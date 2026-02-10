@@ -121,3 +121,10 @@ test_*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
 .env.test
 test_sync.py
 .env.bak*
+
+# Agentic coding infrastructure (local development tools)
+.claude/rules/
+.claude/agents/
+.claude/commands/
+.claude/skills/
+.claude/research/

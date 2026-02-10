@@ -12,6 +12,10 @@ This guide helps you work effectively with the Prebid Sales Agent codebase maint
 5. **Pre-commit hooks are your friend** - They catch most issues automatically
 6. **Name your PRs correctly** - they need to pass .github/workflows/pr-title-check.yml
 
+### Doc-First Rule
+When implementing anything involving external libraries (FastMCP, SQLAlchemy, adcp, Flask, Pydantic, etc.):
+Search documentation FIRST using available MCP servers (Ref, DeepWiki). Do not rely on training data for API specifics.
+
 ### Common Task Patterns
 - **Adding a new AdCP tool**: Extend library schema → Add `_impl()` function → Add MCP wrapper → Add A2A raw function → Add tests
 - **Fixing a route issue**: Check for conflicts with `grep -r "@.*route.*your/path"` → Use `url_for()` in Python, `scriptRoot` in JavaScript
