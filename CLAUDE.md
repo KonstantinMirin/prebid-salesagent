@@ -224,6 +224,11 @@ uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 
 ### Testing
 ```bash
+make quality              # Format + lint + mypy + unit tests (run before every commit)
+make quality-full         # Above + integration/e2e with PostgreSQL
+make test-fast            # Unit tests only (fail-fast)
+make lint-fix             # Auto-fix formatting and lint issues
+
 ./run_all_tests.sh ci     # Full suite with PostgreSQL (matches CI)
 ./run_all_tests.sh quick  # Fast iteration (skips database tests)
 
@@ -402,6 +407,17 @@ See `docs/deployment.md` for platform-specific guides.
 - `deployment.md` - Deployment guides
 - `adapters/` - Adapter-specific documentation
 
+**Workflow guides in `.claude/`:**
+- `.claude/rules/workflows/quality-gates.md` - Quality gate commands and common violations
+- `.claude/rules/workflows/tdd-workflow.md` - Red-Green-Refactor with project patterns
+- `.claude/rules/workflows/bug-reporting.md` - Bug fix workflow
+- `.claude/rules/workflows/beads-workflow.md` - Issue tracking workflow (4-step loop)
+- `.claude/rules/workflows/session-completion.md` - Session close checklist
+- `.claude/rules/workflows/research-workflow.md` - Research before implementation
+- `.claude/rules/workflows/subagent-implementation-guide.md` - Using subagents effectively
+- `.claude/agents/qc-validator.md` - QC validation agent
+- `.claude/commands/research.md` - `/research` command for task exploration
+
 ---
 
 ## Quick Reference
@@ -441,17 +457,17 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 1. Search existing code: `Glob` for similar features
 2. Read relevant files to understand patterns
 3. Design solution following critical patterns
-4. Write tests first (TDD)
+4. Write tests first (TDD — see `.claude/rules/workflows/tdd-workflow.md`)
 5. Implement feature
-6. Run tests: `uv run pytest tests/unit/ -x`
+6. Run quality gates: `make quality`
 7. Commit with clear message
 
 **User reports a bug:**
-1. Reproduce: Read the code path
+1. Reproduce: Read the code path (see `.claude/rules/workflows/bug-reporting.md`)
 2. Write failing test that demonstrates bug
 3. Fix the code
 4. Verify test passes
-5. Check for similar issues in codebase
+5. Run quality gates: `make quality`
 6. Commit fix with test
 
 **User asks "how does X work?"**
