@@ -119,6 +119,15 @@ Never modify existing migrations after commit.
 
 ---
 
+## Self-Improvement
+
+When something goes wrong (test failure you caused, pattern violation, rework):
+1. Analyze what happened and why
+2. Check if a CLAUDE.md rule or pattern would have prevented it
+3. If yes, suggest the addition (do not modify CLAUDE.md without permission)
+
+---
+
 ## Reference Docs
 
 **Load on demand** — read these when working in the relevant area:
@@ -131,8 +140,6 @@ Never modify existing migrations after commit.
 | Quality gates | `.claude/rules/workflows/quality-gates.md` |
 | TDD workflow | `.claude/rules/workflows/tdd-workflow.md` |
 | Bug fixes | `.claude/rules/workflows/bug-reporting.md` |
-| Task tracking | `.claude/rules/workflows/beads-workflow.md` |
-| Session end | `.claude/rules/workflows/session-completion.md` |
 | Research | `.claude/rules/workflows/research-workflow.md` |
 | Subagents | `.claude/rules/workflows/subagent-implementation-guide.md` |
 | Adapters | `docs/adapters/` |
