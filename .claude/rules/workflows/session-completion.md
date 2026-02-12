@@ -23,6 +23,19 @@ make quality
 ```
 All checks must pass. If they fail, fix the issues before committing.
 
+### Step 3b: Run Full CI Test Suite (Before PR)
+**MANDATORY before pushing or creating a PR.** Requires Docker Desktop running.
+```bash
+make pre-pr
+```
+This runs `make quality` + `./run_all_tests.sh ci` which:
+- Starts an isolated PostgreSQL Docker container (does NOT touch your local dev containers)
+- Runs unit tests, integration tests, integration_v2 tests, and e2e tests
+- Tears down all test containers on exit
+- Matches the exact CI environment on GitHub Actions
+
+If this fails, fix the issues before pushing. Do NOT push with failing CI tests.
+
 ### Step 4: Close Completed Tasks
 ```bash
 bd close <id1> <id2> ...

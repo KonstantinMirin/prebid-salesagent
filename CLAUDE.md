@@ -90,10 +90,13 @@ Never hardcode `/api/endpoint` - breaks with nginx prefix.
 
 ```bash
 make quality              # Format + lint + mypy + unit tests (before every commit)
-make quality-full         # Above + integration/e2e with PostgreSQL
+make pre-pr              # Full CI suite with Docker PostgreSQL (MANDATORY before push/PR)
+make quality-full         # Same as pre-pr
 make lint-fix             # Auto-fix formatting and lint issues
 make test-fast            # Unit tests only (fail-fast)
 ```
+
+**Before pushing**: Run `make pre-pr` (requires Docker Desktop running). This matches the exact GitHub Actions CI environment.
 
 ### Git Workflow
 Never push directly to main. Work on feature branches, create PR, merge via GitHub UI.

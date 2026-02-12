@@ -30,14 +30,22 @@ If the task involves external libraries:
 - Check CLAUDE.md for project-specific patterns
 - Check `/docs` directory for detailed documentation
 
-### Step 4: Identify Architecture Decisions
+### Step 4: Engineering Checklist
+Run these checks against your findings. Each one should produce a concrete answer, not a shrug.
+
+1. **DRY**: Does similar logic already exist? Search for functions doing comparable work. Extend, don't duplicate.
+2. **Library idioms**: How does the primary library (Pydantic, SQLAlchemy, FastMCP, etc.) solve this? Check docs via Ref/DeepWiki before hand-rolling.
+3. **Data flow trace**: Walk one concrete example from system boundary (buyer JSON) → Pydantic parsing → logic layer → data layer (DB write/read) → response serialization. Trace both the success path and a failure/rejection path. Note where types change or could break.
+4. **Existing conventions**: Find 2-3 similar implementations in the codebase. Note the pattern. Your implementation should match.
+5. **Test infrastructure**: What fixtures, factories, helpers already exist in `tests/`? What's reusable vs needs new?
+
+### Step 5: Identify Architecture Decisions
 Based on your research:
 - What CLAUDE.md patterns apply?
 - Are there multiple valid approaches?
 - What are the risks or edge cases?
-- What tests will be needed?
 
-### Step 5: Create Research Artifact
+### Step 6: Create Research Artifact
 Create a research file at `.claude/research/$ARGUMENTS.md` with:
 
 ```markdown
@@ -67,6 +75,6 @@ $ARGUMENTS: [description]
 - [Potential issues to watch for]
 ```
 
-### Step 6: Update the Task
+### Step 7: Update the Task
 Run `bd label add $ARGUMENTS research:complete` if research is sufficient.
 Run `bd label add $ARGUMENTS research:blocked` if there are unresolved questions, and add notes explaining what's blocked.
