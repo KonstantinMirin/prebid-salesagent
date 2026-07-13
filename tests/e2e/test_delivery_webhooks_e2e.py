@@ -14,11 +14,11 @@ import uuid
 from time import sleep
 from typing import Any
 
-import psycopg2
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from tests.e2e._tenant_state import set_mock_approval
 from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
@@ -47,33 +47,7 @@ class TestDailyDeliveryWebhookFlow:
 
     def setup_adapter_config(self, live_server):
         """Configure adapter for auto-approval (needs active media buy for delivery scheduler)."""
-        try:
-            conn = psycopg2.connect(live_server["postgres"])
-            cursor = conn.cursor()
-
-            # Ensure ci-test tenant has mock manual approval disabled
-            cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
-            tenant_row = cursor.fetchone()
-            if tenant_row:
-                tenant_id = tenant_row[0]
-                cursor.execute(
-                    """
-                    INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
-                    VALUES (%s, 'mock', false)
-                    ON CONFLICT (tenant_id)
-                    DO UPDATE SET mock_manual_approval_required = false, adapter_type = 'mock'
-                """,
-                    (tenant_id,),
-                )
-                conn.commit()
-                print(f"Updated adapter config for tenant {tenant_id}: manual_approval=False")
-            else:
-                print("Warning: ci-test tenant not found for adapter config update")
-
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Failed to update adapter config: {e}")
+        set_mock_approval(live_server, manual=False)
 
     async def discover_product(self, client):
         """Phase 1: Product discovery (get_products)."""
