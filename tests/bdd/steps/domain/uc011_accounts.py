@@ -1954,9 +1954,15 @@ def then_account_processed_normally(ctx: dict, domain: str) -> None:
 # ── Given: sandbox setup ───────────────────────────────────────────────
 
 
-@given("the seller declares features.sandbox equals true in capabilities")
+@given("the seller declares account.sandbox equals true in capabilities")
+@given("the seller declares features.sandbox equals true in capabilities")  # legacy alias (pre-3.1.1 wording)
 def given_sandbox_supported(ctx: dict) -> None:
-    """Configure seller to support sandbox mode."""
+    """Configure seller to support sandbox mode.
+
+    3.1.1 locates the sandbox capability at account.sandbox on the capabilities
+    response (get-adcp-capabilities-response.json#/properties/account/properties/sandbox);
+    the features.sandbox alias is kept for any un-migrated feature text.
+    """
     _setup_tenant_and_principal(ctx)
     ctx["sandbox_supported"] = True
 
