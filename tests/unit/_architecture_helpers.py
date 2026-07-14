@@ -216,28 +216,33 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
     yield from sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")])
 
 
-# Dirs the filesystem fallback prunes — VCS internals plus build/cache artifacts
-# that ``git ls-files`` never reports. In a clean checkout this mirrors the ignored
-# set closely enough that the fallback matches the tracked set.
-_FALLBACK_PRUNE_DIRS = frozenset(
+# Directories that are never source-tracked — skipped by the filesystem-walk
+# fallback so it stays close to ``git ls-files``. ``.github`` is intentionally
+# NOT excluded: the version-anchor guards scan ``.github/workflows/``.
+_FS_WALK_SKIP_DIRS = frozenset(
     {
         ".git",
         ".venv",
         "venv",
         ".tox",
         "__pycache__",
-        "node_modules",
         ".pytest_cache",
-        ".ruff_cache",
         ".mypy_cache",
+        ".ruff_cache",
+        ".claude",
+        ".beads",
+        "node_modules",
         "htmlcov",
         "test-results",
         ".agent-index",
-        ".beads",
-        "build",
-        "dist",
+        "audit_logs",
+        "logs",
         ".idea",
         ".vscode",
+        ".cache",
+        "dist",
+        "build",
+        ".eggs",
     }
 )
 
@@ -245,19 +250,19 @@ _FALLBACK_PRUNE_DIRS = frozenset(
 def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
     """Yield git-tracked files that exist on disk (hermetic; ignores untracked local files).
 
-    Falls back to a filesystem walk when ``git ls-files`` cannot run — notably when a
-    git worktree is bind-mounted into a container at a path that breaks the worktree's
-    absolute ``.git`` back-references (``run_all_tests.sh`` mounts ``.:/app``, so
-    ``/app/.git`` is a pointer to an unreachable host gitdir). The source files are all
-    present in the bind mount; only git's metadata is unreachable. The fallback prunes
-    the usual VCS/build/cache dirs so, in a clean checkout, it matches the tracked set.
-    On any host with a working git the fallback never triggers — hermetic behavior there
-    is unchanged.
+    Falls back to a hermetic filesystem walk when ``git ls-files`` can't run. The
+    in-network Docker runner bind-mounts only the working directory (``.:/app``);
+    when that working tree is a git *worktree*, its ``.git`` is a pointer FILE to
+    metadata that lives outside the mount, so ``git ls-files`` errors with
+    "not a git repository". Without the fallback every git-dependent architecture
+    guard hard-errors in that runner (and is silently never exercised there). The
+    walk lets the guards run regardless of git availability. On any host with a
+    working git the fallback never triggers — hermetic behavior there is unchanged.
     """
     try:
         output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True, stderr=subprocess.DEVNULL)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        yield from _iter_files_fallback(repo)
+        yield from _iter_filesystem_files(repo)
         return
     for line in output.splitlines():
         if not line.strip():
@@ -267,12 +272,17 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
             yield path
 
 
-def _iter_files_fallback(repo: Path) -> Iterator[Path]:
-    """Deterministic filesystem walk mirroring git-tracked enumeration when git is unavailable."""
+def _iter_filesystem_files(repo: Path) -> Iterator[Path]:
+    """Deterministic git-unavailable fallback: walk ``repo``, skipping known-untracked directories."""
     for dirpath, dirnames, filenames in os.walk(repo):
-        dirnames[:] = sorted(d for d in dirnames if d not in _FALLBACK_PRUNE_DIRS)
+        dirnames[:] = sorted(d for d in dirnames if d not in _FS_WALK_SKIP_DIRS)
+        base = Path(dirpath)
         for name in sorted(filenames):
-            path = Path(dirpath) / name
+            # In a worktree ``.git`` is a pointer FILE (not a dir), so the dir
+            # filter above misses it; skip it (and any skip-named file) here.
+            if name in _FS_WALK_SKIP_DIRS:
+                continue
+            path = base / name
             if path.is_file():
                 yield path
 
