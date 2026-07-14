@@ -117,10 +117,11 @@ class TestNonScalarConceptValueDropped:
     for the _coerce_concept_value non-scalar branch (the symmetric half of the
     numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
 
-    def test_non_scalar_concept_value_is_dropped(self, integration_db, caplog):
+    def test_non_scalar_concept_value_is_dropped(self, integration_db):
         import logging
 
         from tests.factories import CreativeFactory
+        from tests.helpers.log_capture import LogCaptureHandler
 
         with CreativeListEnv() as env:
             tenant, principal = _seed_authenticated_principal(env)
@@ -131,8 +132,16 @@ class TestNonScalarConceptValueDropped:
                 status="approved",
                 data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
             )
-            with caplog.at_level(logging.WARNING):
+            # Capture at the producing module's logger, not via caplog: caplog's
+            # root-level handler is lost when suite-level code reconfigures root
+            # handlers, which made this assertion order-dependent in full runs.
+            handler = LogCaptureHandler()
+            listing_logger = logging.getLogger("src.core.tools.creatives.listing")
+            listing_logger.addHandler(handler)
+            try:
                 result = env.call_via(Transport.REST)
+            finally:
+                listing_logger.removeHandler(handler)
 
             assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
             creative = result.wire_response["creatives"][0]
@@ -140,7 +149,7 @@ class TestNonScalarConceptValueDropped:
             assert "concept_id" not in creative
             assert "concept_name" not in creative
             # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-            assert "Dropping non-scalar concept value" in caplog.text
+            assert any("Dropping non-scalar concept value" in r for r in handler.records)
 
 
 class TestSellerConceptEnrichmentIsFilterable:
