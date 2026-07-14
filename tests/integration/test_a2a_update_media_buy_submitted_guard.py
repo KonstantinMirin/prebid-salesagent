@@ -106,8 +106,12 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
     # The harness-synthesized envelope (built from Task state + id) parses as the
     # submitted variant and carries the task_id the buyer polls. Secondary pin:
     # this proves the Task id doubles as the AdCP task_id, not artifact content.
-    assert isinstance(result, UpdateMediaBuySubmitted), f"expected UpdateMediaBuySubmitted, got {type(result).__name__}"
-    assert result.task_id, "submitted update must carry a task_id for the buyer to poll"
+    # #1417 merged: raw wrappers return the UpdateMediaBuyResult envelope; the
+    # submitted variant rides in .response (envelope status mirrors it).
+    assert result.status == "submitted", f"expected submitted envelope, got status={result.status!r}"
+    inner = getattr(result, "response", result)
+    assert isinstance(inner, UpdateMediaBuySubmitted), f"expected UpdateMediaBuySubmitted, got {type(inner).__name__}"
+    assert inner.task_id, "submitted update must carry a task_id for the buyer to poll"
 
 
 def test_reconstruct_update_media_buy_reachable_contract():
