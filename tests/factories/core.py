@@ -51,6 +51,16 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     is_active = True
     billing_plan = "standard"
     ad_server = "mock"
+    # Auto-approval by default: the Tenant model's column default is True
+    # (production-safe), but factory tenants back tests whose success paths
+    # assume a synchronous create_media_buy. The live e2e server reads this ROW
+    # (in-process transports mock the adapter, so the gate never fires there),
+    # and with True every e2e_rest create takes the manual-approval path and
+    # returns CreateMediaBuySubmitted with no media_buy_id. Mirrors the seeded
+    # dev tenant (src/core/database/database.py human_review_required=False).
+    # Manual-approval scenarios opt IN explicitly via Given steps
+    # (tests/bdd/steps/generic/given_media_buy.py) or per-test overrides.
+    human_review_required = False
     authorized_emails = factory.LazyFunction(lambda: ["test@example.com"])
     authorized_domains = factory.LazyFunction(lambda: ["example.com"])
 
