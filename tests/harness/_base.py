@@ -1144,6 +1144,17 @@ class BaseTestEnv:
             except Exception as e:
                 errors.append(e)
 
+            # Dispose the per-env E2E engine: each e2e-mode env creates its own
+            # engine whose pool would otherwise hold server connections for the
+            # rest of the worker's life — thousands of scenarios x 8 workers
+            # exhausted Postgres max_connections ("sorry, too many clients").
+            try:
+                if self._e2e_engine is not None:
+                    self._e2e_engine.dispose()
+                    self._e2e_engine = None
+            except Exception as e:
+                errors.append(e)
+
         # 3. Stop patches — each in its own try block
         for patcher in reversed(self._patchers):
             try:
