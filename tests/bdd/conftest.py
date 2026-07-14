@@ -353,11 +353,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
     # No ASGI middleware checks content-length for oversized bodies.
     "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
-    # FIXME(#1521, #1592): ck_accounts_billing CHECK (models.py:852, migration 51d4f9009db4)
-    # allows only ('operator','agent') while billing-party at 3.1.1 is
-    # ["operator","agent","advertiser"] — a spec-valid billing="advertiser" passes request
-    # validation and the billing policy check, then IntegrityErrors on INSERT (500).
-    "T-UC-011-sync-billing-advertiser": "billing='advertiser' violates ck_accounts_billing CHECK — #1521/#1592 spec-production gap",
     # ── UC-010 batch-1 wiring (FIXME(#1592), salesagent-4sn7) ──────────────
     # Verified against a real run 2026-07-14: every entry below fails on all
     # three wire transports (strict holds); per-row / per-transport gaps use
@@ -463,14 +458,6 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-004-webhook-notification-type",
         {"delayed"},
         "BR-RULE-029: production webhook service has no is_delayed flag — only scheduled/final/adjusted emitted",
-    ),
-    # FIXME(#1521, #1592): advertiser row of the billing-enum outline — spec-valid
-    # billing-party value rejected by the ck_accounts_billing CHECK constraint (500).
-    # operator/agent rows keep passing.
-    (
-        "T-UC-011-sync-billing-enum",
-        {"advertiser"},
-        "billing='advertiser' violates ck_accounts_billing CHECK — #1521/#1592 spec-production gap",
     ),
     # ── UC-010 batch-1 per-row gaps (FIXME(#1592), salesagent-4sn7) ────────
     # The 'omitted' / absence rows of these outlines pass vacuously (the field

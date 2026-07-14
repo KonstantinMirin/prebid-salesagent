@@ -16,6 +16,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from src.core.billing_policy import BILLING_PARTY_VALUES
 from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
@@ -205,7 +206,7 @@ def _set_billing_policy(ctx: dict, supported: list[str]) -> None:
 @given(parsers.parse('the seller does not support "{billing}" billing'))
 def given_seller_no_specific_billing(ctx: dict, billing: str) -> None:
     """Configure seller to not support a specific billing model."""
-    all_models = {"operator", "agent"}
+    all_models = set(BILLING_PARTY_VALUES)
     _set_billing_policy(ctx, sorted(all_models - {billing}))
 
 

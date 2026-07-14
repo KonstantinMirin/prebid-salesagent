@@ -273,9 +273,6 @@ Feature: BR-UC-011 Manage Accounts
     # @bva billing: operator (first enum value), advertiser (last enum value)
     # POST-S7: Buyer knows billing model for each account
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
-    # XFAIL-EXPECTED (advertiser row only): production gap — #1521 / #1592
-    # (ck_accounts_billing CHECK at src/core/database/models.py:852 allows only
-    # ('operator','agent'); a spec-valid billing="advertiser" IntegrityErrors on INSERT)
 
     Examples:
       | billing    | partition_name     | boundary_point                |
@@ -293,7 +290,6 @@ Feature: BR-UC-011 Manage Accounts
     And the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "advertiser"
     And the account has a seller-assigned account_id
-    # XFAIL-EXPECTED: production gap — #1521 / #1592 (ck_accounts_billing excludes 'advertiser' → 500)
     # billing-party enum = ["operator", "agent", "advertiser"]; the seller invoices the
     # advertiser directly even when a different operator places orders on their behalf
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum

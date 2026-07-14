@@ -397,12 +397,17 @@ def _check_billing_policy(
     """
     from adcp.types import Error
 
+    from src.core.billing_policy import resolve_supported_billing
+
+    # BR-RULE-059 governs UNSUPPORTED billing, not OMITTED billing — an
+    # omitted (None) billing is never rejected, configured tenant or not.
+    if billing_val is None:
+        return None
+
     # Read billing policy from tenant configuration (not identity).
     # Both dict and TenantContext expose .get() identically, so no branching needed.
     tenant = identity.tenant if identity else None
-    supported = tenant.get("supported_billing") if tenant else None
-    if supported is None:
-        return None  # No policy configured → accept all
+    supported = resolve_supported_billing(tenant)
 
     if billing_val not in supported:
         return [
