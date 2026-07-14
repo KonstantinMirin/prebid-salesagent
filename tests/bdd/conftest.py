@@ -61,6 +61,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
+    "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
@@ -318,6 +319,28 @@ _XFAIL_TAGS: dict[str, str] = {
     # ["operator","agent","advertiser"] — a spec-valid billing="advertiser" passes request
     # validation and the billing policy check, then IntegrityErrors on INSERT (500).
     "T-UC-011-sync-billing-advertiser": "billing='advertiser' violates ck_accounts_billing CHECK — #1521/#1592 spec-production gap",
+    # ── UC-010 batch-1 wiring (FIXME(#1592), salesagent-4sn7) ──────────────
+    # Verified against a real run 2026-07-14: every entry below fails on all
+    # three wire transports (strict holds); per-row / per-transport gaps use
+    # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
+    "T-UC-010-main": "account block, supported_pricing_models, reporting_delivery_methods not emitted — #1592 spec-production gap",
+    "T-UC-010-ext-a": "adcp.supported_versions not emitted; no-tenant identity re-resolves to a tenant on A2A/REST raw wrappers — #1592",
+    "T-UC-010-auth-data-identity": "INV-4 gap: response data varies with principal (adapter-derived channels/geo only for authenticated callers) — #1592",
+    "T-UC-010-ext-c-a2a": "A2A public-skill list exempts get_adcp_capabilities from token validation — invalid token accepted, no AUTH_INVALID emitted — #1592",
+    "T-UC-010-ext-c-mcp": "MCP structured_content serializes unset fields as JSON null — audience_targeting: null violates the absent-section contract — #1592",
+    "T-UC-010-ext-d-filter": "protocols filter ignored by the capabilities builder; account block missing from protocol-invariant set — #1592",
+    "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1592",
+    "T-UC-010-ext-d-invalid-value": "request params ignored — schema-invalid protocols filter silently accepted — #1592",
+    "T-UC-010-ext-d-empty": "request params ignored — empty protocols filter (minItems 1) silently accepted — #1592",
+    "T-UC-010-ext-e-echo": "context echo not implemented (3.1.1 MUST preserve byte-for-byte) — #1592",
+    "T-UC-010-ext-e-nested": "context echo not implemented — #1592",
+    "T-UC-010-ext-e-empty": "context echo not implemented — #1592",
+    "T-UC-010-v31-supported-versions": "adcp.supported_versions not emitted — #1592",
+    "T-UC-010-v31-version-unsupported": "version negotiation not implemented (adcp_version ignored, no VERSION_UNSUPPORTED) — #1592",
+    "T-UC-010-v31-version-unsupported-major-fallback": "version negotiation not implemented — #1592",
+    "T-UC-010-v31-version-unsupported-build-version-advisory": "version negotiation not implemented — #1592",
+    "T-UC-010-account-supported-billing": "account.supported_billing not derived from tenant billing config on the capabilities response — #1592",
+    "T-UC-010-account-block-presence": "account block emission incomplete — #1592",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -369,6 +392,40 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"advertiser"},
         "billing='advertiser' violates ck_accounts_billing CHECK — #1521/#1592 spec-production gap",
     ),
+    # ── UC-010 batch-1 per-row gaps (FIXME(#1592), salesagent-4sn7) ────────
+    # The 'omitted' / absence rows of these outlines pass vacuously (the field
+    # is absent because the whole block is missing), so only the value rows xfail.
+    (
+        "T-UC-010-auth",
+        {"invalid_token_a2a"},
+        "A2A public-skill list exempts get_adcp_capabilities from token validation — "
+        "invalid token accepted, no AUTH_INVALID emitted — #1592",
+    ),
+    (
+        "T-UC-010-account-require-operator-auth",
+        {"operator_auth_required", "operator_auth_not_required"},
+        "account.require_operator_auth not emitted — #1592",
+    ),
+    (
+        "T-UC-010-account-required-for-products",
+        {"products_gated", "products_open"},
+        "account.required_for_products not emitted — #1592",
+    ),
+    (
+        "T-UC-010-account-authorization-endpoint",
+        {"oauth_supported"},
+        "account.authorization_endpoint not emitted — #1592",
+    ),
+    (
+        "T-UC-010-features-partitions",
+        {"sandbox_enabled", "sandbox_disabled"},
+        "account.sandbox not emitted — #1592",
+    ),
+    (
+        "T-UC-010-degradation-account",
+        {"full_response", "account_degraded"},
+        "account block not emitted for resolved tenants — #1592",
+    ),
 ]
 
 
@@ -391,6 +448,20 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
         {"single position", "duplicate positions"},
         "MCP wrapper: disclosure_positions not accepted or not validated",
         False,
+    ),
+    # ── UC-010: MCP structured_content serializes unset fields as JSON null
+    # (schema-invalid wire for optional object fields) — FIXME(#1592).
+    (
+        "T-UC-010-ext-e-absent",
+        set(),
+        "MCP structured_content serializes unset fields — context: null on the wire — #1592",
+        True,
+    ),
+    (
+        "T-UC-010-degradation-account",
+        {"no_tenant"},
+        "MCP structured_content serializes unset fields — account: null on the wire — #1592",
+        True,
     ),
 ]
 
@@ -2552,6 +2623,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     #
     # Opt out: set BDD_ALL_TRANSPORTS=1 to run everything (for full runs).
     if not os.environ.get("BDD_ALL_TRANSPORTS"):
+        # With IMPL sunsetted there is NO [impl] variant — deselecting every
+        # strict-xfail wire variant removes the scenario entirely and loses the
+        # xpass tripwire. Keep ONE wire representative per scenario.
+        #
+        # Scoped to UC-010 for now: running a representative suite-wide
+        # immediately surfaces ~24 STALE strict-xfail entries in other UCs
+        # (they xpass when actually run — the tripwire has been dead since the
+        # IMPL sunset). Graduating those needs per-scenario inspection and is
+        # tracked separately (salesagent-4sn7 follow-up bead); extend
+        # _REPRESENTATIVE_UC_PREFIXES as each UC's entries are reconciled.
+        _REPRESENTATIVE_UC_PREFIXES = ("T-UC-010-",)
+        _transport_param = re.compile(r"^(?P<head>.*?\[)(?:impl|a2a|mcp|rest)(?P<tail>[-\]].*)$")
+
+        def _scenario_base(nodeid: str) -> str | None:
+            match = _transport_param.match(nodeid)
+            return f"{match.group('head')}{match.group('tail')}" if match else None
+
+        impl_bases = {
+            base for base in (_scenario_base(i.nodeid) for i in items if "[impl" in i.nodeid) if base is not None
+        }
+        kept_representatives: set[str] = set()
+
         deselected: list[pytest.Item] = []
         remaining: list[pytest.Item] = []
         for item in items:
@@ -2569,10 +2662,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 continue
             # Check if this item has a strict xfail marker
             has_strict_xfail = any(m.name == "xfail" and m.kwargs.get("strict", False) for m in item.iter_markers())
-            if has_strict_xfail:
-                deselected.append(item)
-            else:
+            if not has_strict_xfail:
                 remaining.append(item)
+                continue
+            base = _scenario_base(nodeid)
+            item_markers = {m.name for m in item.iter_markers()}
+            opted_in = any(t.startswith(_REPRESENTATIVE_UC_PREFIXES) for t in item_markers)
+            if opted_in and base is not None and base not in impl_bases and base not in kept_representatives:
+                # No impl sibling to catch the xpass — keep this variant as
+                # the scenario's single strict-xfail representative.
+                kept_representatives.add(base)
+                remaining.append(item)
+            else:
+                deselected.append(item)
 
         if deselected:
             items[:] = remaining
@@ -2622,6 +2724,15 @@ _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
+# Scenario outlines whose <channel> column IS the transport: each Examples row
+# dispatches through its own channel inside the When step, so pytest-level
+# transport multiplication adds zero coverage (×3 identical in-process runs,
+# and an e2e_rest variant that never touches the live server — the channel
+# map has no e2e leg). Run once, like the @mcp/@a2a-tagged scenarios. The
+# UC-010 feature header declares the auth-policy rows deliberately
+# transport-specific (#1592).
+_CHANNEL_COLUMN_TAGS = {"T-UC-010-auth"}
+
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
 # variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
 _NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
@@ -2645,6 +2756,10 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     marker_names = {m.name for m in metafunc.definition.iter_markers()}
     if marker_names & _TRANSPORT_SPECIFIC_TAGS:
         # Transport-specific scenario — don't multiply
+        return
+
+    if marker_names & _CHANNEL_COLUMN_TAGS:
+        # Channel-column outline — each row dispatches via its own channel
         return
 
     # Admin scenarios use Flask test_client, not API transports
@@ -2826,6 +2941,11 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-005"
     if any(t.startswith("T-UC-004") for t in marker_names):
         return "UC-004"
+    if any(t.startswith("T-UC-010-") for t in marker_names):
+        # Trailing dash matters: "T-UC-010" without it would prefix-capture
+        # nothing today, but the dash pins the boundary against future
+        # T-UC-0100-style tags (and mirrors the UC-011/018/019 hazard note).
+        return "UC-010"
     if any(t.startswith("T-UC-011") for t in marker_names):
         return "UC-011"
     if any(t.startswith("T-UC-018") for t in marker_names):
@@ -3020,6 +3140,58 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
                 "and @BR-RULE-034 isolation (#1503) scenarios"
             )
+
+    elif uc == "UC-010":
+        # get_adcp_capabilities — CapabilitiesEnv mocks only the adapter factory
+        # and audit logger; DB, TenantConfigUoW and all transport wrappers are
+        # real. Wiring lands in batches (#1592 / salesagent-4sn7): only tag
+        # families whose step batch has landed pay integration_db + env setup;
+        # the rest xfail fast here (UC-018 pattern). The gate SHRINKS per batch
+        # and disappears at batch 3.
+        _UC010_WIRED_TAGS = {
+            # Batch 1 — envelope + account families
+            "T-UC-010-main",
+            "T-UC-010-main-timestamp",
+            "T-UC-010-main-readonly",
+            "T-UC-010-ext-a",
+            "T-UC-010-account-require-operator-auth",
+            "T-UC-010-account-authorization-endpoint",
+            "T-UC-010-account-required-for-products",
+            "T-UC-010-account-supported-billing",
+            "T-UC-010-account-financials-declaration",
+            "T-UC-010-account-block-presence",
+            "T-UC-010-degradation-account",
+            "T-UC-010-features-partitions",
+            "T-UC-010-auth",
+            "T-UC-010-auth-data-identity",
+            "T-UC-010-ext-c-a2a",
+            "T-UC-010-ext-c-mcp",
+            "T-UC-010-ext-e-echo",
+            "T-UC-010-ext-e-absent",
+            "T-UC-010-ext-e-nested",
+            "T-UC-010-ext-e-empty",
+            "T-UC-010-ext-d-filter",
+            "T-UC-010-ext-d-all-protocols",
+            "T-UC-010-ext-d-invalid-value",
+            "T-UC-010-ext-d-empty",
+            "T-UC-010-v31-supported-versions",
+            "T-UC-010-v31-version-unsupported",
+            "T-UC-010-v31-version-unsupported-major-fallback",
+            "T-UC-010-v31-version-unsupported-build-version-advisory",
+        }
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if not (marker_names & _UC010_WIRED_TAGS):
+            pytest.xfail("UC-010 wiring batch 2/3 pending (#1592, salesagent-4sn7)")
+
+        request.getfixturevalue("integration_db")
+        from tests.harness.capabilities import CapabilitiesEnv
+
+        with CapabilitiesEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+            tenant, principal = env.setup_default_data()
+            ctx["env"] = env
+            ctx["tenant"] = tenant
+            ctx["principal"] = principal
+            yield
 
     elif uc == "UC-011":
         marker_names = {m.name for m in request.node.iter_markers()}

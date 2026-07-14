@@ -857,37 +857,32 @@ class BaseTestEnv:
         tool_result = asyncio.run(wrapper_fn(ctx=mock_ctx, **kwargs))
         return response_cls(**tool_result.structured_content)
 
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """Shared REST dispatch: configure auth → build body → POST → return Response.
-
-        Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
-        1. Pop ``identity`` from kwargs and configure dep override for this request
-        2. Commit factory data
-        3. Build request body from remaining kwargs
-        4. POST via TestClient
-        5. Return raw httpx.Response
+    def _pop_rest_identity(self, kwargs: dict[str, Any]) -> Any:
+        """Pop ``identity`` from REST kwargs, defaulting to the REST identity.
 
         Identity handling (mirrors production auth middleware):
         - identity is None → dep raises AdCPAuthenticationError (no token)
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
         """
-        from src.app import app
-        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
         from tests.harness.transport import Transport
 
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
         if identity is _NO_OVERRIDE:
             identity = self.identity_for(Transport.REST)
+        return identity
 
-        self._commit_factory_data()
+    @staticmethod
+    def _configure_rest_auth(identity: Any) -> None:
+        """Override the FastAPI auth deps for this request's identity.
 
-        # Get client first (may set default dep overrides on first call),
-        # then override per-request auth AFTER.
-        client = self.get_rest_client()
+        Must be called AFTER ``get_rest_client()`` (the client's first call may
+        set default dep overrides which this per-request override replaces).
+        """
+        from src.app import app
+        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
 
-        # Configure per-request auth (must be after get_rest_client)
         if identity is None:
             from src.core.exceptions import AdCPAuthenticationError
 
@@ -899,6 +894,29 @@ class BaseTestEnv:
         else:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+
+    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+        """Shared REST dispatch: configure auth → build body → POST → return Response.
+
+        Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
+        1. Pop ``identity`` from kwargs and configure dep override for this request
+        2. Commit factory data
+        3. Build request body from remaining kwargs
+        4. POST via TestClient
+        5. Return raw httpx.Response
+
+        Envs whose route is not a body-carrying POST override this method and
+        reuse ``_pop_rest_identity`` / ``_configure_rest_auth`` (e.g.
+        ``CapabilitiesEnv`` GETs).
+        """
+        identity = self._pop_rest_identity(kwargs)
+
+        self._commit_factory_data()
+
+        # Get client first (may set default dep overrides on first call),
+        # then override per-request auth AFTER.
+        client = self.get_rest_client()
+        self._configure_rest_auth(identity)
 
         body = self.build_rest_body(**kwargs)
         return client.post(endpoint, json=body)
@@ -1151,6 +1169,25 @@ class IntegrationEnv(BaseTestEnv):
         tenant = TenantFactory(tenant_id=self._tenant_id)
         principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
+
+    def configure_tenant_field(self, field: str, value: Any) -> None:
+        """Write a tenant-level config field for both auth paths.
+
+        Updates the in-memory tenant overrides (mock identity path) AND the
+        DB Tenant row when the column exists (real MCP/A2A auth chain reads
+        the DB via config_loader). Clears the identity cache so the next
+        ``identity_for`` re-resolves with the new value.
+        """
+        self._tenant_overrides[field] = value
+        self._identity_cache.clear()
+
+        if self._session:
+            from src.core.database.models import Tenant
+
+            tenant = self._session.get(Tenant, self._tenant_id)
+            if tenant is not None and hasattr(tenant, field):
+                setattr(tenant, field, value)
+                self._session.commit()
 
     # -- Public query API (step functions must use these, not env._session) ----
 

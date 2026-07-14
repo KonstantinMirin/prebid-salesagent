@@ -253,7 +253,12 @@ class RestE2EDispatcher:
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
             method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+            if method == "get":
+                # httpx GET shorthand takes no body — GET routes are parameterless
+                # (the env's _run_rest_request override enforces that contract).
+                response = client.get(endpoint, headers=headers)
+            else:
+                response = getattr(client, method)(endpoint, json=body, headers=headers)
 
         envelope = {
             "transport": "e2e_rest",

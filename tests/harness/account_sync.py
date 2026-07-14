@@ -69,44 +69,19 @@ class AccountSyncEnv(IntegrationEnv):
         self.mock["audit_logger"].return_value = mock_logger
 
     def set_billing_policy(self, supported: list[str]) -> None:
-        """Configure which billing models this seller accepts (BR-RULE-059).
-
-        Updates both the in-memory tenant overrides (for mock identity path)
-        and the DB tenant record (for real MCP/A2A auth chain).
-        """
+        """Configure which billing models this seller accepts (BR-RULE-059)."""
         self._supported_billing = supported
-        self._tenant_overrides["supported_billing"] = supported
-        self._identity_cache.clear()
-
-        if self._session:
-            from src.core.database.models import Tenant
-
-            tenant = self._session.get(Tenant, self._tenant_id)
-            if tenant:
-                tenant.supported_billing = supported
-                self._session.commit()
+        self.configure_tenant_field("supported_billing", supported)
 
     def set_approval_mode(self, mode: str) -> None:
         """Configure account approval mode (BR-RULE-060).
 
-        Updates both the in-memory tenant overrides (for mock identity path)
-        and the DB tenant record (for real MCP/A2A auth chain).
+        Account approval mode is a distinct field from creative approval_mode
+        (BR-RULE-037) — ``configure_tenant_field`` writes the correct column so
+        the MCP real-auth chain (config_loader.get_tenant_by_id) sees it.
         """
         self._account_approval_mode = mode
-        self._tenant_overrides["account_approval_mode"] = mode
-        self._identity_cache.clear()
-
-        if self._session:
-            from src.core.database.models import Tenant
-
-            tenant = self._session.get(Tenant, self._tenant_id)
-            if tenant:
-                # BR-RULE-060: account approval mode is a distinct field from creative
-                # approval_mode (BR-RULE-037). Write to the correct column so the MCP
-                # real-auth chain (which reads DB via config_loader.get_tenant_by_id)
-                # sees the test-configured value.
-                tenant.account_approval_mode = mode
-                self._session.commit()
+        self.configure_tenant_field("account_approval_mode", mode)
 
     def identity_for(self, transport: Any) -> Any:
         """Build identity with billing policy and approval mode on the tenant dict."""

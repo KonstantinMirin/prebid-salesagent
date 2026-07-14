@@ -101,6 +101,76 @@ def _assert_meaningful_error(error: object) -> None:
     raise AssertionError(f"ctx['error'] is not an Exception or Error model: {type(error).__name__} = {error!r}")
 
 
+# ── Wire error envelope (Error Verification Policy) ─────────────────
+
+
+def _wire_envelope(ctx: dict) -> dict:
+    """The captured two-layer wire error envelope for this dispatch.
+
+    Prefers the real wire (REST body / MCP ToolError JSON / A2A DataPart);
+    falls back to the synthesized envelope only where no wire exists by
+    definition (IMPL). See tests/CLAUDE.md § Error Verification Policy.
+    """
+    envelope = ctx.get("wire_error_envelope")
+    if envelope is None:
+        envelope = ctx.get("synthesized_error_envelope")
+    assert isinstance(envelope, dict), (
+        f"no wire error envelope captured — error={ctx.get('error')!r}, "
+        f"response={'present' if ctx.get('response') is not None else 'absent'}"
+    )
+    return envelope
+
+
+@then(
+    parsers.re(
+        r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)" with recovery "(?P<recovery>[a-z]+)"$'
+    )
+)
+def then_wire_envelope_code_and_recovery(ctx: dict, code: str, recovery: str) -> None:
+    from tests.helpers.envelope_assertions import assert_envelope_shape
+
+    assert_envelope_shape(_wire_envelope(ctx), code, recovery=recovery)
+
+
+@then(parsers.re(r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)"$'))
+def then_wire_envelope_code(ctx: dict, code: str) -> None:
+    """Code-only variant for scenarios that don't pin recovery semantics.
+
+    Anchored regex (not parse) so it cannot shadow the with-recovery form.
+    """
+    body = _wire_envelope(ctx)
+    assert "adcp_error" in body and "errors" in body and body["errors"], f"not a two-layer envelope: {body}"
+    assert body["adcp_error"]["code"] == code, f"adcp_error.code={body['adcp_error']['code']!r}, expected {code!r}"
+    assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
+
+
+@then("the error message should reference authentication or token validation")
+def then_error_references_auth(ctx: dict) -> None:
+    """The payload-level wire message must state that a PRESENTED credential
+    failed verification — the AUTH_INVALID semantics (enums/error-code.json:
+    "Authorization header was present but verification failed").
+
+    Strict two-part contract on ``errors[0].message`` (no envelope-level
+    fallback): it must name the credential (token / credential /
+    authentication / authorization) AND state the verification failure
+    (invalid / failed / rejected / not valid / verification). A generic
+    "authentication required" (missing-credential wording) does NOT satisfy
+    it — that is AUTH_REQUIRED language, the deprecated 3.x alias.
+    """
+    import re as _re
+
+    body = _wire_envelope(ctx)
+    message = body["errors"][0].get("message") or ""
+    assert message, f"errors[0].message is empty on the wire envelope: {body}"
+    lowered = message.lower()
+    names_credential = _re.search(r"\b(token|credential|authenticat\w*|authoriz\w*)\b", lowered)
+    states_failure = _re.search(r"\b(invalid|failed|failure|rejected|not valid|verification|unrecognized)\b", lowered)
+    assert names_credential and states_failure, (
+        "errors[0].message must state that a presented credential failed verification "
+        f"(AUTH_INVALID semantics), got: {message!r}"
+    )
+
+
 # ── Operation failure ────────────────────────────────────────────────
 
 
