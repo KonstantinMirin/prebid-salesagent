@@ -714,14 +714,14 @@ def given_request_natural_key_sandbox(ctx: dict) -> None:
 def when_send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
-    Three dispatch modes share this step text — every one routes a full
+    Four dispatch modes share this step text — every one routes a full
     ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
     - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
       ``request_kwargs`` so the production idempotency replay path runs end-to-end.
-    - manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch a
-      FULL create built from the idempotency request defaults, carrying the
-      Given-step account reference so boundary account resolution runs too.
+    - Manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch
+      the harness-seeded base request with a fresh idempotency key, carrying the
+      Given-step account reference, so the submitted-envelope path runs end-to-end.
     - ``dispatch_mode == "create"`` builds a typed ``CreateMediaBuyRequest`` from
       ctx["request_kwargs"] (carrying a typed ``account`` for account-resolution
       and budget/pricing scenarios) and dispatches it. Production resolves the
@@ -1445,8 +1445,42 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-# Step "the tenant is configured for auto-approval" is defined in
-# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
+# Canonical owner of "the tenant is configured for auto-approval" — the
+# generic given_media_buy.py module keeps only the
+# "tenant human_review_required is false" alias to avoid a cross-module shadow.
+@given("the tenant is configured for auto-approval")
+def given_tenant_auto_approval(ctx: dict) -> None:
+    """Configure the tenant for auto-approval and verify the env reflects it.
+
+    Turns OFF ``human_review_required`` on the real tenant row AND in the
+    identity's tenant dict, and confirms the adapter mock is not gating on
+    manual approval — so the create returns ``status='completed'`` rather than
+    pending. The production approval gate (media_buy_create.py) is
+    ``tenant.human_review_required OR adapter.manual_approval_required`` AND
+    ``'create_media_buy' in adapter.manual_approval_operations``.
+
+    Only the wired idempotency scenarios (MediaBuyCreateEnv, with ctx["tenant"]
+    provisioned by conftest's _harness_env) reach this step; every other UC-002
+    scenario using this text is blanket-xfailed before any step runs.
+    """
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+
+    tenant.human_review_required = False
+    env._commit_factory_data()
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
+
+    adapter_mock = env.mock["adapter"].return_value
+    assert adapter_mock.manual_approval_required is False, (
+        "Step claims 'tenant is configured for auto-approval' but the adapter mock "
+        f"reports manual_approval_required={adapter_mock.manual_approval_required!r}"
+    )
+    assert "create_media_buy" not in (adapter_mock.manual_approval_operations or []), (
+        "Step claims auto-approval but the adapter mock gates create_media_buy on "
+        f"manual approval: {adapter_mock.manual_approval_operations!r}"
+    )
+    ctx["tenant_auto_approval"] = True
 
 
 # ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──
@@ -1602,8 +1636,12 @@ def given_package_positive_budget(ctx: dict) -> None:
     ctx["package_budget_valid"] = True
 
 
-# Step "the ad server adapter is available" is defined in
-# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
+# Canonical owner of "the ad server adapter is available" — removed from the
+# generic given_media_buy.py module to avoid a cross-module shadow.
+@given("the ad server adapter is available")
+def given_adapter_available(ctx: dict) -> None:
+    """Mark the ad server adapter as available for the scenario."""
+    ctx["adapter_available"] = True
 
 
 @given("the request does NOT include an idempotency_key")

@@ -620,12 +620,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # E2E_REST: the 3 UC-003 manual-approval scenarios (T-UC-003-alt-manual,
-        # T-UC-003-approval-tenant, T-UC-003-approval-adapter) GRADUATED — the old
-        # strict xfail ("RestE2EDispatcher lacks update-endpoint support") became
-        # stale when MediaBuyDualEnv gained dynamic REST_ENDPOINT/REST_METHOD update
-        # dispatch (_active_update, PR #1567 lineage) and the trio XPASSed the
-        # in-network run. They now grade on all four transports.
+        # Graduated (main merge, #1417): RestE2EDispatcher gained update-endpoint
+        # support, so the 3 UC-003 manual-approval scenarios that were strict-xfailed
+        # here ("RestE2EDispatcher lacks update-endpoint support") now grade green on
+        # e2e_rest too — deterministic XPASS confirmed on the merged tree.
+        # Per-scenario graduation inspection (scenario → BR → siblings → production):
+        # - T-UC-003-alt-manual → GRADUATE — POST-S7/S8: MediaBuyDualEnv.build_rest_body
+        #   sets _active_update + _update_target_id, so RestE2EDispatcher PUTs the real
+        #   /api/v1/media-buys/{id} route (src/routes/api_v1.py:345) and stashes the raw
+        #   HTTP JSON as wire_response; task_id/NOT-contain steps grade that wire via
+        #   _submitted_wire_dict (loud failure if wire_response missing on non-IMPL).
+        # - T-UC-003-approval-tenant → GRADUATE — BR-RULE-017 INV-2: same real-wire path;
+        #   status "submitted" asserted on the typed payload parsed from the live wire.
+        # - T-UC-003-approval-adapter → GRADUATE — BR-RULE-017 INV-3: same real-wire path;
+        #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
+        # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
         # FIXME(salesagent-nmg9, salesagent-rwly, salesagent-hamk): E2E_REST —
         # set_registry_formats has no sidecar mock path. Docker's real creative
@@ -821,10 +830,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # NOTE(merge): the former T-UC-002-alt-manual workflow_step_id xfail was
-        # retired on this branch (20e5b60d8, salesagent-2t4m): the scenario was
-        # reconciled to the 3.1.1 CreateMediaBuySubmitted contract (task_id, not
-        # workflow_step_id) and passes on all transports.
+        # Retired (PR #1567 round-2 item 2): the former T-UC-002-alt-manual xfail
+        # (workflow_step_id internal/exclude=True, dropped by mcp/rest/e2e_rest
+        # serialization) targeted the pre-3.1.1 scenario assertion. The scenario now
+        # grades the CreateMediaBuySubmitted envelope (task_id, no media_buy_id/
+        # workflow_step_id) and passes on all 4 transports — a strict xfail here
+        # would XPASS-fail.
 
         # --- UC-005: disclosure/asset scenarios with partial impl ---
         # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
@@ -1785,11 +1796,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # GRADUATED (#1270 / #1417): production now validates date range over
-            # e2e_rest, so the invalid cases (equals, after) are rejected — the
-            # former strict "Docker does not validate date range" tripwire here
-            # XPASSed deterministically (in-network runs on both branches) and was
-            # removed; the e2e_rest ledger entries for these nodeids are removed too.
+            # GRADUATED (#1270): production now validates date range over e2e_rest, so the
+            # invalid cases (equals, after) are rejected — the former strict-xfail tripwire
+            # here XPASSed deterministically (two consecutive in-network runs) and was
+            # removed. The non-strict e2e_rest ledger entries for these 2 nodeids remain as
+            # a graceful guard against e2e environment flakiness.
+            # GRADUATED (#1417 round-8 follow-up, same tripwire from main's side): the
+            # #1417 validation refactor made the live server reject invalid date ranges;
+            # the invalid cases (equals, after) pass on e2e_rest and main removed their
+            # ledger entries.
 
         # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
         # in-process — when only end_date is given, production defaults start to
@@ -3320,7 +3335,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         ):
             if marker_names & _UC002_MANUAL_APPROVAL_WIRED:
                 # Tells the shared When step to dispatch a FULL create through
-                # the parametrized transport (not account resolution).
+                # the parametrized transport (not account resolution). (PR #1567)
                 ctx["uc002_full_create"] = True
             # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
             # real create_media_buy through every transport (the replay scenario
@@ -3357,8 +3372,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-partition-targeting-overlay",
             "T-UC-003-boundary-targeting-overlay",
         }
-        # BOUNDED (salesagent-8hu9); full UC-003 graduation tracked by salesagent-x5le.
-        _UC003_MANUAL_APPROVAL_TAGS = {
+        # The 3 manual-approval submitted-envelope scenarios (PR #1567) — see the
+        # BOUNDED branch below.
+        _UC003_WIRED_TAGS = {
             "T-UC-003-alt-manual",
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
@@ -3385,9 +3401,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 _setup_existing_media_buy(ctx, env, tenant, principal, product)
                 env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
                 yield
-        elif marker_names & _UC003_MANUAL_APPROVAL_TAGS:
-            # BOUNDED (salesagent-8hu9): the 3 manual-approval submitted-envelope
-            # scenarios are graded (they exercise UpdateMediaBuySubmitted cross-transport).
+        elif marker_names & _UC003_WIRED_TAGS:
+            # BOUNDED (PR #1567): the 3 manual-approval submitted-envelope
+            # scenarios are graded here (they exercise UpdateMediaBuySubmitted
+            # cross-transport). Every other non-extension UC-003 scenario stays
+            # dormant via the else below — graduating the full UC-003 file is a
+            # tracked PR #1567 follow-up. This guard is what keeps un-dormanting
+            # UC-003 from turning the suite red.
+            #
             # UpdateMediaBuy manual-approval scenarios. MediaBuyDualEnv (an IntegrationEnv)
             # routes an UpdateMediaBuyRequest through IMPL/A2A/MCP/REST. Seed the full create
             # dependency chain plus a standalone MediaBuy with the literal id the
@@ -3415,7 +3436,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(
-                "UC-003 harness not yet wired for non-extension scenarios (full graduation tracked by salesagent-x5le)"
+                "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
             )
 
     elif uc == "UC-006":

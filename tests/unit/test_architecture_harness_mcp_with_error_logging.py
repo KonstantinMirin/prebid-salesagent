@@ -112,23 +112,20 @@ def test_known_violations_not_stale():
 
 
 def test_migrated_update_site_is_guarded():
-    """The #1417 fix: media_buy_dual's update MCP path must surface the wire envelope
-    through the production error boundary.
+    """The #1417 fix: media_buy_dual update MCP path must surface the wire envelope.
 
-    Two conforming forms:
-    - explicit ``with_error_logging(...)`` wrap around a direct tool call (the
-      original #1417 mimic), or
-    - routing through ``_run_mcp_client`` — the real FastMCP client pipeline, where
-      production applies ``with_error_logging`` at tool registration
-      (``src/core/main.py``: ``mcp.tool()(with_error_logging(fn))``). This is the
-      stronger form: the actual registration boundary runs, not a harness mimic.
+    Two compliant shapes: wrapping the tool explicitly (with_error_logging(...)),
+    or the stronger real-pipeline form — routing through _run_mcp_client, which
+    drives the REGISTERED tool where src/core/main.py applies
+    mcp.tool()(with_error_logging(fn)). The create-side call_mcp migrated the
+    same way (see allowlist comment above).
     """
     source = (_HARNESS_DIR / "media_buy_dual.py").read_text()
-    assert _func_references_with_error_logging(source, "_call_update_mcp") or _func_references_name(
-        source, "_call_update_mcp", "_run_mcp_client"
-    ), (
-        "_call_update_mcp must either reference with_error_logging or route through "
-        "_run_mcp_client (the real registration boundary) — the ihwl fix regressed."
+    explicit_wrap = _func_references_with_error_logging(source, "_call_update_mcp")
+    real_pipeline = _func_references_name(source, "_call_update_mcp", "_run_mcp_client")
+    assert explicit_wrap or real_pipeline, (
+        "_call_update_mcp must apply with_error_logging — explicitly, or by routing "
+        "through _run_mcp_client (registration-applied decorator). The ihwl fix regressed."
     )
     # And it must not appear as a direct-call violation.
     assert ("media_buy_dual.py", "_call_update_mcp") not in _scan_violations()

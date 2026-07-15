@@ -87,8 +87,8 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
-    # AdCP 3.1.1 compatibility; pause-on-create not yet honored downstream (PR #1567
-    # follow-up) — accepted and validated on all transports for wire parity.
+    # AdCP 3.1.1 pause-on-create surface; accepted for compatibility, not yet
+    # honored on the create path (#1619).
     paused: bool | None = None
     adcp_version: str = "1.0.0"
 

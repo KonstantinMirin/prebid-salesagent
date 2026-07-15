@@ -543,16 +543,16 @@ def _update_media_buy_impl(
                 _dry_run_mb = uow.media_buys.get_by_id(req.media_buy_id)
 
                 # Build simulated response.
-                # The envelope status "completed" is KEPT for dry_run and is
-                # spec-correct (PR #1567): spec 3.1.1 update-media-buy-response.json
-                # has exactly three variants (Success/Error/Submitted) and NO
-                # simulation envelope; dry_run is a (deprecated) testing hook
-                # (X-Dry-Run header), not a wire field, and the spec is SILENT on a
-                # dry_run response status -> production authoritative.
+                # The wire status="completed" is KEPT for dry_run and is
+                # spec-correct (PR #1567): spec 3.1.1
+                # update-media-buy-response.json has exactly three variants
+                # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
+                # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the
+                # spec is SILENT on a dry_run response status -> production authoritative.
                 # Unlike pending-approval (-> UpdateMediaBuySubmitted) and reject
                 # (-> Error), a dry_run buyer asked to SIMULATE the would-be
                 # outcome, which IS completion -> "completed" is a truthful preview, not a
-                # lie. Guarded by tests/unit/test_media_buy_dry_run_status.py.
+                # lie. Guarded by tests/integration/test_media_buy_dry_run_status.py.
                 _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_mb)
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
@@ -580,8 +580,8 @@ def _update_media_buy_impl(
                 # Spec 3.1.1 models a not-yet-applied (pending human approval) update as the
                 # UpdateMediaBuySubmitted response variant: protocol-envelope status="submitted"
                 # + a task_id the buyer polls for the outcome. Returning UpdateMediaBuySuccess
-                # here would emit the adcp-6.6 default status="completed", falsely asserting the
-                # update was applied. task_id is the workflow step the admin approval flow acts on.
+                # here would falsely assert the update was applied (its envelope status is
+                # "completed"). task_id is the workflow step the admin approval flow acts on.
                 approval_response = UpdateMediaBuySubmitted(
                     task_id=step.step_id,
                     context=req.context,

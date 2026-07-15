@@ -114,11 +114,12 @@ class TestTimestamptzMigration:
         engine, db_url = migration_db
 
         # Normally the database is already at MIGRATION_REV, with test data, from the
-        # previous test in this module (they share the module-scoped migration_db) —
-        # the integration tox env runs xdist with --dist loadfile so this whole file
-        # stays on one worker in order. Self-contained fallback (#1572 fallout): if a
-        # different xdist distribution ever puts this test on a fresh worker (empty DB),
-        # detect that and replay the upgrade test's setup instead of assuming its state.
+        # previous test in this module (they share the module-scoped migration_db).
+        # The integration tox env runs xdist with --dist loadfile so this whole file
+        # stays on one worker in order. Self-contained fallback (#1572 fallout): under
+        # xdist --dist load this test can land on a different worker than the upgrade
+        # test — a fresh, empty DB. Detect that and replay the upgrade test's setup
+        # instead of assuming its state.
         col_type = _get_column_type(engine, "tenants", "created_at")
         if col_type is None:
             run_alembic_upgrade(db_url, PRE_MIGRATION_REV)

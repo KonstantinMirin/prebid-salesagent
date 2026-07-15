@@ -488,12 +488,12 @@ def test_manual_approval_path_through_impl():
         result = _update_media_buy_impl(req=req, identity=identity)
 
         # Spec 3.1.1: a not-yet-applied (pending approval) update is the SUBMITTED variant,
-        # not a completed success (which would falsely claim the update was applied).
-        # status="submitted" + task_id (the workflow step).
+        # not a completed success. status="submitted" + task_id (the workflow step).
         assert isinstance(result.response, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.response.status == "submitted"
         assert result.response.task_id == "step_001"
+        # Update not applied yet: the submitted variant carries no media_buy_id or
+        # affected_packages fields — the buyer polls task_id for the applied outcome.
 
         # Workflow step should be updated with requires_approval status
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list

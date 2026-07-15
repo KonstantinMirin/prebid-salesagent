@@ -101,7 +101,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """
         from tests.factories import AuthorizedPropertyFactory
 
-        tenant, principal = self.setup_default_data()
+        # Seed the tenant as auto-approve (human_review_required=False). The
+        # in-process transports never hit the tenant approval gate because this
+        # env's mocked adapter sets manual_approval_operations=[] — but the live
+        # e2e_rest server has no patches and reads the REAL tenant row, where
+        # the column defaults to True, routing every create to the submitted
+        # (manual-approval) envelope instead of completing it. Seeding False
+        # makes the live server's gate state match what every other transport
+        # already grades (#1418 class; #1417/#1537 scenarios re-triaged after
+        # the adcp-6.6 merge). Scenarios that grade the approval path flip it
+        # explicitly via the "tenant requires manual approval" Given (which
+        # commits the change to the shared DB).
+        tenant, principal = self.setup_default_data(human_review_required=False)
         # Satisfy the create_media_buy setup-checklist "Authorized Properties"
         # gate. In-process transports skip it via the testing context, but the
         # live e2e_rest server enforces it (validate_setup_complete), so a
