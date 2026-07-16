@@ -14,7 +14,6 @@ from adcp.types.generated_poc.creative.list_creatives_request import (
     Sort,
 )
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field as PydanticField
 
 from src.core.audit_logger import get_audit_logger
@@ -30,6 +29,7 @@ from src.core.schemas import (
     ListCreativesResponse,
 )
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp_boundary import build_tool_result
 from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
@@ -544,7 +544,7 @@ async def list_creatives(
         page=page,
         identity=identity,
     )
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 def list_creatives_raw(
