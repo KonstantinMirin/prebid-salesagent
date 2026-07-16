@@ -1,8 +1,15 @@
 """CapabilitiesEnv — integration test environment for _get_adcp_capabilities_impl.
 
-Patches: adapter factory + audit logger ONLY.
-Real: get_db_session, TenantConfigUoW (publisher partners), get_principal_object,
-the full response builder (all hit real DB).
+Patches: adapter CLASS resolver + audit logger ONLY.
+Real: get_db_session, TenantConfigUoW (publisher partners), the full response
+builder (all hit real DB).
+
+Production reads adapter default_channels/get_targeting_capabilities off a
+tenant-resolved adapter CLASS (get_adapter_class_for_tenant,
+src/core/helpers/adapter_helpers.py) — principal-free, identical for
+anonymous and authenticated callers per INV-4 (salesagent-dn2s). The mock
+below stands in for that class: production code only reads class-level
+attributes/staticmethods off it, so a MagicMock works interchangeably.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -62,7 +69,7 @@ class CapabilitiesEnv(IntegrationEnv):
     """
 
     EXTERNAL_PATCHES = {
-        "adapter": "src.core.tools.capabilities.get_adapter",
+        "adapter": "src.core.tools.capabilities.get_adapter_class_for_tenant",
         "audit_logger": "src.core.tools.capabilities.log_tool_activity",
     }
 

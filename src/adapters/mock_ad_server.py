@@ -188,7 +188,8 @@ class MockAdServer(AdServerAdapter):
         """Mock adapter supports all pricing models (AdCP PR #88)."""
         return {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Mock adapter supports all targeting for testing flexibility."""
         return TargetingCapabilities(
             geo_countries=True,

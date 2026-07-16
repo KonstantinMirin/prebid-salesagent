@@ -248,7 +248,8 @@ class BroadstreetAdapter(AdServerAdapter):
         """
         return {"cpm", "flat_rate"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities.
 
         Broadstreet has limited targeting - primarily zone-based.

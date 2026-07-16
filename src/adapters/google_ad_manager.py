@@ -351,7 +351,8 @@ class GoogleAdManager(AdServerAdapter):
         """
         return {"cpm", "vcpm", "cpc", "flat_rate"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities GAM adapter supports.
 
         Google Ad Manager supports comprehensive geo targeting:

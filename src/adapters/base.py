@@ -344,11 +344,23 @@ class AdServerAdapter(ABC):
         """
         return {"cpm"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities this adapter supports.
 
         Default implementation returns minimal capabilities (geo country only).
         Override in subclasses with actual adapter capabilities.
+
+        A ``@staticmethod`` (not an instance method) because capability
+        discovery (get_adcp_capabilities) must read this off the adapter
+        CLASS, tenant-only, without ever constructing a Principal-bound
+        adapter instance (some adapters require principal-bound config in
+        ``__init__`` and would crash for a synthetic Principal — see
+        salesagent-dn2s). Keeping this a staticmethod makes
+        instance-independence a structural fact instead of an unenforced
+        convention: any future override that needs ``self`` (e.g. to read
+        adapter config) MUST stop being a plain override of this signature,
+        which forces a deliberate decision instead of a silent crash.
 
         Returns:
             TargetingCapabilities describing what targeting is supported

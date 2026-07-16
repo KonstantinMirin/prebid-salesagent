@@ -359,7 +359,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
     "T-UC-010-main": "account block, supported_pricing_models, reporting_delivery_methods not emitted — #1592 spec-production gap",
     "T-UC-010-ext-a": "adcp.supported_versions not emitted; no-tenant identity re-resolves to a tenant on A2A/REST raw wrappers — #1592",
-    "T-UC-010-auth-data-identity": "INV-4 gap: response data varies with principal (adapter-derived channels/geo only for authenticated callers) — #1592",
+    # Graduated (salesagent-dn2s): T-UC-010-auth-data-identity — capability
+    # discovery now resolves the adapter CLASS tenant-only (INV-4), identical
+    # for anonymous and authenticated callers.
     # Graduated (salesagent-7moz): T-UC-010-ext-c-a2a — A2A public-skill list
     # now always validates a presented token (adcp_a2a_server.py), rejecting
     # an invalid one with AUTH_INVALID regardless of skill-level auth

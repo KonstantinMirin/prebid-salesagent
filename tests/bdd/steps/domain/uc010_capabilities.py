@@ -594,17 +594,29 @@ def then_mcp_invalid_token_success(ctx: dict) -> None:
         _require(ctx, path)
 
 
-@then("the response should omit the adapter-dependent sections that require a resolved principal")
-def then_omits_principal_sections(ctx: dict) -> None:
-    """Without a resolved principal there is no adapter — adapter-derived
-    data must not appear: presence-objects absent and channels (when a
-    tenant-level media_buy block exists) at the no-principal default."""
+@then("the response should carry the tenant's normal capabilities, not gated on the invalid token")
+def then_capabilities_not_gated_on_token(ctx: dict) -> None:
+    """INV-4 (AdCP v3.1.1, salesagent-dn2s): capability discovery describes
+    the SELLER, not the caller — an invalid/absent token must not degrade
+    adapter-derived data. Channels are tenant-resolved (get_adapter_class_for_tenant)
+    regardless of whether the presented token resolved a principal, so they
+    must equal the harness's tenant-level adapter seed, unaffected by the
+    invalid token.
+
+    audience_targeting/conversion_tracking are asserted absent because
+    production doesn't emit them at all yet (separate #1592 gap) — NOT
+    because a principal is missing.
+    """
+    from tests.harness.capabilities import DEFAULT_ADAPTER_CHANNELS
+
     doc = _wire(ctx)
     for path in ("media_buy.audience_targeting", "media_buy.conversion_tracking"):
-        assert _at(doc, path) is _MISSING, f"{path} present without a resolved principal"
+        assert _at(doc, path) is _MISSING, f"{path} unexpectedly present: {_at(doc, path)!r}"
     channels = _at(doc, "media_buy.portfolio.primary_channels")
-    if channels is not _MISSING:
-        assert channels == ["display"], f"adapter-derived channels leaked without a principal: {channels!r}"
+    assert channels == DEFAULT_ADAPTER_CHANNELS, (
+        f"adapter-derived channels degraded by an invalid token (INV-4 violation): "
+        f"expected {DEFAULT_ADAPTER_CHANNELS!r}, got {channels!r}"
+    )
 
 
 # ── Thens: protocols filter (ext-d) ──────────────────────────────────

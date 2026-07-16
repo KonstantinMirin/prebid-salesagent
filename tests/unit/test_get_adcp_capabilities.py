@@ -225,7 +225,13 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow.tenant_config = mock_repo
 
-            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+            with (
+                patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+                patch(
+                    "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                    side_effect=Exception("adapter unavailable (test)"),
+                ),
+            ):
                 from tests.factories import PrincipalFactory
 
                 identity = PrincipalFactory.make_identity(
@@ -313,29 +319,26 @@ class TestGetAdcpCapabilitiesWithTenant:
                     protocol="mcp",
                 )
 
-                with patch("src.core.tools.capabilities.get_principal_object") as mock_principal:
-                    mock_principal.return_value = MagicMock()
+                with patch("src.core.tools.capabilities.get_adapter_class_for_tenant") as mock_get_adapter_class:
+                    mock_get_adapter_class.return_value = mock_adapter
 
-                    with patch("src.core.tools.capabilities.get_adapter") as mock_get_adapter:
-                        mock_get_adapter.return_value = mock_adapter
+                    response = _get_adcp_capabilities_impl(None, identity)
 
-                        response = _get_adcp_capabilities_impl(None, identity)
+                    # Verify targeting from adapter
+                    assert response.media_buy is not None
+                    assert response.media_buy.execution is not None
+                    targeting = response.media_buy.execution.targeting
+                    assert targeting is not None
+                    assert targeting.geo_countries is True
+                    assert targeting.geo_regions is True
 
-                        # Verify targeting from adapter
-                        assert response.media_buy is not None
-                        assert response.media_buy.execution is not None
-                        targeting = response.media_buy.execution.targeting
-                        assert targeting is not None
-                        assert targeting.geo_countries is True
-                        assert targeting.geo_regions is True
+                    # Should have geo_metros with nielsen_dma
+                    assert targeting.geo_metros is not None
+                    assert targeting.geo_metros.nielsen_dma is True
 
-                        # Should have geo_metros with nielsen_dma
-                        assert targeting.geo_metros is not None
-                        assert targeting.geo_metros.nielsen_dma is True
-
-                        # Should have geo_postal_areas with us_zip
-                        assert targeting.geo_postal_areas is not None
-                        assert targeting.geo_postal_areas.us_zip is True
+                    # Should have geo_postal_areas with us_zip
+                    assert targeting.geo_postal_areas is not None
+                    assert targeting.geo_postal_areas.us_zip is True
         finally:
             current_tenant.set(None)
 
@@ -388,8 +391,16 @@ def _patch_capabilities_deps(
 ):
     """Return a context manager stack patching common capabilities dependencies.
 
+    Adapter resolution is tenant-only (salesagent-dn2s / INV-4): production
+    calls ``get_adapter_class_for_tenant(tenant)`` unconditionally, regardless
+    of whether the caller is authenticated. ``adapter=None`` here reproduces
+    the "adapter unavailable" degradation path (production catches the
+    exception and falls back to display-only channels / no targeting caps) —
+    not "no principal", which no longer affects adapter resolution at all.
+
     Args:
-        adapter: Mock adapter to return from get_adapter (None = no adapter).
+        adapter: Mock adapter CLASS-equivalent to return from
+            get_adapter_class_for_tenant (None = adapter resolution raises).
         db_partners: List of mock PublisherPartner objects from DB query.
     """
     from contextlib import ExitStack
@@ -408,12 +419,15 @@ def _patch_capabilities_deps(
     # Mock log_tool_activity (no-op)
     stack.enter_context(patch("src.core.tools.capabilities.log_tool_activity"))
 
-    # Mock get_principal_object
     if adapter is not None:
-        stack.enter_context(patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()))
-        stack.enter_context(patch("src.core.tools.capabilities.get_adapter", return_value=adapter))
+        stack.enter_context(patch("src.core.tools.capabilities.get_adapter_class_for_tenant", return_value=adapter))
     else:
-        stack.enter_context(patch("src.core.tools.capabilities.get_principal_object", return_value=None))
+        stack.enter_context(
+            patch(
+                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                side_effect=Exception("adapter unavailable (test)"),
+            )
+        )
 
     return stack
 
@@ -520,8 +534,10 @@ class TestGracefulDegradation:
         with (
             patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
             patch("src.core.tools.capabilities.log_tool_activity"),
-            patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()),
-            patch("src.core.tools.capabilities.get_adapter", side_effect=Exception("Adapter init failed")),
+            patch(
+                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                side_effect=Exception("Adapter init failed"),
+            ),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 
@@ -540,7 +556,10 @@ class TestGracefulDegradation:
         with (
             patch("src.core.tools.capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
             patch("src.core.tools.capabilities.log_tool_activity"),
-            patch("src.core.tools.capabilities.get_principal_object", return_value=None),
+            patch(
+                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                side_effect=Exception("adapter unavailable (test)"),
+            ),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 

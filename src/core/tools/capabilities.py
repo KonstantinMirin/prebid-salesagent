@@ -32,12 +32,12 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.auth import get_principal_object, require_identity
+from src.core.auth import require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
-from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
@@ -87,8 +87,7 @@ def _get_adcp_capabilities_impl(
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    # Extract principal and tenant from resolved identity
-    principal_id = identity.principal_id if identity else None
+    # Extract tenant from resolved identity
     tenant = identity.tenant if identity else None
 
     if not tenant:
@@ -111,19 +110,20 @@ def _get_adcp_capabilities_impl(
     # Log activity
     log_tool_activity(identity, "get_adcp_capabilities")
 
-    # Get adapter to determine channels and capabilities
+    # Get adapter CLASS to determine channels and capabilities. Tenant-only,
+    # principal-free: capabilities describe the SELLER (tenant), not the
+    # caller — INV-4 (AdCP v3.1.1). Resolved via get_adcp_capabilities.mdx
+    # L23 + get_adapter_class_for_tenant (adapter_helpers.py), which bypasses
+    # Adapter.__init__ entirely — Kevel/TritonDigital would crash __init__
+    # for a synthetic/tenant-only Principal (salesagent-dn2s).
     primary_channels: list[MediaChannel] = []
-    adapter = None
+    adapter: type | None = None
     try:
-        # Get the Principal object to pass to adapter
-        principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
-
-        if principal:
-            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
-            if adapter and hasattr(adapter, "default_channels"):
-                for channel_name in adapter.default_channels:
-                    if channel_name.lower() in CHANNEL_MAPPING:
-                        primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
+        adapter = get_adapter_class_for_tenant(tenant)
+        if adapter and hasattr(adapter, "default_channels"):
+            for channel_name in adapter.default_channels:
+                if channel_name.lower() in CHANNEL_MAPPING:
+                    primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
     except Exception as e:
         logger.warning(f"Could not get adapter channels: {e}")
 

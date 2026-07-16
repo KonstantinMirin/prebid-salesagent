@@ -83,6 +83,75 @@ from src.core.database.database_session import get_db_session
 from src.core.schemas import Principal
 
 
+def _resolve_tenant_id_and_fallback_adapter(tenant: Any) -> tuple[str, str]:
+    """Extract tenant_id and the tenant.ad_server fallback adapter type.
+
+    Supports both the ORM model (Tenant) and the dict shape (identity.tenant).
+    This is the pre-AdapterConfig fallback only — callers needing the
+    authoritative adapter type must go through ``resolve_tenant_adapter_type``.
+    """
+    if isinstance(tenant, dict):
+        return tenant["tenant_id"], tenant.get("ad_server") or "mock"
+    # ORM model (Tenant) — use attribute access
+    return tenant.tenant_id, tenant.ad_server or "mock"
+
+
+def resolve_tenant_adapter_type(tenant: Any = None) -> str:
+    """Resolve the authoritative ad-server adapter type for a tenant.
+
+    Single source of truth for adapter-TYPE resolution: ``AdapterConfig.adapter_type``
+    (via ``AdapterConfigRepository``) wins when a row exists, falling back to
+    ``tenant.ad_server``/``tenant["ad_server"]`` otherwise. ``get_adapter()`` and the
+    principal-free ``get_adapter_class_for_tenant()`` read path both route through
+    this function so the two can never diverge (salesagent-dn2s: divergent
+    tenant-adapter-type resolution copies would only half-close INV-4).
+
+    Args:
+        tenant: Tenant context (dict or ORM model). Falls back to ContextVar if not provided.
+    """
+    logger = logging.getLogger(__name__)
+
+    if tenant is None:
+        # Fallback for callers that haven't been updated yet (e.g., async approval handlers)
+        from src.core.config_loader import get_current_tenant
+
+        tenant = get_current_tenant()
+
+    tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(tenant)
+    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
+
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+    with get_db_session() as session:
+        repo = AdapterConfigRepository(session, tenant_id)
+        config_row = repo.find_by_tenant()
+        if config_row and config_row.adapter_type:
+            selected_adapter = config_row.adapter_type
+            logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
+
+    return selected_adapter or "mock"
+
+
+def get_adapter_class_for_tenant(tenant: Any = None) -> type:
+    """Resolve the ad-server adapter CLASS for a tenant, without a Principal.
+
+    For read-only capability/discovery paths (e.g. get_adcp_capabilities) that
+    only need adapter-level CLASS attributes (default_channels,
+    get_targeting_capabilities) and must work identically for anonymous and
+    authenticated callers per AdCP INV-4 (capabilities describe the seller,
+    not the caller). Deliberately bypasses ``Adapter.__init__`` — Kevel and
+    TritonDigital unconditionally require a principal-bound config in
+    ``__init__`` and would crash for a synthetic/tenant-only Principal.
+
+    Args:
+        tenant: Tenant context (dict or ORM model). Falls back to ContextVar if not provided.
+    """
+    from src.adapters import get_adapter_class
+
+    adapter_type = resolve_tenant_adapter_type(tenant)
+    return get_adapter_class(adapter_type)
+
+
 def get_adapter(
     principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
 ) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
@@ -104,15 +173,8 @@ def get_adapter(
 
         tenant = get_current_tenant()
 
-    # Extract tenant_id and ad_server from tenant (supports both ORM model and dict)
-    if isinstance(tenant, dict):
-        tenant_id = tenant["tenant_id"]
-        selected_adapter = tenant.get("ad_server", "mock")
-    else:
-        # ORM model (Tenant) — use attribute access
-        tenant_id = tenant.tenant_id
-        selected_adapter = tenant.ad_server or "mock"
-    logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
+    selected_adapter = resolve_tenant_adapter_type(tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
 
     # Get adapter config via repository
     from src.core.database.repositories.adapter_config import AdapterConfigRepository
@@ -128,10 +190,6 @@ def get_adapter(
         if config_row:
             adapter_type = config_row.adapter_type
             logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
-            # Use adapter_type from AdapterConfig as the source of truth
-            if adapter_type:
-                selected_adapter = adapter_type
-                logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
             if adapter_type == "mock":
                 adapter_config["dry_run"] = config_row.mock_dry_run or False
                 # Default to True (require approval) for safety

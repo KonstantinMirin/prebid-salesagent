@@ -398,12 +398,16 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the Buyer has an invalid authentication token
     When the Buyer Agent calls get_adcp_capabilities via MCP with the token
     Then the response should be a success carrying adcp.major_versions, adcp.idempotency and supported_protocols
-    And the response should omit the adapter-dependent sections that require a resolved principal
+    And the response should carry the tenant's normal capabilities, not gated on the invalid token
     # LOCAL CONTRACT (documented reading): treat-invalid-as-absent sits in tension with the
     # AUTH_INVALID seller-MUST, which governs an Authorization header; this project's MCP
     # token rides x-adcp-auth and discovery is the spec's no-prerequisite first call —
     # production is authoritative on the policy (spec-silent), the reading is pinned here.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+    # INV-4 (salesagent-dn2s): capabilities describe the seller, not the caller — the invalid
+    # token must not degrade adapter-derived data (channels), only auth-scoped sections that
+    # remain genuinely unimplemented (audience_targeting/conversion_tracking, separate #1592 gap).
+    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L23)
 
   @T-UC-010-ext-d-filter @extension @ext-d @boundary @partition
   Scenario: media_buy (first enum value) — protocol filter honored, response filtered to requested domain
