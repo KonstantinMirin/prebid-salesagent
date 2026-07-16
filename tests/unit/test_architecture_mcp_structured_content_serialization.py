@@ -140,10 +140,7 @@ class TestMcpStructuredContentSerialization:
             snippets={
                 "bare_name": "ToolResult(content=str(response), structured_content=response)",
                 "attribute_access": "ToolResult(content=str(r.data), structured_content=r.data)",
-                "wrong_method": (
-                    "ToolResult(content=str(response), "
-                    "structured_content=response.model_dump_json())"
-                ),
+                "wrong_method": ("ToolResult(content=str(response), structured_content=response.model_dump_json())"),
             },
         )
 
