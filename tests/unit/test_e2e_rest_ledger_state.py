@@ -59,6 +59,11 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
+        # Added by bug-triage epic salesagent-jl20 (2026-07-16): 2 genuine e2e-only
+        # gaps surfaced by un-xfailing dn2s/mkso's scenarios — see ledger file
+        # section comments for full root-cause analysis of each.
+        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_authentication_state_does_not_affect_response_data_content[e2e_rest]",
+        "tests/bdd/test_uc003_update_media_buy.py::test_authentication_error__principal_not_found_in_database[e2e_rest]",
     }
 )
 
