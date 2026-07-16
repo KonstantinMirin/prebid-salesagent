@@ -19,6 +19,7 @@ from pytest_bdd import given, parsers, then, when
 from src.core.billing_policy import BILLING_PARTY_VALUES
 from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.helpers import assert_envelope_shape
 
@@ -175,7 +176,28 @@ def given_unauthenticated(ctx: dict, transport: str | None = None) -> None:
 
 @given("the Buyer Agent has an A2A connection with an expired token")
 def given_expired_token(ctx: dict) -> None:
-    """Set up A2A connection with an expired/invalid token."""
+    """Set up A2A connection with an expired/invalid token.
+
+    KNOWN ISSUE (found while migrating the AUTH_MISSING/AUTH_INVALID split,
+    salesagent-mkso): this Given is textually "expired token" but its
+    implementation is identical to ``given_unauthenticated`` (no credential
+    at all) — it does not actually drive a PRESENTED-but-rejected token
+    through the real resolution chain. That distinction was unobservable
+    before the split (both cases collapsed to AUTH_REQUIRED); it is real
+    now (absent -> AUTH_MISSING, presented-but-invalid -> AUTH_INVALID).
+    Attempted a real fix here (an identity carrying a bogus ``auth_token``,
+    mirroring ``CapabilitiesEnv.invalid_token_identity()``): A2A correctly
+    exercises the real chain and rejects with AUTH_INVALID, but the REST
+    harness's ``_configure_rest_auth`` dependency override always treats a
+    non-None identity as a valid, already-resolved token (no real
+    header/token-lookup path exists in-process for REST — see
+    tests/harness/capabilities.py's "real header path is exercised on
+    e2e_rest" note), so it collapses to AUTH_MISSING via
+    ``require_principal_id``. Fixing that needs a REST real-token harness
+    seam, out of scope here. Pinned to what this Given actually produces
+    (AUTH_MISSING) rather than force a wrong assertion; a follow-up should
+    either build the REST seam or rename this Given to match its behavior.
+    """
     ctx["has_auth"] = False
     ctx["force_identity"] = None
 
@@ -1120,10 +1142,21 @@ def then_errors_array_may_contain_multiple(ctx: dict) -> None:
 
 @then(parsers.parse('the error code is "{code}"'))
 def then_error_code(ctx: dict, code: str) -> None:
-    """Assert the error has the expected error code."""
-    error = _get_error(ctx)
-    actual = getattr(error, "error_code", None)
-    assert actual is not None, f"Error has no error_code: {error}"
+    """Assert the error has the expected error code — wire-first, reconstructed fallback.
+
+    Consolidated onto the same wire-first strategy as the canonical
+    ``then_error.py:340`` step (tests/CLAUDE.md Error Verification Policy):
+    prefer the real wire envelope's code over the lossy reconstructed
+    ``ctx['error']`` (which collapses distinct wire codes onto one exception
+    class). Kept as a separate step function because BR-UC-011/BR-UC-030 pin
+    the "the error code is" wording rather than "the error code should be"
+    (salesagent-mkso).
+    """
+    actual = _wire_code(ctx)
+    if actual is None:
+        error = _get_error(ctx)
+        actual = getattr(error, "error_code", None)
+        assert actual is not None, f"Error has no error_code: {error}"
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 

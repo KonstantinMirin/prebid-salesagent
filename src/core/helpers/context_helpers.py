@@ -23,9 +23,9 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
         Full tenant dict (always a dict, never a string)
 
     Raises:
-        AdCPAuthenticationError: If no tenant context can be resolved
+        AdCPTenantContextError: If no tenant context can be resolved
     """
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.exceptions import AdCPTenantContextError
 
     # Determine the expected tenant_id from identity
     expected_tenant_id = None
@@ -67,4 +67,11 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
             set_current_tenant(identity.tenant)
             return identity.tenant
 
-    raise AdCPAuthenticationError("No tenant context available")
+    # DEFER: tenant-axis raise, tracked separately under the TENANT_REQUIRED
+    # gap (salesagent-40kk), out of scope for the AUTH_MISSING/AUTH_INVALID
+    # split (salesagent-mkso). AdCPTenantContextError pins this to the
+    # pre-split AUTH_REQUIRED wire code via its own class default (not an
+    # error_code= kwarg, which test_architecture_no_error_code_kwarg_in_impl.py
+    # forbids) so it does not silently inherit AdCPAuthenticationError's new
+    # AUTH_INVALID default.
+    raise AdCPTenantContextError("No tenant context available")

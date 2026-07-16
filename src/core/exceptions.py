@@ -32,19 +32,26 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # WIRE_STANDARD_CODES.  Codes in ERROR_CODE_MAPPING are translated at the
 # transport boundary; codes in INTERNAL_CODES never leave the server.
 
-# Spec codes the SDK helper table has not caught up to. The pinned 3.1 enum
-# (enums/error-code.json @ adcp 04f59d2d5) defines these as real wire codes;
-# adcp 5.7's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
+# Spec codes the SDK helper table has not caught up to. The pinned 3.1.1 enum
+# (dist/schemas/3.1.1/enums/error-code.json) defines these as real wire codes;
+# adcp 6.6.0's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
 # cross-check, not the authority. CREATIVE_NOT_FOUND per the enum: correctable,
 # and "Sellers MUST return this code uniformly for any creative_id not owned by
 # the calling account" (#1430 review). CONFIGURATION_ERROR per the enum:
 # terminal — "the buyer cannot resolve a seller-side deployment
-# misconfiguration and MUST NOT auto-retry" (#1430 review). The remaining
-# demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same treatment
-# in #1602.
+# misconfiguration and MUST NOT auto-retry" (#1430 review). AUTH_MISSING /
+# AUTH_INVALID (v3.1.1 error-code.json) replace the deprecated AUTH_REQUIRED
+# alias with a split: AUTH_MISSING ("No credentials were presented ...
+# Recovery: correctable") vs AUTH_INVALID ("Credentials were presented but
+# rejected ... Recovery: terminal") — see salesagent-mkso. adcp 6.6.0 has not
+# implemented the split yet (SDK is a cross-check, not authoritative). The
+# remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same
+# treatment in #1602.
 _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
     "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
+    "AUTH_MISSING": {"recovery": "correctable", "message": "No credentials were presented"},
+    "AUTH_INVALID": {"recovery": "terminal", "message": "Credentials were presented but rejected"},
 }
 
 # The authoritative wire-code table: SDK baseline + pinned-spec supplement.
@@ -65,11 +72,18 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "FORMAT_NOT_FOUND": "INVALID_REQUEST",
     "TASK_NOT_FOUND": "INVALID_REQUEST",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
-    # Authentication / authorisation
+    # Authentication / authorisation. PRINCIPAL_ID_MISSING (no principal_id
+    # resolved at all) is the absent-credential case -> AUTH_MISSING.
+    # PRINCIPAL_NOT_FOUND / INSUFFICIENT_PRIVILEGES (a specific, presented
+    # identifier was rejected) are the presented-but-invalid case ->
+    # AUTH_INVALID. Per v3.1.1 error-code.json AUTH_MISSING/AUTH_INVALID
+    # split (salesagent-mkso). AUTHORIZATION_ERROR is a distinct axis
+    # (authenticated but not authorized) and stays on AUTH_REQUIRED pending
+    # a separate authz-axis decision (out of scope here).
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
-    "PRINCIPAL_ID_MISSING": "AUTH_REQUIRED",
-    "PRINCIPAL_NOT_FOUND": "AUTH_REQUIRED",
-    "INSUFFICIENT_PRIVILEGES": "AUTH_REQUIRED",
+    "PRINCIPAL_ID_MISSING": "AUTH_MISSING",
+    "PRINCIPAL_NOT_FOUND": "AUTH_INVALID",
+    "INSUFFICIENT_PRIVILEGES": "AUTH_INVALID",
     # Validation (field-level)
     "INVALID_DATE_RANGE": "VALIDATION_ERROR",
     "INVALID_DATETIME": "VALIDATION_ERROR",
@@ -438,42 +452,75 @@ class AdCPInvalidRequestError(AdCPValidationError):
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
 
 
+# v3.1.1 error-code.json deprecates the single AUTH_REQUIRED code in favor of
+# a split: AUTH_MISSING (no credentials presented; correctable — provide
+# credentials and retry) vs AUTH_INVALID (credentials presented but rejected;
+# terminal — do not auto-retry, rotate/escalate). AUTH_REQUIRED itself is
+# retained by the spec only as a deprecated backward-compat alias. See
+# salesagent-mkso for the migration; distinct suggestion strings per code
+# since "provide valid credentials" reads as invalid-framing for the
+# genuinely-absent-credential sites.
+AUTH_MISSING_SUGGESTION = "Provide credentials (x-adcp-auth token) and retry."
+AUTH_INVALID_SUGGESTION = (
+    "Do not auto-retry with the same credentials — they were rejected. Rotate/refresh and retry, or escalate."
+)
+# Retained for any lingering non-split callers; prefer the code-specific
+# suggestions above for new call sites.
 AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
 
 
 class AdCPAuthenticationError(AdCPError):
-    """Missing or invalid authentication credentials (401).
+    """Presented-but-invalid authentication credentials (401, AUTH_INVALID).
 
-    Emits the standard ``AUTH_REQUIRED`` wire code — the sole authentication
-    error code in the AdCP 3.1 error-code enum and adcp 5.7
-    ``STANDARD_ERROR_CODES``. Its enum description explicitly covers both
-    "credentials missing" and "credentials presented but rejected", so it is
-    the canonical code for every authentication failure.
+    Emits ``AUTH_INVALID`` per the v3.1.1 error-code enum: "Credentials were
+    presented but rejected — revoked, malformed signature, or a key no longer
+    in the seller's keystore ... Recovery: terminal." This is the base class
+    for the presented-but-rejected case; ``AdCPAuthRequiredError`` below
+    overrides to ``AUTH_MISSING`` for the genuinely-absent-credential case.
 
-    Recovery is ``correctable`` per the pinned AdCP error-code enum
-    (``AUTH_REQUIRED.recovery == "correctable"``; released 3.1.0 agrees) —
-    not the ``terminal`` base default. The enum carries operationally distinct
-    sub-cases (missing credentials → retry; presented-but-rejected → escalate),
-    but its single canonical ``recovery`` classification is ``correctable``,
-    and the wire contract is graded against that enum (#1417,
-    superseding the earlier "storyboards grade only the code" judgment).
+    Recovery is ``terminal`` — the buyer MUST NOT blindly auto-retry
+    (rejected credentials, retried unmodified, will be rejected again);
+    rotate/refresh once if applicable, otherwise escalate to a human.
     """
 
     _default_status_code: ClassVar[int] = 401
-    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
-    # Every authentication rejection shares one buyer fix hint, so the graded
-    # top-level suggestion (error.json) can never be forgotten at a raise site
-    # (#1417 round-8 review item 4: 11 of 12 raise sites emitted an empty suggestion).
-    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
+    _default_error_code: ClassVar[str] = "AUTH_INVALID"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    _default_suggestion: ClassVar[str | None] = AUTH_INVALID_SUGGESTION
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
-    """No authentication context present (401, AUTH_REQUIRED).
+    """No authentication context present (401, AUTH_MISSING).
 
-    Raised when the request contains no auth token at all. Inherits the
-    standard ``AUTH_REQUIRED`` wire code from its parent.
+    Raised when the request contains no auth token / identity at all. Per
+    the v3.1.1 error-code enum: "No credentials were presented ... Recovery:
+    correctable (provide credentials via the auth header and retry)."
     """
+
+    _default_error_code: ClassVar[str] = "AUTH_MISSING"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    _default_suggestion: ClassVar[str | None] = AUTH_MISSING_SUGGESTION
+
+
+class AdCPTenantContextError(AdCPAuthenticationError):
+    """DEFERRED: tenant-resolution failure (401, AUTH_REQUIRED).
+
+    Raised when no tenant context can be resolved — either no identity at
+    all, or an identity whose tenant could not be detected/attached. This
+    is a distinct axis from the AUTH_MISSING/AUTH_INVALID credential-presence
+    split (tenant resolution, not credential presence/validity) and is
+    tracked separately as the TENANT_REQUIRED gap (salesagent-40kk;
+    tests/bdd/conftest.py). Explicitly pinned to the pre-split AUTH_REQUIRED
+    code (rather than inheriting ``AdCPAuthenticationError``'s new
+    AUTH_INVALID default) via a dedicated subclass — not an ``error_code=``
+    kwarg override, which ``test_architecture_no_error_code_kwarg_in_impl.py``
+    forbids — so the AUTH_MISSING/AUTH_INVALID split (salesagent-mkso) does
+    not silently change tenant-axis wire behavior that is out of its scope.
+    """
+
+    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
 
 
 class AdCPAuthorizationError(AdCPError):

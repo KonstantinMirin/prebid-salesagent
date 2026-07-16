@@ -128,13 +128,16 @@ def then_auth_before_business_logic(ctx: dict) -> None:
 
     Sends a SECOND request with invalid credentials (no principal_id) THROUGH
     THE WIRE (the parametrized transport) and verifies: (1) the wire envelope
-    carries the AUTH_REQUIRED error code, and (2) no adapter calls were made —
-    proving auth blocks before business logic side effects.
+    carries the AUTH_MISSING error code (absent credential — no principal_id
+    resolved at all), and (2) no adapter calls were made — proving auth blocks
+    before business logic side effects.
 
     Per the Error Verification Policy (tests/CLAUDE.md), this asserts on the
-    wire envelope, not a reconstructed exception. The auth error code is
-    AUTH_REQUIRED on the wire (a recent reversal flipped AUTH_TOKEN_INVALID ->
-    AUTH_REQUIRED); the "Principal ID not found" message still holds.
+    wire envelope, not a reconstructed exception. Split from the deprecated
+    AUTH_REQUIRED to AUTH_MISSING/AUTH_INVALID per v3.1.1 error-code.json
+    (salesagent-mkso; a prior reversal flipped AUTH_TOKEN_INVALID ->
+    AUTH_REQUIRED, now split again); the "Principal ID not found" message
+    still holds.
     """
     from src.core.exceptions import AdCPAuthenticationError
     from src.core.schemas import CreateMediaBuyRequest
@@ -175,10 +178,10 @@ def then_auth_before_business_logic(ctx: dict) -> None:
 
     result = auth_ctx.get("result")
     assert result is not None, "dispatch_request did not produce a TransportResult for the invalid-identity request"
-    # recovery omitted -> defaults to the pinned AUTH_REQUIRED enum (correctable). Do not
+    # recovery omitted -> defaults to the pinned AUTH_MISSING enum (correctable). Do not
     # pass an explicit recovery= that shadows the pinned enum (#1417: superseded
     # the earlier terminal override; the pinned enum is the single source of truth).
-    result.assert_wire_error("AUTH_REQUIRED", message_substr="Principal ID not found")
+    result.assert_wire_error("AUTH_MISSING", message_substr="Principal ID not found")
 
     # Verify no business logic side effects occurred
     assert not mock_adapter.create_media_buy.called, (

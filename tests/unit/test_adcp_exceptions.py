@@ -44,7 +44,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTH_REQUIRED"
+        assert exc.error_code == "AUTH_INVALID"
 
     def test_authorization_error(self):
         """AdCPAuthorizationError must have status_code=403."""

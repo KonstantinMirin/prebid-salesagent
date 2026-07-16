@@ -22,8 +22,8 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPError,
     AdCPPolicyViolationError,
     AdCPValidationError,
@@ -201,7 +201,9 @@ async def _get_products_impl(
     if brand_manifest_policy == "require_brand" and not offering:
         raise AdCPAuthorizationError("Brand manifest required by tenant policy", recovery="correctable")
     elif brand_manifest_policy == "require_auth" and not principal_id:
-        raise AdCPAuthenticationError("Authentication required by tenant policy")
+        # No credential presented at all -> AUTH_MISSING per v3.1.1
+        # error-code.json.
+        raise AdCPAuthRequiredError("Authentication required by tenant policy")
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching

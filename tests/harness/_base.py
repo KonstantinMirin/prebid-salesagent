@@ -64,6 +64,7 @@ def _adcp_error_from_code(
         AdCPAccountSuspendedError,
         AdCPAdapterError,
         AdCPAuthenticationError,
+        AdCPAuthRequiredError,
         AdCPBudgetExhaustedError,
         AdCPBudgetTooLowError,
         AdCPCapabilityNotSupportedError,
@@ -88,6 +89,7 @@ def _adcp_error_from_code(
         for cls in (
             AdCPValidationError,
             AdCPAuthenticationError,
+            AdCPAuthRequiredError,
             AdCPNotFoundError,
             AdCPAccountNotFoundError,
             AdCPAccountSetupRequiredError,
@@ -113,12 +115,13 @@ def _adcp_error_from_code(
             AdCPIdempotencyExpiredError,
         )
     }
-    # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED
-    # wire code — we can't disambiguate auth-missing from auth-insufficient at
-    # the wire, and Authentication (missing token/tenant) is the more common
-    # buyer-facing case. Pin Authentication explicitly here so the mapping
-    # doesn't depend on dict-comprehension insertion order.
-    _CODE_TO_CLASS[AdCPAuthenticationError._default_error_code] = AdCPAuthenticationError
+    # AUTH_MISSING -> AdCPAuthRequiredError and AUTH_INVALID -> AdCPAuthenticationError
+    # are unambiguous per v3.1.1 error-code.json (salesagent-mkso) — each class's
+    # own _default_error_code disambiguates them via the dict comprehension above.
+    # AUTH_REQUIRED (deprecated alias) is now shared only by AdCPAuthorizationError
+    # (403, out of the split's scope) and the deferred tenant-axis
+    # AdCPTenantContextError — neither is reconstructed to a specific subclass
+    # here; both fall through to the base AdCPError below.
     from src.core.exceptions import INTERNAL_CODES
 
     assert error_code not in INTERNAL_CODES, (

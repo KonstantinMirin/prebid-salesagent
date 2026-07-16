@@ -111,22 +111,27 @@ def _get_media_buys_impl(
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
     if not principal_id:
+        # No principal_id resolved at all (absent credential) -> AUTH_MISSING
+        # per v3.1.1 error-code.json. Was a hardcoded "AUTH_REQUIRED" literal
+        # bypassing the exception hierarchy entirely (salesagent-mkso).
         return GetMediaBuysResponse(
             media_buys=[],
             errors=[
                 Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_REQUIRED", message="Principal ID not found in context"
+                    code="AUTH_MISSING", message="Principal ID not found in context"
                 )
             ],
         )
 
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
+        # principal_id was presented but doesn't resolve -> AUTH_INVALID
+        # per v3.1.1 error-code.json.
         return GetMediaBuysResponse(
             media_buys=[],
             errors=[
                 Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_REQUIRED", message=f"Principal {principal_id} not found"
+                    code="AUTH_INVALID", message=f"Principal {principal_id} not found"
                 )
             ],
         )

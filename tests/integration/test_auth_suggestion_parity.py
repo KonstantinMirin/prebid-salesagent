@@ -1,14 +1,17 @@
-"""Auth AUTH_REQUIRED raises must carry error.json's top-level suggestion (#1417 round-8 review, items 3-4).
+"""Auth rejections must carry error.json's top-level suggestion (#1417 round-8 review, items 3-4).
 
-Core Invariant: every AUTH_REQUIRED rejection carries a non-empty TOP-LEVEL
-``suggestion`` in the two-layer wire envelope (AdCP 3.1, pinned ref
-v3.1-04f59d2d5, static/schemas/source/core/error.json — "Suggested action to
-resolve the error"). ``require_identity`` already passes
-``suggestion=AUTH_REQUIRED_SUGGESTION``; its four siblings in
-``src/core/auth.py`` (invalid-token, ``resolve_principal_or_raise``,
-``require_principal_id``, ``require_tenant``) raised with the hint only in
-message text, leaving the graded top-level ``suggestion`` field EMPTY
-(PR #1417 review round 8, item 4 → #1417 round-8 review item 4).
+Core Invariant: every AUTH_MISSING/AUTH_INVALID rejection carries a non-empty
+TOP-LEVEL ``suggestion`` in the two-layer wire envelope (AdCP 3.1.1, pinned
+ref dist/schemas/3.1.1/enums/error-code.json — "Suggested action to resolve
+the error"). ``require_identity`` already passes
+``suggestion=AUTH_MISSING_SUGGESTION``; its siblings in ``src/core/auth.py``
+(invalid-token, ``resolve_principal_or_raise``, ``require_principal_id``)
+raised with the hint only in message text, leaving the graded top-level
+``suggestion`` field EMPTY (PR #1417 review round 8, item 4). Split from the
+single deprecated ``AUTH_REQUIRED`` code to ``AUTH_MISSING``/``AUTH_INVALID``
+per the v3.1.1 error-code enum split (salesagent-mkso). ``require_tenant``
+is DEFERRED (tenant-axis gap, salesagent-40kk) and stays on the deprecated
+``AUTH_REQUIRED`` code — out of scope for this split.
 
 Wire-first per tests/CLAUDE.md § Error Verification Policy: the
 ``require_principal_id`` case drives the REAL A2A wire (it is the
@@ -26,15 +29,35 @@ from tests.helpers import assert_envelope_shape
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
+def _assert_auth_missing_with_suggestion(envelope: dict) -> None:
+    from tests.harness.transport import extract_wire_suggestion
+
+    assert_envelope_shape(envelope, "AUTH_MISSING", recovery="correctable")
+    suggestion = extract_wire_suggestion(envelope)
+    assert suggestion, (
+        "Expected a non-empty TOP-LEVEL suggestion in the AUTH_MISSING wire "
+        f"envelope (dist/schemas/3.1.1/enums/error-code.json), got: {envelope}"
+    )
+
+
+def _assert_auth_invalid_with_suggestion(envelope: dict) -> None:
+    from tests.harness.transport import extract_wire_suggestion
+
+    assert_envelope_shape(envelope, "AUTH_INVALID", recovery="terminal")
+    suggestion = extract_wire_suggestion(envelope)
+    assert suggestion, (
+        "Expected a non-empty TOP-LEVEL suggestion in the AUTH_INVALID wire "
+        f"envelope (dist/schemas/3.1.1/enums/error-code.json), got: {envelope}"
+    )
+
+
 def _assert_auth_required_with_suggestion(envelope: dict) -> None:
+    """DEFERRED tenant-axis sites (require_tenant) still emit AUTH_REQUIRED."""
     from tests.harness.transport import extract_wire_suggestion
 
     assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
     suggestion = extract_wire_suggestion(envelope)
-    assert suggestion, (
-        "Expected a non-empty TOP-LEVEL suggestion in the AUTH_REQUIRED wire "
-        f"envelope (error.json @v3.1-04f59d2d5), got: {envelope}"
-    )
+    assert suggestion, f"Expected a non-empty TOP-LEVEL suggestion in the AUTH_REQUIRED wire envelope, got: {envelope}"
 
 
 class TestRequirePrincipalIdA2ASuggestion:
@@ -42,8 +65,9 @@ class TestRequirePrincipalIdA2ASuggestion:
 
     def test_missing_principal_a2a_envelope_carries_suggestion(self, integration_db):
         """An identity with no principal_id rejected on the A2A wire must
-        produce the AUTH_REQUIRED envelope WITH a top-level ``suggestion`` —
-        parity with ``require_identity``.
+        produce the AUTH_MISSING envelope WITH a top-level ``suggestion`` —
+        parity with ``require_identity``. Absent credential -> AUTH_MISSING
+        per v3.1.1 error-code.json (salesagent-mkso).
         """
         from tests.factories import PrincipalFactory, TenantFactory
         from tests.harness.media_buy_list import MediaBuyListEnv
@@ -59,14 +83,14 @@ class TestRequirePrincipalIdA2ASuggestion:
                 f"A missing principal_id must be rejected on the A2A wire, got success payload: {result.payload!r}"
             )
             result.assert_wire_error(
-                "AUTH_REQUIRED",
+                "AUTH_MISSING",
                 recovery="correctable",
                 require_suggestion=True,
             )
 
 
 class TestAuthHelperFamilySuggestion:
-    """The remaining AUTH_REQUIRED raise sites in src/core/auth.py carry a suggestion.
+    """The remaining AUTH_MISSING/AUTH_INVALID raise sites in src/core/auth.py carry a suggestion.
 
     Each case drives the production helper and asserts on the envelope the
     production boundary translator builds for its raise — the same
@@ -74,6 +98,7 @@ class TestAuthHelperFamilySuggestion:
     """
 
     def test_resolve_principal_not_found_carries_suggestion(self, integration_db):
+        """A presented-but-unresolvable principal_id -> AUTH_INVALID (terminal)."""
         from src.core.auth import resolve_principal_or_raise
         from tests.factories import TenantFactory
         from tests.harness._base import BareIntegrationEnv
@@ -85,7 +110,7 @@ class TestAuthHelperFamilySuggestion:
             with pytest.raises(AdCPError) as exc_info:
                 resolve_principal_or_raise("nonexistent-principal", tenant_id="auth_sugg_t1")
 
-        _assert_auth_required_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
 
     def test_require_tenant_missing_carries_suggestion(self):
         from src.core.auth import require_tenant
@@ -100,7 +125,8 @@ class TestAuthHelperFamilySuggestion:
 
     def test_invalid_token_carries_suggestion(self, integration_db):
         """get_principal_from_context with an invalid token (require_valid_token=True)
-        raises AUTH_REQUIRED whose envelope must carry the top-level suggestion.
+        raises AUTH_INVALID (presented-but-rejected credential) whose envelope
+        must carry the top-level suggestion.
         """
         from src.core.auth import get_principal_from_context
         from tests.factories import TenantFactory
@@ -123,4 +149,4 @@ class TestAuthHelperFamilySuggestion:
             with pytest.raises(AdCPError) as exc_info:
                 get_principal_from_context(_HeaderCarrier())
 
-        _assert_auth_required_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))

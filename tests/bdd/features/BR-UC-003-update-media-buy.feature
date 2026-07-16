@@ -467,16 +467,25 @@ Feature: BR-UC-003 Update Media Buy
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error message should contain "authentication"
     And the error should include "suggestion" field
-    And the suggestion should contain "valid credentials"
+    And the suggestion should contain "credentials"
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication failed
-    # POST-F3: Suggestion to obtain valid credentials
+    # POST-F3: Suggestion to obtain credentials
 
   @T-UC-003-ext-a-unknown @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication error -- principal not found in database
+    # NOTE (salesagent-mkso): despite the scenario title, production's
+    # update_media_buy ownership check treats an unresolvable principal_id
+    # as "does not own this media buy" -> AdCPAuthorizationError (403,
+    # authorization axis), not AdCPAuthenticationError (authentication
+    # axis). AdCPAuthorizationError is explicitly OUT OF SCOPE for the
+    # AUTH_MISSING/AUTH_INVALID split (different semantic axis) and still
+    # emits the deprecated AUTH_REQUIRED code pending its own future
+    # decision — corrected from an initial AUTH_INVALID assumption after
+    # tracing the actual raise site.
     Given the Buyer is authenticated as principal "unknown_principal"
     And the principal "unknown_principal" does not exist in the database
     And a valid update_media_buy request with:

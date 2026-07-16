@@ -2141,11 +2141,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-sandbox-validation",
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
+            # Graduated (salesagent-mkso): T-UC-019-ext-a (no-auth get_media_buys)
+            # now correctly emits AUTH_MISSING per the v3.1.1 AUTH_MISSING/
+            # AUTH_INVALID split — was previously stale on AUTH_TOKEN_INVALID/
+            # AUTH_REQUIRED.
             # Extension errors — error code mismatches / not implemented.
-            # ext-a (no-auth get_media_buys): once wired, the missing-credentials
-            # path emits AUTH_TOKEN_INVALID, not the spec's AUTH_REQUIRED — a
-            # pre-existing auth-code gap unrelated to this PR's status work.
-            "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
             "T-UC-019-ext-d",

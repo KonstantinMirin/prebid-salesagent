@@ -7,7 +7,7 @@ from rich.console import Console
 from sqlalchemy import select
 
 from src.adapters.mock_creative_engine import MockCreativeEngine
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import AdCPTenantContextError
 from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
@@ -293,15 +293,22 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
     """Get strategy manager for current context."""
     identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
 
+    # DEFER: tenant-axis raises, tracked separately under the TENANT_REQUIRED
+    # gap (salesagent-40kk), out of scope for the AUTH_MISSING/AUTH_INVALID
+    # split (salesagent-mkso). AdCPTenantContextError pins these to the
+    # pre-split AUTH_REQUIRED wire code via its own class default (not an
+    # error_code= kwarg, which test_architecture_no_error_code_kwarg_in_impl.py
+    # forbids) so they do not silently inherit AdCPAuthenticationError's new
+    # AUTH_INVALID default.
     if not identity or not identity.tenant_id:
-        raise AdCPAuthenticationError("No tenant configuration found")
+        raise AdCPTenantContextError("No tenant configuration found")
 
     if identity.tenant and isinstance(identity.tenant, dict):
         set_current_tenant(identity.tenant)
     else:
         tenant_config = get_current_tenant()
         if not tenant_config:
-            raise AdCPAuthenticationError("No tenant configuration found")
+            raise AdCPTenantContextError("No tenant configuration found")
 
     return StrategyManager(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
 

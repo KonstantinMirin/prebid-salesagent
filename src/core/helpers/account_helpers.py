@@ -53,7 +53,8 @@ def resolve_account(
     # Self-defending entry guard: reject a falsy principal_id up front so neither
     # variant runs a scoped query before rejection. The natural-key path skips the
     # access-scope join on a None principal and could otherwise disclose a
-    # tenant-wide match count; require_principal_id raises AUTH_REQUIRED first (#1417).
+    # tenant-wide match count; require_principal_id raises AUTH_MISSING first
+    # (#1417; split per v3.1.1 error-code.json — salesagent-mkso).
     from src.core.auth import require_principal_id
 
     require_principal_id(identity)
@@ -98,7 +99,7 @@ def _check_account_status(account_id: str, status: str | None) -> None:
 def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: AccountRepository) -> None:
     """Raise if the agent's principal lacks access to the account.
 
-    Self-defending: a falsy principal_id is rejected as AUTH_REQUIRED via
+    Self-defending: a falsy principal_id is rejected as AUTH_MISSING via
     require_principal_id, independent of any caller-side guard, so the access
     check can never be silently skipped by an empty/None principal (#1417).
     """

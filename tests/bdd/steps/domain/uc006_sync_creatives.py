@@ -1918,15 +1918,21 @@ def given_principal_no_associated_tenant(ctx: dict) -> None:
 def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
     """Assert the sync was rejected with the spec-named auth error code.
 
-    Production emits the standard AUTH_REQUIRED for authentication failures,
-    matching the spec.
+    Wire-first, reconstructed fallback (tests/CLAUDE.md Error Verification
+    Policy) — consolidated onto the same strategy as the canonical
+    ``then_error.py:340`` step. Production splits authentication failures
+    into AUTH_MISSING (absent credential, correctable) / AUTH_INVALID
+    (presented-but-rejected credential, terminal) per v3.1.1
+    error-code.json (salesagent-mkso).
     """
-    error = ctx.get("error")
-    assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
-    actual_code, _ = _extract_error_code_and_suggestion(error)
-    assert actual_code == expected_code, (
-        f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
-    )
+    from tests.bdd.steps.generic.then_error import _wire_code
+
+    actual_code = _wire_code(ctx)
+    if actual_code is None:
+        error = ctx.get("error")
+        assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
+        actual_code, _ = _extract_error_code_and_suggestion(error)
+    assert actual_code == expected_code, f"Expected error code '{expected_code}', got '{actual_code}'"
 
 
 @then("the creative should be processed successfully")
@@ -1946,10 +1952,14 @@ def then_creative_processed_successfully(ctx: dict) -> None:
     )
 
 
-@then("the request should be rejected with AUTH_REQUIRED")
-def then_rejected_with_auth_required(ctx: dict) -> None:
-    """Assert the sync was rejected with error_code AUTH_REQUIRED."""
-    _assert_auth_rejection(ctx, "AUTH_REQUIRED")
+@then(parsers.parse("the request should be rejected with {expected_code}"))
+def then_rejected_with_auth_code(ctx: dict, expected_code: str) -> None:
+    """Assert the sync was rejected with the given auth error code.
+
+    Parametrized (was a fixed-text ``AUTH_REQUIRED`` step) to cover the
+    v3.1.1 AUTH_MISSING/AUTH_INVALID split (salesagent-mkso).
+    """
+    _assert_auth_rejection(ctx, expected_code)
 
 
 @then("the assignment should include placement targeting")
