@@ -657,7 +657,16 @@ class AdCPRequestHandler(RequestHandler):
             # to all downstream handlers. No handler should call resolve_identity().
             identity: ResolvedIdentity | None = None
             if auth_token:
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
+                # A PRESENTED token must always be validated, regardless of
+                # whether the requested skill itself requires auth — absent
+                # token -> proceed anonymous (fine); presented-but-invalid
+                # token -> must reject with AUTH_INVALID (terminal), even on
+                # a public/discovery-only skill request. Previously this
+                # reused `requires_auth` (skill-based) here, so an invalid
+                # token on a discovery-only request was silently swallowed as
+                # anonymous by resolve_identity()'s require_valid_token=False
+                # path instead of being rejected (salesagent-7moz).
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
             elif not requires_auth:
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)

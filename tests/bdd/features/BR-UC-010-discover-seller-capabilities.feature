@@ -384,10 +384,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent sends a get_adcp_capabilities skill request via A2A with the token
     Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
     And the error message should reference authentication or token validation
-    # XFAIL-EXPECTED: production gap — #1592 (production emits deprecated AUTH_REQUIRED;
-    # 3.1.1: "Sellers MUST return AUTH_INVALID when an Authorization header was present but
-    # verification failed", recovery terminal — the deprecated alias also carries the WRONG
-    # recovery semantics, correctable, inviting auto-retry of rejected credentials)
+    # Graduated (salesagent-7moz): A2A now always validates a presented token
+    # regardless of the requested skill's own auth requirement.
     # POST-F2: Buyer knows what failed and the error code
     # POST-F1: No state change (read-only)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID

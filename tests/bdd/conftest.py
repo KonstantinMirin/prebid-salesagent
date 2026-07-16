@@ -360,8 +360,13 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-010-main": "account block, supported_pricing_models, reporting_delivery_methods not emitted — #1592 spec-production gap",
     "T-UC-010-ext-a": "adcp.supported_versions not emitted; no-tenant identity re-resolves to a tenant on A2A/REST raw wrappers — #1592",
     "T-UC-010-auth-data-identity": "INV-4 gap: response data varies with principal (adapter-derived channels/geo only for authenticated callers) — #1592",
-    "T-UC-010-ext-c-a2a": "A2A public-skill list exempts get_adcp_capabilities from token validation — invalid token accepted, no AUTH_INVALID emitted — #1592",
-    "T-UC-010-ext-c-mcp": "MCP structured_content serializes unset fields as JSON null — audience_targeting: null violates the absent-section contract — #1592",
+    # Graduated (salesagent-7moz): T-UC-010-ext-c-a2a — A2A public-skill list
+    # now always validates a presented token (adcp_a2a_server.py), rejecting
+    # an invalid one with AUTH_INVALID regardless of skill-level auth
+    # requirement, matching v3.1.1 error-code.json.
+    # Graduated (salesagent-rrz8): T-UC-010-ext-c-mcp — MCP ToolResult now
+    # pre-serializes via model_dump(mode="json"), so audience_targeting is
+    # correctly omitted instead of serialized as null.
     "T-UC-010-ext-d-filter": "protocols filter ignored by the capabilities builder; account block missing from protocol-invariant set — #1592",
     "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1592",
     "T-UC-010-ext-d-invalid-value": "request params ignored — schema-invalid protocols filter silently accepted — #1592",
@@ -462,12 +467,8 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # ── UC-010 batch-1 per-row gaps (FIXME(#1592), salesagent-4sn7) ────────
     # The 'omitted' / absence rows of these outlines pass vacuously (the field
     # is absent because the whole block is missing), so only the value rows xfail.
-    (
-        "T-UC-010-auth",
-        {"invalid_token_a2a"},
-        "A2A public-skill list exempts get_adcp_capabilities from token validation — "
-        "invalid token accepted, no AUTH_INVALID emitted — #1592",
-    ),
+    # Graduated (salesagent-7moz): invalid_token_a2a row — A2A now always
+    # validates a presented token, rejecting invalid ones with AUTH_INVALID.
     (
         "T-UC-010-account-require-operator-auth",
         {"operator_auth_required", "operator_auth_not_required"},
@@ -506,20 +507,11 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 # strict=True  → must fail (genuine xfail)
 # strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
 _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
-    # ── UC-010: MCP structured_content serializes unset fields as JSON null
-    # (schema-invalid wire for optional object fields) — FIXME(#1592).
-    (
-        "T-UC-010-ext-e-absent",
-        set(),
-        "MCP structured_content serializes unset fields — context: null on the wire — #1592",
-        True,
-    ),
-    (
-        "T-UC-010-degradation-account",
-        {"no_tenant"},
-        "MCP structured_content serializes unset fields — account: null on the wire — #1592",
-        True,
-    ),
+    # Graduated (salesagent-rrz8): MCP ToolResult now pre-serializes via
+    # model_dump(mode="json") (src/core/tools/_mcp_boundary.py), so unset
+    # fields are correctly omitted instead of serialized as JSON null.
+    # Former entries: T-UC-010-ext-e-absent (context: null), T-UC-010-
+    # degradation-account/no_tenant (account: null).
 ]
 
 # NOTE: the former _REST_XFAIL_TAGS set was retired once the stale
