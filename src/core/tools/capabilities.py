@@ -41,6 +41,7 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -325,7 +326,7 @@ async def get_adcp_capabilities(
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetAdcpCapabilitiesResponse:
     """Get the capabilities of this AdCP sales agent.
 
@@ -339,9 +340,6 @@ async def get_adcp_capabilities_raw(
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     req = GetAdcpCapabilitiesRequest()
     return _get_adcp_capabilities_impl(req, identity)

@@ -38,7 +38,11 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import (
+    NOT_PROVIDED,
+    IdentityOrNotProvided,
+    resolve_identity_if_not_provided,
+)
 from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -839,7 +843,7 @@ async def get_products_raw(
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
 
@@ -859,9 +863,8 @@ async def get_products_raw(
     Returns:
         GetProductsResponse containing matching products
     """
-    # Resolve identity from transport context if not provided
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    # Resolve identity from transport context only if the caller omitted it
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
 
     # Create request object - adcp library validates schema
     req = create_get_products_request(

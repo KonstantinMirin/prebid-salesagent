@@ -156,6 +156,7 @@ from src.core.tools.financial_validation import (
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
@@ -4508,7 +4509,7 @@ async def create_media_buy_raw(
     idempotency_key: str | None = None,
     paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (PR #1567 follow-up)
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
     raw_wire_payload: dict[str, Any] | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
@@ -4552,10 +4553,7 @@ async def create_media_buy_raw(
         paused=paused,
     )
 
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
 
     # Resolve account at transport boundary (before _impl)
     from src.core.transport_helpers import enrich_identity_with_account

@@ -91,7 +91,7 @@ from src.core.tools.financial_validation import (
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.utils import utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary, package_field_path
 from src.services.targeting_capabilities import (
@@ -1611,7 +1611,7 @@ def update_media_buy_raw(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Update an existing media buy (raw function for A2A server use).
 
@@ -1660,8 +1660,7 @@ def update_media_buy_raw(
         ext=ext,
         idempotency_key=idempotency_key,
     )
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
     # A2A/REST callers pass identity directly without a FastMCP Context, so there
     # is no workflow context_id to forward — _impl creates one if needed.
     return _update_media_buy_impl(req=req, identity=identity, context_id=None)

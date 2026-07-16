@@ -46,7 +46,7 @@ from src.core.schemas.account import (
 )
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +214,7 @@ async def list_accounts(
 def list_accounts_raw(
     req: ListAccountsRequest | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> ListAccountsResponse:
     """List accounts accessible to the authenticated agent (raw function for A2A).
 
@@ -226,8 +226,7 @@ def list_accounts_raw(
     Returns:
         ListAccountsResponse with accessible accounts.
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     return _list_accounts_impl(req, identity)
 
 
@@ -738,7 +737,7 @@ async def sync_accounts(
 async def sync_accounts_raw(
     req: SyncAccountsRequest | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> SyncAccountsResponse:
     """Sync accounts by natural key (raw function for A2A).
 
@@ -750,6 +749,5 @@ async def sync_accounts_raw(
     Returns:
         SyncAccountsResponse with per-account action results.
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
     return await _sync_accounts_impl(req, identity)

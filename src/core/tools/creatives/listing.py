@@ -30,6 +30,7 @@ from src.core.schemas import (
 )
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
@@ -567,7 +568,7 @@ def list_creatives_raw(
     sort_order: str = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """List creative assets with filtering and pagination (raw function for A2A server use, AdCP v2.5).
 
@@ -598,10 +599,7 @@ def list_creatives_raw(
     Returns:
         ListCreativesResponse with filtered creative assets and pagination info
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx)
+    identity = resolve_identity_if_not_provided(identity, ctx)
 
     req = _build_list_creatives_request(
         media_buy_id=media_buy_id,

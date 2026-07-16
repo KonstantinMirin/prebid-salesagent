@@ -112,6 +112,7 @@ from src.core.tools._media_buy_status import (
     NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.utils import utc_flight_end, utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary
 
@@ -819,7 +820,7 @@ def get_media_buy_delivery_raw(
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Get delivery metrics for media buys (raw function for A2A server use).
 
@@ -839,10 +840,7 @@ def get_media_buy_delivery_raw(
     Returns:
         GetMediaBuyDeliveryResponse with delivery metrics
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx)
+    identity = resolve_identity_if_not_provided(identity, ctx)
 
     # Handle account resolution at boundary (same as sync_creatives pattern)
     if account is not None and identity is not None:

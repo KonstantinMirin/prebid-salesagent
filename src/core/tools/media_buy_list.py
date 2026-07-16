@@ -22,6 +22,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL, resolve_canonical_status
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +357,7 @@ def get_media_buys_raw(
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Get media buys (raw function for A2A server use).
 
@@ -372,10 +373,7 @@ def get_media_buys_raw(
     Returns:
         GetMediaBuysResponse
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True, protocol="a2a")
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True, protocol="a2a")
 
     req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
     return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
