@@ -10,8 +10,9 @@ raised with the hint only in message text, leaving the graded top-level
 ``suggestion`` field EMPTY (PR #1417 review round 8, item 4). Split from the
 single deprecated ``AUTH_REQUIRED`` code to ``AUTH_MISSING``/``AUTH_INVALID``
 per the v3.1.1 error-code enum split (salesagent-mkso). ``require_tenant``
-is DEFERRED (tenant-axis gap, salesagent-40kk) and stays on the deprecated
-``AUTH_REQUIRED`` code — out of scope for this split.
+(tenant-axis gap, salesagent-40kk) now completes the split too
+(salesagent-otc5): no identity at all -> ``AUTH_MISSING``; identity
+present but its tenant unresolvable -> ``AUTH_INVALID`` (terminal).
 
 Wire-first per tests/CLAUDE.md § Error Verification Policy: the
 ``require_principal_id`` case drives the REAL A2A wire (it is the
@@ -49,15 +50,6 @@ def _assert_auth_invalid_with_suggestion(envelope: dict) -> None:
         "Expected a non-empty TOP-LEVEL suggestion in the AUTH_INVALID wire "
         f"envelope (dist/schemas/3.1.1/enums/error-code.json), got: {envelope}"
     )
-
-
-def _assert_auth_required_with_suggestion(envelope: dict) -> None:
-    """DEFERRED tenant-axis sites (require_tenant) still emit AUTH_REQUIRED."""
-    from tests.harness.transport import extract_wire_suggestion
-
-    assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
-    suggestion = extract_wire_suggestion(envelope)
-    assert suggestion, f"Expected a non-empty TOP-LEVEL suggestion in the AUTH_REQUIRED wire envelope, got: {envelope}"
 
 
 class TestRequirePrincipalIdA2ASuggestion:
@@ -112,16 +104,59 @@ class TestAuthHelperFamilySuggestion:
 
         _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
 
-    def test_require_tenant_missing_carries_suggestion(self):
+    def test_require_tenant_no_identity_at_all_is_auth_missing(self):
+        """No identity presented at all -> AUTH_MISSING (salesagent-otc5).
+
+        Completes the AUTH_MISSING/AUTH_INVALID split (salesagent-mkso) for
+        the tenant-resolution axis: genuinely absent credentials must emit
+        AUTH_MISSING like every other no-credential rejection, not the
+        deprecated AUTH_REQUIRED alias.
+        """
+        from src.core.auth import require_tenant
+
+        with pytest.raises(AdCPError) as exc_info:
+            require_tenant(None)
+
+        _assert_auth_missing_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+
+    def test_require_tenant_credential_presented_but_unresolvable_is_auth_invalid(self):
+        """A token was presented but its tenant can't be resolved -> AUTH_INVALID (terminal) (salesagent-otc5).
+
+        Completes the AUTH_MISSING/AUTH_INVALID split (salesagent-mkso) for
+        the tenant-resolution axis: the signal is credential presence
+        (``identity.auth_token``), not merely whether an identity object
+        exists — resolve_identity() always builds one for discovery
+        endpoints. A presented-but-unresolvable credential is the terminal
+        case, not the deprecated correctable AUTH_REQUIRED alias.
+        """
         from src.core.auth import require_tenant
         from tests.factories import PrincipalFactory
 
-        identity = PrincipalFactory.make_identity(tenant=None)
+        identity = PrincipalFactory.make_identity(tenant=None, auth_token="presented-token")
 
         with pytest.raises(AdCPError) as exc_info:
             require_tenant(identity)
 
-        _assert_auth_required_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+
+    def test_require_tenant_no_credential_presented_is_auth_missing_even_with_identity(self):
+        """An identity object exists (discovery endpoints always build one) but
+        carries no auth_token -> AUTH_MISSING, not AUTH_INVALID (salesagent-otc5).
+
+        Mirrors the real anonymous-discovery shape: resolve_identity() with
+        require_valid_token=False builds a ResolvedIdentity even with no
+        token presented at all — the tenant-resolution split must key off
+        credential presence, not identity-object presence.
+        """
+        from src.core.auth import require_tenant
+        from tests.factories import PrincipalFactory
+
+        identity = PrincipalFactory.make_identity(tenant=None, auth_token=None)
+
+        with pytest.raises(AdCPError) as exc_info:
+            require_tenant(identity)
+
+        _assert_auth_missing_with_suggestion(build_two_layer_error_envelope(exc_info.value))
 
     def test_invalid_token_carries_suggestion(self, integration_db):
         """get_principal_from_context with an invalid token (require_valid_token=True)

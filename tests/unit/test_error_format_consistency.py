@@ -741,10 +741,9 @@ class TestErrorCodeVocabularyConsistency:
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
         "INVALID_REQUEST",  # SDK standard: AdCPInvalidRequestError (semantically-invalid value)
-        "AUTH_REQUIRED",  # SDK standard: deprecated 3.x alias, still used by AdCPAuthorizationError
-        # and the deferred tenant-axis raises (salesagent-40kk) pending their own migration
         "AUTH_MISSING",  # v3.1.1 error-code.json: absent credential (AdCPAuthRequiredError), correctable
         "AUTH_INVALID",  # v3.1.1 error-code.json: presented-but-rejected credential (AdCPAuthenticationError), terminal
+        "PERMISSION_DENIED",  # v3.1.1 error-code.json: authenticated but not authorized under seller policy (AdCPAuthorizationError, salesagent-otc5)
         "POLICY_VIOLATION",  # SDK standard: AdCPPolicyViolationError (content/advertising policy block)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)

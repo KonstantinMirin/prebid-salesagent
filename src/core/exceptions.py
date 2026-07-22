@@ -52,6 +52,11 @@ _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
     "AUTH_MISSING": {"recovery": "correctable", "message": "No credentials were presented"},
     "AUTH_INVALID": {"recovery": "terminal", "message": "Credentials were presented but rejected"},
+    # v3.1.1 error-code.json: authenticated caller not authorized under the
+    # seller's own policies (distinct from AUTHORIZATION_REQUIRED, which is a
+    # downstream-platform-connection gap). Replaces the deprecated AUTH_REQUIRED
+    # alias for AdCPAuthorizationError (salesagent-otc5).
+    "PERMISSION_DENIED": {"recovery": "correctable", "message": "Not authorized for this action"},
 }
 
 # The authoritative wire-code table: SDK baseline + pinned-spec supplement.
@@ -77,10 +82,10 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # PRINCIPAL_NOT_FOUND / INSUFFICIENT_PRIVILEGES (a specific, presented
     # identifier was rejected) are the presented-but-invalid case ->
     # AUTH_INVALID. Per v3.1.1 error-code.json AUTH_MISSING/AUTH_INVALID
-    # split (salesagent-mkso). AUTHORIZATION_ERROR is a distinct axis
-    # (authenticated but not authorized) and stays on AUTH_REQUIRED pending
-    # a separate authz-axis decision (out of scope here).
-    "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
+    # split (salesagent-mkso). The authz axis (authenticated but not
+    # authorized) is PERMISSION_DENIED, carried directly by
+    # AdCPAuthorizationError's class default (salesagent-otc5) — no internal
+    # code maps through this table for it.
     "PRINCIPAL_ID_MISSING": "AUTH_MISSING",
     "PRINCIPAL_NOT_FOUND": "AUTH_INVALID",
     "INSUFFICIENT_PRIVILEGES": "AUTH_INVALID",
@@ -464,9 +469,6 @@ AUTH_MISSING_SUGGESTION = "Provide credentials (x-adcp-auth token) and retry."
 AUTH_INVALID_SUGGESTION = (
     "Do not auto-retry with the same credentials — they were rejected. Rotate/refresh and retry, or escalate."
 )
-# Retained for any lingering non-split callers; prefer the code-specific
-# suggestions above for new call sites.
-AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
 
 
 class AdCPAuthenticationError(AdCPError):
@@ -502,36 +504,19 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     _default_suggestion: ClassVar[str | None] = AUTH_MISSING_SUGGESTION
 
 
-class AdCPTenantContextError(AdCPAuthenticationError):
-    """DEFERRED: tenant-resolution failure (401, AUTH_REQUIRED).
-
-    Raised when no tenant context can be resolved — either no identity at
-    all, or an identity whose tenant could not be detected/attached. This
-    is a distinct axis from the AUTH_MISSING/AUTH_INVALID credential-presence
-    split (tenant resolution, not credential presence/validity) and is
-    tracked separately as the TENANT_REQUIRED gap (salesagent-40kk;
-    tests/bdd/conftest.py). Explicitly pinned to the pre-split AUTH_REQUIRED
-    code (rather than inheriting ``AdCPAuthenticationError``'s new
-    AUTH_INVALID default) via a dedicated subclass — not an ``error_code=``
-    kwarg override, which ``test_architecture_no_error_code_kwarg_in_impl.py``
-    forbids — so the AUTH_MISSING/AUTH_INVALID split (salesagent-mkso) does
-    not silently change tenant-axis wire behavior that is out of its scope.
-    """
-
-    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
-    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
-
-
 class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
-    Emits ``AUTH_REQUIRED`` with ``correctable`` recovery, matching the pinned
-    AdCP error-code enum and ``AdCPAuthenticationError`` (#1417).
+    Emits ``PERMISSION_DENIED`` with ``correctable`` recovery per the v3.1.1
+    error-code enum: "The authenticated caller is not authorized for the
+    requested action under the seller's own policies." Distinct from
+    ``AUTHORIZATION_REQUIRED`` (a downstream-platform-connection gap, not this
+    class's shape) — migrated off the deprecated AUTH_REQUIRED alias
+    (salesagent-otc5, completing salesagent-mkso for this axis).
     """
 
     _default_status_code: ClassVar[int] = 403
-    _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
+    _default_error_code: ClassVar[str] = "PERMISSION_DENIED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 

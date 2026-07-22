@@ -23,9 +23,10 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
         Full tenant dict (always a dict, never a string)
 
     Raises:
-        AdCPTenantContextError: If no tenant context can be resolved
+        AdCPAuthRequiredError: If no credential was presented at all
+        AdCPAuthenticationError: If a credential was presented but the tenant can't be resolved
     """
-    from src.core.exceptions import AdCPTenantContextError
+    from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 
     # Determine the expected tenant_id from identity
     expected_tenant_id = None
@@ -67,11 +68,14 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
             set_current_tenant(identity.tenant)
             return identity.tenant
 
-    # DEFER: tenant-axis raise, tracked separately under the TENANT_REQUIRED
-    # gap (salesagent-40kk), out of scope for the AUTH_MISSING/AUTH_INVALID
-    # split (salesagent-mkso). AdCPTenantContextError pins this to the
-    # pre-split AUTH_REQUIRED wire code via its own class default (not an
-    # error_code= kwarg, which test_architecture_no_error_code_kwarg_in_impl.py
-    # forbids) so it does not silently inherit AdCPAuthenticationError's new
-    # AUTH_INVALID default.
-    raise AdCPTenantContextError("No tenant context available")
+    # AUTH_MISSING/AUTH_INVALID split (salesagent-mkso), completed for the
+    # tenant-resolution axis (salesagent-otc5). The signal is whether a
+    # credential was PRESENTED (``identity.auth_token``), matching
+    # require_tenant() in src/core/auth.py: no token at all -> AUTH_MISSING
+    # (correctable); a token was presented but tenant still didn't resolve ->
+    # AUTH_INVALID (terminal). Full tenant-axis semantics beyond this
+    # credential-presence split remain tracked under TENANT_REQUIRED
+    # (salesagent-40kk).
+    if not identity or not identity.auth_token:
+        raise AdCPAuthRequiredError("No tenant context available")
+    raise AdCPAuthenticationError("No tenant context available")

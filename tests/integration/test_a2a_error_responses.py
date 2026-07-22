@@ -958,7 +958,7 @@ class TestA2AErrorResponseStructure:
         """PermissionError in a skill handler propagates as AdCPAuthorizationError.
 
         Symmetric with ValueError handling. Outer dispatcher produces a failed
-        Task with envelope (AUTH_REQUIRED, recovery=correctable).
+        Task with envelope (PERMISSION_DENIED, recovery=correctable).
         """
         from unittest.mock import patch
 
@@ -972,9 +972,10 @@ class TestA2AErrorResponseStructure:
                 await handler._handle_explicit_skill("get_products", {}, None)
 
             assert "tenant scope mismatch" in str(exc_info.value)
-            assert exc_info.value.error_code == "AUTH_REQUIRED"
-            # AdCPAuthorizationError default recovery is correctable per the pinned AUTH_REQUIRED
-            # enum (#1417), preserved through the PermissionError wrap.
+            assert exc_info.value.error_code == "PERMISSION_DENIED"
+            # AdCPAuthorizationError default recovery is correctable per the pinned
+            # PERMISSION_DENIED enum (v3.1.1, salesagent-otc5), preserved through the
+            # PermissionError wrap.
             assert exc_info.value.recovery == "correctable"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 

@@ -131,7 +131,8 @@ tests/bdd/test_uc010_discover_seller_capabilities.py::test_authentication_state_
 # a cached ResolvedIdentity, bypassing the real token->principal DB lookup — so a
 # "principal deleted after token issued" scenario still shows a non-empty
 # principal_id in-process, reaching update_media_buy's ownership check
-# (AdCPAuthorizationError, AUTH_REQUIRED — matches the scenario's a2a/mcp/rest pins).
+# (AdCPAuthorizationError, PERMISSION_DENIED — matches the scenario's a2a/mcp/rest
+# pins; salesagent-otc5 migrated this off the deprecated AUTH_REQUIRED alias).
 # Over e2e_rest, the real resolve_identity() call re-resolves the token from the DB
 # on every request; when the principal row is gone, get_principal_from_token finds
 # nothing, principal_id comes back None, and require_principal_id correctly raises

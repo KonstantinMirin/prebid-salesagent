@@ -300,7 +300,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # Removed stale xfails: T-UC-002-partition-optimization-goals, T-UC-002-boundary-optimization-goals
     # Valid rows now pass; invalid rows xfail via _assert_error_outcome _SPEC_PRODUCTION_CODE_MAP.
     # Removed: T-UC-003-partition-optimization-goals, T-UC-003-boundary-optimization-goals, T-UC-003-alt-optimization-goals
-    # NOTE: principal-ownership error code gap handled in _assert_error_outcome (PERMISSION_DENIED→AUTHORIZATION_ERROR)
+    # NOTE: principal-ownership error code gap — spec expects ACCOUNT_NOT_FOUND,
+    # production raises AdCPAuthorizationError (PERMISSION_DENIED, salesagent-otc5)
+    # — see T-UC-003-ext-c below
     # RESOLVED(salesagent-0t6h): UpdateMediaBuySuccess status="submitted" now handled
     # by then_response_status (empty affected_packages = approval pending).
     # Removed T-UC-003-alt-manual xfail — tests pass with the fix.
@@ -737,7 +739,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # no longer drops it), and the unknown-principal ownership check
             # (AdCPAuthorizationError) carries a "verify your x-adcp-auth token" suggestion.
             # T-UC-003-ext-a / -ext-a-unknown pass on a2a/mcp/rest.
-            "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
+            "T-UC-003-ext-c": "production returns PERMISSION_DENIED (AdCPAuthorizationError), spec expects ACCOUNT_NOT_FOUND",
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
             "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",

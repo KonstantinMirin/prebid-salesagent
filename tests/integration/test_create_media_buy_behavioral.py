@@ -1650,7 +1650,7 @@ class TestExtensionObligations:
                     )
 
                 assert "not registered" in str(exc_info.value).lower()
-                assert exc_info.value.error_code == "AUTH_REQUIRED"
+                assert exc_info.value.error_code == "PERMISSION_DENIED"
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):

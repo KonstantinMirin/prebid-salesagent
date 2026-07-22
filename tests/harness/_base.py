@@ -118,10 +118,13 @@ def _adcp_error_from_code(
     # AUTH_MISSING -> AdCPAuthRequiredError and AUTH_INVALID -> AdCPAuthenticationError
     # are unambiguous per v3.1.1 error-code.json (salesagent-mkso) — each class's
     # own _default_error_code disambiguates them via the dict comprehension above.
-    # AUTH_REQUIRED (deprecated alias) is now shared only by AdCPAuthorizationError
-    # (403, out of the split's scope) and the deferred tenant-axis
-    # AdCPTenantContextError — neither is reconstructed to a specific subclass
-    # here; both fall through to the base AdCPError below.
+    # AUTH_REQUIRED (deprecated alias) is no longer emitted by any subclass
+    # (salesagent-otc5 migrated AdCPAuthorizationError to PERMISSION_DENIED and
+    # split the former tenant-axis raises across AUTH_MISSING/AUTH_INVALID).
+    # PERMISSION_DENIED is not in the class list above, so it still falls
+    # through to the base AdCPError below — matching prior behavior for
+    # AdCPAuthorizationError (no test currently needs isinstance() on it via
+    # wire reconstruction).
     from src.core.exceptions import INTERNAL_CODES
 
     assert error_code not in INTERNAL_CODES, (

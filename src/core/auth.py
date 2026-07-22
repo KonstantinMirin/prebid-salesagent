@@ -377,19 +377,27 @@ def require_tenant(
     across tool modules. The canonical message carries the actionable
     diagnostic (token + host headers) so buyer agents can self-correct.
     """
-    from src.core.exceptions import AdCPTenantContextError
+    from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 
     tenant = identity.tenant if identity else None
     if not tenant:
-        # DEFER: this straddles the no-identity axis (AUTH_MISSING) and the
-        # identity-without-tenant axis (arguably AUTH_INVALID), which is the
-        # already-tracked TENANT_REQUIRED gap (salesagent-40kk), out of scope
-        # for the AUTH_MISSING/AUTH_INVALID split. AdCPTenantContextError pins
-        # this raise to the pre-split AUTH_REQUIRED wire code via its own
-        # class default (not an error_code= kwarg, which
-        # test_architecture_no_error_code_kwarg_in_impl.py forbids) so it does
-        # not silently pick up AdCPAuthenticationError's new AUTH_INVALID default.
-        raise AdCPTenantContextError(
+        # AUTH_MISSING/AUTH_INVALID split (salesagent-mkso), completed for the
+        # tenant-resolution axis (salesagent-otc5). The signal is whether a
+        # credential was PRESENTED, i.e. ``identity.auth_token`` — not merely
+        # whether an identity object exists: resolve_identity() always builds
+        # a ResolvedIdentity for discovery endpoints even with no token, and
+        # for a presented-but-invalid token (require_valid_token=False) it
+        # sets auth_token but leaves principal_id unresolved. No token at all
+        # -> AUTH_MISSING (correctable); a token was presented but tenant
+        # still didn't resolve -> AUTH_INVALID (terminal). The TENANT_REQUIRED
+        # gap (salesagent-40kk) — full tenant-axis semantics beyond this
+        # credential-presence split — remains tracked separately.
+        if not identity or not identity.auth_token:
+            raise AdCPAuthRequiredError(
+                "No tenant context available. Check x-adcp-auth token and host headers.",
+                context=context,
+            )
+        raise AdCPAuthenticationError(
             "No tenant context available. Check x-adcp-auth token and host headers.",
             context=context,
         )
