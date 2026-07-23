@@ -184,7 +184,8 @@ class MockAdServer(AdServerAdapter):
         """Set the current simulation time."""
         self._current_simulation_time = simulation_time
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Mock adapter supports all pricing models (AdCP PR #88)."""
         return {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
 

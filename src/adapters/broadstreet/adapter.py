@@ -241,7 +241,8 @@ class BroadstreetAdapter(AdServerAdapter):
 
         return failed
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Return supported pricing models.
 
         Broadstreet supports CPM and flat rate pricing.

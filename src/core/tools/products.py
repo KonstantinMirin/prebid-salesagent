@@ -707,16 +707,18 @@ async def _get_products_impl(
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
     # Annotate pricing options with adapter support (AdCP PR #88)
-    # Do this BEFORE serialization to avoid reconstruction issues
-    if principal and eligible_products:
+    # Do this BEFORE serialization to avoid reconstruction issues.
+    # Tenant-level (not Principal-level) resolution: which pricing models an
+    # adapter supports is a fact about the SELLER's ad server, not the caller
+    # (same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
+    # must not depend on whether principal_id happens to resolve to a DB
+    # Principal (salesagent-r9rf).
+    if eligible_products:
         try:
-            # Use correct get_adapter from adapter_helpers (accepts Principal and dry_run)
-            from src.core.helpers.adapter_helpers import get_adapter
+            from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
 
-            # Get adapter in dry-run mode (no actual ad server calls)
-            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
-
-            supported_models = adapter.get_supported_pricing_models()
+            adapter_class = get_adapter_class_for_tenant(tenant)
+            supported_models = adapter_class.get_supported_pricing_models()
 
             for product in eligible_products:
                 if product.pricing_options:

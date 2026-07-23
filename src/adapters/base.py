@@ -334,10 +334,15 @@ class AdServerAdapter(ABC):
             workflow_step_id=workflow_step_id,
         )
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Return set of pricing models this adapter supports (AdCP PR #88).
 
         Default implementation supports only CPM. Override in subclasses.
+        Staticmethod: no per-principal state, so it can be resolved from the
+        adapter CLASS alone via get_adapter_class_for_tenant() (salesagent-r9rf,
+        same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
+        capability data must not require a resolved Principal to read.
 
         Returns:
             Set of pricing model strings: {"cpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
