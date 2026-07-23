@@ -36,6 +36,25 @@ from tests.helpers import assert_envelope_shape  # noqa: E402
 #   REST: assert_envelope_shape(body, code, recovery=..., message_substr=...)
 
 
+@pytest.fixture(autouse=True)
+def _mock_rest_identity_resolution():
+    """Mock resolve_identity() for every test in this module (unit, no DB).
+
+    _resolve_auth_dep (REST auth-optional dependency) always calls
+    resolve_identity() now — including for anonymous callers, to resolve
+    tenant from headers regardless of credential presence (salesagent-zna9).
+    Tests here exercise error-boundary translation via real REST routes
+    (TestClient(app)) without a DB, so resolve_identity's header-based DB
+    lookups must be mocked. Real header-based DB resolution is covered by
+    tests/integration/test_rest_auth_optional_tenant_resolution.py.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    anonymous_identity = PrincipalFactory.make_identity(principal_id=None, tenant_id=None, tenant=None, protocol="rest")
+    with patch("src.core.resolved_identity.resolve_identity", return_value=anonymous_identity):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # MCP Boundary: extract_error_info
 # ---------------------------------------------------------------------------

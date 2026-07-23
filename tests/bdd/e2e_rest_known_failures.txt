@@ -112,19 +112,6 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # failed with 'asyncio.run() cannot be called from a running event loop').
 # Verified in-network: all 4 transports pass incl. e2e_rest.
 
-# --- uc010 auth-data-identity e2e_rest — GENUINE e2e fixture gap (salesagent-dn2s follow-up) ---
-# The dual-dispatch oracle compares an anonymous call against an authenticated one;
-# anonymous resolves tenant via resolved_identity.py's Host-header 4-strategy
-# detection, whose strategy 4 (localhost fallback) requires the tenant's subdomain
-# to literally be "default". The e2e fixture tenant's subdomain is not "default", so
-# the anonymous e2e_rest call resolves NO tenant and hits capabilities.py's
-# no-tenant early return (omits the whole media_buy block), while the authenticated
-# call resolves tenant from the token and gets the full block — a real difference,
-# but caused by e2e tenant-fixture naming, not by dn2s's fix (which is verified
-# correct on a2a/mcp/rest in-process, all real dispatch, all pass). File a follow-up
-# to either seed a "default"-subdomain e2e tenant or add an x-adcp-tenant header to
-# the harness's anonymous e2e_rest dispatch.
-tests/bdd/test_uc010_discover_seller_capabilities.py::test_authentication_state_does_not_affect_response_data_content[e2e_rest]
 
 # --- uc003 ext-a-unknown e2e_rest — GENUINE harness/reality divergence (salesagent-mkso follow-up) ---
 # The in-process harness's authenticate_env_as() injects principal_id directly onto
