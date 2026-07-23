@@ -24,59 +24,13 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_field, wire_lookup
 from tests.bdd.steps.generic._dispatch import dispatch_request
-
-_MISSING = object()
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
 BILLING_PARTY_ENUM = {"operator", "agent", "advertiser"}
 
 # ── Wire helpers ─────────────────────────────────────────────────────
-
-
-def _wire(ctx: dict) -> dict:
-    """The serialized success-path wire the buyer receives.
-
-    Prefers the real captured wire (REST body / MCP structured_content /
-    A2A artifact). Falls back to serializing the typed payload — exercises
-    the production serializer, not transport framing (IMPL-only caveat).
-    """
-    if ctx.get("error") is not None and ctx.get("response") is None:
-        raise AssertionError(f"expected a success response, got error: {ctx['error']!r}")
-    wire = ctx.get("wire_response")
-    if isinstance(wire, dict):
-        return wire
-    return ctx["response"].model_dump(mode="json")
-
-
-def _at(doc: dict, path: str) -> Any:
-    """Resolve a dotted path against the wire dict; _MISSING when any hop is absent."""
-    cur: Any = doc
-    for part in path.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return _MISSING
-        cur = cur[part]
-    return cur
-
-
-def _require(ctx: dict, path: str) -> Any:
-    """Resolve *path* on the wire, failing when absent OR null.
-
-    A JSON null never satisfies presence: these are optional object/array
-    fields whose schemas do not admit null — a null on the wire is a
-    serialization defect, not a populated section (observed on MCP
-    structured_content, which serializes None fields; #1592).
-    """
-    doc = _wire(ctx)
-    val = _at(doc, path)
-    assert val is not _MISSING, f"{path!r} absent from wire response (top-level keys: {sorted(doc)})"
-    assert val is not None, f"{path!r} is JSON null on the wire — schema-invalid serialization of an unset field"
-    return val
-
-
-def _assert_absent(ctx: dict, path: str) -> None:
-    val = _at(_wire(ctx), path)
-    assert val is _MISSING, f"{path!r} unexpectedly present on the wire: {val!r}"
 
 
 def _config(ctx: dict) -> dict:
@@ -318,35 +272,35 @@ def when_call_a2a_invalid_token(ctx: dict) -> None:
 
 @then("the response should include adcp.major_versions containing 3")
 def then_major_versions(ctx: dict) -> None:
-    assert 3 in _require(ctx, "adcp.major_versions")
+    assert 3 in wire_field(ctx, "adcp.major_versions")
 
 
 @then("the response should include adcp.idempotency with a boolean supported discriminator")
 def then_idempotency_discriminator(ctx: dict) -> None:
-    idempotency = _require(ctx, "adcp.idempotency")
+    idempotency = wire_field(ctx, "adcp.idempotency")
     assert isinstance(idempotency.get("supported"), bool), f"idempotency.supported not a boolean: {idempotency}"
 
 
 @then("the response should include adcp.supported_versions as a non-empty array")
 def then_supported_versions_nonempty(ctx: dict) -> None:
-    versions = _require(ctx, "adcp.supported_versions")
+    versions = wire_field(ctx, "adcp.supported_versions")
     assert isinstance(versions, list) and versions, f"adcp.supported_versions not a non-empty array: {versions!r}"
 
 
 @then(parsers.parse('each value in adcp.supported_versions should match pattern "{pattern}"'))
 def then_supported_versions_pattern(ctx: dict, pattern: str) -> None:
-    for value in _require(ctx, "adcp.supported_versions"):
+    for value in wire_field(ctx, "adcp.supported_versions"):
         assert re.fullmatch(pattern, value), f"supported_versions entry {value!r} does not match {pattern!r}"
 
 
 @then(parsers.parse('the response should include supported_protocols containing "{protocol}"'))
 def then_supported_protocols_contains(ctx: dict, protocol: str) -> None:
-    assert protocol in _require(ctx, "supported_protocols")
+    assert protocol in wire_field(ctx, "supported_protocols")
 
 
 @then(parsers.parse('supported_protocols should contain "{protocol}"'))
 def then_supported_protocols_contains_short(ctx: dict, protocol: str) -> None:
-    assert protocol in _require(ctx, "supported_protocols")
+    assert protocol in wire_field(ctx, "supported_protocols")
 
 
 @then("the response should include last_updated as a valid timestamp")
@@ -354,7 +308,7 @@ def then_supported_protocols_contains_short(ctx: dict, protocol: str) -> None:
 def then_last_updated_valid(ctx: dict) -> None:
     from datetime import datetime
 
-    raw = _require(ctx, "last_updated")
+    raw = wire_field(ctx, "last_updated")
     datetime.fromisoformat(str(raw).replace("Z", "+00:00"))  # raises on malformed
 
 
@@ -370,7 +324,7 @@ def _assert_billing_party_array(value: Any) -> None:
     "account.supported_billing should be a non-empty array of billing-party enum values matching the tenant billing config"
 )
 def then_supported_billing_matches_config(ctx: dict) -> None:
-    value = _require(ctx, "account.supported_billing")
+    value = wire_field(ctx, "account.supported_billing")
     _assert_billing_party_array(value)
     declared = _config(ctx).get("supported_billing")
     if declared is not None:
@@ -379,25 +333,25 @@ def then_supported_billing_matches_config(ctx: dict) -> None:
 
 @then("account.supported_billing should be a non-empty array")
 def then_supported_billing_nonempty(ctx: dict) -> None:
-    value = _require(ctx, "account.supported_billing")
+    value = wire_field(ctx, "account.supported_billing")
     assert isinstance(value, list) and value, f"supported_billing not a non-empty array: {value!r}"
 
 
 @then(parsers.parse("account.supported_billing should equal {expected_set}"))
 def then_supported_billing_equals(ctx: dict, expected_set: str) -> None:
     expected = [part.strip() for part in expected_set.strip("[]").split(",") if part.strip()]
-    value = _require(ctx, "account.supported_billing")
+    value = wire_field(ctx, "account.supported_billing")
     assert sorted(value) == sorted(expected), f"supported_billing {value!r} != {expected!r}"
 
 
 @then('each supported_billing value should be one of "operator", "agent", "advertiser"')
 def then_supported_billing_enum(ctx: dict) -> None:
-    _assert_billing_party_array(_require(ctx, "account.supported_billing"))
+    _assert_billing_party_array(wire_field(ctx, "account.supported_billing"))
 
 
 @then("account.sandbox should equal the tenant-configured sandbox value")
 def then_sandbox_matches_config(ctx: dict) -> None:
-    value = _require(ctx, "account.sandbox")
+    value = wire_field(ctx, "account.sandbox")
     assert isinstance(value, bool), f"account.sandbox not a boolean: {value!r}"
     declared = _config(ctx).get("sandbox")
     if declared is not None:
@@ -407,11 +361,11 @@ def then_sandbox_matches_config(ctx: dict) -> None:
 def _expect_flag(ctx: dict, path: str, expected: str) -> None:
     """Grade an outline <expected> column: 'equal to true/false' | 'absent' |
     'absent or false' | 'equal to "..." as a URI'."""
-    value = _at(_wire(ctx), path)
+    value = wire_lookup(ctx, path)
     if expected == "absent":
-        assert value is _MISSING, f"{path} unexpectedly present: {value!r}"
+        assert value is WIRE_MISSING, f"{path} unexpectedly present: {value!r}"
     elif expected == "absent or false":
-        assert value is _MISSING or value is False, f"{path} expected absent-or-false, got {value!r}"
+        assert value is WIRE_MISSING or value is False, f"{path} expected absent-or-false, got {value!r}"
     elif expected in ("equal to true", "equal to false"):
         assert value is (expected == "equal to true"), f"{path} expected {expected}, got {value!r}"
     else:
@@ -442,7 +396,7 @@ def then_account_financials(ctx: dict) -> None:
 
 @then("the account section should be present with a non-empty supported_billing")
 def then_account_present_with_billing(ctx: dict) -> None:
-    account = _require(ctx, "account")
+    account = wire_field(ctx, "account")
     assert isinstance(account, dict), f"account not an object: {account!r}"
     _assert_billing_party_array(account.get("supported_billing"))
 
@@ -455,9 +409,9 @@ def then_account_present_with_billing(ctx: dict) -> None:
 )
 def then_account_state(ctx: dict, state: str) -> None:
     if state == "absent":
-        _assert_absent(ctx, "account")
+        wire_absent(ctx, "account")
         return
-    account = _require(ctx, "account")
+    account = wire_field(ctx, "account")
     _assert_billing_party_array(account.get("supported_billing"))
     if state.startswith("present with supported_billing only"):
         extras = set(account) - {"supported_billing"}
@@ -466,8 +420,8 @@ def then_account_state(ctx: dict, state: str) -> None:
 
 @then("a present account section should include supported_billing as a non-empty array of billing-party enum values")
 def then_present_account_billing(ctx: dict) -> None:
-    account = _at(_wire(ctx), "account")
-    if account is _MISSING:
+    account = wire_lookup(ctx, "account")
+    if account is WIRE_MISSING:
         return  # conditional Then: only grades a present block
     _assert_billing_party_array(account.get("supported_billing"))
 
@@ -484,7 +438,7 @@ _FEATURE_FLAGS = (
 
 @then("media_buy.features should conform to the 4-flag media-buy-features shape with tenant-configured values")
 def then_features_shape(ctx: dict) -> None:
-    features = _require(ctx, "media_buy.features")
+    features = wire_field(ctx, "media_buy.features")
     for flag in _FEATURE_FLAGS:
         assert isinstance(features.get(flag), bool), f"features.{flag} not a boolean: {features!r}"
     declared = _config(ctx).get("features")
@@ -495,44 +449,44 @@ def then_features_shape(ctx: dict) -> None:
 
 @then("media_buy.supported_pricing_models should equal the exact set derived from the tenant adapter")
 def then_pricing_models(ctx: dict) -> None:
-    models = _require(ctx, "media_buy.supported_pricing_models")
+    models = wire_field(ctx, "media_buy.supported_pricing_models")
     assert isinstance(models, list) and models, f"supported_pricing_models not a non-empty array: {models!r}"
     assert len(models) == len(set(models)), f"supported_pricing_models has duplicates: {models!r}"
 
 
 @then("media_buy.reporting_delivery_methods should equal the tenant-configured delivery methods")
 def then_reporting_delivery_methods(ctx: dict) -> None:
-    methods = _require(ctx, "media_buy.reporting_delivery_methods")
+    methods = wire_field(ctx, "media_buy.reporting_delivery_methods")
     assert isinstance(methods, list) and methods, f"reporting_delivery_methods not a non-empty array: {methods!r}"
 
 
 @then("media_buy.execution.targeting should include geo_countries and geo_regions as booleans")
 def then_targeting_geo_booleans(ctx: dict) -> None:
-    targeting = _require(ctx, "media_buy.execution.targeting")
+    targeting = wire_field(ctx, "media_buy.execution.targeting")
     for key in ("geo_countries", "geo_regions"):
         assert isinstance(targeting.get(key), bool), f"targeting.{key} not a boolean: {targeting!r}"
 
 
 @then(parsers.parse("the response should include media_buy.portfolio with publisher_domains {domains}"))
 def then_portfolio_domains(ctx: dict, domains: str) -> None:
-    actual = _require(ctx, "media_buy.portfolio.publisher_domains")
+    actual = wire_field(ctx, "media_buy.portfolio.publisher_domains")
     assert sorted(actual) == sorted(_quoted_list(domains)), f"publisher_domains {actual!r} != {domains}"
 
 
 @then(parsers.parse("the response should include media_buy.portfolio with primary_channels {channels}"))
 def then_portfolio_channels(ctx: dict, channels: str) -> None:
-    actual = _require(ctx, "media_buy.portfolio.primary_channels")
+    actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
     assert sorted(actual) == sorted(_quoted_list(channels)), f"primary_channels {actual!r} != {channels}"
 
 
 @then("the response should NOT include media_buy details")
 def then_no_media_buy(ctx: dict) -> None:
-    _assert_absent(ctx, "media_buy")
+    wire_absent(ctx, "media_buy")
 
 
 @then("the response should NOT include account section")
 def then_no_account(ctx: dict) -> None:
-    _assert_absent(ctx, "account")
+    wire_absent(ctx, "account")
 
 
 # ── Thens: read-only invariant ───────────────────────────────────────
@@ -570,7 +524,7 @@ def then_success_carries_sections(ctx: dict) -> None:
     if ctx.get("response") is None:
         return  # conditional Then: only grades success outcomes
     for path in ("adcp.major_versions", "adcp.idempotency", "supported_protocols", "media_buy"):
-        _require(ctx, path)
+        wire_field(ctx, path)
 
 
 @then("both responses should contain identical capabilities data ignoring last_updated and context")
@@ -591,7 +545,7 @@ def then_dual_call_identity(ctx: dict) -> None:
 def then_mcp_invalid_token_success(ctx: dict) -> None:
     assert ctx.get("response") is not None, f"expected success, got error: {ctx.get('error')!r}"
     for path in ("adcp.major_versions", "adcp.idempotency", "supported_protocols"):
-        _require(ctx, path)
+        wire_field(ctx, path)
 
 
 @then("the response should carry the tenant's normal capabilities, not gated on the invalid token")
@@ -609,10 +563,9 @@ def then_capabilities_not_gated_on_token(ctx: dict) -> None:
     """
     from tests.harness.capabilities import DEFAULT_ADAPTER_CHANNELS
 
-    doc = _wire(ctx)
     for path in ("media_buy.audience_targeting", "media_buy.conversion_tracking"):
-        assert _at(doc, path) is _MISSING, f"{path} unexpectedly present: {_at(doc, path)!r}"
-    channels = _at(doc, "media_buy.portfolio.primary_channels")
+        wire_absent(ctx, path)
+    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
     assert channels == DEFAULT_ADAPTER_CHANNELS, (
         f"adapter-derived channels degraded by an invalid token (INV-4 violation): "
         f"expected {DEFAULT_ADAPTER_CHANNELS!r}, got {channels!r}"
@@ -628,19 +581,19 @@ def then_capabilities_not_gated_on_token(ctx: dict) -> None:
     )
 )
 def then_section_present(ctx: dict, section: str) -> None:
-    _require(ctx, section)
+    wire_field(ctx, section)
 
 
 @then("the response should include adcp, supported_protocols and account as protocol-invariant blocks")
 def then_protocol_invariant_blocks(ctx: dict) -> None:
     for path in ("adcp", "supported_protocols", "account"):
-        _require(ctx, path)
+        wire_field(ctx, path)
 
 
 @then("the response should NOT include the signals, governance, sponsored_intelligence or creative sections")
 def then_unrequested_sections_absent(ctx: dict) -> None:
     for section in ("signals", "governance", "sponsored_intelligence", "creative"):
-        _assert_absent(ctx, section)
+        wire_absent(ctx, section)
 
 
 # ── Thens: context echo (ext-e) ──────────────────────────────────────
@@ -648,19 +601,18 @@ def then_unrequested_sections_absent(ctx: dict) -> None:
 
 @then(parsers.parse("the response context should equal {expected}"))
 def then_context_equals(ctx: dict, expected: str) -> None:
-    actual = _require(ctx, "context")
+    actual = wire_field(ctx, "context")
     assert actual == json.loads(expected), f"context echo mismatch: {actual!r} != {expected}"
 
 
 @then("the wire response should not contain a context field")
 def then_wire_no_context(ctx: dict) -> None:
-    doc = _wire(ctx)
-    assert "context" not in doc, f"wire response carries a context field: {doc.get('context')!r}"
+    wire_absent(ctx, "context")
 
 
 @then("the wire response context should equal {}")
 def then_wire_context_empty(ctx: dict) -> None:
-    actual = _require(ctx, "context")
+    actual = wire_field(ctx, "context")
     assert actual == {}, f"wire context expected {{}}, got {actual!r}"
 
 
