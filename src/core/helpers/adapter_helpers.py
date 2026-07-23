@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     from adcp import AgentConfig
     from adcp.exceptions import ADCPError
 
+    from src.adapters import AdServerAdapter
+
 
 class _HasAgentFields(Protocol):
     """Structural type for objects with agent config fields (CreativeAgent, SignalsAgent)."""
@@ -132,7 +134,7 @@ def resolve_tenant_adapter_type(tenant: Any = None) -> str:
     return selected_adapter or "mock"
 
 
-def get_adapter_class_for_tenant(tenant: Any = None) -> type:
+def get_adapter_class_for_tenant(tenant: Any = None) -> type[AdServerAdapter]:
     """Resolve the ad-server adapter CLASS for a tenant, without a Principal.
 
     For read-only capability/discovery paths (e.g. get_adcp_capabilities) that

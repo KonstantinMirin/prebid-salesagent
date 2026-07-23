@@ -356,7 +356,9 @@ class TestWireBytesIdenticalAcrossTransports:
         # header-based tenant detection regardless of credential presence) —
         # mock it (unit test, no DB) so this stays isolated to error-envelope
         # translation, not real tenant resolution.
-        anonymous_identity = PrincipalFactory.make_identity(principal_id=None, tenant_id=None, tenant=None, protocol="rest")
+        anonymous_identity = PrincipalFactory.make_identity(
+            principal_id=None, tenant_id=None, tenant=None, protocol="rest"
+        )
         with (
             patch("src.core.resolved_identity.resolve_identity", return_value=anonymous_identity),
             patch(
