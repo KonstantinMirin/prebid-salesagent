@@ -92,6 +92,20 @@ Feature: BR-UC-011 Manage Accounts
     And the error message describes the authentication requirement
     # @bva authentication (account operations): no token on list
 
+  @T-UC-011-ext-c-a2a @list @extension @ext-c @error @a2a @post-f1 @post-f2 @post-f3
+  Scenario: A2A list_accounts request with invalid auth token — error returned
+    Given a tenant is resolvable from the request context
+    And the Buyer has an invalid authentication token
+    When the Buyer Agent sends a list_accounts skill request via A2A with the token
+    Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
+    And the error message should reference authentication or token validation
+    # Coverage gap alongside salesagent-7moz (BR-UC-010 @T-UC-010-ext-c-a2a): A2A
+    # always validates a presented token regardless of the requested DISCOVERY_SKILLS
+    # member (get_adcp_capabilities and list_accounts share the same boundary code path).
+    # POST-F2: Buyer knows what failed and the error code
+    # POST-F1: No state change (read-only)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+
   @T-UC-011-list-pagination @list @pagination @post-s4
   Scenario: List accounts with pagination
     Given the Buyer Agent has an authenticated connection

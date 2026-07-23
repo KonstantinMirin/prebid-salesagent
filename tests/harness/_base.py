@@ -485,6 +485,37 @@ class BaseTestEnv:
             )
         return self._identity_cache[protocol]
 
+    def invalid_token_identity(self) -> ResolvedIdentity:
+        """An identity carrying a token that matches no Principal row.
+
+        Per-transport behavior is production's: A2A rejects a presented-but-
+        invalid credential; MCP/REST treat it as absent (auth-optional tool).
+        """
+        from tests.harness._identity import make_identity
+
+        return make_identity(
+            principal_id=None,
+            tenant_id=self._tenant_id,
+            auth_token="invalid-token-harness",
+            **self._tenant_overrides,
+        )
+
+    def anonymous_identity(self) -> ResolvedIdentity:
+        """Tenant-resolvable identity with NO credential and NO principal.
+
+        Models the production no-auth discovery call where the tenant still
+        resolves (Host header / subdomain) — distinct from identity=None,
+        which is the no-tenant case.
+        """
+        from tests.harness._identity import make_identity
+
+        return make_identity(
+            principal_id=None,
+            tenant_id=self._tenant_id,
+            auth_token=None,
+            **self._tenant_overrides,
+        )
+
     def _resolve_auth_token(self) -> str | None:
         """Look up the real access_token from the session-bound Principal.
 

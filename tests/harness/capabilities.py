@@ -115,36 +115,8 @@ class CapabilitiesEnv(IntegrationEnv):
         self.mock["tenant_config_uow"] = patcher.start()
         self._patchers.append(patcher)
 
-    def invalid_token_identity(self) -> Any:
-        """An identity carrying a token that matches no Principal row.
-
-        Per-transport behavior is production's: A2A rejects a presented-but-
-        invalid credential; MCP/REST treat it as absent (auth-optional tool).
-        """
-        from tests.factories.principal import PrincipalFactory
-
-        return PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id=self._tenant_id,
-            auth_token="invalid-token-harness",
-            **self._tenant_overrides,
-        )
-
-    def anonymous_identity(self) -> Any:
-        """Tenant-resolvable identity with NO credential and NO principal.
-
-        Models the production no-auth discovery call where the tenant still
-        resolves (Host header / subdomain) — distinct from identity=None,
-        which is the no-tenant case.
-        """
-        from tests.factories.principal import PrincipalFactory
-
-        return PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id=self._tenant_id,
-            auth_token=None,
-            **self._tenant_overrides,
-        )
+    # invalid_token_identity() / anonymous_identity() live on BaseTestEnv
+    # (tests/harness/_base.py) — every Env subclass inherits them.
 
     # -- Transport verbs ------------------------------------------------------
 

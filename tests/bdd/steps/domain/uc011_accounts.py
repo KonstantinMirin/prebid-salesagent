@@ -413,6 +413,13 @@ def when_list_accounts_no_auth(ctx: dict) -> None:
     dispatch_request(ctx, identity=None)
 
 
+@when("the Buyer Agent sends a list_accounts skill request via A2A with the token")
+def when_list_accounts_a2a_invalid_token(ctx: dict) -> None:
+    """Send list_accounts via A2A with an invalid (presented but not valid) token."""
+    ctx["transport"] = "A2A"
+    dispatch_request(ctx, identity=ctx["env"].invalid_token_identity())
+
+
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with max_results {value:d}"))
 def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     """Send list_accounts with max_results pagination."""
