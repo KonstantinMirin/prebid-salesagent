@@ -402,7 +402,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the adapter is in <adapter_state> state
     And the tenant has <capability> configured as <capability_state>
     When the Buyer Agent calls get_adcp_capabilities
-    Then media_buy.<section> should be <section_state>
+    Then the media_buy.<section> section should be <section_state>
     And a present audience_targeting section should include supported_identifier_types and minimum_audience_size
     # 3.1.1 presence-indicates-support model: the wire flags features.audience_targeting /
     # features.conversion_tracking were REMOVED in 3.0 (mdx L183-184) — the Given now names
@@ -446,12 +446,19 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the Buyer has an invalid authentication token
     When the Buyer Agent sends a get_adcp_capabilities skill request via A2A with the token
     Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
-    And the error message should reference authentication or token validation
+    And the wire error message should contain "token" and "invalid"
     # Graduated (salesagent-7moz): A2A now always validates a presented token
     # regardless of the requested skill's own auth requirement.
     # POST-F2: Buyer knows what failed and the error code
     # POST-F1: No state change (read-only)
+    # The message substring is pinned to production's ACTUAL AUTH_INVALID wording
+    # (core/error.json message is a free string, so the spec cannot pin content):
+    # resolved_identity.py raises "Authentication token is invalid for tenant '...'"
+    # and adcp_a2a_server.py emits "Authentication token is invalid or expired." —
+    # both contain "token" and "invalid", and neither is the AUTH_REQUIRED
+    # missing-credential wording ("authentication required"), the deprecated 3.x alias.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/message (free string — content pinned to production)
     # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (error table L1083-1084)
 
   # Deliberately MCP-specific: this scenario IS the MCP auth policy (treat-invalid-as-absent).
@@ -611,12 +618,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the adapter reports all 20 channels enum values
     When the Buyer Agent calls get_adcp_capabilities
-    Then primary_channels should contain all 20 canonical values
+    Then primary_channels should equal the channels enum's 20 canonical values
     # 3.1.1 enum has 20 values: display, olv, social, search, ctv, linear_tv, radio,
     # streaming_audio, podcast, dooh, ooh, print, cinema, email, gaming, retail_media,
     # influencer, affiliate, product_placement, sponsored_intelligence
     # (count corrected 2026-07-13: scenario said 18, comment listed 19, spec has 20 — the
     # pre-release snapshot lacked sponsored_intelligence)
+    # PRODUCTION GAP (strict xfail): CHANNEL_MAPPING (src/core/tools/capabilities.py)
+    # maps 19 canonical values + 2 aliases but OMITS sponsored_intelligence, so an
+    # adapter reporting all 20 enum values yields only 19 on the wire —
+    # sponsored_intelligence is dropped as "unrecognized" (MediaChannel.sponsored_intelligence
+    # exists in the adcp enum; only the production mapping lags). Executes and fails at
+    # the 20-value equality until the mapping gains the 20th channel.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/channels.json pointer=/enum
 
   @T-UC-010-features @validation @post-s4

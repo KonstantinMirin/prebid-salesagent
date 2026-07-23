@@ -392,6 +392,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
     "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1592 spec-production gap",
     "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1592 spec-production gap",
+    # Wired non-dormant + strengthened (salesagent-chbi): the scenario executes and grades
+    # the full 20-value channels enum, then fails because CHANNEL_MAPPING
+    # (src/core/tools/capabilities.py) omits sponsored_intelligence — the 20th canonical
+    # channel is dropped as unrecognized, so primary_channels emits only 19 of 20 (all
+    # three transports). Strict xfail until the production mapping gains the 20th channel.
+    "T-UC-010-channel-all-canonical": "CHANNEL_MAPPING omits sponsored_intelligence — primary_channels emits 19 of the 20 canonical channels — production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -505,6 +511,16 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-010-degradation-account",
         {"full_response", "account_degraded"},
         "account block not emitted for resolved tenants — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-chbi): the 'absent' rows (adapter
+    # fails / capability disabled) pass — the block is genuinely off the wire; only the
+    # 'present' rows (full_response: adapter succeeds AND capability enabled) fail,
+    # because production never emits the media_buy.audience_targeting /
+    # conversion_tracking blocks yet (#1592). Strict on the present rows only.
+    (
+        "T-UC-010-degradation-sections",
+        {"full_response"},
+        "media_buy.audience_targeting / conversion_tracking sections not emitted by the capabilities builder — #1592",
     ),
 ]
 
@@ -3544,6 +3560,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-version-unsupported",
             "T-UC-010-v31-version-unsupported-major-fallback",
             "T-UC-010-v31-version-unsupported-build-version-advisory",
+            # Batch 3 — degradation-sections + channel-all-canonical (salesagent-chbi)
+            "T-UC-010-degradation-sections",
+            "T-UC-010-channel-all-canonical",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

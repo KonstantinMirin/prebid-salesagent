@@ -37,6 +37,33 @@ PRICING_MODEL_ENUM = {"cpm", "vcpm", "cpc", "cpcv", "cpv", "cpp", "cpa", "flat_r
 #: (get-adcp-capabilities-response.json#/properties/media_buy/properties/reporting_delivery_methods).
 REPORTING_DELIVERY_ENUM = {"webhook", "offline"}
 
+#: 3.1.1 media channels enum, in schema order — the 20 canonical values
+#: (dist/schemas/3.1.1/enums/channels.json#/enum). primary_channels items $ref
+#: this enum; there is no minItems/uniqueItems constraint, so the graded contract
+#: is set-equality against these 20 values.
+CHANNELS_ENUM = [
+    "display",
+    "olv",
+    "social",
+    "search",
+    "ctv",
+    "linear_tv",
+    "radio",
+    "streaming_audio",
+    "podcast",
+    "dooh",
+    "ooh",
+    "print",
+    "cinema",
+    "email",
+    "gaming",
+    "retail_media",
+    "influencer",
+    "affiliate",
+    "product_placement",
+    "sponsored_intelligence",
+]
+
 # ── Wire helpers ─────────────────────────────────────────────────────
 
 
@@ -134,6 +161,36 @@ def given_publisher_partnerships(ctx: dict, domains: str) -> None:
 @given("the adapter provides targeting capabilities including geo")
 def given_adapter_geo_targeting(ctx: dict) -> None:
     ctx["env"].set_targeting_capabilities(geo_countries=True, geo_regions=True, nielsen_dma=True)
+
+
+@given("the adapter reports all 20 channels enum values")
+def given_adapter_all_canonical_channels(ctx: dict) -> None:
+    """Seed the adapter with every 3.1.1 channels enum value (channels.json#/enum).
+    Production maps each recognized value through CHANNEL_MAPPING onto primary_channels."""
+    ctx["env"].set_adapter_channels(list(CHANNELS_ENUM))
+
+
+@given(parsers.parse("the adapter is in {adapter_state} state"))
+def given_adapter_state(ctx: dict, adapter_state: str) -> None:
+    """available → default happy adapter (channels + full targeting);
+    unavailable → the adapter factory raises, so production degrades to the
+    [display] default and drops adapter-derived media_buy sections."""
+    if adapter_state == "unavailable":
+        ctx["env"].make_adapter_unavailable()
+    elif adapter_state != "available":
+        raise ValueError(f"unknown adapter_state: {adapter_state!r}")
+
+
+@given(parsers.parse("the tenant has {capability} configured as {capability_state}"))
+def given_capability_configured(ctx: dict, capability: str, capability_state: str) -> None:
+    """Record tenant-config capability intent (audience targeting / conversion
+    tracking, enabled|disabled). Production has no capability-config surface yet
+    (#1592) — this records intent; the media_buy.<section> block is not emitted,
+    so the 'present' rows xfail at the Then."""
+    if capability_state not in ("enabled", "disabled"):
+        raise ValueError(f"unknown capability_state: {capability_state!r}")
+    key = capability.strip().replace(" ", "_")
+    _config(ctx)[key] = capability_state == "enabled"
 
 
 @given("the system has known state before the request")
@@ -605,6 +662,39 @@ def then_conversion_tracking_present(ctx: dict) -> None:
     wire_dict(ctx, "media_buy.conversion_tracking")
 
 
+@then(
+    parsers.re(
+        r"the media_buy\.(?P<section>audience_targeting|conversion_tracking) "
+        r"section should be (?P<state>absent|present)$"
+    )
+)
+def then_media_buy_section_state(ctx: dict, section: str, state: str) -> None:
+    """Adapter-dependence of the audience_targeting / conversion_tracking blocks
+    (production choice; the spec is silent on WHY a section is present). 'present'
+    pins the dual assert (non-null JSON object); 'absent' pins wire-key absence —
+    a JSON null would be schema-invalid for these optional-object fields, so it is
+    NOT treated as absent."""
+    path = f"media_buy.{section}"
+    if state == "absent":
+        wire_absent(ctx, path)
+    else:
+        wire_dict(ctx, path)
+
+
+@then("a present audience_targeting section should include supported_identifier_types and minimum_audience_size")
+def then_present_audience_required_members(ctx: dict) -> None:
+    """Conditional required-member grade: audience_targeting.required =
+    [supported_identifier_types, minimum_audience_size]
+    (get-adcp-capabilities-response.json#/properties/media_buy/properties/audience_targeting/required).
+    Only grades a present block (mirrors then_present_account_billing)."""
+    section = wire_lookup(ctx, "media_buy.audience_targeting")
+    if section is WIRE_MISSING:
+        return  # conditional Then: only grades a present block
+    assert isinstance(section, dict), f"audience_targeting not an object: {section!r}"
+    for member in ("supported_identifier_types", "minimum_audience_size"):
+        assert member in section, f"present audience_targeting missing required member {member!r}: {section}"
+
+
 @then(parsers.parse("media_buy.conversion_tracking.{field} should equal {expected}"))
 def then_conversion_field_equals(ctx: dict, field: str, expected: str) -> None:
     """Exact value on a conversion_tracking sub-field. The block has no required
@@ -632,6 +722,20 @@ def then_portfolio_domains(ctx: dict, domains: str) -> None:
 def then_portfolio_channels(ctx: dict, channels: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
     assert sorted(actual) == sorted(_quoted_list(channels)), f"primary_channels {actual!r} != {channels}"
+
+
+@then("primary_channels should equal the channels enum's 20 canonical values")
+def then_primary_channels_all_canonical(ctx: dict) -> None:
+    """Every 3.1.1 channels enum value round-trips onto primary_channels.
+    primary_channels items $ref channels.json#/enum (20 values, no minItems/
+    uniqueItems) — so the graded contract is set-equality against all 20.
+    Strict xfail today: CHANNEL_MAPPING omits sponsored_intelligence, so the
+    20th value is dropped and the wire carries only 19."""
+    actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
+    assert sorted(actual) == sorted(CHANNELS_ENUM), (
+        f"primary_channels is not the full 20-value channels enum: "
+        f"missing {sorted(set(CHANNELS_ENUM) - set(actual))}, extra {sorted(set(actual) - set(CHANNELS_ENUM))}"
+    )
 
 
 @then("the wire response should not contain a media_buy key")
@@ -761,6 +865,27 @@ def then_capabilities_not_gated_on_token(ctx: dict) -> None:
         f"adapter-derived channels degraded by an invalid token (INV-4 violation): "
         f"expected {DEFAULT_ADAPTER_CHANNELS!r}, got {channels!r}"
     )
+
+
+@then(parsers.re(r'the wire error message should contain "(?P<first>[^"]+)" and "(?P<second>[^"]+)"$'))
+def then_wire_error_message_contains(ctx: dict, first: str, second: str) -> None:
+    """errors[0].message on the wire envelope must carry BOTH pinned substrings
+    (case-insensitive). core/error.json message is a free string, so the spec
+    cannot pin content — the substrings are pinned to production's ACTUAL
+    AUTH_INVALID wording: resolved_identity.py "Authentication token is invalid
+    for tenant '...'" and adcp_a2a_server.py "Authentication token is invalid or
+    expired." both contain "token" and "invalid". Requiring both rejects the
+    AUTH_REQUIRED missing-credential wording ("authentication required")."""
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
+    errors = envelope.get("errors") or [{}]
+    message = errors[0].get("message") or ""
+    assert message, f"errors[0].message is empty on the wire envelope: {envelope}"
+    lowered = message.lower()
+    for substring in (first, second):
+        assert substring.lower() in lowered, (
+            f"wire error message {message!r} is missing the pinned substring {substring!r}"
+        )
 
 
 # ── Thens: protocols filter (ext-d) ──────────────────────────────────
