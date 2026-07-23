@@ -59,8 +59,18 @@ _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "PERMISSION_DENIED": {"recovery": "correctable", "message": "Not authorized for this action"},
 }
 
-# The authoritative wire-code table: SDK baseline + pinned-spec supplement.
-WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {**STANDARD_ERROR_CODES, **_SPEC_SUPPLEMENT_CODES}
+# SDK STANDARD_ERROR_CODES entries AdCP v3.1.1 dropped; translated to their
+# canonical v3.1.1 target via ERROR_CODE_MAPPING, never emitted standalone.
+# NOT_SUPPORTED is the legacy SDK feature-unsupported code; v3.1.1's
+# error-code.json canonicalizes feature-unsupported as UNSUPPORTED_FEATURE, so
+# NOT_SUPPORTED has zero production raise sites and must not reach the wire.
+_SPEC_DEMOTED_CODES: frozenset[str] = frozenset({"NOT_SUPPORTED"})
+
+# The authoritative wire-code table: SDK baseline + pinned-spec supplement,
+# minus the codes AdCP v3.1.1 demoted (which translate to a canonical target).
+WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {
+    k: v for k, v in {**STANDARD_ERROR_CODES, **_SPEC_SUPPLEMENT_CODES}.items() if k not in _SPEC_DEMOTED_CODES
+}
 
 ERROR_CODE_MAPPING: dict[str, str] = {
     # Internal-only codes that occasionally leak to the wire when a raise site
@@ -112,6 +122,10 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "PLACEMENT_TARGETING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
     "UNSUPPORTED_ACTION": "UNSUPPORTED_FEATURE",
     "BILLING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
+    # Legacy SDK code AdCP v3.1.1 dropped (see _SPEC_DEMOTED_CODES);
+    # feature-unsupported is canonically UNSUPPORTED_FEATURE per v3.1.1
+    # error-code.json.
+    "NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
     # Resource lookup
     "NO_PACKAGES_FOUND": "PACKAGE_NOT_FOUND",
     # Resource state
