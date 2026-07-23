@@ -62,7 +62,8 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # Added by bug-triage epic salesagent-jl20 (2026-07-16): 2 genuine e2e-only
         # gaps surfaced by un-xfailing dn2s/mkso's scenarios — see ledger file
         # section comments for full root-cause analysis of each.
-        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_authentication_state_does_not_affect_response_data_content[e2e_rest]",
+        # uc010 auth-data-identity graduated at salesagent-zna9 (_resolve_auth_dep
+        # now resolves tenant from headers regardless of credential presence).
         "tests/bdd/test_uc003_update_media_buy.py::test_authentication_error__principal_not_found_in_database[e2e_rest]",
     }
 )
