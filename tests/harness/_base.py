@@ -454,12 +454,29 @@ class BaseTestEnv:
             # is visible to other sessions (e.g., get_principal_from_token
             # in the MCP auth chain uses a separate get_db_session() call).
             auth_token = None
+            principal_id = self._principal_id
             if self.use_real_db:
                 self._commit_factory_data()
-                auth_token = self._resolve_auth_token()
+                # _resolve_auth_token() returns None for two different reasons:
+                # (a) a real DB lookup ran and found no matching Principal row, or
+                # (b) self._session isn't bound yet (env constructed/used outside
+                # its `with` context). Only (a) is a genuine "principal doesn't
+                # exist" signal — gate on self._session directly so a session-
+                # timing case doesn't get misread as a missing-principal one.
+                if self._session:
+                    auth_token = self._resolve_auth_token()
+                    if auth_token is None:
+                        # No Principal row for this principal_id+tenant_id (never
+                        # created, or deleted after "authenticating") — mirror
+                        # production's resolve_identity() (src/core/resolved_identity.py:
+                        # 168-172), which nulls principal_id on a failed token->principal
+                        # lookup, so in-process transports agree with e2e_rest's real DB
+                        # lookup instead of diverging on the deleted-principal case
+                        # (salesagent-z9e0).
+                        principal_id = None
 
             self._identity_cache[protocol] = PrincipalFactory.make_identity(
-                principal_id=self._principal_id,
+                principal_id=principal_id,
                 tenant_id=self._tenant_id,
                 protocol=protocol,
                 dry_run=self._dry_run,

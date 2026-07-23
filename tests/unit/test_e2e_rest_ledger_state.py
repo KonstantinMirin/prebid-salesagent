@@ -64,7 +64,9 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # section comments for full root-cause analysis of each.
         # uc010 auth-data-identity graduated at salesagent-zna9 (_resolve_auth_dep
         # now resolves tenant from headers regardless of credential presence).
-        "tests/bdd/test_uc003_update_media_buy.py::test_authentication_error__principal_not_found_in_database[e2e_rest]",
+        # uc003 ext-a-unknown graduated at salesagent-z9e0 (harness identity_for()
+        # now nulls principal_id on a failed token->principal DB lookup, mirroring
+        # production's resolve_identity() — all transports agree now).
     }
 )
 
