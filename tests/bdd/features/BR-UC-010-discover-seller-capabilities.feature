@@ -87,19 +87,22 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has an adapter with channels "display, social, ctv"
     And the tenant has registered publisher partnerships with domains "news.com", "sports.com"
     And the adapter provides targeting capabilities including geo
+    And the tenant billing policy is configured as operator, agent
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should include adcp.major_versions containing 3
-    And the response should include adcp.idempotency with a boolean supported discriminator
+    And adcp.idempotency.supported should equal true
+    And adcp.idempotency.replay_ttl_seconds should be an integer between 3600 and 604800
     And the response should include supported_protocols containing "media_buy"
-    And account.supported_billing should be a non-empty array of billing-party enum values matching the tenant billing config
-    And account.sandbox should equal the tenant-configured sandbox value
-    And media_buy.features should conform to the 4-flag media-buy-features shape with tenant-configured values
-    And media_buy.supported_pricing_models should equal the exact set derived from the tenant adapter
-    And media_buy.reporting_delivery_methods should equal the tenant-configured delivery methods
-    And media_buy.execution.targeting should include geo_countries and geo_regions as booleans
+    And account.supported_billing should equal [operator, agent]
+    And account.sandbox should equal false
+    And media_buy.features should have boolean flags inline_creative_management, property_list_filtering, catalog_management and committed_metrics_supported
+    And media_buy.supported_pricing_models should be a non-empty unique array of pricing-model enum values
+    And media_buy.reporting_delivery_methods should be a non-empty unique subset of ["webhook", "offline"]
+    And media_buy.execution.targeting.geo_countries should equal true
+    And media_buy.execution.targeting.geo_regions should equal true
     And the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com"
     And the response should include media_buy.portfolio with primary_channels "display", "social", "ctv"
-    And the response should include last_updated as a valid timestamp
+    And last_updated should be an RFC 3339 date-time string
     # Former @T-UC-010-main-mcp / @T-UC-010-main-rest twins merged 2026-07-13: after de-pinning
     # the transport wording the two scenarios were word-identical (the extra "authenticated"
     # Given was auth-policy territory, owned by @T-UC-010-auth); the 4-way transport
@@ -110,8 +113,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # config-derived value asserts.
     # @bva protocols: Not provided (no protocol filter)
     # POST-S1..S8, POST-S10, POST-S15, POST-S18 verified
+    # Vague Thens spec-pinned (salesagent-f5fs): idempotency split into supported=true +
+    # replay_ttl_seconds range (oneOf IdempotencySupported); billing/sandbox/features/pricing/
+    # reporting/targeting-geo pinned to exact values or spec-grounded shape. Exact
+    # supported_pricing_models / reporting_delivery_methods SETS and per-flag feature VALUES are
+    # config-derived (spec-silent on value) — the enum/shape is graded; the set is a production
+    # config surface (#1592, reported not improvised).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/media-buy-features.json pointer=/properties
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/pricing-model.json pointer=/enum
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/reporting_delivery_methods
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
 
   @T-UC-010-main-readonly @main-flow @post-f1
@@ -119,8 +132,11 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the system has known state before the request
     When the Buyer Agent calls get_adcp_capabilities
-    Then the system state should be unchanged after the response
+    Then the row counts of tenants, principals, publisher_partners and media_buys should equal their pre-request values
     # POST-F1: System state is unchanged (read-only operation)
+    # Observable set pinned (was "system state should be unchanged"): the storyboard
+    # defines the read-only obligation (stateful: false); the exact tables snapshot is
+    # the local observable — the four mutable tables a capabilities call could touch.
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/capability-discovery.yaml pointer=/steps (stateful: false on both storyboard steps)
     # Step definition must pin a concrete state snapshot (row counts / updated-at) — spec
     # defines the read-only obligation, the observable set is a local choice.
@@ -130,8 +146,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities
-    Then the response should include last_updated as a valid ISO 8601 timestamp
+    Then last_updated should parse as an RFC 3339 date-time value
     # POST-S7: Buyer knows when capabilities were last updated
+    # Format pinned to the schema keyword (was "valid ISO 8601 timestamp"): the value
+    # must parse as a JSON-Schema date-time (RFC 3339), e.g. "2025-10-14T14:25:30Z".
     # NOT-IN-SPEC presence: last_updated is optional at 3.1.1 — always emitting it is a local
     # guarantee, not a spec mandate. The format contract (date-time) is the spec part.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/last_updated
@@ -141,7 +159,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant uses the mock adapter with full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities
-    Then media_buy.supported_pricing_models should equal the exact model set of the tenant adapter
+    Then media_buy.supported_pricing_models should be a non-empty unique array of pricing-model enum values
     And each pricing model should be one of "cpm", "vcpm", "cpc", "cpcv", "cpv", "cpp", "cpa", "flat_rate", "time"
     And media_buy.supported_pricing_models should contain no duplicates
     # POST-S10: Buyer knows supported pricing models across seller's portfolio
@@ -155,18 +173,23 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has full capabilities configured
     And the tenant supports audience targeting
     When the Buyer Agent calls get_adcp_capabilities
-    Then media_buy.audience_targeting should be present
-    And media_buy.audience_targeting.supported_identifier_types should be a non-empty subset of [hashed_email, hashed_phone] matching the tenant config
-    And media_buy.audience_targeting.minimum_audience_size should be an integer of at least 1 matching the tenant config
-    And when declared media_buy.audience_targeting.supported_uid_types should contain only uid-type enum values matching the tenant config
-    And when declared media_buy.audience_targeting.supports_platform_customer_id should equal the tenant-configured boolean
-    And when declared media_buy.audience_targeting.matching_latency_hours should have integer min and max with 0 <= min <= max
+    Then media_buy.audience_targeting.supported_identifier_types should equal ["hashed_email", "hashed_phone"]
+    And media_buy.audience_targeting.minimum_audience_size should equal 1000
+    And media_buy.audience_targeting.supported_uid_types should equal ["uid2", "rampid"]
+    And media_buy.audience_targeting.supports_platform_customer_id should equal true
+    And media_buy.audience_targeting.matching_latency_hours should equal {"min": 24, "max": 72}
     # POST-S12: Buyer knows audience targeting capabilities
     # 3.1.1: the features.audience_targeting flag was removed in 3.0 — PRESENCE of the
     # media_buy.audience_targeting object indicates support. Required members within the
     # block: supported_identifier_types, minimum_audience_size; the rest are optional and
     # asserted only when the tenant declares them.
+    # Fixture-pinned values (was "matching the tenant config" with no declared fixture):
+    # supported_identifier_types items enum [hashed_email, hashed_phone]; minimum_audience_size
+    # integer minimum 1 (1000 used); supported_uid_types items from uid-type enum (uid2, rampid
+    # are enum members); supports_platform_customer_id boolean; matching_latency_hours object of
+    # integer min/max (both minimum 0). Production does not emit audience_targeting yet (#1592).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/audience_targeting/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L183: flag replaced by object presence)
 
   @T-UC-010-conversion-caps @main-flow @post-s13

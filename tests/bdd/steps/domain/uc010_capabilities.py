@@ -30,6 +30,13 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
 BILLING_PARTY_ENUM = {"operator", "agent", "advertiser"}
 
+#: 3.1.1 pricing-model enum (dist/schemas/3.1.1/enums/pricing-model.json).
+PRICING_MODEL_ENUM = {"cpm", "vcpm", "cpc", "cpcv", "cpv", "cpp", "cpa", "flat_rate", "time"}
+
+#: 3.1.1 reporting delivery methods enum
+#: (get-adcp-capabilities-response.json#/properties/media_buy/properties/reporting_delivery_methods).
+REPORTING_DELIVERY_ENUM = {"webhook", "offline"}
+
 # ── Wire helpers ─────────────────────────────────────────────────────
 
 
@@ -60,10 +67,19 @@ def _quoted_list(text: str) -> list[str]:
 
 
 @given("the tenant has full capabilities configured")
+@given("the tenant uses the mock adapter with full capabilities configured")
 def given_full_capabilities(ctx: dict) -> None:
     """Declare the full-capability tenant. Production has no capability config
     surface yet — this records intent; value asserts xfail until S1/S3 land."""
     _config(ctx)["full"] = True
+
+
+@given("the tenant supports audience targeting")
+def given_supports_audience_targeting(ctx: dict) -> None:
+    """Declare audience-targeting support. Production does not emit the
+    media_buy.audience_targeting block yet (#1592) — records intent; the
+    value asserts xfail until the block lands."""
+    _config(ctx)["audience_targeting"] = True
 
 
 @given(parsers.parse("the tenant has an adapter with channels {channels}"))
@@ -281,6 +297,22 @@ def then_idempotency_discriminator(ctx: dict) -> None:
     assert isinstance(idempotency.get("supported"), bool), f"idempotency.supported not a boolean: {idempotency}"
 
 
+@then("adcp.idempotency.supported should equal true")
+def then_idempotency_supported_true(ctx: dict) -> None:
+    """oneOf IdempotencySupported: supported is the const-true discriminator
+    (get-adcp-capabilities-response.json#/properties/adcp/properties/idempotency/oneOf/0)."""
+    value = wire_field(ctx, "adcp.idempotency.supported")
+    assert value is True, f"idempotency.supported expected true, got {value!r}"
+
+
+@then("adcp.idempotency.replay_ttl_seconds should be an integer between 3600 and 604800")
+def then_idempotency_ttl_range(ctx: dict) -> None:
+    """IdempotencySupported requires replay_ttl_seconds, integer in [3600, 604800]."""
+    ttl = wire_field(ctx, "adcp.idempotency.replay_ttl_seconds")
+    assert isinstance(ttl, int) and not isinstance(ttl, bool), f"replay_ttl_seconds not an integer: {ttl!r}"
+    assert 3600 <= ttl <= 604800, f"replay_ttl_seconds {ttl!r} outside [3600, 604800]"
+
+
 @then("the response should include adcp.supported_versions as a non-empty array")
 def then_supported_versions_nonempty(ctx: dict) -> None:
     versions = wire_field(ctx, "adcp.supported_versions")
@@ -303,13 +335,17 @@ def then_supported_protocols_contains_short(ctx: dict, protocol: str) -> None:
     assert protocol in wire_field(ctx, "supported_protocols")
 
 
-@then("the response should include last_updated as a valid timestamp")
-@then("the response should include last_updated as a valid ISO 8601 timestamp")
+@then("last_updated should be an RFC 3339 date-time string")
+@then("last_updated should parse as an RFC 3339 date-time value")
 def then_last_updated_valid(ctx: dict) -> None:
+    """Format pinned to the schema keyword (last_updated: format date-time).
+    The value must be a string that parses as an RFC 3339 / JSON-Schema
+    date-time (e.g. "2025-10-14T14:25:30Z")."""
     from datetime import datetime
 
     raw = wire_field(ctx, "last_updated")
-    datetime.fromisoformat(str(raw).replace("Z", "+00:00"))  # raises on malformed
+    assert isinstance(raw, str), f"last_updated not a string: {raw!r}"
+    datetime.fromisoformat(raw.replace("Z", "+00:00"))  # raises on malformed
 
 
 # ── Thens: account block ─────────────────────────────────────────────
@@ -318,17 +354,6 @@ def then_last_updated_valid(ctx: dict) -> None:
 def _assert_billing_party_array(value: Any) -> None:
     assert isinstance(value, list) and value, f"supported_billing not a non-empty array: {value!r}"
     assert set(value) <= BILLING_PARTY_ENUM, f"supported_billing carries non-enum values: {value!r}"
-
-
-@then(
-    "account.supported_billing should be a non-empty array of billing-party enum values matching the tenant billing config"
-)
-def then_supported_billing_matches_config(ctx: dict) -> None:
-    value = wire_field(ctx, "account.supported_billing")
-    _assert_billing_party_array(value)
-    declared = _config(ctx).get("supported_billing")
-    if declared is not None:
-        assert sorted(value) == sorted(declared), f"supported_billing {value!r} != tenant config {declared!r}"
 
 
 @then("account.supported_billing should be a non-empty array")
@@ -349,13 +374,13 @@ def then_supported_billing_enum(ctx: dict) -> None:
     _assert_billing_party_array(wire_field(ctx, "account.supported_billing"))
 
 
-@then("account.sandbox should equal the tenant-configured sandbox value")
-def then_sandbox_matches_config(ctx: dict) -> None:
+@then(parsers.parse("account.sandbox should equal {expected}"))
+def then_account_sandbox_equals(ctx: dict, expected: str) -> None:
+    """account.sandbox is a boolean (default false). Pinned to the exact
+    scenario value — no silent-skip on missing config."""
     value = wire_field(ctx, "account.sandbox")
-    assert isinstance(value, bool), f"account.sandbox not a boolean: {value!r}"
-    declared = _config(ctx).get("sandbox")
-    if declared is not None:
-        assert value is declared, f"account.sandbox {value!r} != tenant config {declared!r}"
+    want = json.loads(expected)
+    assert value is want, f"account.sandbox expected {want!r}, got {value!r}"
 
 
 def _expect_flag(ctx: dict, path: str, expected: str) -> None:
@@ -436,28 +461,58 @@ _FEATURE_FLAGS = (
 )
 
 
-@then("media_buy.features should conform to the 4-flag media-buy-features shape with tenant-configured values")
-def then_features_shape(ctx: dict) -> None:
+@then(parsers.parse("media_buy.features should have boolean flags {flags}"))
+def then_features_boolean_flags(ctx: dict, flags: str) -> None:
+    """media-buy-features.json: 4 named flags, all boolean, additionalProperties
+    boolean, none required. The per-flag VALUE is a production choice (spec-silent),
+    so the graded contract is the shape: every named flag present is a boolean, and
+    every property on the object (named or additional) is a boolean."""
     features = wire_field(ctx, "media_buy.features")
-    for flag in _FEATURE_FLAGS:
-        assert isinstance(features.get(flag), bool), f"features.{flag} not a boolean: {features!r}"
-    declared = _config(ctx).get("features")
-    if declared is not None:
-        mismatches = {k: (features.get(k), v) for k, v in declared.items() if features.get(k) is not v}
-        assert not mismatches, f"features differ from tenant config: {mismatches}"
+    assert isinstance(features, dict), f"media_buy.features not an object: {features!r}"
+    named = [name.strip() for name in re.split(r",|\band\b", flags) if name.strip()]
+    assert set(named) == set(_FEATURE_FLAGS), f"scenario names unexpected feature flags: {named!r}"
+    for key, value in features.items():
+        assert isinstance(value, bool), f"features.{key} not a boolean: {value!r}"
 
 
-@then("media_buy.supported_pricing_models should equal the exact set derived from the tenant adapter")
-def then_pricing_models(ctx: dict) -> None:
+@then("media_buy.supported_pricing_models should be a non-empty unique array of pricing-model enum values")
+def then_pricing_models_shape(ctx: dict) -> None:
+    """supported_pricing_models: minItems 1, uniqueItems, items ∈ pricing-model enum.
+    The exact SET is config-derived (spec: "products may support a subset") — a
+    production config surface (#1592), so only the spec-pinned shape is graded here."""
     models = wire_field(ctx, "media_buy.supported_pricing_models")
     assert isinstance(models, list) and models, f"supported_pricing_models not a non-empty array: {models!r}"
     assert len(models) == len(set(models)), f"supported_pricing_models has duplicates: {models!r}"
+    invalid = set(models) - PRICING_MODEL_ENUM
+    assert not invalid, f"supported_pricing_models carries non-enum values: {sorted(invalid)}"
 
 
-@then("media_buy.reporting_delivery_methods should equal the tenant-configured delivery methods")
-def then_reporting_delivery_methods(ctx: dict) -> None:
+@then(parsers.parse("each pricing model should be one of {allowed}"))
+def then_pricing_models_enum(ctx: dict, allowed: str) -> None:
+    allowed_set = set(_quoted_list(allowed))
+    models = wire_field(ctx, "media_buy.supported_pricing_models")
+    invalid = set(models) - allowed_set
+    assert not invalid, f"supported_pricing_models has values outside {sorted(allowed_set)}: {sorted(invalid)}"
+
+
+@then("media_buy.supported_pricing_models should contain no duplicates")
+def then_pricing_models_no_duplicates(ctx: dict) -> None:
+    models = wire_field(ctx, "media_buy.supported_pricing_models")
+    assert len(models) == len(set(models)), f"supported_pricing_models has duplicates: {models!r}"
+
+
+@then(parsers.parse("media_buy.reporting_delivery_methods should be a non-empty unique subset of {allowed}"))
+def then_reporting_methods_subset(ctx: dict, allowed: str) -> None:
+    """reporting_delivery_methods: minItems 1, uniqueItems, items ∈ {webhook, offline}.
+    The exact SET is a seller config choice (spec-silent on value) — only the
+    spec-pinned shape/enum is graded (#1592 for the emission itself)."""
+    allowed_set = set(_quoted_list(allowed))
+    assert allowed_set <= REPORTING_DELIVERY_ENUM, f"scenario allows non-enum reporting methods: {allowed_set!r}"
     methods = wire_field(ctx, "media_buy.reporting_delivery_methods")
     assert isinstance(methods, list) and methods, f"reporting_delivery_methods not a non-empty array: {methods!r}"
+    assert len(methods) == len(set(methods)), f"reporting_delivery_methods has duplicates: {methods!r}"
+    invalid = set(methods) - allowed_set
+    assert not invalid, f"reporting_delivery_methods carries values outside {sorted(allowed_set)}: {sorted(invalid)}"
 
 
 @then("media_buy.execution.targeting should include geo_countries and geo_regions as booleans")
@@ -465,6 +520,25 @@ def then_targeting_geo_booleans(ctx: dict) -> None:
     targeting = wire_field(ctx, "media_buy.execution.targeting")
     for key in ("geo_countries", "geo_regions"):
         assert isinstance(targeting.get(key), bool), f"targeting.{key} not a boolean: {targeting!r}"
+
+
+@then(parsers.parse("media_buy.execution.targeting.{field} should equal {expected}"))
+def then_targeting_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Exact value on a targeting sub-field (e.g. geo_countries should equal true).
+    targeting.<field> types are booleans/objects per the response schema."""
+    actual = wire_field(ctx, f"media_buy.execution.targeting.{field}")
+    want = json.loads(expected)
+    assert actual == want, f"targeting.{field} expected {want!r}, got {actual!r}"
+
+
+@then(parsers.parse("media_buy.audience_targeting.{field} should equal {expected}"))
+def then_audience_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Exact value on an audience_targeting sub-field. Required members
+    (supported_identifier_types, minimum_audience_size) plus the optional
+    members are each pinned to the scenario fixture value."""
+    actual = wire_field(ctx, f"media_buy.audience_targeting.{field}")
+    want = json.loads(expected)
+    assert actual == want, f"audience_targeting.{field} expected {want!r}, got {actual!r}"
 
 
 @then(parsers.parse("the response should include media_buy.portfolio with publisher_domains {domains}"))
@@ -492,8 +566,11 @@ def then_no_account(ctx: dict) -> None:
 # ── Thens: read-only invariant ───────────────────────────────────────
 
 
-@then("the system state should be unchanged after the response")
+@then("the row counts of tenants, principals, publisher_partners and media_buys should equal their pre-request values")
 def then_state_unchanged(ctx: dict) -> None:
+    """Read-only invariant with a concrete observable set: the four mutable
+    tables a capabilities call could touch (tenants, principals,
+    publisher_partners, media_buys) — snapshotted by _db_state_snapshot."""
     before = ctx["state_snapshot"]
     after = _db_state_snapshot(ctx["env"])
     assert after == before, f"state changed by a read-only call: before={before} after={after}"

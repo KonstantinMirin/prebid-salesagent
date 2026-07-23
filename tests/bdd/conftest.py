@@ -384,6 +384,10 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-010-v31-version-unsupported-build-version-advisory": "version negotiation not implemented — #1592",
     "T-UC-010-account-supported-billing": "account.supported_billing not derived from tenant billing config on the capabilities response — #1592",
     "T-UC-010-account-block-presence": "account block emission incomplete — #1592",
+    # Wired non-dormant + strengthened (salesagent-f5fs): steps execute and grade the
+    # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
+    "T-UC-010-pricing": "media_buy.supported_pricing_models not emitted by the capabilities builder — #1592 spec-production gap",
+    "T-UC-010-audience-caps": "media_buy.audience_targeting not emitted by the capabilities builder — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -3506,6 +3510,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-main",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
+            "T-UC-010-pricing",
+            "T-UC-010-audience-caps",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",
