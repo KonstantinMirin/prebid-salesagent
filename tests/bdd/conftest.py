@@ -388,6 +388,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
     "T-UC-010-pricing": "media_buy.supported_pricing_models not emitted by the capabilities builder — #1592 spec-production gap",
     "T-UC-010-audience-caps": "media_buy.audience_targeting not emitted by the capabilities builder — #1592 spec-production gap",
+    # Wired non-dormant + strengthened (salesagent-ytq6): steps execute and grade the
+    # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
+    "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1592 spec-production gap",
+    "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -3512,6 +3516,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",
             "T-UC-010-audience-caps",
+            "T-UC-010-conversion-caps",
+            "T-UC-010-creative-caps",
+            "T-UC-010-ext-b-schema-valid",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",

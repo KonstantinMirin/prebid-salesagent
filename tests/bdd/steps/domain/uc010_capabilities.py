@@ -24,7 +24,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_field, wire_lookup
+from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_dict, wire_field, wire_lookup
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
@@ -80,6 +80,40 @@ def given_supports_audience_targeting(ctx: dict) -> None:
     media_buy.audience_targeting block yet (#1592) — records intent; the
     value asserts xfail until the block lands."""
     _config(ctx)["audience_targeting"] = True
+
+
+@given("the tenant supports conversion tracking")
+def given_supports_conversion_tracking(ctx: dict) -> None:
+    """Declare conversion-tracking support. Production does not emit the
+    media_buy.conversion_tracking block yet (#1592) — records intent; the
+    presence/value asserts xfail until the block lands."""
+    _config(ctx)["conversion_tracking"] = True
+
+
+@given('"creative" is in supported_protocols')
+def given_creative_in_supported_protocols(ctx: dict) -> None:
+    """Declare the creative protocol. Production advertises only the media_buy
+    protocol, so the creative section is not emitted (#1592) — records intent."""
+    _config(ctx).setdefault("supported_protocols", []).append("creative")
+
+
+@given("the tenant declares creative supports_compliance true")
+def given_creative_supports_compliance(ctx: dict) -> None:
+    """Declare the optional creative.supports_compliance value. Records intent;
+    production does not emit the creative section yet (#1592)."""
+    _config(ctx)["creative_supports_compliance"] = True
+
+
+@given("the adapter is unavailable")
+def given_adapter_unavailable(ctx: dict) -> None:
+    """Adapter factory raises — production degrades to the [display] default channel."""
+    ctx["env"].make_adapter_unavailable()
+
+
+@given("the database query fails")
+def given_database_query_fails(ctx: dict) -> None:
+    """Publisher-partner DB read fails — production degrades to the placeholder domain."""
+    ctx["env"].break_tenant_config_db()
 
 
 @given(parsers.parse("the tenant has an adapter with channels {channels}"))
@@ -291,10 +325,24 @@ def then_major_versions(ctx: dict) -> None:
     assert 3 in wire_field(ctx, "adcp.major_versions")
 
 
-@then("the response should include adcp.idempotency with a boolean supported discriminator")
+@then(
+    "adcp.idempotency.supported should be exactly true or false, and when false "
+    "replay_ttl_seconds and in_flight_max_seconds should be absent"
+)
 def then_idempotency_discriminator(ctx: dict) -> None:
-    idempotency = wire_field(ctx, "adcp.idempotency")
-    assert isinstance(idempotency.get("supported"), bool), f"idempotency.supported not a boolean: {idempotency}"
+    """oneOf discriminator invariant (get-adcp-capabilities-response.json
+    #/properties/adcp/properties/idempotency/oneOf): supported is the boolean
+    discriminator; on the IdempotencyUnsupported branch (supported=false) the
+    schema's `not.anyOf` forbids replay_ttl_seconds and in_flight_max_seconds —
+    they "have no meaning without replay support"."""
+    idempotency = wire_dict(ctx, "adcp.idempotency")
+    supported = idempotency.get("supported")
+    assert isinstance(supported, bool), f"idempotency.supported not a boolean: {supported!r}"
+    if supported is False:
+        for forbidden in ("replay_ttl_seconds", "in_flight_max_seconds"):
+            assert forbidden not in idempotency, (
+                f"IdempotencyUnsupported (supported=false) must omit {forbidden}: {idempotency!r}"
+            )
 
 
 @then("adcp.idempotency.supported should equal true")
@@ -522,13 +570,23 @@ def then_targeting_geo_booleans(ctx: dict) -> None:
         assert isinstance(targeting.get(key), bool), f"targeting.{key} not a boolean: {targeting!r}"
 
 
+def _assert_wire_equals(ctx: dict, path: str, expected: str) -> None:
+    """Exact-equality oracle on a dotted success-path wire field.
+
+    Shared by every "<block>.<field> should equal <json>" Then (targeting,
+    audience_targeting, conversion_tracking, creative) — one loud-guarded
+    dual-assert read (wire_field) plus a JSON-parsed exact compare, so the four
+    step families do not each hand-roll the same three lines (DRY)."""
+    actual = wire_field(ctx, path)
+    want = json.loads(expected)
+    assert actual == want, f"{path} expected {want!r}, got {actual!r}"
+
+
 @then(parsers.parse("media_buy.execution.targeting.{field} should equal {expected}"))
 def then_targeting_field_equals(ctx: dict, field: str, expected: str) -> None:
     """Exact value on a targeting sub-field (e.g. geo_countries should equal true).
     targeting.<field> types are booleans/objects per the response schema."""
-    actual = wire_field(ctx, f"media_buy.execution.targeting.{field}")
-    want = json.loads(expected)
-    assert actual == want, f"targeting.{field} expected {want!r}, got {actual!r}"
+    _assert_wire_equals(ctx, f"media_buy.execution.targeting.{field}", expected)
 
 
 @then(parsers.parse("media_buy.audience_targeting.{field} should equal {expected}"))
@@ -536,9 +594,32 @@ def then_audience_field_equals(ctx: dict, field: str, expected: str) -> None:
     """Exact value on an audience_targeting sub-field. Required members
     (supported_identifier_types, minimum_audience_size) plus the optional
     members are each pinned to the scenario fixture value."""
-    actual = wire_field(ctx, f"media_buy.audience_targeting.{field}")
-    want = json.loads(expected)
-    assert actual == want, f"audience_targeting.{field} expected {want!r}, got {actual!r}"
+    _assert_wire_equals(ctx, f"media_buy.audience_targeting.{field}", expected)
+
+
+@then("media_buy.conversion_tracking should be present")
+def then_conversion_tracking_present(ctx: dict) -> None:
+    """conversion_tracking is an object whose PRESENCE indicates support (3.1.1:
+    the features.conversion_tracking flag was removed in 3.0). wire_dict pins the
+    dual assert — present AND non-null AND a JSON object."""
+    wire_dict(ctx, "media_buy.conversion_tracking")
+
+
+@then(parsers.parse("media_buy.conversion_tracking.{field} should equal {expected}"))
+def then_conversion_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Exact value on a conversion_tracking sub-field. The block has no required
+    members; each declared sub-field is pinned to its scenario fixture value —
+    items drawn from the pinned event-type / uid-type / action-source enums,
+    attribution_windows items are window objects with a required post_click array."""
+    _assert_wire_equals(ctx, f"media_buy.conversion_tracking.{field}", expected)
+
+
+@then(parsers.parse("creative.{field} should equal {expected}"))
+def then_creative_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Exact value on a creative sub-field (e.g. supports_compliance should equal
+    true). Pinned to the declared fixture value — the creative block is optional
+    and only present when creative is in supported_protocols."""
+    _assert_wire_equals(ctx, f"creative.{field}", expected)
 
 
 @then(parsers.parse("the response should include media_buy.portfolio with publisher_domains {domains}"))
@@ -553,9 +634,32 @@ def then_portfolio_channels(ctx: dict, channels: str) -> None:
     assert sorted(actual) == sorted(_quoted_list(channels)), f"primary_channels {actual!r} != {channels}"
 
 
-@then("the response should NOT include media_buy details")
+@then("the wire response should not contain a media_buy key")
 def then_no_media_buy(ctx: dict) -> None:
+    """Absence asserted as wire-key absence — top-level required is
+    [adcp, supported_protocols], so media_buy is optional and a minimal response
+    omits the key entirely (there is no `media_buy.details` wire key)."""
     wire_absent(ctx, "media_buy")
+
+
+@then("the wire response should not contain an adcp_error field")
+def then_no_adcp_error(ctx: dict) -> None:
+    """A successful (degraded-but-valid) response carries no envelope error signal:
+    protocol-envelope adcp_error is the transport-level error field for FATAL task
+    failures only, so it is absent on a non-failure."""
+    wire_absent(ctx, "adcp_error")
+
+
+@then("the response should pass schema validation for get-adcp-capabilities-response")
+def then_schema_valid(ctx: dict) -> None:
+    """Storyboard response_schema check: the serialized wire MUST conform to
+    get-adcp-capabilities-response.json. Re-validate the actual wire body through
+    the pinned GetAdcpCapabilitiesResponse model (generated from that schema) — a
+    degraded response that dropped a required field or emitted an out-of-constraint
+    value raises ValidationError here, so the assertion is non-vacuous."""
+    from adcp.types import GetAdcpCapabilitiesResponse
+
+    GetAdcpCapabilitiesResponse.model_validate(wire_dict(ctx))
 
 
 @then("the response should NOT include account section")
@@ -582,7 +686,17 @@ def then_state_unchanged(ctx: dict) -> None:
 @then(parsers.re(r"the response should be (?P<outcome>success|AUTH_INVALID)$"))
 def then_auth_outcome(ctx: dict, outcome: str) -> None:
     if outcome == "success":
-        assert ctx.get("response") is not None, f"expected success, got error: {ctx.get('error')!r}"
+        # A success outcome is a non-error completed discovery envelope: no wire
+        # error envelope was produced (auth accepted / treated-as-absent) and the
+        # spec-required top-level blocks are on the wire (top-level required is
+        # [adcp, supported_protocols]). The fuller section shape is graded by the
+        # companion "a success outcome should carry ..." Then.
+        assert ctx.get("error") is None, f"expected success, got error: {ctx.get('error')!r}"
+        assert ctx.get("wire_error_envelope") is None, (
+            f"expected success, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
+        )
+        for path in ("adcp", "supported_protocols"):
+            wire_field(ctx, path)
         return
     from tests.helpers.envelope_assertions import assert_envelope_shape
 

@@ -199,19 +199,28 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant supports conversion tracking
     When the Buyer Agent calls get_adcp_capabilities
     Then media_buy.conversion_tracking should be present
-    And when declared media_buy.conversion_tracking.supported_event_types should contain only event-type enum values matching the tenant config
-    And when declared media_buy.conversion_tracking.supported_uid_types should contain only uid-type enum values matching the tenant config
-    And when declared media_buy.conversion_tracking.supported_hashed_identifiers should be a subset of [hashed_email, hashed_phone]
-    And when declared media_buy.conversion_tracking.supported_action_sources should contain only action-source enum values
-    And when declared each media_buy.conversion_tracking.attribution_windows entry should carry a required post_click array of duration objects and an optional post_view array of duration objects
-    And when declared media_buy.conversion_tracking.multi_source_event_dedup should equal the tenant-configured boolean
+    And media_buy.conversion_tracking.supported_event_types should equal ["purchase", "page_view"]
+    And media_buy.conversion_tracking.supported_uid_types should equal ["uid2", "rampid"]
+    And media_buy.conversion_tracking.supported_hashed_identifiers should equal ["hashed_email"]
+    And media_buy.conversion_tracking.supported_action_sources should equal ["website", "app"]
+    And media_buy.conversion_tracking.attribution_windows should equal [{"post_click": [{"interval": 7, "unit": "days"}]}]
+    And media_buy.conversion_tracking.multi_source_event_dedup should equal true
     # POST-S13: Buyer knows conversion tracking capabilities
     # 3.1.1: features.conversion_tracking flag removed in 3.0 — object PRESENCE indicates
-    # support; no required members inside the block, so every subfield assert is conditional
-    # on the tenant declaring it. supported_event_types OMITTED means all standard event
-    # types are supported. attribution_windows items are window objects (post_click required),
-    # NOT bare duration objects — durations live inside post_click/post_view.
+    # support; no required members inside the block. Every subfield asserts an exact
+    # fixture value (salesagent-ytq6, was "when declared ... matching the tenant config"
+    # with no declared fixture): supported_event_types/uid_types/action_sources items are
+    # drawn from their pinned enums; supported_hashed_identifiers ∈ [hashed_email,
+    # hashed_phone]; attribution_windows items are window objects whose post_click is a
+    # REQUIRED array of duration objects (interval integer >=1 + unit enum), NOT bare
+    # durations. The exact per-seller SET is config-derived (spec-silent on value) — a
+    # production config surface; production does not emit conversion_tracking at all yet
+    # (#1592), so the scenario executes and fails at "should be present" (strict xfail).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/conversion_tracking
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/event-type.json pointer=/enum
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/action-source.json pointer=/enum
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/duration.json pointer=/required
     # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L184: flag replaced by object presence)
 
   @T-UC-010-creative-caps @main-flow @post-s14
@@ -219,14 +228,19 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     And "creative" is in supported_protocols
+    And the tenant declares creative supports_compliance true
     When the Buyer Agent calls get_adcp_capabilities
-    Then the response should include creative section
-    And creative.supports_compliance should equal the tenant-configured value
+    Then the response should include the creative section
+    And creative.supports_compliance should equal true
     # POST-S14: Buyer knows creative protocol capabilities
     # NOT-IN-SPEC direction note: schema says the block is "Only present if creative is in
     # supported_protocols" (necessary condition); emitting it whenever the protocol is
-    # declared is the local choice. supports_compliance is optional — value asserted from config.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/creative
+    # declared is the local choice. supports_compliance is an optional boolean — pinned to
+    # the declared fixture value (salesagent-ytq6, was "equal the tenant-configured value"
+    # with no declared fixture; mirrors the concrete sibling row). Production emits only the
+    # media_buy protocol (creative not in supported_protocols), so the scenario executes and
+    # fails at "should include the creative section" (strict xfail, #1592).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties/supports_compliance
 
   # Deliberately transport-specific: auth policy genuinely differs per channel and the
   # channel column is the subject of the outline. Spec is silent on auth for this task
@@ -246,9 +260,15 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # INV-3 (invalid MCP/REST -> treated absent; local contract — this project's token rides
     # x-adcp-auth, not Authorization, and discovery is the no-prerequisite first call),
     # INV-4 (auth irrelevant to data), INV-5 (invalid A2A -> AUTH_INVALID error)
-    # XFAIL-EXPECTED: production gap — #1592 (production still emits deprecated AUTH_REQUIRED
-    # for the invalid-A2A row; spec-true code is AUTH_INVALID with recovery terminal)
+    # A success <outcome> is graded as a non-error completed discovery envelope: no wire
+    # error envelope was produced and the spec-required top-level blocks (adcp,
+    # supported_protocols) are present (salesagent-ytq6, was existence-only "response is not
+    # None"). The invalid-A2A error row is wire-pinned to AUTH_INVALID / recovery terminal
+    # (canonical code; graduated salesagent-7moz — A2A now validates a presented token and
+    # rejects invalid ones with AUTH_INVALID, so the row passes; the former AUTH_REQUIRED
+    # production gap is closed).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/required
     # REST rows pin the same treat-as-absent local contract as MCP (spec-silent -> production
     # authoritative; confirm on wiring).
 
@@ -282,9 +302,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should include adcp.major_versions containing 3
     And the response should include adcp.supported_versions as a non-empty array
-    And the response should include adcp.idempotency with a boolean supported discriminator
+    And each value in adcp.supported_versions should match pattern "^\d+\.\d+(-[a-zA-Z0-9.-]+)?$"
+    And adcp.idempotency.supported should be exactly true or false, and when false replay_ttl_seconds and in_flight_max_seconds should be absent
     And the response should include supported_protocols containing "media_buy"
-    And the response should NOT include media_buy details
+    And the wire response should not contain a media_buy key
     And the response should NOT include account section
     # Former @T-UC-010-ext-a-mcp / @T-UC-010-ext-a-a2a twins merged 2026-07-13 (assertions
     # aligned; transport covered by 4-way parametrization).
@@ -292,6 +313,16 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # the minimal shape IS schema-checked: top-level required is [adcp, supported_protocols],
     # and adcp.required is [major_versions, idempotency] — a minimal response WITHOUT
     # adcp.idempotency is schema-invalid, hence the idempotency assert.
+    # Hardened (salesagent-ytq6): supported_versions entries pinned to the schema `pattern`
+    # (was non-empty-only); idempotency pinned to the oneOf discriminator invariant — supported
+    # is exactly true/false and, on the IdempotencyUnsupported branch (supported=false), the
+    # `not.anyOf` MUST omit replay_ttl_seconds/in_flight_max_seconds (was "boolean supported
+    # discriminator", a schema-role phrase asserting only the type); media_buy absence asserted
+    # as wire-key absence (was "NOT include media_buy details" — there is no `media_buy.details`
+    # wire key). Strict xfail stands: the no-tenant branch does not emit adcp.supported_versions
+    # yet, so the scenario fails at the non-empty assert (#1592).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/supported_versions
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf/1
     # Design tension (flagged, production decision): advertising "media_buy" in
     # supported_protocols while omitting the media_buy block is schema-valid but against the
     # storyboard's spirit ("Expected when media_buy is in supported_protocols").
@@ -330,11 +361,20 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the database query fails
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should pass schema validation for get-adcp-capabilities-response
-    And no error should be propagated to the caller
-    And degradation warnings should be logged internally
+    And the wire response should not contain an adcp_error field
+    And the response should include media_buy.portfolio with primary_channels "display"
     # INV-5 (local): degrade-don't-error; the schema-validity half is the spec-hard invariant
-    # (storyboard validation check: response_schema).
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/capability-discovery.yaml pointer=/steps/0/validations (response_schema)
+    # (storyboard validation check: response_schema). Rewritten (salesagent-ytq6): the two
+    # vague Thens ("no error should be propagated", "degradation warnings should be logged
+    # internally") were replaced with wire-observable assertions — the envelope MUST NOT carry
+    # adcp_error for a non-failure (protocol-envelope), and the adapter-unavailable degradation
+    # path MUST still produce a valid response whose primary_channels fall back to the [display]
+    # default (consistency anchor: the adapter_and_db_fail row of the sibling ext-b-degradation
+    # outline). "degradation warnings logged internally" was intentionally NOT re-added: internal
+    # logs are not on the wire, so the degradation is instead graded by its observable output
+    # (primary_channels=[display]) rather than by an untestable internal-log side effect.
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (check: response_schema)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/adcp_error (envelope error-signal for fatal failures — absent on a successful degraded response)
 
   @T-UC-010-degradation-account @extension @degradation @partition @boundary @post-s3
   Scenario Outline: Account section presence depends on tenant resolution
