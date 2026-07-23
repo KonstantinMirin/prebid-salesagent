@@ -21,7 +21,6 @@ from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-from tests.helpers import assert_envelope_shape
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -2836,10 +2835,12 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
     """The seller refuses a brandless entry as a correctable validation error.
 
     Two boundaries, one buyer contract (never accepted, never a 500):
-    - IMPL/A2A/REST: the request reaches _sync_accounts_impl (Accounts3 arm,
+    - A2A/REST: the request reaches _sync_accounts_impl (Accounts3 arm,
       brand=None); _extract_natural_key raises AdCPValidationError, so the
-      two-layer wire (A2A/REST) or synthesized (IMPL) envelope carries
-      code VALIDATION_ERROR with recovery=correctable.
+      two-layer wire envelope carries code VALIDATION_ERROR with
+      recovery=correctable. Graded through the canonical result surface;
+      the AdCPValidationError at accounts.py carries no errors[].field pointer,
+      so no field= is asserted (recovery defaults from the pinned enum).
     - MCP: the tool surface types accounts as list[Accounts] (brand required),
       so the FastMCP TypeAdapter rejects the brandless entry at the schema
       boundary before _impl, naming the missing 'brand' field.
@@ -2850,10 +2851,9 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is not None, "expected the brandless entry to be rejected with an error"
 
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
-    if envelope is not None:
-        # Seller's own validation (IMPL/A2A/REST) → assert the two-layer AdCP envelope.
-        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+    if ctx.get("wire_error_envelope") is not None:
+        # Seller's own validation (A2A/REST) → assert the two-layer AdCP envelope.
+        ctx["result"].assert_wire_error("VALIDATION_ERROR", recovery="correctable")
     else:
         # MCP: the tool surface types accounts as list[Accounts] (brand required),
         # so FastMCP's TypeAdapter rejects the brandless dict at the schema

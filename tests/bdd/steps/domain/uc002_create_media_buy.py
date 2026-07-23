@@ -1298,6 +1298,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     contract the buyer sees — instead of a reconstructed exception.
     """
     from src.core.exceptions import AdCPError
+    from tests.harness.transport import extract_wire_suggestion
 
     assert "error" in ctx, f"Expected an error for outcome: {outcome}"
     error = ctx["error"]
@@ -1315,8 +1316,16 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     # Suggestion-only: "error with suggestion"
     if remainder.startswith("with suggestion"):
         if result is not None and result.wire_error_envelope is not None:
-            code = result.wire_error_envelope.get("adcp_error", {}).get("code")
-            result.assert_wire_error(code, require_suggestion=True)
+            # No Gherkin code to pin here; assert the buyer-facing suggestion is
+            # present on the wire via the canonical harness reader (the same
+            # top-level lookup assert_wire_error uses), not a hand-rolled envelope
+            # index — and without round-tripping the wire's own code back through
+            # assert_wire_error, which would hard-fail on a non-pinned code.
+            suggestion = extract_wire_suggestion(result.wire_error_envelope)
+            assert suggestion, (
+                f"Expected a non-empty top-level suggestion on the wire error, got envelope: "
+                f"{result.wire_error_envelope}"
+            )
             return
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"

@@ -38,6 +38,20 @@ def _pinned_error_metadata() -> dict[str, dict[str, str]]:
     return json.loads(_PINNED_ERROR_ENUM.read_text())["enumMetadata"]
 
 
+def is_pinned_error_code(code: str | None) -> bool:
+    """Whether ``code`` is a canonical AdCP error code in the pinned enum.
+
+    The guard an outcome-dispatch step needs BEFORE calling
+    :meth:`TransportResult.assert_wire_error`: that method HARD-FAILS on any
+    non-pinned code (a scenario-only code like ``DOMAIN_INVALID_FORMAT`` that
+    production never emits), so a step whose scenarios can carry a non-pinned
+    code must route those through a reconstructed-exception branch instead of
+    the wire assertion. Same pinned source as ``assert_wire_error`` (pin-wins),
+    so the two never disagree on what "canonical" means.
+    """
+    return code is not None and code in _pinned_error_metadata()
+
+
 def extract_wire_suggestion(envelope: dict | None) -> str | None:
     """The buyer-facing ``suggestion`` from a two-layer AdCP wire error envelope.
 
