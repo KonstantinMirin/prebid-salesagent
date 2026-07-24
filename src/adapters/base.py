@@ -58,6 +58,8 @@ class TargetingCapabilities:
     gb_outward: bool = False  # UK outward code (first part)
     gb_full: bool = False  # Full UK postcode
     de_plz: bool = False  # German PLZ
+    ch_plz: bool = False  # Swiss PLZ
+    at_plz: bool = False  # Austrian PLZ
     fr_code_postal: bool = False  # French postal code
     au_postcode: bool = False  # Australian postcode
 
@@ -76,6 +78,8 @@ class TargetingCapabilities:
         "ca_fsa",
         "ca_full",
         "de_plz",
+        "ch_plz",
+        "at_plz",
         "fr_code_postal",
         "au_postcode",
     )

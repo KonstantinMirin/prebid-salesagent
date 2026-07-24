@@ -2702,7 +2702,14 @@ async def _create_media_buy_impl(
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
 
         # Check if manual approval is required
-        # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
+        # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback.
+        # NOTE: capabilities.py's resolve_manual_approval_signal() (adapter_helpers.py,
+        # salesagent-y9ld) reads a SIMILAR but not identical signal (no default-True
+        # fallback, honest-absence semantics for reporting) -- deliberately NOT reused
+        # here: this is the live enforcement path (a pure dict read with zero DB calls
+        # today), and resolve_manual_approval_signal()'s DB fallback would add an
+        # unconditional query to this hot path for a stylistic DRY win. Tracked as a
+        # follow-up (salesagent-3rhn) alongside the sibling media_buy_update.py gap.
         tenant_approval_required = tenant.get("human_review_required", True)
         adapter_approval_required = adapter.manual_approval_required
         # Tenant setting takes precedence - if tenant requires approval, it's required

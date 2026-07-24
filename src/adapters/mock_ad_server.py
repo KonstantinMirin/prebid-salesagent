@@ -203,6 +203,8 @@ class MockAdServer(AdServerAdapter):
             gb_outward=True,
             gb_full=True,
             de_plz=True,
+            ch_plz=True,
+            at_plz=True,
             fr_code_postal=True,
             au_postcode=True,
             eurostat_nuts2=True,

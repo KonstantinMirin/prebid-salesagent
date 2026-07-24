@@ -223,6 +223,52 @@ def get_targeting_capabilities_override(tenant: Any = None) -> TargetingCapabili
     return _TargetingCapabilities(**override)
 
 
+#: Resolved adapter type -> the AdapterConfig column backing its manual-approval
+#: requirement. Triton has no such column (not modeled), so it is absent here.
+_MANUAL_APPROVAL_COLUMNS: dict[str, str] = {
+    "google_ad_manager": "gam_manual_approval_required",
+    "kevel": "kevel_manual_approval_required",
+    "mock": "mock_manual_approval_required",
+}
+
+
+def resolve_manual_approval_signal(tenant: Any = None) -> bool:
+    """Whether this tenant's configuration genuinely requires manual approval
+    on new media buys -- the same signal ``_create_media_buy_impl`` enforces
+    (media_buy_create.py), read tenant/DB-side so it works without a live
+    adapter instance (capabilities.py only holds the adapter CLASS, per INV-4 /
+    salesagent-dn2s -- ``manual_approval_required`` is an instance attribute
+    set in ``Adapter.__init__`` and does not exist on the class).
+
+    ``tenant.human_review_required`` is NOT NULL DEFAULT TRUE at the schema
+    level (a real, always-present tenant setting, not a Python-level default
+    papering over a missing key) -- reading it directly is an honest claim
+    about real enforced behavior, not an invented default (salesagent-rldj/
+    salesagent-y9ld Core Invariant). Falls back to the resolved adapter type's
+    own manual-approval DB column; that column is nullable and this reader
+    applies NO default when it is unset -- deliberately NOT the same
+    True-when-null policy ``get_adapter()``'s live adapter_config assembly
+    uses for enforcement, since that default is exactly the false-conformance
+    risk this reader must avoid (salesagent-becl.72 refine).
+    """
+    if tenant and tenant.get("human_review_required"):
+        return True
+
+    adapter_type = resolve_tenant_adapter_type(tenant)
+    column = _MANUAL_APPROVAL_COLUMNS.get(adapter_type)
+    if not column:
+        return False
+
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+    with get_db_session() as session:
+        row = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+        return bool(row and getattr(row, column, None) is True)
+
+
 def get_adapter(
     principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
 ) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:

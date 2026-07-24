@@ -45,6 +45,14 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 #: comment ("fixture seeds channels 'display, social, ctv' on the adapter").
 DEFAULT_ADAPTER_CHANNELS = ["display", "social", "ctv"]
 
+#: Default pricing models seeded on the adapter mock -- mirrors the REAL
+#: MockAdServerAdapter.get_supported_pricing_models() set (mock_ad_server.py),
+#: so the harness's MagicMock stand-in doesn't silently degrade to an empty
+#: iterator (MagicMock() auto-implements __iter__ -> iter([]) unless a
+#: return_value is set) for the one BDD scenario family (T-UC-010-pricing)
+#: that actually exercises this method.
+DEFAULT_ADAPTER_PRICING_MODELS = {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
+
 
 def _full_targeting_capabilities() -> TargetingCapabilities:
     """A TargetingCapabilities with every dimension enabled."""
@@ -83,6 +91,7 @@ class CapabilitiesEnv(IntegrationEnv):
         adapter = MagicMock()
         adapter.default_channels = list(DEFAULT_ADAPTER_CHANNELS)
         adapter.get_targeting_capabilities.return_value = _full_targeting_capabilities()
+        adapter.get_supported_pricing_models.return_value = set(DEFAULT_ADAPTER_PRICING_MODELS)
         self.mock["adapter"].return_value = adapter
         self._adapter_mock = adapter
 

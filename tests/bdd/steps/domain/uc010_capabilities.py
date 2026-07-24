@@ -277,6 +277,16 @@ def given_adapter_targeting_config(ctx: dict, config: str) -> None:
         field = match.group(1).split(".")[-1]
         if field in known:
             dims[field] = match.group(2) == "true"
+    # Native postal tokens (e.g. 'US=["zip"]', 'DE=["plz"]') -- the R4 native-map
+    # scenario rows spell postal dimensions by (country, system), not by field
+    # name; translate via the SAME table production uses (single source, DRY).
+    from src.core.tools.capabilities import _POSTAL_AREA_TABLE
+
+    postal_field_by_country_system = {(c, s): field for field, (c, s) in _POSTAL_AREA_TABLE.items()}
+    for match in re.finditer(r'([A-Z]{2})=\["([a-z_]+)"\]', config):
+        field = postal_field_by_country_system.get((match.group(1), match.group(2)))
+        if field:
+            dims[field] = True
     ctx["env"].set_targeting_capabilities(**dims)
 
 
@@ -432,6 +442,31 @@ def given_capability_config(ctx: dict, capability_config: str) -> None:
     """Outline-row config declaration (features-partitions). Records the raw
     row text; the row→assertion table in the satisfy-Then grades it."""
     _config(ctx)["row"] = capability_config
+
+
+# ── Givens: creative_approval_mode (real config — salesagent-y9ld R7) ─────
+
+
+@given(parsers.parse("the tenant creative approval mode is configured as {configured}"))
+def given_creative_approval_mode(ctx: dict, configured: str) -> None:
+    """REAL config for the require_human half: tenant.human_review_required
+    (NOT NULL DEFAULT TRUE at the schema level, tests/factories/core.py's
+    TenantFactory default is False) is the tenant-side signal
+    media_buy.creative_approval_mode is designed to derive from
+    (resolve_manual_approval_signal, salesagent-y9ld). "require_human" writes
+    human_review_required=True through the real DB column production reads;
+    "omitted" writes it False (the factory default, made explicit so the row
+    is not accidentally coupled to the factory's current default). No
+    production config surface exists yet for an affirmative auto_approve
+    claim (Q2, deferred) — that row's Given is intent-only.
+    """
+    configured = configured.strip()
+    _config(ctx)["creative_approval_mode"] = configured
+    if configured == "require_human":
+        ctx["env"].configure_tenant_field("human_review_required", True)
+    elif configured == "omitted":
+        ctx["env"].configure_tenant_field("human_review_required", False)
+    # "auto_approve": no production config surface yet (Q2) — intent only.
 
 
 # ── Givens: version negotiation ──────────────────────────────────────
@@ -791,13 +826,19 @@ _FEATURE_FLAGS = (
 @then(parsers.parse("media_buy.features should have boolean flags {flags}"))
 def then_features_boolean_flags(ctx: dict, flags: str) -> None:
     """media-buy-features.json: 4 named flags, all boolean, additionalProperties
-    boolean, none required. The per-flag VALUE is a production choice (spec-silent),
-    so the graded contract is the shape: every named flag present is a boolean, and
-    every property on the object (named or additional) is a boolean."""
+    boolean. The per-flag VALUE is a production choice (spec-silent), so the
+    graded contract is the shape: every one of the 4 named flags this scenario
+    names is ACTUALLY EMITTED as a boolean key on the wire (not merely typed
+    correctly if present -- salesagent-y9ld R3: a presence-only check here
+    would silently pass with committed_metrics_supported omitted from the
+    response, the exact regression this Then exists to catch), and every
+    other property on the object (named or additional) is also a boolean."""
     features = wire_field(ctx, "media_buy.features")
     assert isinstance(features, dict), f"media_buy.features not an object: {features!r}"
     named = [name.strip() for name in re.split(r",|\band\b", flags) if name.strip()]
     assert set(named) == set(_FEATURE_FLAGS), f"scenario names unexpected feature flags: {named!r}"
+    missing = set(named) - set(features)
+    assert not missing, f"media_buy.features missing named flags {sorted(missing)}: {features!r}"
     for key, value in features.items():
         assert isinstance(value, bool), f"features.{key} not a boolean: {value!r}"
 
@@ -996,6 +1037,22 @@ def then_no_media_buy(ctx: dict) -> None:
     [adcp, supported_protocols], so media_buy is optional and a minimal response
     omits the key entirely (there is no `media_buy.details` wire key)."""
     wire_absent(ctx, "media_buy")
+
+
+@then(parsers.parse("media_buy.creative_approval_mode should be {expected}"))
+def then_creative_approval_mode(ctx: dict, expected: str) -> None:
+    """NEW at 3.1.1: closed enum [auto_approve, require_human], absence =
+    legacy-unspecified (not an auto-approve claim) — salesagent-y9ld R7.
+    "absent" grades the omission itself; "equal to \"<value>\"" grades an
+    exact enum match."""
+    expected = expected.strip()
+    if expected == "absent":
+        wire_absent(ctx, "media_buy.creative_approval_mode")
+        return
+    match = re.fullmatch(r'equal to "([^"]+)"', expected)
+    assert match, f"unrecognized expected clause for creative_approval_mode: {expected!r}"
+    actual = wire_field(ctx, "media_buy.creative_approval_mode")
+    assert actual == match.group(1), f"media_buy.creative_approval_mode expected {match.group(1)!r}, got {actual!r}"
 
 
 @then("the wire response should not contain an adcp_error field")

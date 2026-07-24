@@ -17,10 +17,12 @@ from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
 from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types.generated_poc.enums.pricing_model import PricingModel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Account,
     Adcp,
+    CreativeApprovalMode,
     Execution,
     GeoMetros,
     MajorVersion,
@@ -162,7 +164,42 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "influencer": MediaChannel.influencer,
     "affiliate": MediaChannel.affiliate,
     "product_placement": MediaChannel.product_placement,
+    "sponsored_intelligence": MediaChannel.sponsored_intelligence,
 }
+
+# TargetingCapabilities boolean field -> (native country key, native system value),
+# per core/postal-area-support.json's native country-keyed map. Single shared table
+# drives BOTH the presence guard and the PostalAreaSupport construction (DRY --
+# salesagent-y9ld R4; the old code had 9 field-by-field kwargs plus a hand-enumerated
+# `any([...])` guard, two sites that could omit a field independently).
+_POSTAL_AREA_TABLE: dict[str, tuple[str, str]] = {
+    "us_zip": ("US", "zip"),
+    "us_zip_plus_four": ("US", "zip_plus_four"),
+    "gb_outward": ("GB", "outward"),
+    "gb_full": ("GB", "full"),
+    "ca_fsa": ("CA", "fsa"),
+    "ca_full": ("CA", "full"),
+    "de_plz": ("DE", "plz"),
+    "ch_plz": ("CH", "plz"),
+    "at_plz": ("AT", "plz"),
+    "fr_code_postal": ("FR", "code_postal"),
+    "au_postcode": ("AU", "postcode"),
+}
+
+
+def _build_geo_postal_areas(targeting_caps: object | None) -> PostalAreaSupport | None:
+    """Native country-keyed geo_postal_areas, built from _POSTAL_AREA_TABLE --
+    never the deprecated boolean-alias shape. None when the adapter declares no
+    postal targeting at all (honest absence, not an empty object)."""
+    if not targeting_caps:
+        return None
+    by_country: dict[str, list[str]] = {}
+    for field, (country, system) in _POSTAL_AREA_TABLE.items():
+        if getattr(targeting_caps, field, False):
+            by_country.setdefault(country, []).append(system)
+    if not by_country:
+        return None
+    return PostalAreaSupport(**by_country)
 
 
 def _get_adcp_capabilities_impl(
@@ -228,6 +265,24 @@ def _get_adcp_capabilities_impl(
     if not primary_channels:
         primary_channels = [MediaChannel.display]
 
+    # supported_pricing_models: pre-flight buyer signal, sorted+deterministic.
+    # Same source as the per-product "supported" annotation (products.py:721) --
+    # never a literal/default set. Adapter unavailable -> omit (honest absence,
+    # matching the primary_channels/reporting degradation posture elsewhere in
+    # this function; do NOT invent a default set).
+    supported_pricing_models: list[PricingModel] | None = None
+    if adapter and hasattr(adapter, "get_supported_pricing_models"):
+        try:
+            resolved_models = sorted(
+                (PricingModel(m) for m in adapter.get_supported_pricing_models()), key=lambda m: m.value
+            )
+            # minItems 1 -- an empty result means "nothing determined", the same
+            # honest-absence posture as the exception path below, never an
+            # empty array (which the SDK model itself rejects).
+            supported_pricing_models = resolved_models or None
+        except Exception as e:
+            logger.warning(f"Could not get supported pricing models: {e}")
+
     # Get publisher domains from database
     publisher_domains: list[PublisherDomain] = []
     try:
@@ -281,6 +336,10 @@ def _get_adcp_capabilities_impl(
         # UNSUPPORTED_FEATURE there instead of being warned at capability
         # discovery. Mirrors the property_list_filtering=False rationale above.
         catalog_management=False,
+        # committed_metrics_supported: declared False until a committed-metrics
+        # surface exists (no product/media-buy data model backs a delivery
+        # commitment today). Mirrors the catalog_management=False rationale above.
+        committed_metrics_supported=False,
     )
 
     # Build targeting capabilities from adapter, unless a per-tenant
@@ -312,32 +371,10 @@ def _get_adcp_capabilities_impl(
             uk_itl2=targeting_caps.uk_itl2 or None,
         )
 
-    # Build PostalAreaSupport if any postal targeting is supported
-    geo_postal_areas = None
-    if targeting_caps and any(
-        [
-            targeting_caps.us_zip,
-            targeting_caps.us_zip_plus_four,
-            targeting_caps.ca_fsa,
-            targeting_caps.ca_full,
-            targeting_caps.gb_outward,
-            targeting_caps.gb_full,
-            targeting_caps.de_plz,
-            targeting_caps.fr_code_postal,
-            targeting_caps.au_postcode,
-        ]
-    ):
-        geo_postal_areas = PostalAreaSupport(
-            us_zip=targeting_caps.us_zip or None,
-            us_zip_plus_four=targeting_caps.us_zip_plus_four or None,
-            ca_fsa=targeting_caps.ca_fsa or None,
-            ca_full=targeting_caps.ca_full or None,
-            gb_outward=targeting_caps.gb_outward or None,
-            gb_full=targeting_caps.gb_full or None,
-            de_plz=targeting_caps.de_plz or None,
-            fr_code_postal=targeting_caps.fr_code_postal or None,
-            au_postcode=targeting_caps.au_postcode or None,
-        )
+    # Build PostalAreaSupport as the native country-keyed map (postal-area-support.json;
+    # the boolean aliases us_zip/de_plz/... are `deprecated: true` at 3.1.1) --
+    # native-only, no alias co-emission (plan Q5 recommendation).
+    geo_postal_areas = _build_geo_postal_areas(targeting_caps)
 
     targeting = Targeting(
         geo_countries=targeting_caps.geo_countries if targeting_caps else True,
@@ -351,11 +388,29 @@ def _get_adcp_capabilities_impl(
         targeting=targeting,
     )
 
+    # creative_approval_mode: require_human when this tenant's configuration
+    # genuinely requires manual review (resolve_manual_approval_signal, the
+    # same signal _create_media_buy_impl enforces); omit entirely otherwise --
+    # NEVER claim auto_approve without an explicit tenant-level affirmation
+    # that no product/account requires review (no such config surface exists
+    # yet, salesagent-y9ld plan Q2 -- declaring it would be a false
+    # conformance claim, not a "legacy-unspecified" honest omission).
+    from src.core.helpers.adapter_helpers import resolve_manual_approval_signal
+
+    manual_approval_signal = False
+    try:
+        manual_approval_signal = resolve_manual_approval_signal(tenant)
+    except Exception as e:
+        logger.warning(f"Could not resolve manual approval signal: {e}")
+    creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
+
     # Build media_buy capabilities
     media_buy = MediaBuy(
         portfolio=portfolio,
         features=features,
         execution=execution,
+        supported_pricing_models=supported_pricing_models,
+        creative_approval_mode=creative_approval_mode,
     )
 
     # Build response

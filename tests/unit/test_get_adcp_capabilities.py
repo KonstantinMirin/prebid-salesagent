@@ -336,9 +336,12 @@ class TestGetAdcpCapabilitiesWithTenant:
                     assert targeting.geo_metros is not None
                     assert targeting.geo_metros.nielsen_dma is True
 
-                    # Should have geo_postal_areas with us_zip
+                    # Should have geo_postal_areas with native US=["zip"] (salesagent-y9ld
+                    # R4 -- native country-keyed map, never the deprecated us_zip alias).
                     assert targeting.geo_postal_areas is not None
-                    assert targeting.geo_postal_areas.us_zip is True
+                    assert targeting.geo_postal_areas.US is not None
+                    assert "zip" in targeting.geo_postal_areas.US
+                    assert targeting.geo_postal_areas.us_zip is None
         finally:
             current_tenant.set(None)
 
@@ -906,12 +909,19 @@ class TestGeoPostalAreas:
 
         postal = response.media_buy.execution.targeting.geo_postal_areas
         assert postal is not None
-        assert postal.us_zip is True
-        assert postal.ca_fsa is True
-        assert postal.gb_outward is True
-        # Fields not set should be None
-        assert postal.de_plz is None
-        assert postal.fr_code_postal is None
+        # Native country-keyed map (salesagent-y9ld R4) -- production emits ONLY the
+        # native shape, never the deprecated boolean aliases (us_zip/ca_fsa/gb_outward
+        # are `deprecated: true` at v3.1.1, postal-area-support.json).
+        assert postal.US is not None and "zip" in postal.US
+        assert postal.CA is not None and "fsa" in postal.CA
+        assert postal.GB is not None and "outward" in postal.GB
+        # Countries not set should be absent
+        assert postal.DE is None
+        assert postal.FR is None
+        # Deprecated aliases are never co-emitted
+        assert postal.us_zip is None
+        assert postal.ca_fsa is None
+        assert postal.gb_outward is None
 
     def test_no_postal_targeting_means_none(self):
         """When no postal targeting capabilities, geo_postal_areas is None."""

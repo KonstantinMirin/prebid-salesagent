@@ -398,20 +398,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # T-UC-010-account-supported-billing / T-UC-010-account-block-presence GRADUATED
     # (salesagent-3s5a): account.supported_billing now derives from resolve_supported_billing(tenant)
     # and the account block is now emitted on the tenant-resolved path.
-    # Wired non-dormant + strengthened (salesagent-f5fs): steps execute and grade the
-    # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
-    "T-UC-010-pricing": "media_buy.supported_pricing_models not emitted by the capabilities builder — #1592 spec-production gap",
+    # Graduated (salesagent-y9ld R1): media_buy.supported_pricing_models now derives from
+    # adapter.get_supported_pricing_models() (mirrors products.py:721). T-UC-010-pricing removed.
     "T-UC-010-audience-caps": "media_buy.audience_targeting not emitted by the capabilities builder — #1592 spec-production gap",
     # Wired non-dormant + strengthened (salesagent-ytq6): steps execute and grade the
     # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
     "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1592 spec-production gap",
     "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1592 spec-production gap",
-    # Wired non-dormant + strengthened (salesagent-chbi): the scenario executes and grades
-    # the full 20-value channels enum, then fails because CHANNEL_MAPPING
-    # (src/core/tools/capabilities.py) omits sponsored_intelligence — the 20th canonical
-    # channel is dropped as unrecognized, so primary_channels emits only 19 of 20 (all
-    # three transports). Strict xfail until the production mapping gains the 20th channel.
-    "T-UC-010-channel-all-canonical": "CHANNEL_MAPPING omits sponsored_intelligence — primary_channels emits 19 of the 20 canonical channels — production gap",
+    # Graduated (salesagent-y9ld R2): CHANNEL_MAPPING now includes sponsored_intelligence,
+    # the 20th canonical channel. T-UC-010-channel-all-canonical removed.
     # Wired non-dormant + strengthened (salesagent-tmpd): each scenario executes and grades the
     # spec-pinned shapes, then fails on a block the capabilities builder never emits (strict
     # xfail on all transports).
@@ -696,24 +691,23 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     ),
     # Wired non-dormant + strengthened (salesagent-tmpd): targeting-partitions rows that
     # production satisfies (adapter_unavailable_defaults, nested_absent) pass; the rest execute
-    # the real assertion and fail because the capabilities builder emits only
-    # geo_countries/geo_regions/geo_metros/geo_postal_areas and geo_postal_areas uses the
-    # deprecated boolean-alias shape (age_restriction/language/keyword_targets/negative_keywords/
-    # geo_proximity + native postal map never built).
+    # the real assertion and fail because the capabilities builder never emitted the richer
+    # non-geo dimensions (age_restriction/language/keyword_targets/negative_keywords/geo_proximity
+    # -- R8 follow-up, out of core scope). Graduated (salesagent-y9ld R4): nested_populated /
+    # postal_areas_native / postal_areas_legacy_alias now pass -- the native country-keyed
+    # geo_postal_areas map is built (_build_geo_postal_areas, capabilities.py), no longer the
+    # deprecated boolean-alias shape.
     (
         "T-UC-010-targeting-partitions",
         {
             "full_adapter",
             "partial_dimensions",
-            "nested_populated",
             "age_restriction_supported",
             "keyword_targeting",
             "geo_proximity_supported",
-            "postal_areas_native",
-            "postal_areas_legacy_alias",
         },
-        "targeting builder emits only geo_countries/geo_regions/geo_metros/geo_postal_areas "
-        "(deprecated alias shape) — richer dimensions and the native country-keyed postal map not built — #1592",
+        "targeting builder never emits the non-geo dimensions (age_restriction/language/"
+        "keyword_targets/negative_keywords/geo_proximity) — R8 follow-up, out of core scope — #1592",
     ),
     # Wired non-dormant + strengthened (salesagent-tmpd): degradation-partitions rows that
     # production satisfies (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass; the
@@ -728,6 +722,21 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "adcp.supported_versions not emitted; INV-4 keeps adapter channels "
         "principal-free so no_principal does not degrade to [display]; account_degraded gap "
         "not yet root-caused — #1592",
+    ),
+    # Wired (salesagent-y9ld R7): approval_unspecified (creative_approval_mode omitted
+    # by default -- TenantFactory.human_review_required=False and no
+    # gam/kevel/mock_manual_approval_required column set) passes today with zero
+    # production change -- honest-absence regression armor. Graduated: approval_human
+    # now passes -- resolve_manual_approval_signal() derives require_human from
+    # tenant.human_review_required (adapter_helpers.py), wired into the MediaBuy build.
+    # approval_auto stays xfailed -- no config surface exists to affirmatively claim
+    # auto_approve (Q2, deferred; declaring it without certainty would be a false
+    # conformance claim).
+    (
+        "T-UC-010-v31-creative-approval-mode",
+        {"approval_auto"},
+        "media_buy.creative_approval_mode=auto_approve has no backing config surface "
+        "(Q2 deferred) — #1592 spec-production gap",
     ),
     # Moved from _XFAIL_TAGS (salesagent-3s5a): request_signing/webhook_signing={supported:false}
     # now emitted, so "valid" rows (asserting schema-valid relations/bounds against an
@@ -3863,6 +3872,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # Batch 9 — version negotiation + idempotency posture (salesagent-rldj)
             "T-UC-010-v31-idempotency-supported",
             "T-UC-010-v31-idempotency-in-flight-bound",
+            # Batch 10 — creative_approval_mode (salesagent-y9ld R7)
+            "T-UC-010-v31-creative-approval-mode",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
