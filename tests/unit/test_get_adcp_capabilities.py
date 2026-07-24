@@ -720,6 +720,166 @@ class TestResponseShapeCapabilities:
         assert "media_buy" not in data
 
 
+class TestAccountBlockAndSigningDeclarations:
+    """Pin the salesagent-3s5a contract: account block + honest signing declarations.
+
+    Core Invariant (salesagent-3s5a): every field capabilities.py emits is either
+    (a) read from the exact tenant config the corresponding enforcement path reads
+    (supported_billing via resolve_supported_billing, mirroring _check_billing_policy),
+    or (b) a true constant of the current architecture (require_operator_auth=False,
+    webhook_signing/request_signing supported=False) -- never fabricated.
+
+    These are RED until src/core/tools/capabilities.py emits account/webhook_signing/
+    request_signing (salesagent-becl.15 implements this).
+    """
+
+    def test_no_tenant_response_omits_account_but_declares_signing_false(self):
+        """No-tenant (minimal) path: account block absent, signing blocks present and False.
+
+        webhook_signing/request_signing are agent-level facts (not tenant-dependent),
+        so they must appear on BOTH the no-tenant and tenant-resolved paths. account
+        stays absent on the no-tenant path (BR-RULE-052 / ext-a: no tenant to derive
+        billing/sandbox from).
+        """
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        current_tenant.set(None)
+
+        response = _get_adcp_capabilities_impl(None, None)
+
+        assert response.account is None
+
+        assert response.webhook_signing is not None
+        assert response.webhook_signing.supported is False
+
+        assert response.request_signing is not None
+        assert response.request_signing.supported is False
+
+    def test_account_block_present_with_tenant_and_honest_constants(self):
+        """Tenant-resolved path: account block present with the exact honest-constant shape.
+
+        require_operator_auth is a true architectural constant (False) -- config
+        surfaces to make it configurable are explicitly out of scope for this task.
+        authorization_endpoint/required_for_products/account_financials are omitted
+        (not fabricated) because no config or enforcement path backs them yet.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-1",
+            "name": "Account Block Pub",
+            "subdomain": "acctpub",
+            "supported_billing": ["operator", "advertiser"],
+            "account_sandbox": False,
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.account is not None
+        assert response.account.require_operator_auth is False
+        assert response.account.authorization_endpoint is None
+        assert response.account.required_for_products is None
+        assert response.account.account_financials is None
+
+    def test_account_supported_billing_matches_resolve_supported_billing(self):
+        """account.supported_billing must equal resolve_supported_billing(tenant) exactly.
+
+        This mirrors _check_billing_policy's own read of the same helper -- the
+        capability declaration and the enforcement path must never diverge.
+        """
+        from src.core.billing_policy import resolve_supported_billing
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-2",
+            "name": "Billing Pub",
+            "subdomain": "billingpub",
+            "supported_billing": ["operator", "advertiser"],
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        expected = resolve_supported_billing(tenant)
+        assert [bp.value for bp in response.account.supported_billing] == expected
+        assert expected == ["operator", "advertiser"]
+
+    def test_account_supported_billing_defaults_to_full_enum_when_tenant_silent(self):
+        """An unconfigured tenant (no supported_billing key) declares the full 3-value enum.
+
+        Matches resolve_supported_billing's own documented semantics: None means
+        unconfigured, and unconfigured means "accept every billing model."
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-3",
+            "name": "Silent Billing Pub",
+            "subdomain": "silentpub",
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.account is not None
+        assert sorted(bp.value for bp in response.account.supported_billing) == [
+            "advertiser",
+            "agent",
+            "operator",
+        ]
+
+    def test_account_sandbox_reflects_tenant_column(self):
+        """account.sandbox must equal the tenant's account_sandbox value, not a hardcoded constant."""
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant_sandbox_off = {
+            "tenant_id": "t-account-4",
+            "name": "Sandbox Off Pub",
+            "subdomain": "sandboxoff",
+            "account_sandbox": False,
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant_sandbox_off)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.account.sandbox is False
+
+    def test_webhook_signing_and_request_signing_declared_false_with_tenant(self):
+        """Tenant-resolved path also declares webhook_signing/request_signing supported=False.
+
+        Built once (DRY) and shared with the no-tenant path -- these are agent-level
+        facts, not tenant config.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-5",
+            "name": "Signing Pub",
+            "subdomain": "signingpub",
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.webhook_signing is not None
+        assert response.webhook_signing.supported is False
+
+        assert response.request_signing is not None
+        assert response.request_signing.supported is False
+
+
 class TestGeoPostalAreas:
     """Test geo_postal_areas building from targeting capabilities."""
 

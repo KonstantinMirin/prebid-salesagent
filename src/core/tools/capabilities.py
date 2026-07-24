@@ -7,6 +7,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 """
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
@@ -17,6 +18,7 @@ from adcp.types.generated_poc.core.postal_area_support import (
 from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    Account,
     Adcp,
     Execution,
     GeoMetros,
@@ -25,14 +27,20 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     MediaBuy,
     Portfolio,
     PublisherDomain,
+    RequestSigning,
     SupportedProtocol,
-    # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
+    # NOTE: src.core.schemas.Targeting is an UNRELATED SDK type (media-buy targeting
+    # overlay), not a local subclass of this Targeting (capabilities declared-dimensions
+    # shape) -- confirmed via subclass-identity check, salesagent-3s5a. Importing the SDK
+    # type directly here is correct, not a Pattern #1 bypass.
     Targeting,
+    WebhookSigning,
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
 from src.core.auth import require_identity
+from src.core.billing_policy import BillingParty, resolve_supported_billing
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
@@ -45,6 +53,39 @@ from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, reso
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
+
+# webhook_signing / request_signing: agent-level facts (no RFC 9421 request/webhook
+# signing implemented today), not tenant config -- declared identically on every
+# response, in-process and no-tenant alike (salesagent-3s5a). The
+# must_equal_when(webhook emission -> supported=true) x-adcp-validation invariant is
+# satisfied vacuously today because production emits no webhook-triggering fields
+# either; RFC 9421 signing support is tracked as follow-up work, not this task's scope.
+_WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
+_REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
+
+
+def _build_account_block(tenant: Mapping) -> Account:
+    """Build the account block from real tenant config -- never fabricated.
+
+    supported_billing derives from resolve_supported_billing (src/core/billing_policy.py),
+    the single source shared with the sync_accounts billing gate (_check_billing_policy)
+    -- the two can never diverge. require_operator_auth is a true architectural constant
+    (no per-tenant operator-auth config or enforcement exists yet). sandbox reflects the
+    tenant's account_sandbox column (default true). authorization_endpoint/
+    required_for_products/account_financials stay omitted -- declaring them would be an
+    aspirational capability the platform doesn't back yet, not an honest one
+    (salesagent-3s5a Core Invariant).
+    """
+    return Account(
+        supported_billing=[BillingParty(v) for v in resolve_supported_billing(tenant)],
+        require_operator_auth=False,
+        sandbox=tenant.get("account_sandbox", True),
+        # SDK field defaults are False, not None -- pass None explicitly or these
+        # would fabricate "not required"/"no financials" instead of honestly omitting.
+        authorization_endpoint=None,
+        required_for_products=None,
+        account_financials=None,
+    )
 
 
 # Mapping from adapter channel names to MediaChannel enum values
@@ -99,6 +140,8 @@ def _get_adcp_capabilities_impl(
             ),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
+            request_signing=_REQUEST_SIGNING_UNSUPPORTED,
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -280,6 +323,9 @@ def _get_adcp_capabilities_impl(
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,
+        account=_build_account_block(tenant),
+        webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
+        request_signing=_REQUEST_SIGNING_UNSUPPORTED,
         last_updated=datetime.now(UTC),
     )
 

@@ -371,7 +371,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated (salesagent-rrz8): T-UC-010-ext-c-mcp — MCP ToolResult now
     # pre-serializes via model_dump(mode="json"), so audience_targeting is
     # correctly omitted instead of serialized as null.
-    "T-UC-010-ext-d-filter": "protocols filter ignored by the capabilities builder; account block missing from protocol-invariant set — #1592",
+    # T-UC-010-ext-d-filter PARTIALLY GRADUATED (salesagent-3s5a) -> moved to _SELECTIVE_XFAIL:
+    # a2a/mcp pass now that account is emitted; rest still fails for an UNRELATED pre-existing
+    # reason (REST /api/v1/capabilities is a parameterless GET, cannot express a protocols
+    # filter kwarg at all — capabilities.py's own NotImplementedError, #1592 S2).
     "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1592",
     "T-UC-010-ext-d-invalid-value": "request params ignored — schema-invalid protocols filter silently accepted — #1592",
     "T-UC-010-ext-d-empty": "request params ignored — empty protocols filter (minItems 1) silently accepted — #1592",
@@ -387,8 +390,9 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1592 spec-production gap",
     "T-UC-010-v31-specialisms": "specialisms hard-coded to [sales-non-guaranteed], not derived from tenant config; creative protocol not advertised — #1592 spec-production gap",
     "T-UC-010-v31-advisory-errors": "top-level advisory errors[] not emitted by the capabilities builder — #1592 spec-production gap",
-    "T-UC-010-account-supported-billing": "account.supported_billing not derived from tenant billing config on the capabilities response — #1592",
-    "T-UC-010-account-block-presence": "account block emission incomplete — #1592",
+    # T-UC-010-account-supported-billing / T-UC-010-account-block-presence GRADUATED
+    # (salesagent-3s5a): account.supported_billing now derives from resolve_supported_billing(tenant)
+    # and the account block is now emitted on the tenant-resolved path.
     # Wired non-dormant + strengthened (salesagent-f5fs): steps execute and grade the
     # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
     "T-UC-010-pricing": "media_buy.supported_pricing_models not emitted by the capabilities builder — #1592 spec-production gap",
@@ -416,12 +420,16 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-010-v31-measurement-catalog": "the capabilities builder never emits the measurement block (metrics[] + measurement.core in experimental_features); measurement is not in supported_protocols — #1592 spec-production gap",
     # Wired non-dormant + strengthened (salesagent-jd6a): each row executes and grades the
     # spec-pinned bound/relation, then fails on all transports because the capabilities builder
-    # emits no request_signing block, never derives idempotency from tenant config, and runs no
-    # version negotiation (#1592). Strict tag-level xfail — every parametrized row fails.
-    "T-UC-010-v31-request-signing-monotonicity": "capabilities builder emits no request_signing block, so neither the subset/disjoint relations (valid rows) nor the CONFIGURATION_ERROR rejection of a relation-violating posture (invalid rows) is observable — #1592 spec-production gap",
+    # never derives idempotency from tenant config and runs no version negotiation (#1592).
+    # Strict tag-level xfail — every parametrized row fails.
+    # T-UC-010-v31-request-signing-monotonicity / T-UC-010-v31-webhook-signing-bounds moved to
+    # _SELECTIVE_XFAIL (salesagent-3s5a): request_signing/webhook_signing={supported:false} now
+    # emitted, so the "valid" rows (which only assert schema-valid subset/disjoint relations or
+    # must_equal_when bounds against an unsupported posture) pass; the "invalid" rows (which
+    # require the builder to REJECT a relation-violating/out-of-bounds posture with
+    # CONFIGURATION_ERROR) still fail — no per-tenant signing-posture config surface exists.
     "T-UC-010-v31-idempotency-ttl-bounds": "capabilities builder hard-codes idempotency(supported=true, replay_ttl_seconds=86400) and ignores tenant config, so it neither echoes the declared replay_ttl_seconds posture (valid rows) nor rejects an out-of-bounds/cross-field-violating one (invalid rows) — #1592 spec-production gap",
     "T-UC-010-v31-version-unsupported-details-bounds": "capabilities builder ignores adcp_version and raises no VERSION_UNSUPPORTED, so the required non-empty supported_versions details bound is never emitted — #1592 spec-production gap",
-    "T-UC-010-v31-webhook-signing-bounds": "capabilities builder emits no webhook_signing block, so it neither echoes the declared posture within the algorithm-enum/must_equal_when bounds (valid rows) nor rejects a supported!=true-under-trigger or out-of-enum-algorithm posture with CONFIGURATION_ERROR (invalid rows) — #1592 spec-production gap",
     # ── UC-011 list wiring (FIXME(#1592), salesagent-9if1) ─────────────────
     # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
     # v3.1.1 shape; each fails on a surface _list_accounts_impl does not build.
@@ -633,10 +641,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # is absent because the whole block is missing), so only the value rows xfail.
     # Graduated (salesagent-7moz): invalid_token_a2a row — A2A now always
     # validates a presented token, rejecting invalid ones with AUTH_INVALID.
+    # operator_auth_not_required GRADUATED (salesagent-3s5a): require_operator_auth is now
+    # emitted as the true constant False. operator_auth_required (expects True) can never
+    # pass with this plan — no per-tenant operator-auth config surface exists.
     (
         "T-UC-010-account-require-operator-auth",
-        {"operator_auth_required", "operator_auth_not_required"},
-        "account.require_operator_auth not emitted — #1592",
+        {"operator_auth_required"},
+        "account.require_operator_auth is a hardcoded False constant — no config surface to "
+        "make it True exists — #1592",
     ),
     (
         "T-UC-010-account-required-for-products",
@@ -650,13 +662,15 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     ),
     (
         "T-UC-010-features-partitions",
-        {"sandbox_enabled", "sandbox_disabled"},
-        "account.sandbox not emitted — #1592",
+        {"sandbox_disabled"},
+        "account.sandbox Given-side gap: no step writes account_sandbox=false for this row "
+        "(the DB column defaults true, owner decision) — #1592",
     ),
     (
         "T-UC-010-degradation-account",
-        {"full_response", "account_degraded"},
-        "account block not emitted for resolved tenants — #1592",
+        {"account_degraded"},
+        "account_degraded row gap not yet root-caused (same underlying assertion as the sibling "
+        "T-UC-010-degradation-partitions account_degraded row) — #1592",
     ),
     # Wired non-dormant + strengthened (salesagent-chbi): the 'absent' rows (adapter
     # fails / capability disabled) pass — the block is genuinely off the wire; only the
@@ -691,14 +705,50 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     ),
     # Wired non-dormant + strengthened (salesagent-tmpd): degradation-partitions rows that
     # production satisfies (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass; the
-    # gap rows fail — full_response/account_degraded need the unemitted account block, no_tenant
-    # needs adcp.supported_versions (not emitted), and no_principal expects [display] but INV-4
-    # keeps the adapter principal-free so channels are NOT degraded by a missing principal.
+    # gap rows fail — no_tenant needs adcp.supported_versions (not emitted), and no_principal
+    # expects [display] but INV-4 keeps the adapter principal-free so channels are NOT degraded
+    # by a missing principal. full_response GRADUATED (salesagent-3s5a): the account block is
+    # now emitted with non-empty supported_billing and adcp.idempotency is already present.
+    # account_degraded stays xfailed — a separate, still-ungraded gap (needs investigation).
     (
         "T-UC-010-degradation-partitions",
-        {"full_response", "no_tenant", "no_principal", "account_degraded"},
-        "account block / adcp.supported_versions not emitted; INV-4 keeps adapter channels "
-        "principal-free so no_principal does not degrade to [display] — #1592",
+        {"no_tenant", "no_principal", "account_degraded"},
+        "adcp.supported_versions not emitted; INV-4 keeps adapter channels "
+        "principal-free so no_principal does not degrade to [display]; account_degraded gap "
+        "not yet root-caused — #1592",
+    ),
+    # Moved from _XFAIL_TAGS (salesagent-3s5a): request_signing/webhook_signing={supported:false}
+    # now emitted, so "valid" rows (asserting schema-valid relations/bounds against an
+    # unsupported posture) pass; "invalid" rows (requiring the builder to REJECT a
+    # relation-violating/out-of-bounds posture with CONFIGURATION_ERROR) still fail — no
+    # per-tenant signing-posture config surface exists to reject against.
+    (
+        "T-UC-010-v31-request-signing-monotonicity",
+        {
+            "required_for adds one operation not in supported_for",
+            "warn_for and required_for share exactly one operation",
+            "protocol_methods_required_for adds one method not in protocol_methods_supported_for",
+        },
+        "capabilities builder never rejects a relation-violating request_signing posture with "
+        "CONFIGURATION_ERROR — no per-tenant signing-posture config surface exists — #1592",
+    ),
+    (
+        "T-UC-010-v31-webhook-signing-bounds",
+        {
+            "reporting_delivery_methods=['webhook'], supported=false",
+            "supports_webhook_delivery=true, supported absent",
+            "algorithms=['rsa-pss-sha512']",
+        },
+        "capabilities builder never rejects a supported!=true-under-trigger or out-of-enum-algorithm "
+        "webhook_signing posture with CONFIGURATION_ERROR — no per-tenant signing-posture config "
+        "surface exists — #1592",
+    ),
+    (
+        "T-UC-010-ext-d-filter",
+        {"[rest]"},
+        "REST /api/v1/capabilities is a parameterless GET — cannot express a protocols filter "
+        "kwarg at all (capabilities.py NotImplementedError) — #1592 S2, unrelated to the account "
+        "block gap the a2a/mcp rows graduated on",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the baseline-absence row passes
     # (polling_only → reporting_delivery_methods/offline_delivery_protocols absent, webhook_signing
