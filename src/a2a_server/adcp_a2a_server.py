@@ -1853,6 +1853,9 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with identity
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
+            context=parameters.get("context"),
+            adcp_version=parameters.get("adcp_version"),
+            adcp_major_version=parameters.get("adcp_major_version"),
             identity=identity,
         )
 

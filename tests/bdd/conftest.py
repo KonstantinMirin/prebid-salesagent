@@ -371,16 +371,16 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated (salesagent-rrz8): T-UC-010-ext-c-mcp — MCP ToolResult now
     # pre-serializes via model_dump(mode="json"), so audience_targeting is
     # correctly omitted instead of serialized as null.
-    # T-UC-010-ext-d-filter PARTIALLY GRADUATED (salesagent-3s5a) -> moved to _SELECTIVE_XFAIL:
-    # a2a/mcp pass now that account is emitted; rest still fails for an UNRELATED pre-existing
-    # reason (REST /api/v1/capabilities is a parameterless GET, cannot express a protocols
-    # filter kwarg at all — capabilities.py's own NotImplementedError, #1592 S2).
+    # T-UC-010-ext-d-filter FULLY GRADUATED (salesagent-5yik): the new POST
+    # /api/v1/capabilities route carries protocols/context/adcp_version on all
+    # 3 transports, so a2a/mcp/rest all now pass (removed from both this dict
+    # and the _SELECTIVE_XFAIL rest-only entry below).
+    # T-UC-010-ext-d-invalid-value / -empty / T-UC-010-ext-e-echo / -nested / -empty
+    # FULLY GRADUATED (salesagent-5yik): build_get_adcp_capabilities_request now
+    # constructs a real typed GetAdcpCapabilitiesRequest (Pydantic enforces the
+    # protocols enum + minItems:1), and _get_adcp_capabilities_impl echoes
+    # req.context verbatim onto the response on every transport.
     "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1592",
-    "T-UC-010-ext-d-invalid-value": "request params ignored — schema-invalid protocols filter silently accepted — #1592",
-    "T-UC-010-ext-d-empty": "request params ignored — empty protocols filter (minItems 1) silently accepted — #1592",
-    "T-UC-010-ext-e-echo": "context echo not implemented (3.1.1 MUST preserve byte-for-byte) — #1592",
-    "T-UC-010-ext-e-nested": "context echo not implemented — #1592",
-    "T-UC-010-ext-e-empty": "context echo not implemented — #1592",
     "T-UC-010-v31-supported-versions": "adcp.supported_versions not emitted — #1592",
     "T-UC-010-v31-version-unsupported": "version negotiation not implemented (adcp_version ignored, no VERSION_UNSUPPORTED) — #1592",
     "T-UC-010-v31-version-unsupported-major-fallback": "version negotiation not implemented — #1592",
@@ -742,13 +742,6 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "capabilities builder never rejects a supported!=true-under-trigger or out-of-enum-algorithm "
         "webhook_signing posture with CONFIGURATION_ERROR — no per-tenant signing-posture config "
         "surface exists — #1592",
-    ),
-    (
-        "T-UC-010-ext-d-filter",
-        {"[rest]"},
-        "REST /api/v1/capabilities is a parameterless GET — cannot express a protocols filter "
-        "kwarg at all (capabilities.py NotImplementedError) — #1592 S2, unrelated to the account "
-        "block gap the a2a/mcp rows graduated on",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the baseline-absence row passes
     # (polling_only → reporting_delivery_methods/offline_delivery_protocols absent, webhook_signing

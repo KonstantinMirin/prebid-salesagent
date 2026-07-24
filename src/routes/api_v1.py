@@ -215,6 +215,13 @@ class SyncAccountsBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
+class GetCapabilitiesBody(SalesAgentBaseModel):
+    protocols: list[str] | None = None
+    context: dict[str, Any] | None = None
+    adcp_version: str | None = None
+    adcp_major_version: int | None = None
+
+
 # ---------------------------------------------------------------------------
 # Discovery endpoints (auth-optional)
 # ---------------------------------------------------------------------------
@@ -242,6 +249,25 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
 async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
     response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
+    return response.model_dump(mode="json")
+
+
+@router.post("/capabilities")
+async def post_capabilities(body: GetCapabilitiesBody, identity: ResolvedIdentity | None = resolve_auth):
+    """Get AdCP capabilities with request parameters (auth-optional discovery skill).
+
+    Additive alongside the parameterless GET route above (owner decision
+    2026-07-24): protocols filtering and context echo need a real request
+    body, which a bare GET cannot carry — matches the POST+JSON-body
+    convention every other route in this file follows.
+    """
+    response = await capabilities_module.get_adcp_capabilities_raw(
+        protocols=body.protocols,
+        context=to_context_object(body.context),
+        adcp_version=body.adcp_version,
+        adcp_major_version=body.adcp_major_version,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 

@@ -178,24 +178,28 @@ class CapabilitiesEnv(IntegrationEnv):
         """Call get_adcp_capabilities via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("get_adcp_capabilities", GetAdcpCapabilitiesResponse, **kwargs)
 
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """REST dispatch override: the capabilities route is GET with no body.
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Flat kwargs (protocols/context/adcp_version/adcp_major_version) map
+        1:1 onto GetCapabilitiesBody's top-level fields — no req object, no
+        per-field extraction needed.
+        """
+        return kwargs
 
-        Mirrors the base implementation's auth handling via the shared
-        ``_configure_rest_auth`` helper, then GETs. Request params (protocols /
-        context / adcp_version) cannot ride this route today — passing any
-        raises so the gap surfaces as xfail evidence instead of a silent drop
-        (No Quiet Failures; the param-carrying REST shape is S2 production work).
+    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+        """REST dispatch: POST /api/v1/capabilities with a JSON body when
+        request params are present (protocols/context/adcp_version), else GET
+        the parameterless happy-path route — both are real production routes
+        (salesagent-5yik, owner decision 2026-07-24: POST, matching the
+        codebase's RPC-over-REST convention).
         """
         identity = self._pop_rest_identity(kwargs)
-        if kwargs:
-            raise NotImplementedError(
-                f"REST /api/v1/capabilities is a parameterless GET — cannot express {sorted(kwargs)} (#1592 S2)"
-            )
         self._commit_factory_data()
         client = self.get_rest_client()
         self._configure_rest_auth(identity)
-        return client.get(endpoint)
+        if not kwargs:
+            return client.get(endpoint)
+        body = self.build_rest_body(**kwargs)
+        return client.post(endpoint, json=body)
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetAdcpCapabilitiesResponse:
         """Parse REST JSON into GetAdcpCapabilitiesResponse."""

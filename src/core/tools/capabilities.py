@@ -9,8 +9,9 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Annotated
 
-from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
@@ -38,6 +39,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_supported_billing
@@ -50,6 +52,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
+from src.core.validation_helpers import adcp_validation_boundary
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -85,6 +88,30 @@ def _build_account_block(tenant: Mapping) -> Account:
         authorization_endpoint=None,
         required_for_products=None,
         account_financials=None,
+    )
+
+
+def build_get_adcp_capabilities_request(
+    *,
+    protocols: list[str] | None = None,
+    context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
+    ext: dict | None = None,
+) -> GetAdcpCapabilitiesRequest:
+    """Build the shared get_adcp_capabilities request for transport wrappers.
+
+    Mirrors build_list_creative_formats_request (creative_formats.py) -- the
+    single seam every transport wrapper constructs the typed request through,
+    so a future request field lands here once instead of in wrapper lockstep
+    (salesagent-5yik).
+    """
+    return GetAdcpCapabilitiesRequest(
+        protocols=protocols,
+        context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
+        ext=ext,
     )
 
 
@@ -142,6 +169,7 @@ def _get_adcp_capabilities_impl(
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
             webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
             request_signing=_REQUEST_SIGNING_UNSUPPORTED,
+            context=req.context if req else None,
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -327,13 +355,26 @@ def _get_adcp_capabilities_impl(
         webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
         request_signing=_REQUEST_SIGNING_UNSUPPORTED,
         last_updated=datetime.now(UTC),
+        context=req.context if req else None,
     )
+
+    # Filter protocol-domain sections to the requested protocols. adcp/
+    # supported_protocols/account are protocol-invariant (describe the seller
+    # as a whole, not a specific protocol domain) and always survive.
+    if req and req.protocols:
+        requested = {enum_value(p) for p in req.protocols}
+        for field_name in ("media_buy", "signals", "governance", "sponsored_intelligence", "creative"):
+            if field_name not in requested:
+                setattr(response, field_name, None)
 
     return response
 
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
+    adcp_version: Annotated[str | None, Field(description="Requested AdCP spec version")] = None,
+    adcp_major_version: Annotated[int | None, Field(description="Requested AdCP major version")] = None,
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -341,7 +382,10 @@ async def get_adcp_capabilities(
     MCP tool wrapper aligned with adcp v3.x spec.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Filter response sections to these protocol domains (optional)
+        context: Application-level context per AdCP spec, echoed on the response
+        adcp_version: Requested AdCP spec version (optional)
+        adcp_major_version: Requested AdCP major version (optional)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -349,17 +393,22 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object (currently minimal)
-    req = GetAdcpCapabilitiesRequest()
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = build_get_adcp_capabilities_request(
+            protocols=protocols,
+            context=context,
+            adcp_version=adcp_version,
+            adcp_major_version=adcp_major_version,
+        )
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
 
     # Build human-readable summary
-    protocols = [enum_value(p) for p in response.supported_protocols]
+    summary_protocols = [enum_value(p) for p in response.supported_protocols]
     summary_parts = [
         f"AdCP v{response.adcp.major_versions[0].root} Capabilities",
-        f"Supported protocols: {', '.join(protocols)}",
+        f"Supported protocols: {', '.join(summary_protocols)}",
     ]
 
     if response.media_buy and response.media_buy.portfolio:
@@ -378,15 +427,21 @@ async def get_adcp_capabilities(
 
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetAdcpCapabilitiesResponse:
     """Get the capabilities of this AdCP sales agent.
 
-    Raw function without @mcp.tool decorator for A2A server use.
+    Raw function without @mcp.tool decorator for A2A server / REST use.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Filter response sections to these protocol domains (optional)
+        context: Application-level context per AdCP spec, echoed on the response
+        adcp_version: Requested AdCP spec version (optional)
+        adcp_major_version: Requested AdCP major version (optional)
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -394,5 +449,11 @@ async def get_adcp_capabilities_raw(
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
     identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest()
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = build_get_adcp_capabilities_request(
+            protocols=protocols,
+            context=context,
+            adcp_version=adcp_version,
+            adcp_major_version=adcp_major_version,
+        )
     return _get_adcp_capabilities_impl(req, identity)
