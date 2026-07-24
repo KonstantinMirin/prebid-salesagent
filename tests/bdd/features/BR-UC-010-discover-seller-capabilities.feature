@@ -943,11 +943,11 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/webhook_signing/properties/supported/x-adcp-validation
 
     Examples:
-      | partition_boundary                                          | methods            | protocols | expected_methods            | expected_protocols | webhook_signing_supported |
-      | polling_only methods omitted (baseline polling only)        | omitted            | omitted   | absent                      | absent             | unconstrained             |
-      | webhook_only methods=[webhook]                              | [webhook]          | omitted   | equal to [webhook]          | absent             | equal to true             |
-      | offline_only methods=[offline] with s3 protocol             | [offline]          | [s3]      | equal to [offline]          | equal to [s3]      | unconstrained             |
-      | mixed_delivery methods=[webhook, offline] with gcs protocol | [webhook, offline] | [gcs]     | equal to [webhook, offline] | equal to [gcs]     | equal to true             |
+      | partition_boundary                                          | methods            | protocols | expected_methods            | expected_protocols | webhook_signing_supported  |
+      | polling_only methods omitted (baseline polling only)        | omitted            | omitted   | absent                      | absent             | true, false, or absent     |
+      | webhook_only methods=[webhook]                              | [webhook]          | omitted   | equal to [webhook]          | absent             | equal to true              |
+      | offline_only methods=[offline] with s3 protocol             | [offline]          | [s3]      | equal to [offline]          | equal to [s3]      | true, false, or absent     |
+      | mixed_delivery methods=[webhook, offline] with gcs protocol | [webhook, offline] | [gcs]     | equal to [webhook, offline] | equal to [gcs]     | equal to true              |
 
   @T-UC-010-v31-content-standards-block @v31 @main-flow @post-s19
   Scenario: content-standards-block — media_buy.content_standards capability declares evaluation surface
@@ -1017,17 +1017,25 @@ Feature: BR-UC-010 Discover Seller Capabilities
   Scenario: brand-block — brand protocol capabilities (experimental in v3.1)
     Given a tenant is resolvable from the request context
     And "brand" is in supported_protocols
+    And the tenant declares brand.rights=true right_types=[talent, music] available_uses=[likeness, sync] generation_providers=["openai"]
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should include brand section
-    And brand.rights should be a boolean
-    And each brand.right_types value should be one of "talent", "character", "brand_ip", "music", "stock_media"
-    And each brand.available_uses value should be one of "likeness", "voice", "name", "endorsement", "motion_capture", "signature", "catchphrase", "sync", "background_music", "editorial", "commercial", "ai_generated_image"
-    And brand.generation_providers should be an array of strings
+    And brand.rights should equal true
+    And brand.right_types should equal ["talent", "music"]
+    And brand.available_uses should equal ["likeness", "sync"]
+    And brand.generation_providers should equal ["openai"]
     # brand top-level block ("Only present if brand is in supported_protocols"); experimental
     # is per-field (x-status on rights/right_types/available_uses/generation_providers).
-    # Enum value lists pinned 2026-07-13 (enums/right-type.json, enums/right-use.json).
+    # Strengthened (salesagent-scgh): the Given now declares a concrete brand posture and every
+    # Then exact-echoes the declared fixture (was type-only/enum-membership-only). right_types
+    # items ∈ enums/right-type.json enum [talent, character, brand_ip, music, stock_media];
+    # available_uses items ∈ enums/right-use.json enum [likeness, voice, name, endorsement,
+    # motion_capture, signature, catchphrase, sync, background_music, editorial, commercial,
+    # ai_generated_image]; generation_providers is an array of open strings.
     # POST-S22: Buyer knows brand protocol capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/brand
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/right-type.json pointer=/enum
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/right-use.json pointer=/enum
 
   @T-UC-010-v31-request-signing-posture @v31 @main-flow @post-s23 @partition @boundary
   Scenario Outline: request-signing-posture — RFC 9421 request signing declaration
@@ -1184,8 +1192,15 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # brand_json_url"; identity: {} alone is schema-valid but advisory-neutral. Enforcement
     # is storyboard/verifier-level in 3.x (schema-required only under 4.x versions) — the
     # seller-gradable behavior is refusing to emit (config-validation) the invalid posture.
+    # Observable pinned (salesagent-scgh): "rejected" = the builder does NOT return a success
+    # response for the invalid posture — it surfaces a CONFIGURATION_ERROR (a seller-side
+    # deployment/config fault the buyer cannot fix) with recovery "terminal", naming
+    # brand_json_url; "a valid capabilities response" = a success carrying adcp +
+    # supported_protocols and no adcp_error. CONFIGURATION_ERROR is enums/error-code.json with
+    # enumMetadata.recovery = "terminal".
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/identity
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/identity/properties/brand_json_url/x-adcp-validation/required_when
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
 
     Examples:
       | partition_boundary                                                  | signing_posture                                  | identity_state | verdict                                     |
@@ -1201,15 +1216,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should include measurement section
     And measurement.metrics should be a non-empty array
-    And each entry should include metric_id as a vendor-metric-id
+    And each metrics entry's metric_id should match pattern "^[a-z][a-z0-9_]*$" with length 1..64
     And a metrics entry should carry metric_id "viewable_impressions"
     And experimental_features should contain "measurement.core"
     # measurement (x-status experimental) requires metrics (minItems 1); items require
     # metric_id. Agents implementing measurement MUST list measurement.core in
     # experimental_features (both the measurement block and supported_protocols descriptions).
-    # The former "may include" pseudo-asserts replaced by fixture round-trip.
+    # Strengthened (salesagent-scgh): "as a vendor-metric-id" named a schema, not a contract —
+    # replaced by the schema's own item constraints (vendor-metric-id.json: pattern
+    # ^[a-z][a-z0-9_]*$, minLength 1, maxLength 64; examples attention_units, demographic_reach).
     # POST-S26: Buyer knows measurement vendor metric catalog
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/measurement
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/vendor-metric-id.json pointer=/pattern
 
   @T-UC-010-v31-measurement-accreditations @v31 @main-flow @post-s26 @partition @boundary
   Scenario Outline: measurement-accreditations — third-party accreditation entries on metrics

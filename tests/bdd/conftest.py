@@ -403,6 +403,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # xfail on all transports).
     "T-UC-010-features": "media_buy.content_standards / conversion_tracking / audience_targeting presence-objects and the account block (account.sandbox) not emitted by the capabilities builder — #1592 spec-production gap",
     "T-UC-010-targeting": "targeting emits only geo_countries/geo_regions/geo_metros/geo_postal_areas — age_restriction, language, keyword_targets, negative_keywords, geo_proximity not built and geo_postal_areas uses the deprecated boolean-alias shape not the native country-keyed map — #1592 spec-production gap",
+    # Wired non-dormant + strengthened (salesagent-scgh): each scenario executes and grades the
+    # spec-pinned v3.1.1 shape, then fails on a block the capabilities builder never emits
+    # (brand is not in supported_protocols; measurement block never built). Strict xfail, all
+    # transports.
+    "T-UC-010-v31-brand-block": "the capabilities builder advertises only media_buy in supported_protocols and never emits the brand top-level block (rights/right_types/available_uses/generation_providers) — #1592 spec-production gap",
+    "T-UC-010-v31-measurement-catalog": "the capabilities builder never emits the measurement block (metrics[] + measurement.core in experimental_features); measurement is not in supported_protocols — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -558,6 +564,36 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"full_response", "no_tenant", "no_principal", "account_degraded"},
         "account block / adcp.supported_versions not emitted; INV-4 keeps adapter channels "
         "principal-free so no_principal does not degrade to [display] — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-scgh): the baseline-absence row passes
+    # (polling_only → reporting_delivery_methods/offline_delivery_protocols absent, webhook_signing
+    # honest-tautology); the push-delivery rows fail because the capabilities builder never emits
+    # media_buy.reporting_delivery_methods / offline_delivery_protocols / webhook_signing.
+    (
+        "T-UC-010-v31-reporting-delivery-methods",
+        {"webhook_only", "offline_only", "mixed_delivery"},
+        "media_buy.reporting_delivery_methods / offline_delivery_protocols / webhook_signing not "
+        "emitted by the capabilities builder — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-scgh): the no-emission row passes (no
+    # must_equal_when trigger fires → webhook_signing absent is schema-valid); the emission rows
+    # grade the conditional invariant (supported MUST equal true) and fail because the
+    # capabilities builder emits no webhook_signing block.
+    (
+        "T-UC-010-v31-webhook-signing-required-when",
+        {"reporting_webhook_emission", "content_standards_webhook", "wholesale_feed_webhook"},
+        "webhook_signing block not emitted — the must_equal_when(webhook emission → supported=true) "
+        "invariant is ungraded in production — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-scgh): the no-posture row passes (a valid
+    # capabilities response is emitted); the signing-posture-without-brand_json_url rows grade the
+    # required_when rejection (CONFIGURATION_ERROR, recovery terminal) and fail because the builder
+    # never builds identity/the signing posture and so never rejects the invalid config.
+    (
+        "T-UC-010-v31-identity-required-when-signing",
+        {"posture_declared_identity_absent", "posture_declared_identity_empty"},
+        "capabilities builder never emits identity/request_signing and never rejects a signing "
+        "posture missing identity.brand_json_url — #1592",
     ),
 ]
 
@@ -3606,6 +3642,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-targeting-partitions",
             "T-UC-010-degradation-partitions",
             "T-UC-010-v31-idempotency-required",
+            # Batch 5 — v3.1 signing / brand / reporting / measurement (salesagent-scgh)
+            "T-UC-010-v31-reporting-delivery-methods",
+            "T-UC-010-v31-brand-block",
+            "T-UC-010-v31-webhook-signing-required-when",
+            "T-UC-010-v31-identity-required-when-signing",
+            "T-UC-010-v31-measurement-catalog",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

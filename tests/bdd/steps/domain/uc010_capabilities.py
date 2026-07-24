@@ -1310,3 +1310,254 @@ def then_response_satisfies(ctx: dict, expected_assertion: str) -> None:
     if assertion is None:
         raise NotImplementedError(f"UC-010 assertion row not wired yet: {expected_assertion!r} (#1592)")
     assertion(ctx)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Batch 5 (salesagent-scgh): v3.1.1 signing / brand / reporting / measurement
+#
+# reporting_delivery_methods, offline_delivery_protocols, webhook_signing, the
+# brand block, the identity signing posture and the measurement block are NOT
+# built by the capabilities builder (src/core/tools/capabilities.py emits only
+# adcp / supported_protocols / specialisms / media_buy{features,execution}).
+# The Givens record declared intent; the Thens grade the exact v3.1.1-pinned
+# shape on the wire. Rows production already satisfies (polling-only absence,
+# the no-emission webhook row, the valid identity row) PASS; the rest execute
+# the real assertion and fail on the unemitted block — strict per-row/per-tag
+# xfail in conftest (_SELECTIVE_XFAIL / _XFAIL_TAGS), never a dormant skip.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+#: 3.1.1 cloud-storage-protocol enum (enums/cloud-storage-protocol.json).
+CLOUD_STORAGE_PROTOCOL_ENUM = {"s3", "gcs", "azure_blob"}
+
+#: 3.1.1 vendor-metric-id constraints (core/vendor-metric-id.json).
+_VENDOR_METRIC_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _parse_bracket_list(token: str) -> list[str]:
+    """Parse a Gherkin '[a, b]' fragment into a list of bare string tokens."""
+    inner = token.strip().removeprefix("[").removesuffix("]").strip()
+    if not inner:
+        return []
+    return [part.strip() for part in inner.split(",") if part.strip()]
+
+
+def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:
+    """Grade an outline <expected> column of the form 'absent' | 'equal to [a, b]'
+    against a success-path array field on the wire."""
+    expected = expected.strip()
+    if expected == "absent":
+        wire_absent(ctx, path)
+        return
+    match = re.fullmatch(r"equal to (\[[^\]]*\])", expected)
+    assert match, f"unrecognized array expected column: {expected!r}"
+    want = _parse_bracket_list(match.group(1))
+    actual = wire_field(ctx, path)
+    assert actual == want, f"{path} expected {want!r}, got {actual!r}"
+
+
+# ── Givens: declared-intent recorders (production has no config surface) ──
+
+
+@given('"brand" is in supported_protocols')
+def given_brand_in_supported_protocols(ctx: dict) -> None:
+    """Declare the brand protocol. Production advertises only media_buy, so the
+    brand top-level block is never emitted (#1592) — records intent."""
+    _config(ctx).setdefault("supported_protocols", []).append("brand")
+
+
+@given('"measurement" is in supported_protocols')
+def given_measurement_in_supported_protocols(ctx: dict) -> None:
+    """Declare the measurement protocol. Production advertises only media_buy, so
+    the measurement block is never emitted (#1592) — records intent."""
+    _config(ctx).setdefault("supported_protocols", []).append("measurement")
+
+
+@given(
+    "the tenant declares brand.rights=true right_types=[talent, music] "
+    'available_uses=[likeness, sync] generation_providers=["openai"]'
+)
+def given_brand_posture(ctx: dict) -> None:
+    """Declare a concrete brand posture (rights/right_types/available_uses/
+    generation_providers). Records intent; the capabilities builder does not emit
+    the brand block yet (#1592) so the value Thens xfail."""
+    _config(ctx)["brand"] = {
+        "rights": True,
+        "right_types": ["talent", "music"],
+        "available_uses": ["likeness", "sync"],
+        "generation_providers": ["openai"],
+    }
+
+
+@given(parsers.parse("the tenant declares reporting delivery methods {methods} with offline protocols {protocols}"))
+def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) -> None:
+    """Declare push-based reporting delivery methods + offline protocols. Records
+    intent; production never emits media_buy.reporting_delivery_methods /
+    offline_delivery_protocols (#1592)."""
+    _config(ctx)["reporting_delivery_methods"] = None if methods.strip() == "omitted" else _parse_bracket_list(methods)
+    _config(ctx)["offline_delivery_protocols"] = (
+        None if protocols.strip() == "omitted" else _parse_bracket_list(protocols)
+    )
+
+
+@given(
+    parsers.re(
+        r"the tenant declares (?P<emission_state>(?:media_buy\.|wholesale_feed_webhooks\.).+|no mutating-webhook emission)$"
+    )
+)
+def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
+    """Declare a mutating-webhook emission posture (or its absence) for the
+    webhook-signing required_when invariant. Records intent; production emits no
+    webhook_signing block (#1592) so the must_equal_when invariant is ungraded."""
+    _config(ctx)["webhook_emission_state"] = emission_state.strip()
+
+
+@given(parsers.parse("the tenant declares {signing_posture} with identity block {identity_state}"))
+def given_signing_posture_with_identity(ctx: dict, signing_posture: str, identity_state: str) -> None:
+    """Declare a signing posture + identity-block state for the identity
+    required_when invariant. Records intent; the builder never rejects
+    signing-without-brand_json_url (identity/signing posture not built, #1592)."""
+    _config(ctx)["signing_posture"] = signing_posture.strip()
+    _config(ctx)["identity_state"] = identity_state.strip()
+
+
+@given(parsers.parse('the tenant declares measurement.metrics with metric_id "{metric_id}"'))
+def given_measurement_metric(ctx: dict, metric_id: str) -> None:
+    """Declare one measurement metric by metric_id. Records intent; production
+    emits no measurement block (#1592)."""
+    _config(ctx).setdefault("measurement_metrics", []).append(metric_id)
+
+
+# ── Thens: reporting_delivery_methods outline ────────────────────────────
+
+
+@then(parsers.re(r"media_buy\.reporting_delivery_methods should be (?P<expected>absent|equal to \[[^\]]*\])$"))
+def then_reporting_methods_value(ctx: dict, expected: str) -> None:
+    """reporting_delivery_methods: absent (baseline polling only) or exactly the
+    declared push methods (items ∈ {webhook, offline}, minItems 1, uniqueItems)."""
+    _grade_array_or_absent(ctx, "media_buy.reporting_delivery_methods", expected)
+
+
+@then(parsers.re(r"media_buy\.offline_delivery_protocols should be (?P<expected>absent|equal to \[[^\]]*\])$"))
+def then_offline_protocols_value(ctx: dict, expected: str) -> None:
+    """offline_delivery_protocols: absent unless reporting includes 'offline', then
+    exactly the declared protocols (items ∈ cloud-storage-protocol enum)."""
+    _grade_array_or_absent(ctx, "media_buy.offline_delivery_protocols", expected)
+    value = wire_lookup(ctx, "media_buy.offline_delivery_protocols")
+    if value is not WIRE_MISSING:
+        invalid = set(value) - CLOUD_STORAGE_PROTOCOL_ENUM
+        assert not invalid, f"offline_delivery_protocols carries non-enum values: {sorted(invalid)}"
+
+
+@then(parsers.re(r"webhook_signing\.supported should be (?P<expected>.+)$"))
+def then_webhook_signing_supported(ctx: dict, expected: str) -> None:
+    """webhook_signing.supported conditional invariant (must_equal_when): when the
+    seller advertises mutating-webhook emission it MUST equal true; when no trigger
+    fires it may be true, false, or absent (honest tautology — no cross-field
+    constraint). 'equal to true/false' grades the exact value; anything else is the
+    no-trigger row (present→boolean or absent)."""
+    expected = expected.strip()
+    path = "webhook_signing.supported"
+    if expected in ("equal to true", "equal to false"):
+        actual = wire_field(ctx, path)
+        assert actual is (expected == "equal to true"), f"{path} expected {expected}, got {actual!r}"
+        return
+    value = wire_lookup(ctx, path)
+    if value is not WIRE_MISSING:
+        assert isinstance(value, bool), f"{path} present but not a boolean: {value!r}"
+
+
+# ── Thens: brand block ───────────────────────────────────────────────────
+
+
+@then("the response should include brand section")
+def then_brand_section_present(ctx: dict) -> None:
+    """brand top-level block is present only when 'brand' is in supported_protocols.
+    wire_dict pins present AND non-null AND a JSON object."""
+    wire_dict(ctx, "brand")
+
+
+@then(parsers.parse("brand.{field} should equal {expected}"))
+def then_brand_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Exact-echo a declared brand sub-field: rights (boolean), right_types /
+    available_uses (arrays of right-type / right-use enum members),
+    generation_providers (array of open strings)."""
+    _assert_wire_equals(ctx, f"brand.{field}", expected)
+
+
+# ── Thens: identity required_when verdict ────────────────────────────────
+
+
+@then(parsers.parse("the seller capabilities builder should treat the configuration as {verdict}"))
+def then_identity_signing_verdict(ctx: dict, verdict: str) -> None:
+    """identity.brand_json_url required_when invariant: a seller declaring a signing
+    posture with an absent/empty identity MUST be rejected (it cannot produce a
+    conformant response), surfaced as a CONFIGURATION_ERROR (seller-side deployment
+    fault, recovery terminal) naming brand_json_url. A no-posture config emits a
+    valid success response (adcp + supported_protocols, no adcp_error)."""
+    verdict = verdict.strip()
+    if verdict.startswith("rejected"):
+        from tests.helpers.envelope_assertions import assert_envelope_shape
+
+        assert ctx.get("error") is not None, f"expected rejection, got a success response ({verdict!r})"
+        assert_envelope_shape(
+            ctx.get("wire_error_envelope"),
+            "CONFIGURATION_ERROR",
+            recovery="terminal",
+            message_substr="brand_json_url",
+        )
+        return
+    assert verdict == "a valid capabilities response", f"unrecognized verdict column: {verdict!r}"
+    assert ctx.get("error") is None, f"expected a valid response, got error: {ctx.get('error')!r}"
+    assert ctx.get("wire_error_envelope") is None, (
+        f"expected a valid response, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
+    )
+    for path in ("adcp", "supported_protocols"):
+        wire_field(ctx, path)
+
+
+# ── Thens: measurement block ─────────────────────────────────────────────
+
+
+@then("the response should include measurement section")
+def then_measurement_section_present(ctx: dict) -> None:
+    """measurement (x-status experimental) block present. wire_dict pins present
+    AND non-null AND a JSON object."""
+    wire_dict(ctx, "measurement")
+
+
+@then("measurement.metrics should be a non-empty array")
+def then_measurement_metrics_nonempty(ctx: dict) -> None:
+    """metrics: minItems 1 (measurement requires at least one computed metric)."""
+    metrics = wire_field(ctx, "measurement.metrics")
+    assert isinstance(metrics, list) and metrics, f"measurement.metrics not a non-empty array: {metrics!r}"
+
+
+@then(parsers.parse('each metrics entry\'s metric_id should match pattern "{pattern}" with length 1..64'))
+def then_measurement_metric_id_shape(ctx: dict, pattern: str) -> None:
+    """Every metrics[].metric_id is a vendor-metric-id: pattern ^[a-z][a-z0-9_]*$,
+    minLength 1, maxLength 64 (core/vendor-metric-id.json)."""
+    assert pattern == "^[a-z][a-z0-9_]*$", f"scenario pattern drifted from vendor-metric-id.json: {pattern!r}"
+    metrics = wire_field(ctx, "measurement.metrics")
+    for entry in metrics:
+        metric_id = entry.get("metric_id")
+        assert isinstance(metric_id, str) and _VENDOR_METRIC_ID_RE.match(metric_id), (
+            f"metric_id does not match {pattern}: {metric_id!r}"
+        )
+        assert 1 <= len(metric_id) <= 64, f"metric_id length outside 1..64: {metric_id!r}"
+
+
+@then(parsers.parse('a metrics entry should carry metric_id "{metric_id}"'))
+def then_measurement_metric_present(ctx: dict, metric_id: str) -> None:
+    """The declared metric_id round-trips: some metrics entry carries it exactly."""
+    metrics = wire_field(ctx, "measurement.metrics")
+    ids = [entry.get("metric_id") for entry in metrics]
+    assert metric_id in ids, f"no metrics entry carries metric_id {metric_id!r}: {ids!r}"
+
+
+@then(parsers.parse('experimental_features should contain "{feature}"'))
+def then_experimental_features_contains(ctx: dict, feature: str) -> None:
+    """Agents implementing measurement MUST list measurement.core in
+    experimental_features (measurement block + supported_protocols descriptions)."""
+    features = wire_field(ctx, "experimental_features")
+    assert feature in features, f"experimental_features does not contain {feature!r}: {features!r}"
