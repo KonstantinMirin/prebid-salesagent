@@ -620,11 +620,12 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-notif-register-paused @sync @notification-configs @partition @boundary
   Scenario: Register a paused account-level notification subscriber and read it back
     Given the Buyer Agent has an authenticated connection
-    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative" and event_types "creative.status_changed, creative.purged"
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative", event_types "creative.status_changed, creative.purged", and legacy Bearer authentication
     Then the response is a success variant with accounts array
     And the account notification_configs echo exactly 1 subscriber
     And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/creative" and active false
-    And the echoed subscriber does not include authentication credentials
+    And the echoed subscriber has event_types "creative.status_changed, creative.purged"
+    And the echoed subscriber's authentication object omits "credentials"
     When the Buyer Agent sends a list_accounts request
     Then the listed account for brand domain "acme-corp.com" echoes subscriber "buyer-primary" with active false
     # XFAIL-EXPECTED: production gap — #1592 (notification_configs surface entirely unimplemented)
@@ -638,9 +639,10 @@ Feature: BR-UC-011 Manage Accounts
   Scenario: Re-sending a subscriber_id replaces in place; an empty array clears the set
     Given the Buyer Agent has an authenticated connection
     And an account for brand domain "acme-corp.com" exists with notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
-    When the Buyer Agent sends a sync_accounts request re-sending subscriber "buyer-primary" with url "https://buyer.example/webhooks/adcp/paused" and event_types "creative.purged"
+    When the Buyer Agent sends a sync_accounts request re-sending subscriber "buyer-primary" as paused with url "https://buyer.example/webhooks/adcp/paused" and event_types "creative.purged"
     Then the account notification_configs echo exactly 1 subscriber
     And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/paused" and active false
+    And the echoed subscriber has event_types "creative.purged"
     When the Buyer Agent sends a sync_accounts request with an empty notification_configs array for brand domain "acme-corp.com"
     Then the account notification_configs echo exactly 0 subscribers
     # XFAIL-EXPECTED: production gap — #1592 (declarative replace keyed by subscriber_id unimplemented)
@@ -957,10 +959,13 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an authenticated connection
     And both sandbox and production accounts exist for the Buyer
     When the Buyer Agent sends a list_accounts request with sandbox equals true
-    Then the response should contain "accounts" array
+    Then the response contains an accounts array with 1 items
     And all returned accounts should have sandbox equals true
     And the response should not include production accounts
     # BR-RULE-209 INV-4: sandbox accounts identifiable via sandbox: true
+    # Given seeds exactly one sandbox + one production account; the sandbox=true
+    # filter returns only the sandbox account (count 1, sandbox id present, prod id absent)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/sandbox
 
   @T-UC-011-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account provisioning with invalid billing returns real validation error
@@ -1005,11 +1010,16 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain  | operator      | billing  | sandbox |
     | acme-corp.com | acme-corp.com | operator | true    |
     Then the account for brand domain "acme-corp.com" has action "failed"
-    And the per-account errors array contains an error describing that sandbox provisioning is not supported
-    And the error should include "suggestion" field with remediation guidance
+    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
+    And the per-account error recovery is "correctable"
+    And the per-account error field points at "accounts[0].sandbox"
+    And the per-account error suggestion mentions "get_adcp_capabilities"
     # @bva sandbox: capability not declared, sandbox provisioning requested
     # BR-RULE-209 INV-6: only a seller with account.sandbox: true supports sandbox provisioning
+    # UNSUPPORTED_FEATURE is the canonical fit (a requested feature the seller does not
+    # support); recovery correctable = "check get_adcp_capabilities and remove unsupported fields"
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
     # POST-F1: no real or sandbox account created on failure
 
   @T-UC-011-v31-error-account-setup-required @v3-1 @error-details @post-f1 @post-f2 @post-f3

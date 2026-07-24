@@ -1064,12 +1064,13 @@ def _parse_sync_table(datatable: Any) -> list[dict[str, Any]]:
     return accounts
 
 
-@when("the Buyer Agent sends a sync_accounts request with:")
-def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
-    """Send sync_accounts with accounts from Gherkin data table.
+def _dispatch_sync_table(ctx: dict, datatable: Any) -> None:
+    """Parse a Gherkin sync_accounts data table and dispatch it on the wire.
 
     pytest-bdd datatable: list of lists. First row = headers, rest = data rows.
     Handles force_identity (unauthenticated) and force_internal_error contexts.
+    Shared by the plain ``with:`` table When and the ``with idempotency_key … and:``
+    variant so the two paths cannot drift (DRY invariant).
     """
     from src.core.schemas.account import SyncAccountsRequest
 
@@ -1102,6 +1103,26 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
         dispatch_request(ctx, req=req, **kwargs)
     except Exception as exc:
         ctx["error"] = exc
+
+
+@when("the Buyer Agent sends a sync_accounts request with:")
+def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts with accounts from a Gherkin data table."""
+    _dispatch_sync_table(ctx, datatable)
+
+
+@when(parsers.re(r'the Buyer Agent sends a sync_accounts request with idempotency_key "(?P<key>[^"]+)" and:'))
+def when_sync_accounts_with_key_and_table(ctx: dict, key: str, datatable: Any) -> None:
+    """Send sync_accounts from a data table, ignoring the descriptive idempotency_key.
+
+    The Gherkin names an idempotency_key for narrative/traceability, but production
+    does not carry idempotency_key on the sync_accounts wire — the REST request model
+    rejects it as an extra input (#1592), matching the empirical finding recorded in
+    salesagent-9jiu. Dispatching a keyless request is therefore the faithful wire call;
+    the key is retained on ctx only so a later step could reference it.
+    """
+    ctx["sync_idempotency_key"] = key
+    _dispatch_sync_table(ctx, datatable)
 
 
 @when(parsers.parse('the Buyer Agent sends a sync_accounts request with governance_agents for brand "{domain}"'))
@@ -2591,9 +2612,18 @@ def given_sandbox_supported(ctx: dict) -> None:
 
 @given("both sandbox and production accounts exist for the Buyer")
 def given_sandbox_and_production_accounts(ctx: dict) -> None:
-    """Create one sandbox and one production account with agent access."""
-    _create_accessible_account(ctx, status="active", sandbox=True)
-    _create_accessible_account(ctx, status="active", sandbox=False)
+    """Create one sandbox and one production account with agent access.
+
+    Records the sandbox and production account_ids separately (not just the
+    combined ``expected_account_ids`` set) so the sandbox-filter Thens can grade
+    the filter non-vacuously: the sandbox account MUST be returned and the
+    production account MUST be absent — an empty result is a filter defect, not a
+    pass. Real DB seeding via factories (not mock injection).
+    """
+    sandbox_acct = _create_accessible_account(ctx, status="active", sandbox=True)
+    prod_acct = _create_accessible_account(ctx, status="active", sandbox=False)
+    ctx["sandbox_account_ids"] = {sandbox_acct.account_id}
+    ctx["production_account_ids"] = {prod_acct.account_id}
 
 
 # ── When: context-bearing requests ─────────────────────────────────────
@@ -2963,23 +2993,422 @@ def then_no_real_platform_account(ctx: dict) -> None:
 
 @then("all returned accounts should have sandbox equals true")
 def then_all_accounts_sandbox_true(ctx: dict) -> None:
-    """Assert every account in the response has sandbox=True."""
+    """Assert the sandbox filter returned the seeded sandbox account and only it.
+
+    Non-vacuous: an empty response is a filter defect, not a pass (the prior
+    ``for acct in resp.accounts`` loop passed on ``[]``). The Given seeded exactly
+    one sandbox account; that id MUST be present, and every returned account MUST
+    carry sandbox=True.
+
+    Spec: account/list-accounts-request.json#/properties/sandbox — "true returns
+    only sandbox accounts"; core/account.json#/properties/sandbox (boolean).
+    """
     resp = _require_response(ctx)
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    expected_sandbox_ids = ctx.get("sandbox_account_ids", set())
+    assert expected_sandbox_ids, "Given did not record sandbox_account_ids — fixture wiring bug"
+    assert expected_sandbox_ids <= returned_ids, (
+        f"Sandbox filter dropped the seeded sandbox account(s): expected {expected_sandbox_ids} "
+        f"present, got returned ids {returned_ids}"
+    )
     for acct in resp.accounts:
         assert acct.sandbox is True, f"Expected sandbox=True, got sandbox={acct.sandbox} for {acct.name}"
 
 
 @then("the response should not include production accounts")
 def then_no_production_accounts(ctx: dict) -> None:
-    """Assert all returned accounts are sandbox (no production accounts).
+    """Assert the seeded production account is absent (sandbox=true filter excludes it).
 
-    The sandbox filter was applied in the When step. Every returned account
-    must have sandbox=True; any sandbox=False or sandbox=None is a production
-    account that should have been filtered out.
+    Non-vacuous: names the concrete production account_id from the Given and
+    asserts it is NOT in the returned set — the prior ``sandbox is True`` loop
+    passed on an empty result. Absence (not merely sandbox=false) is the
+    production signal per the request-filter contract.
+
+    Spec: account/list-accounts-request.json#/properties/sandbox — "false returns
+    only production accounts. Omit to return all accounts."; core/account.json
+    #/properties/sandbox (absence means production).
     """
     resp = _require_response(ctx)
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    prod_ids = ctx.get("production_account_ids", set())
+    assert prod_ids, "Given did not record production_account_ids — fixture wiring bug"
+    leaked = prod_ids & returned_ids
+    assert not leaked, f"Production account(s) {sorted(leaked)} leaked past the sandbox=true filter"
     for acct in resp.accounts:
-        assert acct.sandbox is True, f"Production account found: {acct.account_id} (sandbox={acct.sandbox})"
+        assert acct.sandbox is True, f"Non-sandbox account found: {acct.account_id} (sandbox={acct.sandbox})"
+
+
+# ── Given: sandbox capability not declared ─────────────────────────────
+
+
+@given("the seller does not declare account.sandbox in capabilities")
+def given_sandbox_not_supported(ctx: dict) -> None:
+    """Configure a seller that does NOT advertise the account.sandbox capability.
+
+    v3.1.1 locates the sandbox capability at account.sandbox on the capabilities
+    response (get-adcp-capabilities-response.json#/properties/account/properties/sandbox,
+    default false). This Given is the negative of ``given_sandbox_supported``: the
+    seller has not opted in, so a sync_accounts request carrying sandbox: true MUST
+    be rejected per-account (BR-RULE-209 INV-6). Real DB seeding (tenant/principal),
+    no capability flag set.
+    """
+    _setup_tenant_and_principal(ctx)
+    ctx["sandbox_supported"] = False
+
+
+# ── When: sandbox response-shape request items ─────────────────────────
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request with idempotency_key "(?P<key>[^"]+)" '
+        r"and a request item where sandbox is (?P<request_item>true|false|omitted)"
+    )
+)
+def when_sync_sandbox_shape(ctx: dict, key: str, request_item: str) -> None:
+    """Send one sync_accounts account entry whose sandbox field is true/false/omitted.
+
+    Grades the response-shape echo (true→true, false→false, omitted→absent) against
+    account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/sandbox
+    ("echoed from the request. Only present for buyer-declared accounts"). The
+    descriptive idempotency_key is not carried on the wire (see
+    ``when_sync_accounts_with_key_and_table``).
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    ctx["sync_idempotency_key"] = key
+    entry: dict[str, Any] = {
+        "brand": {"domain": "acme-corp.com"},
+        "operator": "acme-corp.com",
+        "billing": "operator",
+    }
+    if request_item == "true":
+        entry["sandbox"] = True
+    elif request_item == "false":
+        entry["sandbox"] = False
+    # "omitted": leave sandbox out of the entry entirely
+
+    try:
+        req = SyncAccountsRequest(accounts=[entry])
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+# ── Then: sandbox response-shape + capability error assertions ─────────
+
+
+@then(parsers.parse('the per-account result sandbox field is "{expected}"'))
+def then_per_account_sandbox_field(ctx: dict, expected: str) -> None:
+    """Assert the per-account result's sandbox field on the wire is true/false/absent.
+
+    Tri-state, read on the buyer-facing success wire (absent ≠ false ≠ true):
+    "omitted" in the request MUST echo as absent, not a JSON null — an unset
+    optional is not serialized. "false" and "true" echo the literal boolean.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/sandbox
+    ("Whether this is a sandbox account, echoed from the request. Only present for
+    buyer-declared accounts.").
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert isinstance(accounts, list) and accounts, f"success wire body carries no accounts[]: {body!r}"
+    acct0 = accounts[0]
+    assert isinstance(acct0, dict), f"accounts[0] is not a JSON object on the wire: {acct0!r}"
+    if expected == "absent":
+        assert "sandbox" not in acct0, (
+            f"expected sandbox absent from the wire (production account), got sandbox={acct0.get('sandbox')!r}"
+        )
+    elif expected == "true":
+        assert acct0.get("sandbox") is True, f"expected sandbox true on the wire, got {acct0.get('sandbox')!r}"
+    elif expected == "false":
+        assert acct0.get("sandbox") is False, f"expected sandbox false on the wire, got {acct0.get('sandbox')!r}"
+    else:
+        raise AssertionError(f"unknown expected sandbox shape {expected!r} (want true/false/absent)")
+
+
+def _last_account_error_matching(ctx: dict, code: str) -> Any:
+    """Return the per-account error object carrying ``code`` on the referenced account."""
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if getattr(e, "code", None) == code), None)
+    assert err is not None, (
+        f"No per-account error with code {code!r}; got codes {[getattr(e, 'code', None) for e in errors]}"
+    )
+    return err
+
+
+@then(parsers.parse('the per-account error field points at "{field}"'))
+def then_per_account_error_field(ctx: dict, field: str) -> None:
+    """Assert the referenced account's error names WHICH request field was rejected.
+
+    Spec: core/error.json#/properties/field — the JSONPath-lite pointer at the
+    offending request field (e.g. 'accounts[0].sandbox').
+    """
+    errors = _last_account_errors(ctx)
+    fields = [getattr(e, "field", None) for e in errors]
+    assert field in fields, f"Expected a per-account error field pointing at {field!r}, got {fields}"
+
+
+@then(parsers.parse('the per-account error suggestion mentions "{needle}"'))
+def then_per_account_error_suggestion_mentions(ctx: dict, needle: str) -> None:
+    """Assert a per-account error's suggestion string contains the remediation cue.
+
+    Spec: core/error.json#/properties/suggestion ("Suggested fix for the error").
+    For UNSUPPORTED_FEATURE the documented remediation is
+    enums/error-code.json#/enumMetadata/UNSUPPORTED_FEATURE/suggestion =
+    "check get_adcp_capabilities and remove unsupported fields".
+    """
+    errors = _last_account_errors(ctx)
+    suggestions = [getattr(e, "suggestion", None) or "" for e in errors]
+    assert any(needle in s for s in suggestions), (
+        f"Expected a per-account error suggestion mentioning {needle!r}, got {suggestions!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-011 account-level notification_configs wiring (salesagent-psr7 / eiww batch B4)
+#
+# Production trace (src/core/tools/accounts.py + src/core/schemas/account.py,
+# verified empirically): the sync_accounts pipeline does NOT process
+# accounts[].notification_configs — the per-account result model
+# (SyncResponseAccount) declares no notification_configs field, so nothing is
+# persisted or echoed. Every echo/read-back Then below therefore fails at the
+# first "echo exactly N subscriber" assertion (None → 0 ≠ expected), which is
+# the #1592 spec-production gap the strict tag-level xfails (conftest
+# _XFAIL_TAGS) record. The steps are wired so the scenarios EXECUTE (non-dormant)
+# and fail on the missing surface, not on StepDefinitionNotFoundError.
+#
+# Spec (v3.1.1): core/notification-config.json (subscriber shape; write-only
+# credentials; active flag persisted even when false); account/
+# sync-accounts-request.json#/properties/accounts/items/properties/notification_configs
+# (declarative replace — omit=leave unchanged, []=clear, re-send subscriber_id
+# replaces in place); account/sync-accounts-response.json#/oneOf/0/.../
+# notification_configs (applied subscribers echoed; authentication.credentials
+# omitted); compliance/3.1.1/universal/notification-config-lifecycle.yaml
+# (graded storyboard: register_and_echo_paused_subscriber, replace_pause_and_clear).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _parse_event_types(ets: str) -> list[str]:
+    """Split a comma-space-separated event_types string into a list of names."""
+    return [e.strip() for e in ets.split(",") if e.strip()]
+
+
+def _notif_config(
+    subscriber_id: str, url: str, event_types: str, *, active: bool, authentication: dict | None = None
+) -> dict[str, Any]:
+    """Build a notification_configs[] entry dict for a sync_accounts request."""
+    entry: dict[str, Any] = {
+        "subscriber_id": subscriber_id,
+        "url": url,
+        "event_types": _parse_event_types(event_types),
+        "active": active,
+    }
+    if authentication is not None:
+        entry["authentication"] = authentication
+    return entry
+
+
+def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
+    """Dispatch a sync_accounts request carrying a notification_configs array for one account."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    entry = {
+        "brand": {"domain": domain},
+        "operator": domain,
+        "billing": "operator",
+        "notification_configs": notification_configs,
+    }
+    try:
+        req = SyncAccountsRequest(accounts=[entry])
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+def _sub_attr(sub: Any, name: str) -> Any:
+    """Read a subscriber attribute from a dict or a typed NotificationConfig."""
+    return sub.get(name) if isinstance(sub, dict) else getattr(sub, name, None)
+
+
+def _echoed_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
+    """Return the referenced account's echoed notification_configs (or [] when absent).
+
+    Reads the typed response's per-account notification_configs. Production echoes
+    none (the field is absent from SyncResponseAccount), so this yields [] and the
+    count assertion fails — the honest #1592 gap.
+    """
+    resp = _require_response(ctx)
+    if domain is not None:
+        acct = next((a for a in resp.accounts if a.brand.domain == domain), None)
+        assert acct is not None, (
+            f"No account for domain {domain!r} in response; domains={[a.brand.domain for a in resp.accounts]}"
+        )
+    else:
+        acct = ctx.get("last_account") or resp.accounts[0]
+    configs = getattr(acct, "notification_configs", None)
+    return list(configs) if configs else []
+
+
+def _find_subscriber(subs: list[Any], subscriber_id: str) -> Any:
+    """Find an echoed subscriber by subscriber_id, or None."""
+    return next((s for s in subs if str(_sub_attr(s, "subscriber_id")) == subscriber_id), None)
+
+
+@given(
+    parsers.re(
+        r'an account for brand domain "(?P<domain>[^"]+)" exists with notification config '
+        r'subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)"'
+    )
+)
+def given_account_with_notif_subscriber(ctx: dict, domain: str, sub: str, url: str) -> None:
+    """Pre-create an account carrying one active notification subscriber.
+
+    Production ignores accounts[].notification_configs (#1592) but still provisions
+    the account, so the natural key exists for the subsequent replace/clear When.
+    """
+    _setup_tenant_and_principal(ctx)
+    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=True)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+    ctx["notif_domain"] = domain
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)", '
+        r'event_types "(?P<ets>[^"]+)", and legacy Bearer authentication'
+    )
+)
+def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision an account with one paused (active:false) subscriber carrying legacy Bearer auth.
+
+    The authentication block (Bearer scheme + a 32-char write-only credential per
+    core/notification-config.json#/properties/authentication/properties/credentials)
+    gives the credentials-omitted echo assertion teeth: the input declares a
+    credential, so an echo that returns it is a real write-only leak.
+    """
+    ctx["notif_domain"] = domain
+    auth = {"schemes": ["Bearer"], "credentials": "x" * 32}
+    cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request re-sending subscriber "(?P<sub>[^"]+)" '
+        r'as paused with url "(?P<url>[^"]+)" and event_types "(?P<ets>[^"]+)"'
+    )
+)
+def when_sync_resend_subscriber_paused(ctx: dict, sub: str, url: str, ets: str) -> None:
+    """Declarative replace: re-send the same subscriber_id as paused (active:false).
+
+    Spec: sync-accounts-request notification_configs description — "Re-sending an
+    existing subscriber_id for the account replaces that subscriber's config."
+    core/notification-config.json#/properties/subscriber_id: replaces URL,
+    event_types, authentication selector, AND active flag.
+    """
+    domain = ctx.get("notif_domain", "acme-corp.com")
+    cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a sync_accounts request with an empty notification_configs array "
+        r'for brand domain "(?P<domain>[^"]+)"'
+    )
+)
+def when_sync_clear_notification_configs(ctx: dict, domain: str) -> None:
+    """Declarative clear: send [] to remove all subscribers.
+
+    Spec: sync-accounts-request notification_configs description — "send [] to
+    remove all subscribers."
+    """
+    _dispatch_sync_notification(ctx, domain, [])
+
+
+@then(parsers.re(r"the account notification_configs echo exactly (?P<count>\d+) subscribers?"))
+def then_notif_echo_count(ctx: dict, count: str) -> None:
+    """Assert the account echoes exactly N applied notification subscribers.
+
+    Spec: sync-accounts-response.json#/oneOf/0/.../notification_configs — "Only
+    configs that the seller has persisted are echoed." Storyboard field_absent
+    check on notification_configs[1] pins "exactly one subscriber".
+    """
+    subs = _echoed_subscribers(ctx)
+    assert len(subs) == int(count), f"Expected {count} echoed subscriber(s), got {len(subs)}: {subs!r}"
+
+
+@then(parsers.re(r'the echoed subscriber "(?P<sub>[^"]+)" has url "(?P<url>[^"]+)" and active (?P<flag>true|false)'))
+def then_echoed_subscriber_url_active(ctx: dict, sub: str, url: str, flag: str) -> None:
+    """Assert the echoed subscriber carries the exact url and active flag.
+
+    Spec: core/notification-config.json#/properties/{url,active}; the storyboard
+    grades subscriber url and active=false field_value checks.
+    """
+    subs = _echoed_subscribers(ctx)
+    match = _find_subscriber(subs, sub)
+    assert match is not None, f"No echoed subscriber {sub!r} in {subs!r}"
+    assert str(_sub_attr(match, "url")) == url, f"Expected url {url!r}, got {_sub_attr(match, 'url')!r}"
+    expected_active = flag == "true"
+    assert _sub_attr(match, "active") is expected_active, (
+        f"Expected active {expected_active}, got {_sub_attr(match, 'active')!r}"
+    )
+
+
+@then(parsers.parse('the echoed subscriber has event_types "{ets}"'))
+def then_echoed_subscriber_event_types(ctx: dict, ets: str) -> None:
+    """Assert the echoed subscriber's event_types equal the registered set, in order.
+
+    Spec: core/notification-config.json#/properties/event_types (minItems 1,
+    uniqueItems); the storyboard grades event_types[0]/[1] field_value checks.
+    """
+    subs = _echoed_subscribers(ctx)
+    assert subs, f"No echoed subscribers to check event_types on: {subs!r}"
+    expected = _parse_event_types(ets)
+    actual = [str(e) for e in (_sub_attr(subs[0], "event_types") or [])]
+    assert actual == expected, f"Expected event_types {expected}, got {actual}"
+
+
+@then(parsers.parse('the echoed subscriber\'s authentication object omits "{field}"'))
+def then_echoed_subscriber_auth_omits(ctx: dict, field: str) -> None:
+    """Assert the echoed authentication object does not carry the write-only field.
+
+    Spec: core/notification-config.json top-level — "Credentials and shared secrets
+    in authentication.credentials are write-only — sellers MUST NOT echo them back";
+    sync-accounts-response notification_configs — "authentication.credentials is
+    omitted on every entry (write-only)."
+    """
+    subs = _echoed_subscribers(ctx)
+    assert subs, f"No echoed subscribers to check authentication on: {subs!r}"
+    auth = _sub_attr(subs[0], "authentication")
+    if auth is None:
+        return  # no authentication block echoed at all → the write-only field is not leaked
+    auth_dict = auth if isinstance(auth, dict) else auth.model_dump(exclude_none=True)
+    assert field not in auth_dict, f"authentication echoed write-only {field!r}: {auth_dict!r}"
+
+
+@then(
+    parsers.re(
+        r'the listed account for brand domain "(?P<domain>[^"]+)" echoes subscriber "(?P<sub>[^"]+)" '
+        r"with active (?P<flag>true|false)"
+    )
+)
+def then_listed_account_echoes_subscriber(ctx: dict, domain: str, sub: str, flag: str) -> None:
+    """Assert a list_accounts read-back echoes the persisted paused subscriber.
+
+    Spec: core/account.json carries notification_configs; paused entries MUST be
+    observable on the buyer's next read (core/notification-config.json#/properties/active:
+    "the buyer's next sync_accounts MUST observe the same array").
+    """
+    subs = _echoed_subscribers(ctx, domain=domain)
+    match = _find_subscriber(subs, sub)
+    assert match is not None, f"No echoed subscriber {sub!r} for listed account {domain!r}: {subs!r}"
+    expected_active = flag == "true"
+    assert _sub_attr(match, "active") is expected_active, (
+        f"Expected active {expected_active}, got {_sub_attr(match, 'active')!r}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
