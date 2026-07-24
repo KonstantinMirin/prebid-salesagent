@@ -757,6 +757,7 @@ class TestErrorCodeVocabularyConsistency:
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
         "CONFIGURATION_ERROR",  # Spec supplement: passthrough wire code, pinned terminal (salesagent-nr2q)
+        "VERSION_UNSUPPORTED",  # Spec supplement: AdCPVersionUnsupportedError, correctable (salesagent-rldj, #1592 C4)
         # SDK standard codes added by the error-emission-architecture substrate.
         "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError

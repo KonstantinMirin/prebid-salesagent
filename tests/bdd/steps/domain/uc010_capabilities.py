@@ -439,12 +439,15 @@ def given_capability_config(ctx: dict, capability_config: str) -> None:
 
 @given(parsers.parse("the seller speaks adcp release-precision versions {versions}"))
 def given_seller_versions(ctx: dict, versions: str) -> None:
-    _config(ctx)["supported_versions"] = _quoted_list(versions)
+    versions_list = _quoted_list(versions)
+    _config(ctx)["supported_versions"] = versions_list
+    ctx["env"].set_supported_versions(versions_list)
 
 
 @given(parsers.parse('the seller\'s build_version is "{build_version}"'))
 def given_seller_build_version(ctx: dict, build_version: str) -> None:
     _config(ctx)["build_version"] = build_version
+    ctx["env"].set_build_version(build_version)
 
 
 # ── When cluster ─────────────────────────────────────────────────────
@@ -558,12 +561,75 @@ def then_idempotency_present(ctx: dict) -> None:
     wire_dict(ctx, "adcp.idempotency")
 
 
-@then("adcp.idempotency.supported should equal true")
-def then_idempotency_supported_true(ctx: dict) -> None:
-    """oneOf IdempotencySupported: supported is the const-true discriminator
-    (get-adcp-capabilities-response.json#/properties/adcp/properties/idempotency/oneOf/0)."""
+@then(parsers.parse("adcp.idempotency.supported should equal {supported}"))
+def then_idempotency_supported_equals(ctx: dict, supported: str) -> None:
+    """oneOf discriminator: supported is the const true/false branch selector
+    (get-adcp-capabilities-response.json#/properties/adcp/properties/idempotency/oneOf)."""
+    expected = {"true": True, "false": False}[supported.strip()]
     value = wire_field(ctx, "adcp.idempotency.supported")
-    assert value is True, f"idempotency.supported expected true, got {value!r}"
+    assert value is expected, f"idempotency.supported expected {expected!r}, got {value!r}"
+
+
+def _parse_expected_fields(text: str) -> list[tuple[str, str, str | None]]:
+    """Parse an 'expected_fields' column fragment into (field, verb, value) triples.
+
+    Supports 'X equals N[, Y equals M, ...]' (comma-joined 'field equals value'
+    clauses -- value may be an int or 'true'/'false'), and
+    'X absent and Y absent' (space-'and'-joined 'field absent' clauses).
+    """
+    text = text.strip()
+    if " absent" in text:
+        return [(clause.replace(" absent", "").strip(), "absent", None) for clause in text.split(" and ")]
+    triples = []
+    for clause in text.split(","):
+        clause = clause.strip()
+        if " equals " in clause:
+            field, _, value = clause.partition(" equals ")
+        else:
+            # Bare 'field value' form (e.g. 'account_id_is_opaque true').
+            field, _, value = clause.rpartition(" ")
+        triples.append((field.strip(), "equals", value.strip()))
+    return triples
+
+
+@then(parsers.parse("adcp.idempotency should satisfy {expected_fields}"))
+def then_idempotency_satisfies(ctx: dict, expected_fields: str) -> None:
+    """Grades the idempotency-supported outline's per-row field expectations --
+    either declared fields echoed exactly (IdempotencySupported branch) or the
+    schema's not.anyOf-forbidden fields genuinely absent (IdempotencyUnsupported
+    branch)."""
+    idempotency = wire_dict(ctx, "adcp.idempotency")
+    for field, verb, raw_value in _parse_expected_fields(expected_fields):
+        if verb == "absent":
+            assert field not in idempotency, f"expected {field!r} absent, but present: {idempotency[field]!r}"
+            continue
+        actual = idempotency.get(field)
+        if raw_value in ("true", "false"):
+            expected: bool | int = raw_value == "true"
+        else:
+            expected = int(raw_value)
+        assert actual == expected, f"idempotency.{field} expected {expected!r}, got {actual!r}"
+
+
+def _wire_int(value: object, field: str) -> int:
+    """Coerce a wire numeric value to int, tolerating A2A's protobuf Struct
+    encoding (NumberValue is always double -- an integer round-trips as an
+    integral float, e.g. 86400.0, on that transport only)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise AssertionError(f"{field} not a number: {value!r}")
+    if isinstance(value, float) and not value.is_integer():
+        raise AssertionError(f"{field} not an integral value: {value!r}")
+    return int(value)
+
+
+@then("adcp.idempotency.in_flight_max_seconds should be less than or equal to adcp.idempotency.replay_ttl_seconds")
+def then_idempotency_in_flight_bound(ctx: dict) -> None:
+    """Cross-field rule the JSON Schema cannot express (test-layer-enforced):
+    in_flight_max_seconds MUST be no greater than replay_ttl_seconds."""
+    idempotency = wire_dict(ctx, "adcp.idempotency")
+    in_flight = _wire_int(idempotency.get("in_flight_max_seconds"), "in_flight_max_seconds")
+    ttl = _wire_int(idempotency.get("replay_ttl_seconds"), "replay_ttl_seconds")
+    assert in_flight <= ttl, f"in_flight_max_seconds {in_flight!r} exceeds replay_ttl_seconds {ttl!r}"
 
 
 @then("adcp.idempotency.replay_ttl_seconds should be an integer between 3600 and 604800")
@@ -1854,13 +1920,37 @@ _IDEMPOTENCY_BOUNDARY_POSTURES: dict[str, dict[str, Any]] = {
 
 @given(parsers.parse("the tenant declares idempotency posture at {boundary_point}"))
 def given_idempotency_posture(ctx: dict, boundary_point: str) -> None:
-    """Declare a concrete idempotency posture for the replay_ttl_seconds boundary.
-    Records intent; production hard-codes idempotency(supported=true,
-    replay_ttl_seconds=86400) and never reads tenant config (#1592)."""
+    """Declare a concrete idempotency posture for the replay_ttl_seconds boundary."""
     boundary_point = boundary_point.strip()
     posture = _IDEMPOTENCY_BOUNDARY_POSTURES.get(boundary_point)
     assert posture is not None, f"unmapped idempotency boundary_point: {boundary_point!r}"
     _config(ctx)["idempotency"] = posture
+    ctx["env"].set_idempotency_posture(**posture)
+
+
+def _parse_idempotency_posture(text: str) -> dict[str, Any]:
+    """Parse a free-form 'key=value key=value ...' posture fragment
+    (e.g. 'supported=true replay_ttl_seconds=3600 in_flight_max_seconds=300
+    account_id_is_opaque=true') into an IdempotencyPosture kwargs dict."""
+    posture: dict[str, Any] = {}
+    for token in text.strip().split():
+        key, _, raw_value = token.partition("=")
+        if raw_value in ("true", "false"):
+            posture[key] = raw_value == "true"
+        else:
+            posture[key] = int(raw_value)
+    assert "supported" in posture, f"posture fragment {text!r} missing required 'supported=' token"
+    return posture
+
+
+@given(parsers.re(r"the tenant declares idempotency posture (?P<posture>supported=.+)$"))
+def given_idempotency_posture_freeform(ctx: dict, posture: str) -> None:
+    """Declare a free-form idempotency posture (idempotency-supported /
+    idempotency-in-flight-bound scenario outlines) -- distinct from the
+    fixed-label {boundary_point} form above, which the ttl-bounds outline uses."""
+    parsed = _parse_idempotency_posture(posture)
+    _config(ctx)["idempotency"] = parsed
+    ctx["env"].set_idempotency_posture(**parsed)
 
 
 @given(parsers.parse("the seller's error-details builder is configured for {boundary_point}"))
@@ -1940,15 +2030,13 @@ def then_idempotency_bounds(ctx: dict, expected: str) -> None:
     _assert_schema_valid(ctx)
     declared = _config(ctx).get("idempotency") or {}
     idempotency = wire_dict(ctx, "adcp.idempotency")
-    ttl = idempotency.get("replay_ttl_seconds")
-    assert isinstance(ttl, int) and 3600 <= ttl <= 604800, (
-        f"replay_ttl_seconds {ttl!r} outside the schema bounds 3600..604800"
-    )
+    ttl = _wire_int(idempotency.get("replay_ttl_seconds"), "replay_ttl_seconds")
+    assert 3600 <= ttl <= 604800, f"replay_ttl_seconds {ttl!r} outside the schema bounds 3600..604800"
     assert ttl == declared.get("replay_ttl_seconds"), (
         f"replay_ttl_seconds {ttl!r} does not echo the declared {declared.get('replay_ttl_seconds')!r}"
     )
     if "in_flight_max_seconds" in declared:
-        in_flight = idempotency.get("in_flight_max_seconds")
+        in_flight = _wire_int(idempotency.get("in_flight_max_seconds"), "in_flight_max_seconds")
         assert in_flight == declared["in_flight_max_seconds"], (
             f"in_flight_max_seconds {in_flight!r} does not echo the declared {declared['in_flight_max_seconds']!r}"
         )

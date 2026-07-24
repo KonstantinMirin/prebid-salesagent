@@ -57,6 +57,11 @@ _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     # downstream-platform-connection gap). Replaces the deprecated AUTH_REQUIRED
     # alias for AdCPAuthorizationError (salesagent-otc5).
     "PERMISSION_DENIED": {"recovery": "correctable", "message": "Not authorized for this action"},
+    # v3.1.1 error-code.json: buyer pinned an adcp_version/adcp_major_version
+    # this seller doesn't support. Recovery: correctable — the buyer can
+    # re-pin to a version this seller advertises via get_adcp_capabilities.adcp
+    # and retry (salesagent-rldj, #1592 C4).
+    "VERSION_UNSUPPORTED": {"recovery": "correctable", "message": "Requested AdCP version is not supported"},
 }
 
 # SDK STANDARD_ERROR_CODES entries AdCP v3.1.1 dropped; translated to their
@@ -456,6 +461,18 @@ class AdCPValidationError(AdCPError):
 
     _default_status_code: ClassVar[int] = 400
     _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPVersionUnsupportedError(AdCPError):
+    """Buyer pinned an adcp_version/adcp_major_version this seller doesn't support (400).
+
+    Recovery is correctable per v3.1.1 error-code.json enumMetadata: re-pin to
+    a release in the returned error.details.supported_versions and retry.
+    """
+
+    _default_status_code: ClassVar[int] = 400
+    _default_error_code: ClassVar[str] = "VERSION_UNSUPPORTED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 

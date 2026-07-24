@@ -134,6 +134,79 @@ class CapabilitiesEnv(IntegrationEnv):
         self.mock["adapter"].side_effect = Exception("adapter unavailable (harness)")
 
     @realize_e2e(
+        e2e_unsupported(
+            "no production tenant-config surface for the seller's advertised adcp version set "
+            "(SUPPORTED_ADCP_VERSIONS/MAJORS are process-wide constants, salesagent-rldj) — a "
+            "module-constant monkeypatch cannot cross a real HTTP process boundary"
+        )
+    )
+    def set_supported_versions(self, versions: list[str]) -> None:
+        """Override the seller's advertised adcp_version/adcp_major_version release set.
+
+        In-process only: monkeypatches src.core.version_negotiation's derived
+        module constants, reached by every in-process transport (a2a/mcp/rest
+        within the BDD harness) via their per-call lazy re-import.
+        """
+        majors = sorted({int(v.split(".")[0]) for v in versions})
+        version_patcher = patch("src.core.version_negotiation.SUPPORTED_ADCP_VERSIONS", list(versions))
+        major_patcher = patch("src.core.version_negotiation.SUPPORTED_ADCP_MAJORS", majors)
+        self.mock["supported_versions"] = version_patcher.start()
+        self.mock["supported_majors"] = major_patcher.start()
+        self._patchers.append(version_patcher)
+        self._patchers.append(major_patcher)
+
+    @realize_e2e(
+        e2e_unsupported(
+            "no production tenant-config surface for the seller's advertised build_version "
+            "(src.core.version.get_version() is a process-wide package-metadata read, "
+            "salesagent-rldj) — cannot be injected over real HTTP"
+        )
+    )
+    def set_build_version(self, build_version: str) -> None:
+        """Override the advisory build_version surfaced on a VERSION_UNSUPPORTED error."""
+        patcher = patch("src.core.version.get_version", return_value=build_version)
+        self.mock["build_version"] = patcher.start()
+        self._patchers.append(patcher)
+
+    @realize_e2e(
+        e2e_unsupported(
+            "no production tenant-config surface for the adcp.idempotency posture "
+            "(get_idempotency_posture() is a process-wide provider, salesagent-rldj) — a "
+            "module-function monkeypatch cannot cross a real HTTP process boundary"
+        )
+    )
+    def set_idempotency_posture(
+        self,
+        *,
+        supported: bool,
+        replay_ttl_seconds: int | None = None,
+        in_flight_max_seconds: int | None = None,
+        account_id_is_opaque: bool = False,
+    ) -> None:
+        """Override the seller's declared adcp.idempotency posture.
+
+        In-process only: monkeypatches get_idempotency_posture() at its module
+        seam (src.core.tools.capabilities._build_adcp_block re-imports it per
+        call). The overridden posture still flows through the REAL
+        IdempotencyPosture.check_bounds()/to_sdk_union() production code --
+        only the input posture is test-controlled, not the validation/shaping.
+        """
+        from src.core.database.repositories.idempotency_attempt import IdempotencyPosture
+
+        posture = IdempotencyPosture(
+            supported=supported,
+            replay_ttl_seconds=replay_ttl_seconds,
+            in_flight_max_seconds=in_flight_max_seconds,
+            account_id_is_opaque=account_id_is_opaque,
+        )
+        patcher = patch(
+            "src.core.database.repositories.idempotency_attempt.get_idempotency_posture",
+            return_value=posture,
+        )
+        self.mock["idempotency_posture"] = patcher.start()
+        self._patchers.append(patcher)
+
+    @realize_e2e(
         e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
     )
     def break_tenant_config_db(self) -> None:

@@ -23,7 +23,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
     GeoMetros,
-    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
@@ -43,7 +42,6 @@ from pydantic import Field
 
 from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_supported_billing
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
@@ -53,6 +51,7 @@ from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
+from src.core.version_negotiation import negotiate_adcp_version
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -65,6 +64,31 @@ logger = logging.getLogger(__name__)
 # either; RFC 9421 signing support is tracked as follow-up work, not this task's scope.
 _WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
 _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
+
+
+def _build_adcp_block(tenant: Mapping | None) -> Adcp:
+    """Build the top-level adcp.* envelope -- single source for both the
+    no-tenant minimal response and the tenant-resolved full response
+    (salesagent-rldj DRY fix; the two literal Adcp(...) constructions this
+    replaces had drifted apart before, the exact class of bug DRY exists to
+    prevent).
+
+    major_versions/supported_versions derive from SUPPORTED_ADCP_MAJORS/
+    VERSIONS (src/core/version_negotiation.py), themselves derived from the
+    pinned SDK spec version -- never a literal. idempotency derives from
+    get_idempotency_posture(tenant), the single source shared by both
+    response paths.
+    """
+    from src.core.database.repositories.idempotency_attempt import get_idempotency_posture
+    from src.core.version_negotiation import SUPPORTED_ADCP_MAJORS, SUPPORTED_ADCP_VERSIONS
+
+    posture = get_idempotency_posture(tenant)
+    posture.check_bounds()
+    return Adcp(
+        major_versions=[MajorVersion(root=m) for m in SUPPORTED_ADCP_MAJORS],
+        supported_versions=list(SUPPORTED_ADCP_VERSIONS),
+        idempotency=posture.to_sdk_union(),
+    )
 
 
 def _build_account_block(tenant: Mapping) -> Account:
@@ -155,16 +179,18 @@ def _get_adcp_capabilities_impl(
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
+    # Negotiate FIRST -- a bad version pin is rejected even with no tenant
+    # context (salesagent-rldj: version negotiation is not tenant-gated).
+    if req:
+        negotiate_adcp_version(req.adcp_version, req.adcp_major_version)
+
     # Extract tenant from resolved identity
     tenant = identity.tenant if identity else None
 
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
-            adcp=Adcp(
-                major_versions=[MajorVersion(root=3)],
-                idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-            ),
+            adcp=_build_adcp_block(None),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
             webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
@@ -344,10 +370,7 @@ def _get_adcp_capabilities_impl(
     # failures don't block merge, and the public declaration forces
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
-        adcp=Adcp(
-            major_versions=[MajorVersion(root=3)],
-            idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-        ),
+        adcp=_build_adcp_block(tenant),
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,

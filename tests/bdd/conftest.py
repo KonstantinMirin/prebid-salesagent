@@ -360,7 +360,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # three wire transports (strict holds); per-row / per-transport gaps use
     # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
     "T-UC-010-main": "account block, supported_pricing_models, reporting_delivery_methods not emitted — #1592 spec-production gap",
-    "T-UC-010-ext-a": "adcp.supported_versions not emitted; no-tenant identity re-resolves to a tenant on A2A/REST raw wrappers — #1592",
+    # Graduated (salesagent-rldj): _build_adcp_block() now always emits
+    # adcp.supported_versions (derived from SUPPORTED_ADCP_VERSIONS) on both
+    # the no-tenant and tenant-resolved paths. T-UC-010-ext-a removed.
     # Graduated (salesagent-dn2s): T-UC-010-auth-data-identity — capability
     # discovery now resolves the adapter CLASS tenant-only (INV-4), identical
     # for anonymous and authenticated callers.
@@ -381,10 +383,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # protocols enum + minItems:1), and _get_adcp_capabilities_impl echoes
     # req.context verbatim onto the response on every transport.
     "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1592",
-    "T-UC-010-v31-supported-versions": "adcp.supported_versions not emitted — #1592",
-    "T-UC-010-v31-version-unsupported": "version negotiation not implemented (adcp_version ignored, no VERSION_UNSUPPORTED) — #1592",
-    "T-UC-010-v31-version-unsupported-major-fallback": "version negotiation not implemented — #1592",
-    "T-UC-010-v31-version-unsupported-build-version-advisory": "version negotiation not implemented — #1592",
+    # Graduated (salesagent-rldj): T-UC-010-v31-supported-versions removed —
+    # see T-UC-010-ext-a graduation note above (same _build_adcp_block fix).
+    # Graduated (salesagent-rldj): version negotiation now implemented
+    # (src/core/version_negotiation.py) — a bad adcp_version/adcp_major_version
+    # pin raises AdCPVersionUnsupportedError -> VERSION_UNSUPPORTED on all
+    # transports. T-UC-010-v31-version-unsupported /
+    # -major-fallback / -build-version-advisory removed from this dict.
     # Wired non-dormant + strengthened (salesagent-e4ad): steps execute and grade the
     # spec-pinned shape, then fail on the unemitted/hard-coded block (strict xfail on all transports).
     "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1592 spec-production gap",
@@ -428,8 +433,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # must_equal_when bounds against an unsupported posture) pass; the "invalid" rows (which
     # require the builder to REJECT a relation-violating/out-of-bounds posture with
     # CONFIGURATION_ERROR) still fail — no per-tenant signing-posture config surface exists.
-    "T-UC-010-v31-idempotency-ttl-bounds": "capabilities builder hard-codes idempotency(supported=true, replay_ttl_seconds=86400) and ignores tenant config, so it neither echoes the declared replay_ttl_seconds posture (valid rows) nor rejects an out-of-bounds/cross-field-violating one (invalid rows) — #1592 spec-production gap",
-    "T-UC-010-v31-version-unsupported-details-bounds": "capabilities builder ignores adcp_version and raises no VERSION_UNSUPPORTED, so the required non-empty supported_versions details bound is never emitted — #1592 spec-production gap",
+    # Graduated (salesagent-rldj): get_idempotency_posture() now returns a
+    # typed IdempotencyPosture whose check_bounds() enforces the
+    # replay_ttl_seconds/in_flight_max_seconds schema bounds, raising
+    # CONFIGURATION_ERROR (terminal) on the invalid rows; the harness
+    # CapabilitiesEnv.set_idempotency_posture override lets the boundary rows
+    # drive it. T-UC-010-v31-idempotency-ttl-bounds removed from this dict.
+    # Graduated (salesagent-rldj): version negotiation now emits a non-empty,
+    # release-precision supported_versions in VERSION_UNSUPPORTED details on
+    # every row. T-UC-010-v31-version-unsupported-details-bounds removed.
     # ── UC-011 list wiring (FIXME(#1592), salesagent-9if1) ─────────────────
     # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
     # v3.1.1 shape; each fails on a surface _list_accounts_impl does not build.
@@ -3848,6 +3860,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-identity-brand-json-url-bounds",
             # Batch 8 — webhook-signing bounds outline (salesagent-8wuu)
             "T-UC-010-v31-webhook-signing-bounds",
+            # Batch 9 — version negotiation + idempotency posture (salesagent-rldj)
+            "T-UC-010-v31-idempotency-supported",
+            "T-UC-010-v31-idempotency-in-flight-bound",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
