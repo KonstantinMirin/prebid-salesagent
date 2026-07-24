@@ -414,6 +414,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # transports.
     "T-UC-010-v31-brand-block": "the capabilities builder advertises only media_buy in supported_protocols and never emits the brand top-level block (rights/right_types/available_uses/generation_providers) — #1592 spec-production gap",
     "T-UC-010-v31-measurement-catalog": "the capabilities builder never emits the measurement block (metrics[] + measurement.core in experimental_features); measurement is not in supported_protocols — #1592 spec-production gap",
+    # Wired non-dormant + strengthened (salesagent-jd6a): each row executes and grades the
+    # spec-pinned bound/relation, then fails on all transports because the capabilities builder
+    # emits no request_signing block, never derives idempotency from tenant config, and runs no
+    # version negotiation (#1592). Strict tag-level xfail — every parametrized row fails.
+    "T-UC-010-v31-request-signing-monotonicity": "capabilities builder emits no request_signing block, so neither the subset/disjoint relations (valid rows) nor the CONFIGURATION_ERROR rejection of a relation-violating posture (invalid rows) is observable — #1592 spec-production gap",
+    "T-UC-010-v31-idempotency-ttl-bounds": "capabilities builder hard-codes idempotency(supported=true, replay_ttl_seconds=86400) and ignores tenant config, so it neither echoes the declared replay_ttl_seconds posture (valid rows) nor rejects an out-of-bounds/cross-field-violating one (invalid rows) — #1592 spec-production gap",
+    "T-UC-010-v31-version-unsupported-details-bounds": "capabilities builder ignores adcp_version and raises no VERSION_UNSUPPORTED, so the required non-empty supported_versions details bound is never emitted — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -597,6 +604,17 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-v31-identity-required-when-signing",
         {"posture_declared_identity_absent", "posture_declared_identity_empty"},
+        "capabilities builder never emits identity/request_signing and never rejects a signing "
+        "posture missing identity.brand_json_url — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-jd6a): the no-posture / brand_json_url-present
+    # valid rows pass (a degraded-but-schema-valid baseline response is emitted and no malformed
+    # brand_json_url is on the wire); the signing-posture-without-brand_json_url invalid rows grade
+    # the required_when rejection (CONFIGURATION_ERROR, recovery terminal, naming brand_json_url)
+    # and fail because the builder never builds identity/the signing posture and so never rejects.
+    (
+        "T-UC-010-v31-identity-brand-json-url-bounds",
+        {"posture_url_absent", "posture_identity_empty"},
         "capabilities builder never emits identity/request_signing and never rejects a signing "
         "posture missing identity.brand_json_url — #1592",
     ),
@@ -3657,6 +3675,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-compliance-testing",
             "T-UC-010-v31-specialisms",
             "T-UC-010-v31-advisory-errors",
+            # Batch 7 — bounds / monotonicity outlines (salesagent-jd6a)
+            "T-UC-010-v31-request-signing-monotonicity",
+            "T-UC-010-v31-idempotency-ttl-bounds",
+            "T-UC-010-v31-version-unsupported-details-bounds",
+            "T-UC-010-v31-identity-brand-json-url-bounds",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

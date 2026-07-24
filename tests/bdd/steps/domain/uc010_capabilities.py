@@ -90,6 +90,43 @@ def _quoted_list(text: str) -> list[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
+def _assert_schema_valid(ctx: dict) -> None:
+    """Re-validate the serialized wire body through the pinned GetAdcpCapabilitiesResponse
+    model (generated from get-adcp-capabilities-response.json) — a response that dropped a
+    required field or carried an out-of-constraint value raises ValidationError here."""
+    from adcp.types import GetAdcpCapabilitiesResponse
+
+    GetAdcpCapabilitiesResponse.model_validate(wire_dict(ctx))
+
+
+def _assert_capabilities_success(ctx: dict) -> None:
+    """A valid (possibly degraded) capabilities response: no recorded error, no wire error
+    envelope, and the top-level required blocks (adcp, supported_protocols) on the wire
+    (get-adcp-capabilities-response.json#/required = [adcp, supported_protocols])."""
+    assert ctx.get("error") is None, f"expected a valid response, got error: {ctx.get('error')!r}"
+    assert ctx.get("wire_error_envelope") is None, (
+        f"expected a valid response, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
+    )
+    for path in ("adcp", "supported_protocols"):
+        wire_field(ctx, path)
+
+
+def _assert_capabilities_config_error(ctx: dict, message_substr: str | None = None) -> None:
+    """A seller-side config rejection: the builder refused to emit a conformant response and
+    surfaced CONFIGURATION_ERROR (recovery terminal — a deployment fault the buyer cannot fix
+    and MUST NOT auto-retry; enums/error-code.json#/enumMetadata/CONFIGURATION_ERROR). When
+    given, message_substr must appear in errors[0].message."""
+    from tests.helpers.envelope_assertions import assert_envelope_shape
+
+    assert ctx.get("error") is not None, "expected a CONFIGURATION_ERROR rejection, got a success response"
+    assert_envelope_shape(
+        ctx.get("wire_error_envelope"),
+        "CONFIGURATION_ERROR",
+        recovery="terminal",
+        message_substr=message_substr,
+    )
+
+
 # ── Givens: tenant / adapter / DB state ──────────────────────────────
 
 
@@ -905,9 +942,7 @@ def then_schema_valid(ctx: dict) -> None:
     the pinned GetAdcpCapabilitiesResponse model (generated from that schema) — a
     degraded response that dropped a required field or emitted an out-of-constraint
     value raises ValidationError here, so the assertion is non-vacuous."""
-    from adcp.types import GetAdcpCapabilitiesResponse
-
-    GetAdcpCapabilitiesResponse.model_validate(wire_dict(ctx))
+    _assert_schema_valid(ctx)
 
 
 @then("the response should NOT include account section")
@@ -1497,23 +1532,10 @@ def then_identity_signing_verdict(ctx: dict, verdict: str) -> None:
     valid success response (adcp + supported_protocols, no adcp_error)."""
     verdict = verdict.strip()
     if verdict.startswith("rejected"):
-        from tests.helpers.envelope_assertions import assert_envelope_shape
-
-        assert ctx.get("error") is not None, f"expected rejection, got a success response ({verdict!r})"
-        assert_envelope_shape(
-            ctx.get("wire_error_envelope"),
-            "CONFIGURATION_ERROR",
-            recovery="terminal",
-            message_substr="brand_json_url",
-        )
+        _assert_capabilities_config_error(ctx, message_substr="brand_json_url")
         return
     assert verdict == "a valid capabilities response", f"unrecognized verdict column: {verdict!r}"
-    assert ctx.get("error") is None, f"expected a valid response, got error: {ctx.get('error')!r}"
-    assert ctx.get("wire_error_envelope") is None, (
-        f"expected a valid response, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
-    )
-    for path in ("adcp", "supported_protocols"):
-        wire_field(ctx, path)
+    _assert_capabilities_success(ctx)
 
 
 # ── Thens: measurement block ─────────────────────────────────────────────
@@ -1775,3 +1797,205 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
     wire_absent(ctx, "adcp_error")
     for path in ("adcp", "supported_protocols"):
         wire_field(ctx, path)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Batch 7 (salesagent-jd6a): bounds / monotonicity boundary outlines
+#
+# request_signing subset/disjoint relations, adcp.idempotency replay_ttl_seconds
+# bounds, VERSION_UNSUPPORTED details supported_versions bound, and the
+# identity.brand_json_url required_when rule. Each <expected> column drives a
+# concrete graded observable — a schema-valid success whose emitted block satisfies
+# the pinned relation/bound, or a seller-side CONFIGURATION_ERROR rejection — never
+# a vague valid/invalid word. The capabilities builder emits no request_signing,
+# derives no idempotency posture from config, runs no version negotiation, and
+# builds no identity/signing posture (#1592); the Givens record declared intent and
+# the graded rows strict-xfail on the unemitted block (tag-level for the all-fail
+# outlines; selective for the identity outline whose no-rejection valid rows pass).
+# ══════════════════════════════════════════════════════════════════════════
+
+
+# ── Givens: declared-intent recorders (production has no config surface) ──
+
+
+@given(parsers.parse("the tenant declares request_signing posture sets for {boundary_point}"))
+def given_request_signing_posture_sets(ctx: dict, boundary_point: str) -> None:
+    """Declare a request_signing posture-set boundary (supported_for/required_for/
+    warn_for and their protocol_methods_* siblings). Records intent; the capabilities
+    builder emits no request_signing block (#1592)."""
+    _config(ctx)["request_signing_boundary"] = boundary_point.strip()
+
+
+#: idempotency-ttl boundary rows → the concrete declared posture they name.
+#: replay_ttl_seconds minimum 3600, maximum 604800 (schema); in_flight_max_seconds
+#: MUST be ≤ replay_ttl_seconds (test-layer cross-field rule). 86400 is a valid
+#: mid-range replay window used for the in_flight rows.
+_IDEMPOTENCY_BOUNDARY_POSTURES: dict[str, dict[str, Any]] = {
+    "replay_ttl_seconds = 3599 (below min)": {"supported": True, "replay_ttl_seconds": 3599},
+    "replay_ttl_seconds = 604800 (max, 7d)": {"supported": True, "replay_ttl_seconds": 604800},
+    "replay_ttl_seconds = 604801 (above max)": {"supported": True, "replay_ttl_seconds": 604801},
+    "in_flight_max_seconds == replay_ttl_seconds": {
+        "supported": True,
+        "replay_ttl_seconds": 86400,
+        "in_flight_max_seconds": 86400,
+    },
+    "in_flight_max_seconds > replay_ttl_seconds": {
+        "supported": True,
+        "replay_ttl_seconds": 86400,
+        "in_flight_max_seconds": 86401,
+    },
+}
+
+
+@given(parsers.parse("the tenant declares idempotency posture at {boundary_point}"))
+def given_idempotency_posture(ctx: dict, boundary_point: str) -> None:
+    """Declare a concrete idempotency posture for the replay_ttl_seconds boundary.
+    Records intent; production hard-codes idempotency(supported=true,
+    replay_ttl_seconds=86400) and never reads tenant config (#1592)."""
+    boundary_point = boundary_point.strip()
+    posture = _IDEMPOTENCY_BOUNDARY_POSTURES.get(boundary_point)
+    assert posture is not None, f"unmapped idempotency boundary_point: {boundary_point!r}"
+    _config(ctx)["idempotency"] = posture
+
+
+@given(parsers.parse("the seller's error-details builder is configured for {boundary_point}"))
+def given_error_details_builder(ctx: dict, boundary_point: str) -> None:
+    """Declare a (malformed) VERSION_UNSUPPORTED details configuration — empty
+    supported_versions array or omitted. Records intent; the capabilities builder runs
+    no version negotiation and raises no VERSION_UNSUPPORTED (#1592)."""
+    _config(ctx)["version_unsupported_details"] = boundary_point.strip()
+
+
+@given(parsers.parse("the tenant identity and signing posture are configured for {boundary_point}"))
+def given_identity_signing_posture(ctx: dict, boundary_point: str) -> None:
+    """Declare an identity + signing-posture boundary for the brand_json_url
+    required_when rule. Records intent; the capabilities builder never builds
+    identity/the signing posture and so never rejects the invalid config (#1592)."""
+    _config(ctx)["identity_signing_boundary"] = boundary_point.strip()
+
+
+# ── Thens: request_signing subset/disjoint relations ─────────────────────
+
+
+def _assert_request_signing_relations(ctx: dict) -> None:
+    """The emitted request_signing posture MUST satisfy every x-adcp-validation relation:
+    required_for ⊆ supported_for; warn_for disjoint from required_for AND ⊆ supported_for;
+    protocol_methods_required_for ⊆ protocol_methods_supported_for."""
+    posture = wire_dict(ctx, "request_signing")
+
+    def _members(key: str) -> set:
+        return set(posture.get(key) or [])
+
+    supported = _members("supported_for")
+    required = _members("required_for")
+    warn = _members("warn_for")
+    pm_supported = _members("protocol_methods_supported_for")
+    pm_required = _members("protocol_methods_required_for")
+    assert required <= supported, f"required_for {sorted(required)} ⊄ supported_for {sorted(supported)}"
+    assert warn.isdisjoint(required), (
+        f"warn_for {sorted(warn)} shares operations with required_for {sorted(required)} (must be disjoint)"
+    )
+    assert warn <= supported, f"warn_for {sorted(warn)} ⊄ supported_for {sorted(supported)}"
+    assert pm_required <= pm_supported, (
+        f"protocol_methods_required_for {sorted(pm_required)} ⊄ protocol_methods_supported_for {sorted(pm_supported)}"
+    )
+
+
+@then(parsers.parse("request_signing should hold the subset and disjoint relations for a {expected} posture"))
+def then_request_signing_relations(ctx: dict, expected: str) -> None:
+    """valid → schema-valid success whose request_signing satisfies every subset/disjoint
+    relation; invalid → the builder rejects the relation-violating config with
+    CONFIGURATION_ERROR (recovery terminal) rather than emitting the violating posture."""
+    expected = expected.strip()
+    if expected == "invalid":
+        _assert_capabilities_config_error(ctx)
+        return
+    assert expected == "valid", f"unrecognized expected column: {expected!r}"
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    _assert_request_signing_relations(ctx)
+
+
+# ── Thens: adcp.idempotency replay_ttl_seconds bounds ────────────────────
+
+
+@then(parsers.parse("adcp.idempotency should echo a {expected} posture within the replay_ttl_seconds bounds"))
+def then_idempotency_bounds(ctx: dict, expected: str) -> None:
+    """valid → adcp.idempotency echoes the declared posture exactly and passes schema
+    validation (replay_ttl_seconds ∈ [3600, 604800]; when in_flight_max_seconds is declared it
+    is present, equal, and ≤ replay_ttl_seconds); invalid → the builder rejects the
+    out-of-bounds / cross-field-violating posture with CONFIGURATION_ERROR (recovery terminal)
+    and never emits it."""
+    expected = expected.strip()
+    if expected == "invalid":
+        _assert_capabilities_config_error(ctx)
+        return
+    assert expected == "valid", f"unrecognized expected column: {expected!r}"
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    declared = _config(ctx).get("idempotency") or {}
+    idempotency = wire_dict(ctx, "adcp.idempotency")
+    ttl = idempotency.get("replay_ttl_seconds")
+    assert isinstance(ttl, int) and 3600 <= ttl <= 604800, (
+        f"replay_ttl_seconds {ttl!r} outside the schema bounds 3600..604800"
+    )
+    assert ttl == declared.get("replay_ttl_seconds"), (
+        f"replay_ttl_seconds {ttl!r} does not echo the declared {declared.get('replay_ttl_seconds')!r}"
+    )
+    if "in_flight_max_seconds" in declared:
+        in_flight = idempotency.get("in_flight_max_seconds")
+        assert in_flight == declared["in_flight_max_seconds"], (
+            f"in_flight_max_seconds {in_flight!r} does not echo the declared {declared['in_flight_max_seconds']!r}"
+        )
+        assert in_flight <= ttl, (
+            f"in_flight_max_seconds {in_flight!r} exceeds replay_ttl_seconds {ttl!r} (cross-field rule)"
+        )
+
+
+# ── Thens: VERSION_UNSUPPORTED details supported_versions bound ───────────
+
+
+@then(
+    'the emitted VERSION_UNSUPPORTED details must carry supported_versions equal to ["3.0", "3.1"], '
+    "never empty or omitted"
+)
+def then_version_details_supported_versions(ctx: dict) -> None:
+    """When the (Recommended) version-unsupported details block is emitted it MUST carry a
+    non-empty supported_versions (version-unsupported.json#/required = [supported_versions],
+    minItems 1) — here exactly the release-precision versions the seller speaks, ["3.0", "3.1"].
+    An empty array or omitted field is a conformance violation."""
+    from tests.helpers.envelope_assertions import assert_envelope_shape
+
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    assert envelope is not None, (
+        "expected a VERSION_UNSUPPORTED error envelope, got a success response "
+        "(the capabilities builder runs no version negotiation)"
+    )
+    assert_envelope_shape(envelope, "VERSION_UNSUPPORTED", recovery="correctable")
+    versions = _error_details(ctx).get("supported_versions")
+    assert isinstance(versions, list) and versions, (
+        f"details.supported_versions is empty or omitted (required, minItems 1): {versions!r}"
+    )
+    assert versions == ["3.0", "3.1"], f"details.supported_versions {versions!r} != ['3.0', '3.1']"
+
+
+# ── Thens: identity.brand_json_url required_when rule ─────────────────────
+
+
+@then(parsers.parse("identity.brand_json_url should be graded {expected} against its required_when rule"))
+def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
+    """valid → a schema-valid success and, when identity.brand_json_url is emitted, it matches
+    format uri / pattern "^https://"; invalid → the builder rejects the signing-posture-without-
+    brand_json_url config with CONFIGURATION_ERROR (recovery terminal) naming brand_json_url."""
+    expected = expected.strip()
+    if expected == "invalid":
+        _assert_capabilities_config_error(ctx, message_substr="brand_json_url")
+        return
+    assert expected == "valid", f"unrecognized expected column: {expected!r}"
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    url = wire_lookup(ctx, "identity.brand_json_url")
+    if url is not WIRE_MISSING:
+        assert isinstance(url, str) and url.startswith("https://"), (
+            f'identity.brand_json_url must match pattern "^https://": {url!r}'
+        )

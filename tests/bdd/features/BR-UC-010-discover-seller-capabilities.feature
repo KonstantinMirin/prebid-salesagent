@@ -1386,30 +1386,49 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     And the seller's build_version is "3.1.2+scope3.deploy.4821"
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
-    Then the wire error envelope should carry code "VERSION_UNSUPPORTED"
+    Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
     And the error details should include build_version equal to "3.1.2+scope3.deploy.4821"
     And the error details should include supported_versions as a non-empty array
+    And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"
     # XFAIL-EXPECTED: production gap — #1592 (version negotiation not implemented)
     # Trimmed 2026-07-13 to seller-observable assertions: "Buyer Agent must select from
     # supported_versions" and "must not use build_version for negotiation" are BUYER conduct
     # a seller suite cannot grade (kept here as the spec context: "Buyers MUST NOT use this
     # field for negotiation").
+    # Hardened 2026-07-24 (salesagent-jd6a, triage :1197): pinned recovery "correctable" on the
+    # VERSION_UNSUPPORTED envelope (enumMetadata.recovery = correctable — "re-pin to a release
+    # in supported_versions and retry") to match the sibling version-unsupported Thens, and
+    # tightened the "non-empty array" duty with the release-precision pattern each entry must
+    # match (build_version stays the exact advisory value; buyers MUST NOT use it for negotiation).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json pointer=/properties/build_version
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json pointer=/properties/supported_versions
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/VERSION_UNSUPPORTED
 
   @T-UC-010-v31-request-signing-monotonicity @v31 @invariant @boundary @partition
   Scenario Outline: request-signing posture sets boundary - <boundary_point>
     Given a tenant is resolvable from the request context
     And the tenant declares request_signing posture sets for <boundary_point>
     When the Buyer Agent calls get_adcp_capabilities
-    Then the seller should emit the posture for a <expected> configuration and refuse to emit an invalid one
+    Then request_signing should hold the subset and disjoint relations for a <expected> posture
     # x-adcp-validation relations on request_signing: required_for subset_of supported_for;
     # warn_for disjoint_with required_for and subset_of supported_for;
     # protocol_methods_required_for subset_of protocol_methods_supported_for. These are
     # test-layer/verifier constraints — the seller-gradable behavior for invalid rows is that
     # the capabilities builder rejects/never emits the violating posture (response_schema
     # grading alone would NOT catch it).
+    # Hardened 2026-07-24 (salesagent-jd6a, triage :1248): the former single Then crammed a
+    # wire assertion and an unobservable "refuse to emit" into valid/invalid column words. Now
+    # the <expected> column drives the graded observable: valid rows → a schema-valid success
+    # whose emitted request_signing satisfies every relation (required_for ⊆ supported_for;
+    # warn_for ∩ required_for = ∅ and warn_for ⊆ supported_for; protocol_methods_required_for ⊆
+    # protocol_methods_supported_for); invalid rows → the builder rejects the relation-violating
+    # config with CONFIGURATION_ERROR (seller-side deployment fault, recovery terminal) rather
+    # than emitting the violating posture. The capabilities builder emits no request_signing
+    # block today (#1592), so every row strict-xfails.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/required_for/x-adcp-validation
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/warn_for/x-adcp-validation
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/protocol_methods_required_for/x-adcp-validation
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
 
     Examples:
       | boundary_point                                                                      | expected |
@@ -1425,13 +1444,21 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant declares idempotency posture at <boundary_point>
     When the Buyer Agent calls get_adcp_capabilities
-    Then the idempotency posture should be <expected> against the replay-ttl bounds
+    Then adcp.idempotency should echo a <expected> posture within the replay_ttl_seconds bounds
     # replay_ttl_seconds integer minimum 3600 maximum 604800 (schema-enforced); cross-field
     # in_flight_max_seconds <= replay_ttl_seconds is test-layer-enforced ("validators MUST
     # enforce this cross-field constraint at the test layer") — the failing side of the
     # cross-field rule added 2026-07-13. Invalid rows grade the seller's config validation:
     # reject or normalize, never emit a non-conformant response.
+    # Hardened 2026-07-24 (salesagent-jd6a, triage :1272): "valid"/"invalid" pinned nothing.
+    # Now valid rows → adcp.idempotency echoes the declared posture exactly and passes schema
+    # validation (replay_ttl_seconds within 3600..604800; when in_flight_max_seconds is declared
+    # it is present and ≤ replay_ttl_seconds); invalid rows → the builder rejects the
+    # out-of-bounds / cross-field-violating posture (CONFIGURATION_ERROR, recovery terminal) and
+    # never emits it. Production hard-codes idempotency(supported=true, replay_ttl_seconds=86400)
+    # and ignores tenant config (#1592), so every row strict-xfails.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf/0
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
 
     Examples:
       | boundary_point                              | expected |
@@ -1465,39 +1492,59 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     And the seller's error-details builder is configured for <boundary_point>
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
-    Then the seller's emitted VERSION_UNSUPPORTED details should be <expected>
+    Then the emitted VERSION_UNSUPPORTED details must carry supported_versions equal to ["3.0", "3.1"], never empty or omitted
     # XFAIL-EXPECTED: production gap — #1592 (version negotiation not implemented)
     # Rebuilt 2026-07-13: the former When ("Buyer Agent inspects the error details") was not
     # a tool call — the error is now produced via a real 4.0 pin like the scenario-family
     # above. supported_versions REQUIRED minItems 1 whenever the (Recommended) details block
     # is emitted. Former row 3 ("build_version used as negotiation input → invalid") was
     # BUYER conduct a seller suite cannot grade — dropped.
+    # Hardened 2026-07-24 (salesagent-jd6a, triage :1312): the former <expected> column was
+    # uniformly "invalid" and pinned nothing. Both rows are invalid-side (the error-details
+    # builder is configured to emit a malformed details block), so the Then asserts the concrete
+    # conformance duty a spec-correct seller owes: when the details block is emitted it MUST carry
+    # a non-empty supported_versions (required, minItems 1) — here exactly the release-precision
+    # versions the seller speaks, ["3.0", "3.1"] — never an empty array and never omitted. The
+    # capabilities builder ignores adcp_version and raises no VERSION_UNSUPPORTED (#1592), so both
+    # rows strict-xfail on the missing error envelope.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json pointer=/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json pointer=/properties/supported_versions
 
     Examples:
-      | boundary_point                          | expected |
-      | supported_versions empty array          | invalid  |
-      | supported_versions omitted              | invalid  |
+      | boundary_point                 |
+      | supported_versions empty array |
+      | supported_versions omitted     |
 
   @T-UC-010-v31-identity-brand-json-url-bounds @v31 @boundary @partition @post-s25
   Scenario Outline: identity.brand_json_url boundary - <boundary_point>
     Given a tenant is resolvable from the request context
     And the tenant identity and signing posture are configured for <boundary_point>
     When the Buyer Agent calls get_adcp_capabilities
-    Then the seller should emit the configuration when <expected> and refuse to emit it when invalid
+    Then identity.brand_json_url should be graded <expected> against its required_when rule
     # Mirrors identity.brand_json_url x-adcp-validation.required_when.any_of (six signing-
     # posture signals) plus the empty-identity-with-posture rejection from the identity block
     # description. Enforcement is storyboard-level in 3.x (schema-required only under 4.x
     # supported_versions) — "invalid" = seller-side refusal to emit / validator rejection.
     # Row 2's signal is pinned to request_signing.supported_for non-empty (one of the six).
+    # Hardened 2026-07-24 (salesagent-jd6a, triage :1331): the garbled single Then ("emit the
+    # configuration when valid and refuse to emit it when invalid") pinned nothing. Now the
+    # <expected> column drives the graded observable: valid rows → a schema-valid success and,
+    # when identity.brand_json_url is emitted, it matches format uri / pattern "^https://";
+    # invalid rows → the builder rejects the signing-posture-without-brand_json_url config with
+    # CONFIGURATION_ERROR (recovery terminal) naming brand_json_url — the same observable decision
+    # the identity-required-when-signing sibling grades. The builder never builds identity/the
+    # signing posture (#1592), so the invalid rows strict-xfail (selective) while the valid rows
+    # pass on the degraded-but-schema-valid baseline response.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/identity/properties/brand_json_url
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/identity/properties/brand_json_url/x-adcp-validation/required_when
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
 
     Examples:
-      | boundary_point                                                                       | expected |
-      | no signing posture, no brand_json_url                                                | valid    |
-      | request_signing.supported_for non-empty, brand_json_url present                      | valid    |
-      | request_signing.supported_for non-empty, brand_json_url absent                       | invalid  |
-      | signing posture declared with identity: {}                                           | invalid  |
+      | boundary_point                                                              | expected |
+      | no_posture no signing posture, no brand_json_url                            | valid    |
+      | posture_url_present request_signing.supported_for non-empty, url present    | valid    |
+      | posture_url_absent request_signing.supported_for non-empty, url absent      | invalid  |
+      | posture_identity_empty signing posture declared, identity: {}               | invalid  |
 
   @T-UC-010-v31-webhook-signing-bounds @v31 @boundary @partition @post-s24
   Scenario Outline: webhook_signing boundary - <boundary_point>
