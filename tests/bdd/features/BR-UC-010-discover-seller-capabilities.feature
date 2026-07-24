@@ -1253,12 +1253,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then compliance_testing.scenarios should be a non-empty array of strings
     And compliance_testing.scenarios should NOT contain "list_scenarios"
-    And each declared scenario should match a scenario the seller's comply_test_controller list_scenarios returns
+    And compliance_testing.scenarios should be a subset of the scenario ids returned by the seller's comply_test_controller list_scenarios call
     # Fixed 2026-07-13: at 3.1.1 scenarios items are OPEN strings — there is NO enum ("Values
     # MAY also include implementation-specific scenarios"); the former six-value closed-enum
     # assert was a pre-release snapshot artifact. Constraints: minItems 1; list_scenarios
     # excluded per description; the meaningful check is consistency with the controller's
     # runtime list_scenarios.
+    # Hardened 2026-07-24 (salesagent-e4ad, triage :1118): the vague "should match a scenario
+    # the ... list_scenarios returns" is restated as the precise SUBSET relation. The runtime
+    # reference is the seller's comply_test_controller (schema description: "the runtime source
+    # of truth remains comply_test_controller with scenario: 'list_scenarios'"). This seller
+    # exposes no comply_test_controller in production (#1592) — the scenario strict-xfails on
+    # the unemitted compliance_testing block.
     # POST-S27: Buyer knows compliance testing scenarios
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/compliance_testing
 
@@ -1299,10 +1305,16 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should include errors as an array of error objects
     And each errors entry should carry code and message
-    And the response should still include adcp and supported_protocols with a success envelope status
+    And the response envelope status should equal "completed" and the envelope should not carry adcp_error
     # errors is a top-level optional array of core/error.json ("Task-specific errors and
     # warnings"); advisory semantics are prose-implicit (success envelope + errors-as-
     # warnings) and ungraded by the storyboard — noted as prose-implicit.
+    # Hardened 2026-07-24 (salesagent-e4ad, triage :1164): "a success envelope status" is
+    # restated to the pinned envelope contract — status MUST equal "completed" for this
+    # synchronous read-only metadata call, and the envelope MUST NOT carry adcp_error for a
+    # non-failure (non-fatal warnings populate ONLY payload.errors[] with severity warning).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/status
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/adcp_error
     # POST-S29: Advisory errors do not fail capabilities discovery
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/errors
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/required
@@ -1332,7 +1344,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
-    Then the wire error envelope should carry code "VERSION_UNSUPPORTED"
+    Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
     And the error details should include supported_versions as a non-empty array
     And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"
     # XFAIL-EXPECTED: production gap — #1592 (capabilities builder ignores request params
@@ -1343,24 +1355,30 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # build_version advisory. "suggestion" is OPTIONAL on core/error.json — the former
     # suggestion-required Then over-asserted and was dropped. Buyer-side conduct ("may re-pin
     # and retry without a second discovery round-trip") is a comment, not a Then.
+    # Recovery pinned 2026-07-24 (salesagent-e4ad, triage :1197): VERSION_UNSUPPORTED is
+    # "Recovery: correctable (re-pin to a release in supported_versions and retry ...)".
     # POST-F2, POST-F4
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json pointer=/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/VERSION_UNSUPPORTED
 
   @T-UC-010-v31-version-unsupported-major-fallback @v31 @extension @ext-f @error @post-f4 @partition
   Scenario: version-unsupported-major-fallback — major-version negotiation falls back to supported_versions
     Given a tenant is resolvable from the request context
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     When the Buyer Agent calls get_adcp_capabilities with adcp_major_version 4
-    Then the wire error envelope should carry code "VERSION_UNSUPPORTED"
+    Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
     And the error details should include supported_versions containing "3.0" and "3.1"
     # XFAIL-EXPECTED: production gap — #1592 (version negotiation not implemented)
     # adcp_major_version pin honored through 3.x ("Servers MUST continue to honor this field
     # through 3.x"); details still carries supported_versions. supported_majors is a
     # SHOULD-level emission (assert when the fixture emits it); "suggestion" is optional —
     # required-Then dropped 2026-07-13.
+    # Recovery pinned 2026-07-24 (salesagent-e4ad, triage :1217): VERSION_UNSUPPORTED recovery
+    # is correctable (re-pin to a supported release and retry).
     # POST-F4: supported_versions is authoritative even for major-version pins
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/VERSION_UNSUPPORTED
 
   @T-UC-010-v31-version-unsupported-build-version-advisory @v31 @extension @ext-f @error @post-f4 @boundary
   Scenario: version-unsupported-build-version-advisory — build_version is advisory triage only

@@ -1561,3 +1561,217 @@ def then_experimental_features_contains(ctx: dict, feature: str) -> None:
     experimental_features (measurement block + supported_protocols descriptions)."""
     features = wire_field(ctx, "experimental_features")
     assert feature in features, f"experimental_features does not contain {feature!r}: {features!r}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Batch 6 (salesagent-e4ad): compliance_testing / specialisms / advisory errors
+#
+# The capabilities builder (src/core/tools/capabilities.py) emits only
+# adcp / supported_protocols / a HARD-CODED specialisms=[sales-non-guaranteed] /
+# media_buy{features,execution}. It never emits the compliance_testing block, a
+# top-level errors[] array, or a config-derived specialisms set, and advertises
+# only the media_buy protocol. The Givens record declared intent; the Thens grade
+# the exact v3.1.1-pinned shape on the wire. Every scenario in this batch strict-
+# xfails on the unemitted/hard-coded block (#1592), never a dormant skip.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+#: 3.1.1 specialism enum, closed 22-value kebab-case set (enums/specialism.json#/enum).
+SPECIALISM_ENUM = {
+    "audience-sync",
+    "brand-rights",
+    "collection-lists",
+    "content-standards",
+    "creative-ad-server",
+    "creative-generative",
+    "creative-template",
+    "creative-transformers",
+    "governance-aware-seller",
+    "governance-delivery-monitor",
+    "governance-spend-authority",
+    "property-lists",
+    "sales-broadcast-tv",
+    "sales-catalog-driven",
+    "sales-guaranteed",
+    "sales-non-guaranteed",
+    "sales-proposal-mode",
+    "sales-social",
+    "signal-marketplace",
+    "signal-owned",
+    "signed-requests",
+    "sponsored-intelligence",
+}
+
+
+# ── Givens: declared-intent recorders (production has no config surface) ──
+
+
+@given("the tenant declares the compliance-testing scenarios it implements")
+def given_compliance_scenarios(ctx: dict) -> None:
+    """Declare compliance_testing support. Production emits no compliance_testing
+    block (#1592) — records intent; the scenario xfails at the first Then."""
+    _config(ctx)["compliance_testing"] = True
+
+
+@given('"creative" and "media_buy" are in supported_protocols')
+def given_creative_and_media_buy_protocols(ctx: dict) -> None:
+    """Declare both protocols so the specialism roll-up parents are present.
+    Production advertises only media_buy, so the creative roll-up parent is
+    missing on the wire (#1592) — records intent."""
+    protocols = _config(ctx).setdefault("supported_protocols", [])
+    for protocol in ("creative", "media_buy"):
+        if protocol not in protocols:
+            protocols.append(protocol)
+
+
+@given(parsers.parse("the tenant claims specialisms {specialisms}"))
+def given_tenant_specialisms(ctx: dict, specialisms: str) -> None:
+    """Declare a config-derived specialisms set. Production hard-codes
+    specialisms=[sales-non-guaranteed] regardless of tenant config (#1592) —
+    records intent; the equality Then xfails."""
+    _config(ctx)["specialisms"] = _quoted_list(specialisms)
+
+
+@given("the seller surfaces an advisory warning during discovery")
+def given_advisory_warning(ctx: dict) -> None:
+    """Declare an advisory (non-fatal) warning. Production surfaces no top-level
+    errors[] array on the capabilities response (#1592) — records intent; the
+    errors[] Then xfails while the success envelope stays intact."""
+    _config(ctx)["advisory_warning"] = True
+
+
+# ── Thens: compliance_testing block ──────────────────────────────────────
+
+
+@then("compliance_testing.scenarios should be a non-empty array of strings")
+def then_compliance_scenarios_nonempty(ctx: dict) -> None:
+    """compliance_testing.scenarios: minItems 1, items type string, OPEN (no enum)
+    (get-adcp-capabilities-response.json#/properties/compliance_testing/properties/scenarios)."""
+    scenarios = wire_field(ctx, "compliance_testing.scenarios")
+    assert isinstance(scenarios, list) and scenarios, (
+        f"compliance_testing.scenarios not a non-empty array: {scenarios!r}"
+    )
+    for entry in scenarios:
+        assert isinstance(entry, str) and entry, (
+            f"compliance_testing.scenarios carries a non-string/empty entry: {entry!r}"
+        )
+
+
+@then(parsers.parse('compliance_testing.scenarios should NOT contain "{value}"'))
+def then_compliance_scenarios_excludes(ctx: dict, value: str) -> None:
+    """list_scenarios is excluded from the advertised set — it is a discovery
+    operation, not a test capability (schema description)."""
+    scenarios = wire_field(ctx, "compliance_testing.scenarios")
+    assert value not in scenarios, f"compliance_testing.scenarios must exclude {value!r}: {scenarios!r}"
+
+
+def _controller_list_scenarios(ctx: dict) -> set[str] | None:
+    """Scenario ids the seller's comply_test_controller returns for
+    scenario:'list_scenarios' — the schema's named runtime source of truth. This
+    seller exposes NO comply_test_controller in production (#1592), so there is no
+    reference set to cross-check against; returns None (REPORTED, salesagent-e4ad)."""
+    return None
+
+
+@then(
+    "compliance_testing.scenarios should be a subset of the scenario ids returned "
+    "by the seller's comply_test_controller list_scenarios call"
+)
+def then_compliance_scenarios_subset(ctx: dict) -> None:
+    """Cross-system consistency: the advertised compliance_testing.scenarios MUST be
+    a subset of what the seller's comply_test_controller returns for
+    scenario:'list_scenarios' (schema description: "the runtime source of truth
+    remains comply_test_controller"). This seller exposes no comply_test_controller
+    (#1592), so the reference set is unavailable — the relation is ungraded until the
+    controller lands and the scenario already strict-xfails on the unemitted
+    compliance_testing block. When both surfaces exist this asserts the true subset.
+    Grounds: get-adcp-capabilities-response.json#/properties/compliance_testing
+    (scenarios open strings, minItems 1; list_scenarios excluded)."""
+    scenarios = set(wire_field(ctx, "compliance_testing.scenarios"))
+    controller_scenarios = _controller_list_scenarios(ctx)
+    assert controller_scenarios is not None, (
+        "seller exposes no comply_test_controller list_scenarios to cross-check the "
+        "advertised compliance_testing.scenarios against (production gap #1592)"
+    )
+    extra = scenarios - controller_scenarios
+    assert not extra, f"compliance_testing.scenarios advertises ids the controller does not return: {sorted(extra)}"
+
+
+# ── Thens: specialisms ───────────────────────────────────────────────────
+
+
+@then(parsers.parse("specialisms should equal {expected}"))
+def then_specialisms_equal(ctx: dict, expected: str) -> None:
+    """specialisms echoes the declared kebab-case claims exactly (items $ref
+    enums/specialism.json, uniqueItems). Order-independent set equality against the
+    scenario fixture."""
+    want = _quoted_list(expected)
+    actual = wire_field(ctx, "specialisms")
+    assert sorted(actual) == sorted(want), f"specialisms {actual!r} != {want!r}"
+
+
+@then("each specialism should be a member of the 3.1.1 specialism enum")
+def then_specialisms_enum(ctx: dict) -> None:
+    """Every specialisms entry is a member of the closed 22-value kebab-case enum
+    (enums/specialism.json#/enum)."""
+    actual = wire_field(ctx, "specialisms")
+    invalid = set(actual) - SPECIALISM_ENUM
+    assert not invalid, f"specialisms carries non-enum values: {sorted(invalid)}"
+
+
+@then(
+    parsers.re(r'specialism "(?P<specialism>[a-z-]+)" should roll up to "(?P<protocol>[a-z_]+)" in supported_protocols')
+)
+def then_specialism_rollup(ctx: dict, specialism: str, protocol: str) -> None:
+    """Roll-up invariant (specialisms description): "Each specialism rolls up to one
+    of the protocols in supported_protocols — the runner rejects a specialism claim
+    whose parent protocol is missing". Graded on the wire: the claimed specialism is
+    present in specialisms AND its declared parent protocol is present in
+    supported_protocols."""
+    specialisms = wire_field(ctx, "specialisms")
+    protocols = wire_field(ctx, "supported_protocols")
+    assert specialism in specialisms, f"specialism {specialism!r} not advertised in specialisms: {specialisms!r}"
+    assert protocol in protocols, (
+        f"specialism {specialism!r} rolls up to {protocol!r}, absent from supported_protocols: {protocols!r}"
+    )
+
+
+# ── Thens: advisory errors[] ─────────────────────────────────────────────
+
+
+@then("the response should include errors as an array of error objects")
+def then_errors_array(ctx: dict) -> None:
+    """Top-level errors is an optional array of core/error.json objects
+    (get-adcp-capabilities-response.json#/properties/errors)."""
+    errors = wire_field(ctx, "errors")
+    assert isinstance(errors, list) and errors, f"errors not a non-empty array: {errors!r}"
+    for entry in errors:
+        assert isinstance(entry, dict), f"errors entry not an object: {entry!r}"
+
+
+@then("each errors entry should carry code and message")
+def then_errors_code_and_message(ctx: dict) -> None:
+    """core/error.json#/required = [code, message] — every entry carries both as
+    non-empty strings."""
+    errors = wire_field(ctx, "errors")
+    for entry in errors:
+        for member in ("code", "message"):
+            value = entry.get(member)
+            assert isinstance(value, str) and value, f"errors entry missing non-empty {member!r}: {entry!r}"
+
+
+@then('the response envelope status should equal "completed" and the envelope should not carry adcp_error')
+def then_success_envelope_no_adcp_error(ctx: dict) -> None:
+    """Advisory errors do not fail discovery: the synchronous read-only metadata
+    call MUST emit envelope status "completed" and the envelope MUST NOT carry
+    adcp_error for a non-failure (protocol-envelope.json#/properties/status,
+    #/properties/adcp_error — "the envelope MUST NOT carry adcp_error for non-
+    failures"). For this status-less payload, "completed" is proven by no recorded
+    error and no wire error envelope; the top-level required blocks stay on the wire."""
+    assert ctx.get("error") is None, f"expected a completed envelope, got error: {ctx.get('error')!r}"
+    assert ctx.get("wire_error_envelope") is None, (
+        f"expected a completed envelope, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
+    )
+    wire_absent(ctx, "adcp_error")
+    for path in ("adcp", "supported_protocols"):
+        wire_field(ctx, path)

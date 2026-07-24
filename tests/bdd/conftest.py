@@ -382,6 +382,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-010-v31-version-unsupported": "version negotiation not implemented (adcp_version ignored, no VERSION_UNSUPPORTED) — #1592",
     "T-UC-010-v31-version-unsupported-major-fallback": "version negotiation not implemented — #1592",
     "T-UC-010-v31-version-unsupported-build-version-advisory": "version negotiation not implemented — #1592",
+    # Wired non-dormant + strengthened (salesagent-e4ad): steps execute and grade the
+    # spec-pinned shape, then fail on the unemitted/hard-coded block (strict xfail on all transports).
+    "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1592 spec-production gap",
+    "T-UC-010-v31-specialisms": "specialisms hard-coded to [sales-non-guaranteed], not derived from tenant config; creative protocol not advertised — #1592 spec-production gap",
+    "T-UC-010-v31-advisory-errors": "top-level advisory errors[] not emitted by the capabilities builder — #1592 spec-production gap",
     "T-UC-010-account-supported-billing": "account.supported_billing not derived from tenant billing config on the capabilities response — #1592",
     "T-UC-010-account-block-presence": "account block emission incomplete — #1592",
     # Wired non-dormant + strengthened (salesagent-f5fs): steps execute and grade the
@@ -3648,6 +3653,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-webhook-signing-required-when",
             "T-UC-010-v31-identity-required-when-signing",
             "T-UC-010-v31-measurement-catalog",
+            # Batch 6 — compliance_testing / specialisms / advisory errors (salesagent-e4ad)
+            "T-UC-010-v31-compliance-testing",
+            "T-UC-010-v31-specialisms",
+            "T-UC-010-v31-advisory-errors",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
