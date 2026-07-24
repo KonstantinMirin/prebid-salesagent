@@ -422,6 +422,26 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-010-v31-idempotency-ttl-bounds": "capabilities builder hard-codes idempotency(supported=true, replay_ttl_seconds=86400) and ignores tenant config, so it neither echoes the declared replay_ttl_seconds posture (valid rows) nor rejects an out-of-bounds/cross-field-violating one (invalid rows) — #1592 spec-production gap",
     "T-UC-010-v31-version-unsupported-details-bounds": "capabilities builder ignores adcp_version and raises no VERSION_UNSUPPORTED, so the required non-empty supported_versions details bound is never emitted — #1592 spec-production gap",
     "T-UC-010-v31-webhook-signing-bounds": "capabilities builder emits no webhook_signing block, so it neither echoes the declared posture within the algorithm-enum/must_equal_when bounds (valid rows) nor rejects a supported!=true-under-trigger or out-of-enum-algorithm posture with CONFIGURATION_ERROR (invalid rows) — #1592 spec-production gap",
+    # ── UC-011 list wiring (FIXME(#1592), salesagent-9if1) ─────────────────
+    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
+    # v3.1.1 shape; each fails on a surface _list_accounts_impl does not build.
+    # T-UC-011-list-account-filter: req.account is ignored (accounts.py only
+    # filters on status/sandbox), so an exact filter returns every accessible
+    # account instead of the one match — strict on both key_shape rows.
+    "T-UC-011-list-account-filter": "list_accounts exact `account` filter (account-ref oneOf) not implemented — "
+    "_list_accounts_impl ignores req.account and returns all accessible accounts — #1592 spec-production gap",
+    # T-UC-011-list-authorization: the Account schema carries no authorization
+    # object (account-with-authorization item shape is new in 3.1.1), so the
+    # wire items never expose allowed_tasks.
+    "T-UC-011-list-authorization": "per-account authorization block (account-with-authorization / allowed_tasks) not "
+    "emitted — production Account schema has no authorization field, list items are bare — #1592 spec-production gap",
+    # T-UC-011-list-read-idempotency-tolerance: list-accounts-request declares
+    # additionalProperties:true and read tools MUST tolerate the 3.1
+    # idempotency_key envelope, but ListAccountsRequest runs extra="forbid" in
+    # dev/CI, so the read wrapper rejects idempotency_key instead of ignoring it.
+    "T-UC-011-list-read-idempotency-tolerance": "read-wrapper tolerance of the 3.1 idempotency_key envelope not "
+    "graded — ListAccountsRequest (extra=forbid) rejects the undeclared idempotency_key that additionalProperties:true "
+    "requires it to accept — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only

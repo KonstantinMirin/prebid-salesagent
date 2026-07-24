@@ -69,8 +69,8 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an authenticated connection
     And the agent has accounts with statuses "rejected", "active", "active"
     When the Buyer Agent sends a list_accounts request with status filter "rejected"
-    Then the response contains only accounts with status "rejected"
-    And accounts with other statuses are excluded
+    Then the response contains an accounts array with 1 items
+    And every returned account has status "rejected"
     # @bva status: rejected — the one account-status enum value the filter outline never seeded
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/status/enum
 
@@ -125,7 +125,9 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a list_accounts request with max_results 50
     Then the response contains 20 accounts
     And the response pagination has has_more false and no cursor
-    # XFAIL-EXPECTED: production gap — #1592 (terminal-page cursor-absence invariant ungraded)
+    # GRADED GREEN (salesagent-9if1): _apply_pagination emits cursor=None when has_more=false and
+    # every transport pre-serializes via model_dump(mode="json") (exclude_none), so the cursor is
+    # omitted (not null) on the wire — the invariant now holds on a2a/mcp/rest.
     # cursor is "Only present when has_more is true" — has_more=false MUST NOT carry a cursor
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/pagination-response.json pointer=/properties/cursor/description
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/pagination-integrity-list-accounts.yaml pointer=phases/pagination_walk
@@ -136,7 +138,7 @@ Feature: BR-UC-011 Manage Accounts
     And accessible accounts exist for brand domains "acme-corp.com" and "nova-brands.com"
     When the Buyer Agent sends a list_accounts request with an account filter keyed by <key_shape> for brand domain "acme-corp.com"
     Then the response contains an accounts array with 1 items
-    And the returned account is the one for brand domain "acme-corp.com"
+    And the returned account has brand domain "acme-corp.com" and operator "acme-corp.com"
     # XFAIL-EXPECTED: production gap — #1592 (list_accounts `account` exact filter is NEW in 3.1.1; not implemented)
     # AccountRef oneOf: account_id XOR natural key (brand + operator, optionally sandbox)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/account
@@ -153,8 +155,8 @@ Feature: BR-UC-011 Manage Accounts
     And the seller supports scope introspection for the authenticated agent
     And the agent has 1 accessible accounts
     When the Buyer Agent sends a list_accounts request
-    Then each returned account includes an authorization object
-    And each authorization object includes a non-empty allowed_tasks array
+    Then each returned account includes an authorization object with required key "allowed_tasks"
+    And each allowed_tasks array is a non-empty list of unique snake_case task names
     # XFAIL-EXPECTED: production gap — #1592 (account-with-authorization item shape is NEW in 3.1.1; production emits bare accounts)
     # allowed_tasks is the only required field of account-authorization; absence of the whole
     # object means "no introspection", NOT denial — callers MUST NOT infer access from absence

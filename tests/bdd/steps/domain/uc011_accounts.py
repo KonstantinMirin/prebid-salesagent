@@ -17,7 +17,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import _require_response, wire_absent, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
@@ -808,6 +808,195 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
                 assert actual == expected_count, (
                     f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
                 )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-011 list Then/When/Given hardening (salesagent-9if1 / eiww batch B1)
+#
+# Wires the previously-dormant list scenarios and de-vacuums the
+# status-rejected assertions. Every Then reads the buyer-facing wire body
+# (wire_dict/wire_absent) and asserts VALUES, not existence. Spec anchors are
+# cited per scenario against v3.1.1 (the pinned target, docs/adcp-spec-version.md).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then(parsers.parse('every returned account has status "{status}"'))
+def then_every_account_has_status(ctx: dict, status: str) -> None:
+    """Assert the wire accounts array is non-empty AND every element has ``status``.
+
+    Non-vacuous replacement for the ``only accounts with status`` /
+    ``accounts with other statuses are excluded`` pair on
+    @T-UC-011-list-status-rejected: the fixture seeds exactly one matching
+    account (rejected) plus two non-matching (active), so an empty array is a
+    filter defect, not a pass.
+
+    Spec: account/list-accounts-request.json#/properties/status (v3.1.1) —
+    "Filter accounts by status"; account-status enum contains ``rejected``.
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts, f"expected a non-empty accounts array for status filter {status!r}, got {accounts!r}"
+    actual = [a.get("status") for a in accounts]
+    assert all(s == status for s in actual), f"expected every returned account status == {status!r}, got {actual}"
+
+
+@then("the response pagination has has_more false and no cursor")
+def then_pagination_terminal(ctx: dict) -> None:
+    """Assert the terminal page reports has_more=false and OMITS the cursor.
+
+    Spec: core/pagination-response.json (v3.1.1) — cursor is "Only present when
+    has_more is true"; ``required: ["has_more"]``. A serialized ``cursor: null``
+    would be a schema-invalid emission of an unset optional, so wire_absent (not
+    a null-tolerant check) is the correct oracle.
+    """
+    pagination = wire_dict(ctx, "pagination")
+    assert pagination.get("has_more") is False, (
+        f"expected pagination.has_more is false on the terminal page, got {pagination.get('has_more')!r}"
+    )
+    wire_absent(ctx, "pagination.cursor")
+
+
+@given(parsers.parse('accessible accounts exist for brand domains "{d1}" and "{d2}"'))
+def given_accounts_for_brand_domains(ctx: dict, d1: str, d2: str) -> None:
+    """Seed two accessible accounts keyed by distinct brand domains.
+
+    Records each seller-assigned account_id under ctx["accounts_by_domain"] so
+    the account_id-keyed filter row can build a real AccountRef.
+    """
+    by_domain = ctx.setdefault("accounts_by_domain", {})
+    for domain in (d1, d2):
+        acct = _create_accessible_account(ctx, brand={"domain": domain}, operator=domain)
+        by_domain[domain] = acct.account_id
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a list_accounts request with an account filter "
+        'keyed by {key_shape} for brand domain "{domain}"'
+    )
+)
+def when_list_with_account_filter(ctx: dict, key_shape: str, domain: str) -> None:
+    """Send list_accounts with an exact ``account`` filter (AccountRef).
+
+    Spec: account/list-accounts-request.json#/properties/account (v3.1.1) →
+    core/account-ref.json#/oneOf — arm 0 is keyed by account_id, arm 1 by the
+    natural key (brand + operator).
+    """
+    from src.core.schemas.account import ListAccountsRequest
+
+    if key_shape == "account_id":
+        account_ref: dict[str, Any] = {"account_id": ctx["accounts_by_domain"][domain]}
+    else:  # "brand and operator"
+        account_ref = {"brand": {"domain": domain}, "operator": domain}
+    try:
+        req = ListAccountsRequest(account=account_ref)
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@then(parsers.parse('the returned account has brand domain "{domain}" and operator "{operator}"'))
+def then_returned_account_identity(ctx: dict, domain: str, operator: str) -> None:
+    """Assert the filter returned exactly one account with the expected natural key.
+
+    "is the one for brand domain X" is under-specified — brand.domain alone does
+    not distinguish accounts differing by operator. The natural key
+    (brand + operator) is what core/account-ref.json#/oneOf/1 identifies by.
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts and len(accounts) == 1, f"expected exactly one filtered account, got {accounts!r}"
+    acct = accounts[0]
+    actual_domain = (acct.get("brand") or {}).get("domain")
+    assert actual_domain == domain, f"expected brand domain {domain!r}, got {actual_domain!r}"
+    assert acct.get("operator") == operator, f"expected operator {operator!r}, got {acct.get('operator')!r}"
+
+
+@given("the seller supports scope introspection for the authenticated agent")
+def given_scope_introspection(ctx: dict) -> None:
+    """Declare that the seller can introspect the agent's task scope.
+
+    Production has no scope-introspection surface, so no config is applied; the
+    flag records intent for the wired (currently-xfailing) authorization check.
+    """
+    _setup_tenant_and_principal(ctx)
+    ctx["scope_introspection"] = True
+
+
+@then('each returned account includes an authorization object with required key "allowed_tasks"')
+def then_account_has_authorization(ctx: dict) -> None:
+    """Assert every listed account carries an ``authorization`` object bearing allowed_tasks.
+
+    Spec: account/list-accounts-response.json#/properties/accounts/items →
+    core/account-with-authorization.json; core/account-authorization.json
+    ``required: ["allowed_tasks"]`` (v3.1.1). Absence of the whole object means
+    "no introspection" — callers MUST NOT infer denial — but when the seller
+    DOES support introspection each item MUST carry it.
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts, f"expected a non-empty accounts array, got {accounts!r}"
+    for acct in accounts:
+        authz = acct.get("authorization")
+        assert isinstance(authz, dict), f"account {acct.get('account_id')!r} missing authorization object: {acct!r}"
+        assert "allowed_tasks" in authz, f"authorization missing required key allowed_tasks: {authz!r}"
+
+
+@then("each allowed_tasks array is a non-empty list of unique snake_case task names")
+def then_allowed_tasks_snake_case(ctx: dict) -> None:
+    """Assert allowed_tasks is a non-empty, duplicate-free snake_case task list.
+
+    Spec: core/account-authorization.json#/properties/allowed_tasks (v3.1.1) —
+    items ``pattern: "^[a-z][a-z0-9_]*$"``, ``uniqueItems: true``.
+    """
+    import re
+
+    pattern = re.compile(r"^[a-z][a-z0-9_]*$")
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts, f"expected a non-empty accounts array, got {accounts!r}"
+    for acct in accounts:
+        authz = acct.get("authorization") or {}
+        tasks = authz.get("allowed_tasks")
+        assert isinstance(tasks, list) and tasks, f"allowed_tasks must be a non-empty list, got {tasks!r}"
+        assert len(tasks) == len(set(tasks)), f"allowed_tasks contains duplicates: {tasks!r}"
+        bad = [t for t in tasks if not (isinstance(t, str) and pattern.match(t))]
+        assert not bad, f"allowed_tasks not all snake_case task names: {bad!r}"
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a list_accounts request carrying idempotency_key "(?P<idem>[^"]+)", '
+        r"an ext object, and context (?P<ctx_json>\{.*\})"
+    )
+)
+def when_list_with_idempotency_envelope(ctx: dict, idem: str, ctx_json: str) -> None:
+    """Send list_accounts carrying the 3.1 every-request envelope extras.
+
+    Spec: compliance/3.1.1/universal/read-tool-idempotency.yaml
+    (phase read_requests_accept_idempotency_key) requires read tools to ACCEPT
+    idempotency_key/ext without rejection; list-accounts-request.json declares
+    ``additionalProperties: true`` and does NOT list idempotency_key as a field.
+    The duty is tolerance. In dev/CI the request model runs extra="forbid", so
+    constructing it with idempotency_key is rejected here — captured as the error
+    that grades the tolerance gap.
+    """
+    from adcp.types import ContextObject
+
+    from src.core.schemas.account import ListAccountsRequest
+
+    context_data = _parse_inline_context(ctx_json)
+    ctx["sent_context"] = context_data
+    context_obj = ContextObject.model_validate(context_data)
+    try:
+        req = ListAccountsRequest(
+            idempotency_key=idem,  # type: ignore[call-arg]
+            ext={"probe": "read-tool-idempotency"},
+            context=context_obj,
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ═══════════════════════════════════════════════════════════════════════
