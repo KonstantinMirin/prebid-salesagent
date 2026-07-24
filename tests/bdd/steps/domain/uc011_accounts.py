@@ -3271,6 +3271,7 @@ def given_account_with_notif_subscriber(ctx: dict, domain: str, sub: str, url: s
     cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=True)
     _dispatch_sync_notification(ctx, domain, [cfg])
     ctx["notif_domain"] = domain
+    ctx["notif_prior"] = {"subscriber_id": sub, "url": url, "active": True}
 
 
 @when(
@@ -3409,6 +3410,182 @@ def then_listed_account_echoes_subscriber(ctx: dict, domain: str, sub: str, flag
     assert _sub_attr(match, "active") is expected_active, (
         f"Expected active {expected_active}, got {_sub_attr(match, 'active')!r}"
     )
+
+
+# ── UC-011 notification_configs — final batch (salesagent-m12f / eiww batch B5) ──
+# event-scope-reject, duplicate-subscriber, activation-proof-fail, omit-preserves.
+# All four grade the account-level notification_configs surface, which production
+# does not implement (#1592): _sync_accounts_impl accepts and IGNORES
+# accounts[].notification_configs (SyncAccountsRequest models the field, but the
+# request validator does not reject media-buy-anchored event_types or duplicate
+# subscriber_ids, and SyncResponseAccount carries no notification_configs field).
+# So each error scenario is provisioned successfully (action 'created') instead of
+# the spec-mandated per-account rejection — the honest #1592 gap wired below.
+# Spec (v3.1.1): core/notification-config.json (event_types media-buy-anchored
+# rejection with INVALID_REQUEST/VALIDATION_ERROR at the event_types entry;
+# subscriber_id uniqueness rejection at the duplicate entry; active flag is
+# replaced per-subscriber state; proof-of-control before treating a new/changed
+# active subscriber as active); enums/error-code.json (INVALID_REQUEST and
+# VALIDATION_ERROR are canonical, recovery 'correctable').
+
+
+@given(
+    parsers.re(
+        r'an account for brand domain "(?P<domain>[^"]+)" exists with a paused notification config '
+        r'subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)"'
+    )
+)
+def given_account_with_paused_notif_subscriber(ctx: dict, domain: str, sub: str, url: str) -> None:
+    """Pre-create an account carrying one PAUSED (active:false) notification subscriber.
+
+    F19 (salesagent-eiww triage): the omit-preserves Then asserts ``active false`` on
+    the read-back, so the seed MUST declare the paused state rather than lean on an
+    undeclared fixture default. Production ignores accounts[].notification_configs
+    (#1592) but still provisions the account, so the natural key exists for the
+    omit-preserves When (which sends no notification_configs at all).
+
+    Spec: core/notification-config.json#/properties/active — "When false, the seller
+    persists the configuration but suppresses fires"; the active flag is part of the
+    per-subscriber replaced state (#/properties/subscriber_id), so it must be declared
+    to be assertable on the echo.
+    """
+    _setup_tenant_and_principal(ctx)
+    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+    ctx["notif_domain"] = domain
+    ctx["notif_prior"] = {"subscriber_id": sub, "url": url, "active": False}
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)" '
+        r'and event_types "(?P<ets>[^"]+)"'
+    )
+)
+def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision an account with one paused subscriber whose event_types are under test.
+
+    Distinct from the ``…, event_types "…", and legacy Bearer authentication`` When
+    (which also declares an auth block): this variant carries only the event_types so
+    the scenario grades event-scope rejection, not credential handling.
+
+    Spec: core/notification-config.json#/properties/event_types — media-buy-anchored
+    types (scheduled, final, delayed, adjusted, impairment) "are invalid on this
+    surface; sellers MUST reject those entries as per-account validation failures with
+    INVALID_REQUEST or VALIDATION_ERROR and error.field pointing at the invalid
+    event_types entry rather than silently dropping them".
+    """
+    ctx["notif_domain"] = domain
+    cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with two notification config entries both using subscriber "(?P<sub>[^"]+)"'
+    )
+)
+def when_sync_provision_duplicate_subscriber(ctx: dict, domain: str, sub: str) -> None:
+    """Provision an account with two notification_configs entries sharing one subscriber_id.
+
+    Spec: core/notification-config.json#/properties/subscriber_id — "Sending two
+    entries with the same subscriber_id in a single sync_accounts request array is
+    rejected as a per-account validation failure with INVALID_REQUEST or
+    VALIDATION_ERROR, and error.field MUST point at the duplicate entry."
+    """
+    ctx["notif_domain"] = domain
+    first = _notif_config(sub, "https://buyer.example/webhooks/adcp/one", "creative.status_changed", active=False)
+    second = _notif_config(sub, "https://buyer.example/webhooks/adcp/two", "creative.purged", active=False)
+    _dispatch_sync_notification(ctx, domain, [first, second])
+
+
+@given(parsers.re(r'the webhook proof-of-control challenge for "(?P<url>[^"]+)" fails'))
+def given_proof_of_control_fails(ctx: dict, url: str) -> None:
+    """Declare that the seller's proof-of-control challenge for ``url`` will fail.
+
+    Records the expectation that activating a subscriber pointed at ``url`` MUST NOT
+    succeed. Production performs no proof-of-control challenge (#1592), so this is a
+    pure intent marker; the scenario's honest failure is that the seller activates the
+    subscriber (action 'created') instead of rejecting it at notification_configs[0].url.
+
+    Spec: core/notification-config.json top-level — "Sellers MUST verify endpoint
+    control before activating a new or changed active account-level notification
+    config"; #/properties/active — "Reactivation requires full SSRF validation with
+    connect pinning plus proof-of-control".
+    """
+    ctx["proof_fail_url"] = url
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request re-sending subscriber "(?P<sub>[^"]+)" '
+        r'as active with url "(?P<url>[^"]+)"'
+    )
+)
+def when_sync_resend_subscriber_active(ctx: dict, sub: str, url: str) -> None:
+    """Declarative replace: re-send the same subscriber_id as active (active:true).
+
+    Reactivating or changing an active subscriber's url MUST trigger the
+    proof-of-control challenge before the seller treats it as active; on challenge
+    failure the entry is rejected. Reuses the seed's event_types (declarative replace
+    carries the full desired entry).
+
+    Spec: sync-accounts-request.json notification_configs description — proof-of-control
+    "before treating a new or changed active subscriber as active"; on failure the
+    entry is rejected (action=failed) with VALIDATION_ERROR at notification_configs[0].url.
+    """
+    domain = ctx.get("notif_domain", "acme-corp.com")
+    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=True)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@then("the account keeps its prior notification_configs set unchanged")
+def then_account_keeps_prior_notif_set(ctx: dict) -> None:
+    """Assert the rejected activation left the prior persisted subscriber set intact.
+
+    On proof-of-control failure the seller rejects the entry and leaves the prior
+    notification_configs[] set unchanged — the buyer's read-back MUST still show the
+    original subscriber with its original url and active state (the Given's seed).
+
+    Spec: core/notification-config.json#/properties/active — "the buyer's next
+    sync_accounts MUST observe the same array".
+    """
+    prior = ctx.get("notif_prior")
+    assert prior is not None, "No prior notification_configs state recorded by the Given"
+    subs = _echoed_subscribers(ctx, domain=ctx.get("notif_domain"))
+    match = _find_subscriber(subs, prior["subscriber_id"])
+    assert match is not None, f"Prior subscriber {prior['subscriber_id']!r} missing from echoed set {subs!r}"
+    assert str(_sub_attr(match, "url")) == prior["url"], (
+        f"Prior url changed: expected {prior['url']!r}, got {_sub_attr(match, 'url')!r}"
+    )
+    assert _sub_attr(match, "active") is prior["active"], (
+        f"Prior active flag changed: expected {prior['active']!r}, got {_sub_attr(match, 'active')!r}"
+    )
+
+
+@then(parsers.re(r'the per-account errors array contains an error with code "(?P<code1>[^"]+)" or "(?P<code2>[^"]+)"'))
+def then_per_account_error_code_or(ctx: dict, code1: str, code2: str) -> None:
+    """Assert the failed account's errors contain either of two spec-permitted codes.
+
+    The spec permits INVALID_REQUEST OR VALIDATION_ERROR for these per-account
+    notification validation failures (core/notification-config.json event_types and
+    subscriber_id descriptions), so the scenario pins the disjunction. A dedicated
+    or-variant step is required because the greedy single-code binding
+    (then_per_account_error_code, ``code "{code}"`` via parse) would capture the
+    literal string 'INVALID_REQUEST" or "VALIDATION_ERROR' as one code and never match.
+
+    Spec: enums/error-code.json#/enum — both INVALID_REQUEST and VALIDATION_ERROR are
+    canonical members; #/enumMetadata — both carry recovery 'correctable'.
+    """
+    acct = ctx.get("last_account")
+    if acct is None:
+        acct = _require_response(ctx).accounts[0]
+        ctx["last_account"] = acct
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
+    codes = [e.code for e in acct.errors]
+    assert code1 in codes or code2 in codes, f"Expected error code {code1!r} or {code2!r} in {codes}"
 
 
 # ═══════════════════════════════════════════════════════════════════════

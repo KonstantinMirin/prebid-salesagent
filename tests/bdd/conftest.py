@@ -525,6 +525,25 @@ _XFAIL_TAGS: dict[str, str] = {
     "_sync_accounts_impl provisions the account (action 'created') with sandbox=true regardless of declared "
     "capabilities, so the expected per-account UNSUPPORTED_FEATURE rejection (accounts[0].sandbox) is never "
     "emitted — #1592 spec-production gap",
+    # ── UC-011 notification_configs per-account rejections (FIXME(#1592), salesagent-m12f) ──
+    # Steps execute non-dormant on a2a/mcp/rest; each provisions the account and grades
+    # the spec-mandated per-account rejection, which production never emits because
+    # _sync_accounts_impl ignores accounts[].notification_configs (the request validator
+    # rejects neither media-buy-anchored event_types nor duplicate subscriber_ids, and no
+    # proof-of-control challenge exists). The account is provisioned (action 'created')
+    # instead of failing, so each fails at the "has action failed" assertion.
+    "T-UC-011-notif-event-scope-reject": "account-level notification_configs unimplemented — _sync_accounts_impl "
+    "ignores accounts[].notification_configs, so a media-buy-anchored event_type ('scheduled') on the account "
+    "surface is never validated; the account is provisioned (action 'created') instead of failing with "
+    "INVALID_REQUEST/VALIDATION_ERROR at notification_configs[0].event_types[0] — #1592 spec-production gap",
+    "T-UC-011-notif-duplicate-subscriber": "account-level notification_configs unimplemented — _sync_accounts_impl "
+    "ignores accounts[].notification_configs, so duplicate subscriber_id entries in one submitted array are never "
+    "detected; the account is provisioned (action 'created') instead of failing with INVALID_REQUEST/VALIDATION_ERROR "
+    "at notification_configs[1].subscriber_id — #1592 spec-production gap",
+    "T-UC-011-notif-activation-proof-fail": "account-level notification_configs unimplemented — no proof-of-control "
+    "challenge exists and _sync_accounts_impl ignores accounts[].notification_configs, so an active subscriber whose "
+    "url is unreachable is never challenged or rejected; the account is provisioned (action 'created') instead of "
+    "failing with VALIDATION_ERROR at notification_configs[0].url and keeping the prior set — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only

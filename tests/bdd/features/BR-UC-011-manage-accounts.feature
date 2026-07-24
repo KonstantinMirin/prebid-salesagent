@@ -654,7 +654,7 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-notif-omit-preserves @sync @notification-configs @partition @boundary
   Scenario: Omitting notification_configs leaves persisted subscribers unchanged
     Given the Buyer Agent has an authenticated connection
-    And an account for brand domain "acme-corp.com" exists with notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
+    And an account for brand domain "acme-corp.com" exists with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
@@ -662,7 +662,10 @@ Feature: BR-UC-011 Manage Accounts
     And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/creative" and active false
     # XFAIL-EXPECTED: production gap — #1592 (notification_configs persistence unimplemented)
     # "Omit this field to leave existing subscribers unchanged" — omission is not clearance
+    # The seed declares a PAUSED subscriber (active false) so the echoed active flag is a
+    # declared input, not an undeclared fixture default (F19)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/notification-config.json pointer=/properties/active
 
   @T-UC-011-notif-event-scope-reject @sync @notification-configs @error @post-f1 @post-f2 @partition @boundary
   Scenario: Media-buy-anchored event type on the account surface is rejected per entry
