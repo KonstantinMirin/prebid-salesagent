@@ -37,6 +37,11 @@ PRICING_MODEL_ENUM = {"cpm", "vcpm", "cpc", "cpcv", "cpv", "cpp", "cpa", "flat_r
 #: (get-adcp-capabilities-response.json#/properties/media_buy/properties/reporting_delivery_methods).
 REPORTING_DELIVERY_ENUM = {"webhook", "offline"}
 
+#: 3.1.1 webhook-signing algorithm enum — the closed set the adcp/webhook-signing/v1 profile
+#: permits (get-adcp-capabilities-response.json#/properties/webhook_signing/properties/algorithms/items/enum;
+#: minItems 1, uniqueItems). Other values are reserved and MUST NOT be emitted under v1.
+WEBHOOK_SIGNING_ALGORITHM_ENUM = {"ed25519", "ecdsa-p256-sha256"}
+
 #: 3.1.1 media channels enum, in schema order — the 20 canonical values
 #: (dist/schemas/3.1.1/enums/channels.json#/enum). primary_channels items $ref
 #: this enum; there is no minItems/uniqueItems constraint, so the graded contract
@@ -1999,3 +2004,66 @@ def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
         assert isinstance(url, str) and url.startswith("https://"), (
             f'identity.brand_json_url must match pattern "^https://": {url!r}'
         )
+
+
+# ── Thens: webhook_signing must_equal_when + algorithm-enum bounds ────────
+
+
+@given(parsers.parse("the tenant declares webhook_signing posture described as {boundary_point}"))
+def given_webhook_signing_boundary(ctx: dict, boundary_point: str) -> None:
+    """Declare a webhook_signing boundary — a mutating-webhook trigger paired with a
+    supported value, or an algorithms set. Records intent; the capabilities builder emits
+    no webhook_signing block (#1592), so the outline strict-xfails on all transports."""
+    _config(ctx)["webhook_signing_boundary"] = boundary_point.strip()
+
+
+def _assert_webhook_signing_must_equal_when(ctx: dict, webhook_signing: dict) -> None:
+    """must_equal_when (webhook_signing.supported/x-adcp-validation): when ANY mutating-webhook
+    trigger is present on the wire — media_buy.reporting_delivery_methods contains "webhook",
+    media_buy.content_standards.supports_webhook_delivery is true, or
+    wholesale_feed_webhooks.supported is true — webhook_signing.supported MUST be true."""
+    reporting = wire_lookup(ctx, "media_buy.reporting_delivery_methods")
+    triggers = (
+        isinstance(reporting, list) and "webhook" in reporting,
+        wire_lookup(ctx, "media_buy.content_standards.supports_webhook_delivery") is True,
+        wire_lookup(ctx, "wholesale_feed_webhooks.supported") is True,
+    )
+    if any(triggers):
+        assert webhook_signing.get("supported") is True, (
+            "must_equal_when: a mutating-webhook trigger is present on the wire but "
+            f"webhook_signing.supported != true: {webhook_signing.get('supported')!r}"
+        )
+
+
+@then(parsers.parse("webhook_signing should be graded {expected} against its must_equal_when and algorithm-enum rules"))
+def then_webhook_signing_bounds(ctx: dict, expected: str) -> None:
+    """valid → a schema-valid success whose webhook_signing echoes the declared posture:
+    supported is a boolean and true whenever a mutating-webhook trigger fires (must_equal_when),
+    and algorithms — when present — is a non-empty, unique array drawn from the closed enum
+    {ed25519, ecdsa-p256-sha256}. invalid → the builder rejects the posture (must_equal_when
+    fired with supported != true, or an algorithm outside the closed enum) with
+    CONFIGURATION_ERROR (recovery terminal) rather than emitting a non-conformant block."""
+    expected = expected.strip()
+    if expected == "invalid":
+        _assert_capabilities_config_error(ctx)
+        return
+    assert expected == "valid", f"unrecognized expected column: {expected!r}"
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    webhook_signing = wire_dict(ctx, "webhook_signing")
+    supported = webhook_signing.get("supported")
+    assert supported is True or supported is False, f"webhook_signing.supported (required) not a boolean: {supported!r}"
+    algorithms = webhook_signing.get("algorithms")
+    if algorithms is not None:
+        assert isinstance(algorithms, list) and algorithms, (
+            f"webhook_signing.algorithms present but not a non-empty array (minItems 1): {algorithms!r}"
+        )
+        assert len(algorithms) == len(set(algorithms)), (
+            f"webhook_signing.algorithms violates uniqueItems: {algorithms!r}"
+        )
+        invalid = set(algorithms) - WEBHOOK_SIGNING_ALGORITHM_ENUM
+        assert not invalid, (
+            f"webhook_signing.algorithms carries values outside the closed enum "
+            f"{sorted(WEBHOOK_SIGNING_ALGORITHM_ENUM)}: {sorted(invalid)}"
+        )
+    _assert_webhook_signing_must_equal_when(ctx, webhook_signing)

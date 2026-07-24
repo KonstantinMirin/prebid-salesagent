@@ -1551,7 +1551,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant declares webhook_signing posture described as <boundary_point>
     When the Buyer Agent calls get_adcp_capabilities
-    Then the webhook_signing posture should be <expected>
+    Then webhook_signing should be graded <expected> against its must_equal_when and algorithm-enum rules
     # webhook_signing.supported must_equal_when (triggers: reporting_delivery_methods
     # contains webhook; content_standards.supports_webhook_delivery true;
     # wholesale_feed_webhooks.supported true — third trigger row added 2026-07-13);
@@ -1682,13 +1682,19 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then supported_protocols should contain "media_buy"
     And the account section should be present with a non-empty supported_billing
+    And account.supported_billing should equal [operator, agent, advertiser]
     # XFAIL-EXPECTED: production gap — #1592 (account block emission incomplete)
-    # SHOULD-level relationship: account is not top-level-required, but "All sellers should
-    # declare this section" and sellers declaring media_buy "should also include account ...
-    # Compliance testing validates their presence" — presence-when-media_buy-declared is the
-    # graded expectation; the block is all-or-nothing (supported_billing required, minItems 1).
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L154, L177)
+    # SHOULD-level relationship grounded in the SCHEMA — the 3.1.1 mdx docs are not part of
+    # the v3.1.1 tag (schemas + compliance yaml only), so the former docs @source did not
+    # resolve. media_buy.description pins it: "Expected when media_buy is in
+    # supported_protocols. Sellers declaring media_buy should also include account with
+    # supported_billing." account is NOT top-level-required (response #/required =
+    # [adcp, supported_protocols]); the block is all-or-nothing (account/required =
+    # [supported_billing], minItems 1). Under "full capabilities" the seller supports every
+    # billing party, so supported_billing echoes the complete billing-party enum.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/description
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
 
   # ── New scenarios (2026-07-13, #1592 P0.2 gap closure): fields new at 3.1.1 ───────────────
 

@@ -421,6 +421,7 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-010-v31-request-signing-monotonicity": "capabilities builder emits no request_signing block, so neither the subset/disjoint relations (valid rows) nor the CONFIGURATION_ERROR rejection of a relation-violating posture (invalid rows) is observable — #1592 spec-production gap",
     "T-UC-010-v31-idempotency-ttl-bounds": "capabilities builder hard-codes idempotency(supported=true, replay_ttl_seconds=86400) and ignores tenant config, so it neither echoes the declared replay_ttl_seconds posture (valid rows) nor rejects an out-of-bounds/cross-field-violating one (invalid rows) — #1592 spec-production gap",
     "T-UC-010-v31-version-unsupported-details-bounds": "capabilities builder ignores adcp_version and raises no VERSION_UNSUPPORTED, so the required non-empty supported_versions details bound is never emitted — #1592 spec-production gap",
+    "T-UC-010-v31-webhook-signing-bounds": "capabilities builder emits no webhook_signing block, so it neither echoes the declared posture within the algorithm-enum/must_equal_when bounds (valid rows) nor rejects a supported!=true-under-trigger or out-of-enum-algorithm posture with CONFIGURATION_ERROR (invalid rows) — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -3680,6 +3681,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-idempotency-ttl-bounds",
             "T-UC-010-v31-version-unsupported-details-bounds",
             "T-UC-010-v31-identity-brand-json-url-bounds",
+            # Batch 8 — webhook-signing bounds outline (salesagent-8wuu)
+            "T-UC-010-v31-webhook-signing-bounds",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
