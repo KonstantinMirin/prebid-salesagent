@@ -1109,6 +1109,199 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# UC-011 sync settings-update / mode-exclusive wiring (salesagent-ce1u / eiww batch B2)
+#
+# Wires the previously-dormant settings-update and mode-exclusive scenarios and
+# spec-grounds their Then assertions against v3.1.1 (the pinned target,
+# docs/adcp-spec-version.md). Each is a #1592 spec-production gap and stays a
+# strict tag-level xfail (tests/bdd/conftest.py _XFAIL_TAGS): the steps EXECUTE
+# non-dormant and fail on the real gap, not on a missing step definition.
+#
+# Production trace (src/core/tools/accounts.py, verified empirically):
+#   - _extract_natural_key reads entry.brand; a settings-update entry keyed only
+#     by `account` (AccountReference) has brand=None, so it raises an operation-
+#     level AdCPValidationError ("the account-reference (settings-update) form is
+#     not supported by this seller") instead of updating / surfacing a per-account
+#     UNSUPPORTED_PROVISIONING result. Settings-update mode is unimplemented.
+#   - A both-shapes entry (account + brand+operator+billing) validates as the
+#     ProvisioningMode arm of the item union; the extra `account` is retained but
+#     ignored, so production PROVISIONS it (action "created") instead of rejecting
+#     the oneOf(ProvisioningMode XOR SettingsUpdateMode) violation.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with a settings-update entry "
+        'keyed by the existing account\'s account_id setting payment_terms "{pt}"'
+    )
+)
+def when_sync_settings_update_by_account_id(ctx: dict, pt: str) -> None:
+    """Dispatch a SettingsUpdateMode entry (AccountReference by account_id) setting payment_terms.
+
+    The entry carries only ``account`` + ``payment_terms`` (no brand/operator/billing
+    trio) — the SettingsUpdateMode arm of the item oneOf. The target account_id is
+    the one the ``already exists`` Given captured via the real pre-create sync.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf/1
+    (SettingsUpdateMode requires ``account``; trio fields MUST be absent).
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    account_id = ctx.get("original_field_values", {}).get("account_id")
+    assert account_id, "Given must pre-create an account and capture its account_id in original_field_values"
+    try:
+        req = SyncAccountsRequest(accounts=[{"account": {"account_id": account_id}, "payment_terms": pt}])
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by unknown account_id "{account_id}"'
+    )
+)
+def when_sync_settings_update_unknown_account(ctx: dict, account_id: str) -> None:
+    """Dispatch a SettingsUpdateMode entry referencing an account that does not exist.
+
+    A settings-update entry MUST NOT provision; an unknown ``account`` is the
+    per-entry UNSUPPORTED_PROVISIONING case.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/properties/account/description
+    ("the seller MUST NOT create a new account — entries that would otherwise
+    trigger provisioning are rejected with UNSUPPORTED_PROVISIONING").
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    _setup_tenant_and_principal(ctx)
+    try:
+        req = SyncAccountsRequest(accounts=[{"account": {"account_id": account_id}}])
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(
+    "the Buyer Agent sends a sync_accounts request with an entry carrying both "
+    "an account reference and the provisioning trio"
+)
+def when_sync_both_account_and_trio(ctx: dict) -> None:
+    """Dispatch an entry that satisfies BOTH item-oneOf arms (account AND the trio).
+
+    Such an entry violates oneOf(ProvisioningMode XOR SettingsUpdateMode) and must
+    be rejected as a request VALIDATION_ERROR. Production instead validates it as
+    the ProvisioningMode arm and ignores the extra ``account`` (the #1592 gap).
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    _setup_tenant_and_principal(ctx)
+    try:
+        req = SyncAccountsRequest(
+            accounts=[
+                {
+                    "account": {"account_id": "acc_target_ref"},
+                    "brand": {"domain": "acme-corp.com"},
+                    "operator": "acme-corp.com",
+                    "billing": "operator",
+                }
+            ]
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@then(parsers.parse('the account payment_terms is "{pt}"'))
+def then_account_payment_terms(ctx: dict, pt: str) -> None:
+    """Assert the referenced account echoes the expected payment_terms.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/payment_terms;
+    ``net_45`` is in enums/payment-terms.json#/enum
+    (["net_15","net_30","net_45","net_60","net_90","prepay"]).
+    """
+    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
+    actual = getattr(acct, "payment_terms", None)
+    actual = _status_str(actual) if actual is not None else None
+    assert actual == pt, f"Expected payment_terms '{pt}', got '{actual}'"
+
+
+@then(parsers.parse('the settings-update entry has action "{action}"'))
+def then_settings_update_entry_action(ctx: dict, action: str) -> None:
+    """Assert the single settings-update result entry has the expected action.
+
+    Requires a success-variant response (per-account results). When production
+    rejects the brandless settings-update entry with an operation-level error
+    instead, there is no response — this fails loudly (the honest #1592 gap),
+    rather than treating a request-level error as a per-account 'failed'.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/action/enum
+    = ["created","updated","unchanged","failed"].
+    """
+    resp = _require_response(ctx)
+    assert resp.accounts, f"Expected a per-account result entry, got {resp.accounts!r}"
+    acct = resp.accounts[0]
+    actual = _action_str(acct.action)
+    assert actual == action, f"Expected settings-update entry action '{action}', got '{actual}'"
+    ctx["last_account"] = acct
+
+
+@then(parsers.parse('the per-account error recovery is "{recovery}"'))
+def then_per_account_error_recovery(ctx: dict, recovery: str) -> None:
+    """Assert the failed account's per-account error carries the expected recovery.
+
+    Spec: core/error.json#/properties/recovery/enum = ["transient","correctable","terminal"];
+    enums/error-code.json#/enumMetadata/UNSUPPORTED_PROVISIONING recovery = "correctable".
+    """
+    acct = ctx.get("last_account")
+    assert acct is not None, "No account referenced — need a prior settings-update entry step"
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
+    recoveries = [getattr(e, "recovery", None) for e in acct.errors]
+    assert recovery in recoveries, f"Expected per-account error recovery '{recovery}', got {recoveries}"
+
+
+@then(parsers.parse("the echoed account_id equals the account_id from the first response"))
+def then_echoed_account_id_stable(ctx: dict) -> None:
+    """Assert the second natural-key call echoed the SAME seller-assigned account_id.
+
+    Grades the stability invariant: a seller MAY echo an internal handle but MUST
+    keep resolving the same natural key to the same account_id on subsequent calls.
+    A second call that minted a different account_id would pass the bare-presence
+    check while breaking this invariant.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/account_id/description
+    ("the seller MUST continue accepting the natural-key AccountRef for subsequent calls").
+    """
+    first = ctx.get("first_seller_account_id")
+    assert first, "No first-call account_id captured — the first 'seller-assigned account_id' Then must run first"
+    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
+    second = getattr(acct, "account_id", None)
+    assert second == first, f"Expected the echoed account_id to stay '{first}', got '{second}'"
+
+
+@then(parsers.parse('the request is rejected at the operation level with error code "{code}" naming field "{field}"'))
+def then_operation_error_naming_field(ctx: dict, code: str, field: str) -> None:
+    """Assert an operation-level wire error variant with ``code`` and ``errors[0].field``.
+
+    Uses the single sanctioned wire-error surface (TransportResult.assert_wire_error),
+    which hard-fails on a non-canonical code and defaults recovery to the pinned
+    v3.1.1 enum classification. For a oneOf structural violation the spec-correct
+    grade is the response error variant (oneOf arm 1) carrying VALIDATION_ERROR.
+
+    Spec: account/sync-accounts-response.json#/oneOf/1 (error variant, top-level
+    errors[]); core/error.json#/properties/field (JSONPath-lite);
+    enums/error-code.json#/enumMetadata/VALIDATION_ERROR.
+    """
+    result = ctx.get("result")
+    assert result is not None, (
+        f"No transport result captured — the request did not reach a transport. Recorded error: {ctx.get('error')!r}"
+    )
+    result.assert_wire_error(code, field=field)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # THEN steps — sync_accounts response assertions
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1150,12 +1343,19 @@ def then_account_action(ctx: dict, domain: str, action: str) -> None:
 
 @then("the account has a seller-assigned account_id")
 def then_account_has_id(ctx: dict) -> None:
-    """Assert the last referenced account has a seller-assigned account_id."""
+    """Assert the last referenced account has a seller-assigned account_id.
+
+    Captures the FIRST such account_id under ctx["first_seller_account_id"]
+    (setdefault, so only the first call wins) for the natural-key stability
+    invariant graded by ``the echoed account_id equals the account_id from the
+    first response`` — that Then compares the second call's handle to this one.
+    """
     acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
     account_id = getattr(acct, "account_id", None)
     assert account_id is not None and isinstance(account_id, str) and len(account_id) > 0, (
         f"Account missing non-empty seller-assigned account_id: {acct}"
     )
+    ctx.setdefault("first_seller_account_id", account_id)
 
 
 @then(parsers.parse('the account has status "{status}"'))

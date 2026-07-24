@@ -306,10 +306,15 @@ Feature: BR-UC-011 Manage Accounts
     And the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "advertiser"
     And the account has a seller-assigned account_id
+    And the account has status "active"
     # billing-party enum = ["operator", "agent", "advertiser"]; the seller invoices the
-    # advertiser directly even when a different operator places orders on their behalf
+    # advertiser directly even when a different operator places orders on their behalf.
+    # status is in the per-item required set, and the spec example for an advertiser-billed
+    # created account pins status "active" — an unpinned status let a rejected/pending result pass.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/examples/3
 
   @T-UC-011-sync-mixed @sync @upsert @partition
   Scenario: Sync mixed_results -- created and updated in same request (all different actions)
@@ -352,9 +357,12 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "unchanged"
+    And the echoed account_id equals the account_id from the first response
     # Sellers MAY echo a seller-assigned account_id, but MUST continue accepting the
     # natural-key AccountRef for every account provisioned in provisioning mode —
-    # the second natural-key call must upsert, never demand account_id
+    # the second natural-key call must upsert to the SAME handle, never demand account_id
+    # and never mint a different account_id (which would pass the bare-presence check while
+    # breaking the stability invariant this scenario exists to grade).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/account_id/description
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/description
 
@@ -365,7 +373,11 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
     Then the account for brand domain "acme-corp.com" has action "updated"
     And the account payment_terms is "net_45"
-    And no new account was created on the seller
+    When the Buyer Agent sends a list_accounts request
+    Then the response contains an accounts array with 1 items
+    # "no new account was created" is only observable on the account census, not on the seller's
+    # internal state: a settings-update MUST NOT provision, so the post-call list stays at the one
+    # pre-existing account. A second (provisioned) entry would surface with action "created".
     # XFAIL-EXPECTED: production gap — #1592 (settings-update mode not implemented; SDK Accounts3 arm unhandled)
     # Settings-update entry carries `account` (AccountRef); trio fields MUST be absent;
     # the seller updates settable state with no provisioning side effects
@@ -378,22 +390,35 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by unknown account_id "acc_does_not_exist"
     Then the settings-update entry has action "failed"
     And the per-account errors array contains an error with code "UNSUPPORTED_PROVISIONING"
-    And no accounts were modified on the seller
+    And the per-account error recovery is "correctable"
+    When the Buyer Agent sends a list_accounts request
+    Then the response contains an empty accounts array
     # XFAIL-EXPECTED: production gap — #1592 (UNSUPPORTED_PROVISIONING path unimplemented)
     # "When `account` is present, the seller MUST NOT create a new account — entries that
     # would otherwise trigger provisioning are rejected with UNSUPPORTED_PROVISIONING"
+    # (recovery "correctable" per the enum metadata). "No accounts were modified" is graded on the
+    # census: nothing was seeded, so the post-call list stays empty.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account/description
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (UNSUPPORTED_PROVISIONING)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_PROVISIONING
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/recovery/enum
 
   @T-UC-011-sync-mode-exclusive @sync @settings-update @validation @partition @boundary
   Scenario: Entry carrying both an account reference and the provisioning trio is rejected
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an entry carrying both an account reference and the provisioning trio
-    Then the account processing fails with a validation error for account
+    Then the request is rejected at the operation level with error code "VALIDATION_ERROR" naming field "accounts[0]"
     # XFAIL-EXPECTED: production gap — #1592 (per-entry oneOf mode exclusivity not validated)
-    # Exactly one of the two key shapes is allowed per entry (oneOf: ProvisioningMode
-    # forbids `account`; SettingsUpdateMode forbids brand/operator/billing)
+    # An entry satisfying BOTH arms violates the item oneOf (exactly one), which is a structural
+    # request-schema violation — graded as an operation-level error variant (top-level errors[],
+    # response oneOf arm 1) carrying VALIDATION_ERROR (recovery "correctable" per the enum) with
+    # field pointing at the offending entry — NOT a per-account "failed" result (arm 0), which is
+    # for semantically-valid entries that fail a business rule. Production currently validates the
+    # both-shapes entry as the ProvisioningMode arm and silently ignores the extra `account`, so it
+    # provisions instead of rejecting.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/1
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/field
 
   @T-UC-011-ext-a-no-token @sync @ext-a @auth @error @post-f1 @post-f2 @partition @boundary
   Scenario: Sync without authentication -- sync_no_token returns error_auth (no token on sync)

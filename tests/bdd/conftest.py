@@ -442,6 +442,45 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-011-list-read-idempotency-tolerance": "read-wrapper tolerance of the 3.1 idempotency_key envelope not "
     "graded — ListAccountsRequest (extra=forbid) rejects the undeclared idempotency_key that additionalProperties:true "
     "requires it to accept — #1592 spec-production gap",
+    # ── UC-011 sync settings-update / mode-exclusive wiring (FIXME(#1592), salesagent-ce1u) ──
+    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
+    # v3.1.1 shape; each fails on a surface _sync_accounts_impl does not build.
+    # Verified empirically against src/core/tools/accounts.py (see uc011_accounts.py
+    # batch-B2 header for the production trace).
+    # T-UC-011-sync-settings-update: settings-update (AccountReference) mode is
+    # unimplemented — _extract_natural_key rejects the brandless account_id-keyed
+    # entry with an operation-level VALIDATION_ERROR ("the account-reference
+    # (settings-update) form is not supported by this seller") instead of updating
+    # the referenced account's payment_terms, so no success response is produced.
+    "T-UC-011-sync-settings-update": "settings-update (AccountReference) mode not implemented — _extract_natural_key "
+    "rejects the brandless account_id-keyed entry with an operation-level VALIDATION_ERROR instead of updating the "
+    "referenced account's payment_terms — #1592 spec-production gap",
+    # T-UC-011-sync-settings-update-no-provision: same unimplemented mode — an
+    # unknown account_id is rejected wholesale with an operation-level
+    # VALIDATION_ERROR rather than surfacing a per-account action "failed" bearing
+    # UNSUPPORTED_PROVISIONING(recovery=correctable); the MUST-NOT-provision path
+    # is not built.
+    "T-UC-011-sync-settings-update-no-provision": "settings-update mode not implemented — a brandless account_id-keyed "
+    "entry is rejected with an operation-level VALIDATION_ERROR rather than a per-account action 'failed' bearing "
+    "UNSUPPORTED_PROVISIONING(recovery=correctable) — #1592 spec-production gap",
+    # T-UC-011-sync-mode-exclusive: the item union does not enforce
+    # oneOf(ProvisioningMode XOR SettingsUpdateMode) — a both-shapes entry
+    # validates as the ProvisioningMode arm and the extra `account` is silently
+    # ignored, so production PROVISIONS it (action "created") instead of rejecting
+    # the oneOf violation with an operation-level VALIDATION_ERROR naming accounts[0].
+    "T-UC-011-sync-mode-exclusive": "SyncAccountsRequest item union does not enforce ProvisioningMode XOR "
+    "SettingsUpdateMode — a both-shapes entry validates as the provisioning arm (extra `account` ignored) and is "
+    "provisioned instead of rejected with an operation-level VALIDATION_ERROR — #1592 spec-production gap",
+    # T-UC-011-ext-c-rejected: activated by wiring the shared `the per-account error
+    # recovery is "..."` step (salesagent-ce1u). Its BILLING_NOT_SUPPORTED assertion
+    # already passes, but _check_billing_policy (src/core/tools/accounts.py) builds
+    # Error(code, message, suggestion) WITHOUT the recovery field, so the correctable
+    # recovery the enum mandates is never emitted on the per-account error. The
+    # scenario's own comment already notes "recovery not emitted"; it was dormant on
+    # the missing step and is now an honest strict xfail on the real gap.
+    "T-UC-011-ext-c-rejected": "per-account BILLING_NOT_SUPPORTED error carries no recovery — _check_billing_policy "
+    "builds Error(code, message, suggestion) without the recovery field the enum mandates (correctable) — "
+    "#1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
