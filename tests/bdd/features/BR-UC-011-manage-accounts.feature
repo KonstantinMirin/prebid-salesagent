@@ -484,8 +484,6 @@ Feature: BR-UC-011 Manage Accounts
     # @bva billing: billing = unsupported value for seller
     # BR-RULE-059 INV-2: Request includes billing model the seller does not support -> action=failed, status=rejected, BILLING_NOT_SUPPORTED
     # POST-F2: Buyer knows what failed and the specific error code
-    # XFAIL-EXPECTED (last 3 assertions): production gap — #1592 (details.scope /
-    # details.supported_billing / recovery not emitted; graded by billing-gate-dispatch)
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/capability_gate/steps/sync_accounts_unsupported_billing
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/billing-not-supported.json
 

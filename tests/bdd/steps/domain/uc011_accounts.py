@@ -222,6 +222,7 @@ def given_seller_no_billing(ctx: dict) -> None:
 def _set_billing_policy(ctx: dict, supported: list[str]) -> None:
     """Set billing policy via the harness."""
     ctx["env"].set_billing_policy(supported)
+    ctx["configured_billing_policy"] = list(supported)
 
 
 @given(parsers.parse('the seller does not support "{billing}" billing'))
@@ -1308,6 +1309,45 @@ def then_per_account_error_recovery(ctx: dict, recovery: str) -> None:
     assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
     recoveries = [getattr(e, "recovery", None) for e in acct.errors]
     assert recovery in recoveries, f"Expected per-account error recovery '{recovery}', got {recoveries}"
+
+
+@then(parsers.parse('the per-account error details scope is "{scope}"'))
+def then_per_account_error_details_scope(ctx: dict, scope: str) -> None:
+    """Assert the failed account's BILLING_NOT_SUPPORTED error details.scope value.
+
+    Spec: error-details/billing-not-supported.json#/properties/scope/enum =
+    ["capability","account"]; billing-gate-dispatch.yaml capability_gate phase
+    emits scope="capability" for a seller-wide unsupported-billing rejection.
+    """
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    assert err is not None, f"No BILLING_NOT_SUPPORTED error present, got codes {[e.code for e in errors]}"
+    details = getattr(err, "details", None) or {}
+    actual = details.get("scope")
+    assert actual == scope, f"Expected per-account error details.scope '{scope}', got {actual!r}"
+
+
+@then("the per-account error details supported_billing echoes the seller's supported billing values")
+def then_per_account_error_details_supported_billing(ctx: dict) -> None:
+    """Assert details.supported_billing echoes the seller's configured supported set.
+
+    Spec: error-details/billing-not-supported.json#/properties/supported_billing
+    (array, minItems: 1, "Sellers MAY omit this field" when the resolved supported
+    set is empty) -- compares order-insensitively against the policy the Given step
+    configured via ``_set_billing_policy``, stashed at ``ctx["configured_billing_policy"]``.
+    """
+    configured = ctx.get("configured_billing_policy")
+    assert configured is not None, "No configured billing policy captured — a prior Given must set the seller's policy"
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    assert err is not None, f"No BILLING_NOT_SUPPORTED error present, got codes {[e.code for e in errors]}"
+    details = getattr(err, "details", None) or {}
+    actual = details.get("supported_billing")
+    assert actual is not None, f"Expected details.supported_billing to be present, got details={details!r}"
+    assert set(actual) == set(configured), (
+        f"Expected details.supported_billing to echo the seller's supported billing values "
+        f"{configured!r} (order-insensitive), got {actual!r}"
+    )
 
 
 @then(parsers.parse("the echoed account_id equals the account_id from the first response"))

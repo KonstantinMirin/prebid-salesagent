@@ -409,12 +409,23 @@ def _check_billing_policy(
     supported = resolve_supported_billing(tenant)
 
     if billing_val not in supported:
+        # billing-not-supported.json: supported_billing minItems 1, "Sellers MAY
+        # omit this field" -- an empty resolved policy must omit the key entirely,
+        # never emit a schema-invalid empty array (salesagent-hh1f review MEDIUM #1).
+        details: dict[str, Any] = {"scope": "capability"}
+        supported_suffix = ""
+        if supported:
+            details["supported_billing"] = supported
+            supported_suffix = f" Supported models: {', '.join(supported)}."
         return [
             Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
                 code="BILLING_NOT_SUPPORTED",
-                message=f"Billing model '{billing_val}' is not supported by this seller. "
-                f"Supported models: {', '.join(supported)}.",
-                suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",
+                message=f"Billing model '{billing_val}' is not supported by this seller.{supported_suffix}",
+                suggestion=f"Use one of the supported billing models: {', '.join(supported)}."
+                if supported
+                else "Contact the seller to enable a supported billing model.",
+                recovery="correctable",
+                details=details,
             )
         ]
     return None

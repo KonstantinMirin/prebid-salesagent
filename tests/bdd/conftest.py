@@ -486,16 +486,9 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-011-sync-mode-exclusive": "SyncAccountsRequest item union does not enforce ProvisioningMode XOR "
     "SettingsUpdateMode — a both-shapes entry validates as the provisioning arm (extra `account` ignored) and is "
     "provisioned instead of rejected with an operation-level VALIDATION_ERROR — #1592 spec-production gap",
-    # T-UC-011-ext-c-rejected: activated by wiring the shared `the per-account error
-    # recovery is "..."` step (salesagent-ce1u). Its BILLING_NOT_SUPPORTED assertion
-    # already passes, but _check_billing_policy (src/core/tools/accounts.py) builds
-    # Error(code, message, suggestion) WITHOUT the recovery field, so the correctable
-    # recovery the enum mandates is never emitted on the per-account error. The
-    # scenario's own comment already notes "recovery not emitted"; it was dormant on
-    # the missing step and is now an honest strict xfail on the real gap.
-    "T-UC-011-ext-c-rejected": "per-account BILLING_NOT_SUPPORTED error carries no recovery — _check_billing_policy "
-    "builds Error(code, message, suggestion) without the recovery field the enum mandates (correctable) — "
-    "#1592 spec-production gap",
+    # Graduated (salesagent-hh1f): _check_billing_policy now emits recovery="correctable"
+    # + details={scope, supported_billing} (conditionally, honest-absence on an empty
+    # policy) on the per-account BILLING_NOT_SUPPORTED error. T-UC-011-ext-c-rejected removed.
     # ── UC-011 per-buyer-agent commercial gate wiring (FIXME(#1592), salesagent-9jiu) ──
     # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
     # v3.1.1 shape (error-details/billing-not-permitted-for-agent.json); each
