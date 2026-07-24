@@ -398,6 +398,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # channel is dropped as unrecognized, so primary_channels emits only 19 of 20 (all
     # three transports). Strict xfail until the production mapping gains the 20th channel.
     "T-UC-010-channel-all-canonical": "CHANNEL_MAPPING omits sponsored_intelligence — primary_channels emits 19 of the 20 canonical channels — production gap",
+    # Wired non-dormant + strengthened (salesagent-tmpd): each scenario executes and grades the
+    # spec-pinned shapes, then fails on a block the capabilities builder never emits (strict
+    # xfail on all transports).
+    "T-UC-010-features": "media_buy.content_standards / conversion_tracking / audience_targeting presence-objects and the account block (account.sandbox) not emitted by the capabilities builder — #1592 spec-production gap",
+    "T-UC-010-targeting": "targeting emits only geo_countries/geo_regions/geo_metros/geo_postal_areas — age_restriction, language, keyword_targets, negative_keywords, geo_proximity not built and geo_postal_areas uses the deprecated boolean-alias shape not the native country-keyed map — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -521,6 +526,38 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-010-degradation-sections",
         {"full_response"},
         "media_buy.audience_targeting / conversion_tracking sections not emitted by the capabilities builder — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-tmpd): targeting-partitions rows that
+    # production satisfies (adapter_unavailable_defaults, nested_absent) pass; the rest execute
+    # the real assertion and fail because the capabilities builder emits only
+    # geo_countries/geo_regions/geo_metros/geo_postal_areas and geo_postal_areas uses the
+    # deprecated boolean-alias shape (age_restriction/language/keyword_targets/negative_keywords/
+    # geo_proximity + native postal map never built).
+    (
+        "T-UC-010-targeting-partitions",
+        {
+            "full_adapter",
+            "partial_dimensions",
+            "nested_populated",
+            "age_restriction_supported",
+            "keyword_targeting",
+            "geo_proximity_supported",
+            "postal_areas_native",
+            "postal_areas_legacy_alias",
+        },
+        "targeting builder emits only geo_countries/geo_regions/geo_metros/geo_postal_areas "
+        "(deprecated alias shape) — richer dimensions and the native country-keyed postal map not built — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-tmpd): degradation-partitions rows that
+    # production satisfies (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass; the
+    # gap rows fail — full_response/account_degraded need the unemitted account block, no_tenant
+    # needs adcp.supported_versions (not emitted), and no_principal expects [display] but INV-4
+    # keeps the adapter principal-free so channels are NOT degraded by a missing principal.
+    (
+        "T-UC-010-degradation-partitions",
+        {"full_response", "no_tenant", "no_principal", "account_degraded"},
+        "account block / adcp.supported_versions not emitted; INV-4 keeps adapter channels "
+        "principal-free so no_principal does not degrade to [display] — #1592",
     ),
 ]
 
@@ -3563,6 +3600,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # Batch 3 — degradation-sections + channel-all-canonical (salesagent-chbi)
             "T-UC-010-degradation-sections",
             "T-UC-010-channel-all-canonical",
+            # Batch 4 — features / targeting / idempotency-required (salesagent-tmpd)
+            "T-UC-010-features",
+            "T-UC-010-targeting",
+            "T-UC-010-targeting-partitions",
+            "T-UC-010-degradation-partitions",
+            "T-UC-010-v31-idempotency-required",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

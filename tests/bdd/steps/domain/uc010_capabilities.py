@@ -193,6 +193,112 @@ def given_capability_configured(ctx: dict, capability: str, capability_state: st
     _config(ctx)[key] = capability_state == "enabled"
 
 
+@given("the adapter provides full targeting capabilities")
+def given_adapter_full_targeting(ctx: dict) -> None:
+    """Seed the adapter with every TargetingCapabilities boolean dimension True.
+    Production maps geo_countries/geo_regions/geo_metros/geo_postal_areas off this;
+    the richer dimensions (age_restriction, language, keyword_targets,
+    negative_keywords, geo_proximity) have NO adapter surface and are never built."""
+    from dataclasses import fields as _dc_fields
+
+    from src.adapters.base import TargetingCapabilities
+
+    ctx["env"].set_targeting_capabilities(**{f.name: True for f in _dc_fields(TargetingCapabilities)})
+
+
+@given(parsers.parse("the adapter provides targeting as {config}"))
+def given_adapter_targeting_config(ctx: dict, config: str) -> None:
+    """Realize an outline-row adapter targeting config (targeting-partitions).
+
+    Only the TargetingCapabilities boolean dimensions have an adapter surface, so
+    dotted/native tokens (age_restriction.supported, geo_postal_areas US=[...],
+    keyword_targets.*, geo_proximity.*) are recorded as intent — production has no
+    way to emit them, which is exactly why those rows are production gaps."""
+    from dataclasses import fields as _dc_fields
+
+    from src.adapters.base import TargetingCapabilities
+
+    ctx["targeting_config"] = config
+    if "adapter unavailable" in config:
+        ctx["env"].make_adapter_unavailable()
+        return
+    known = {f.name for f in _dc_fields(TargetingCapabilities)}
+    if "all dimensions reported" in config:
+        ctx["env"].set_targeting_capabilities(**dict.fromkeys(known, True))
+        return
+    # Default geo_countries/geo_regions on; every nested dimension off unless the
+    # row explicitly sets it (so "no nested sub-properties" yields metros/postal absent).
+    dims = dict.fromkeys(known, False)
+    dims["geo_countries"] = True
+    dims["geo_regions"] = True
+    for match in re.finditer(r"([a-z_]+(?:\.[a-z_]+)?)\s*=\s*(true|false)", config):
+        field = match.group(1).split(".")[-1]
+        if field in known:
+            dims[field] = match.group(2) == "true"
+    ctx["env"].set_targeting_capabilities(**dims)
+
+
+@given("a tenant is resolvable and adapter and DB are available with all features")
+def given_full_degradation_baseline(ctx: dict) -> None:
+    """full_response degradation row: happy path (default env — adapter + DB up)."""
+    ctx["has_tenant"] = True
+    _config(ctx)["full"] = True
+
+
+@given("a tenant is resolvable but adapter is unavailable")
+def given_tenant_adapter_unavailable(ctx: dict) -> None:
+    """adapter_fail row: tenant resolves, adapter factory raises → [display] default."""
+    ctx["has_tenant"] = True
+    ctx["env"].make_adapter_unavailable()
+
+
+@given("a tenant is resolvable but database query fails")
+def given_tenant_db_fails(ctx: dict) -> None:
+    """db_fail row: tenant resolves, publisher-partner DB read fails → placeholder domain."""
+    ctx["has_tenant"] = True
+    ctx["env"].break_tenant_config_db()
+
+
+@given("a tenant is resolvable but both adapter and DB fail")
+def given_tenant_adapter_and_db_fail(ctx: dict) -> None:
+    """adapter_and_db_fail row: both degrade — [display] channels + placeholder domain."""
+    ctx["has_tenant"] = True
+    ctx["env"].make_adapter_unavailable()
+    ctx["env"].break_tenant_config_db()
+
+
+@given("a tenant is resolvable but no auth principal available")
+def given_tenant_no_principal(ctx: dict) -> None:
+    """no_principal row: tenant resolves, caller is principal-less (anonymous identity).
+    Per INV-4 the adapter is tenant-only/principal-free, so adapter-derived channels
+    are NOT degraded by the missing principal — the [display] expectation is the gap."""
+    ctx["has_tenant"] = True
+    ctx["identity"] = ctx["env"].anonymous_identity()
+
+
+@given(
+    parsers.re(
+        r"a tenant is resolvable but adapter unavailable or "
+        r"(?P<capability>audience targeting|conversion tracking) disabled$"
+    )
+)
+def given_tenant_section_absent(ctx: dict, capability: str) -> None:
+    """audience_targeting_absent / conversion_tracking_absent rows: model the
+    'adapter unavailable' leg (the capabilities builder never emits these blocks
+    regardless, so they are absent on the wire)."""
+    ctx["has_tenant"] = True
+    ctx["env"].make_adapter_unavailable()
+    _config(ctx)[capability.replace(" ", "_")] = False
+
+
+@given("a tenant is resolvable but creative not in supported_protocols")
+def given_tenant_creative_absent(ctx: dict) -> None:
+    """creative_absent row: production advertises only the media_buy protocol, so
+    the creative section is never emitted."""
+    ctx["has_tenant"] = True
+    _config(ctx)["supported_protocols"] = ["media_buy"]
+
+
 @given("the system has known state before the request")
 def given_state_snapshot(ctx: dict) -> None:
     ctx["state_snapshot"] = _db_state_snapshot(ctx["env"])
@@ -400,6 +506,14 @@ def then_idempotency_discriminator(ctx: dict) -> None:
             assert forbidden not in idempotency, (
                 f"IdempotencyUnsupported (supported=false) must omit {forbidden}: {idempotency!r}"
             )
+
+
+@then("adcp.idempotency should be present in the response")
+def then_idempotency_present(ctx: dict) -> None:
+    """adcp.idempotency is REQUIRED (get-adcp-capabilities-response.json
+    #/properties/adcp/required includes idempotency; "Clients MUST NOT assume a
+    default"). wire_dict pins present AND non-null AND a JSON object."""
+    wire_dict(ctx, "adcp.idempotency")
 
 
 @then("adcp.idempotency.supported should equal true")
@@ -646,6 +760,34 @@ def then_targeting_field_equals(ctx: dict, field: str, expected: str) -> None:
     _assert_wire_equals(ctx, f"media_buy.execution.targeting.{field}", expected)
 
 
+@then(
+    parsers.re(
+        r'media_buy\.execution\.targeting\.geo_postal_areas should be a country-keyed map where (?P<country>[A-Z]{2}) contains "(?P<token>[a-z_]+)"$'
+    )
+)
+def then_geo_postal_native_map(ctx: dict, country: str, token: str) -> None:
+    """geo_postal_areas is the NATIVE country-keyed map (postal-area-support.json:
+    named country props US/GB/CA/... plus additionalProperties = array items enum
+    [postal_code, custom]) — NOT the deprecated country-fused boolean aliases
+    (us_zip/de_plz, marked deprecated: true). Grades the native shape: the given
+    country key maps to an array containing the given item."""
+    postal = wire_field(ctx, "media_buy.execution.targeting.geo_postal_areas")
+    assert isinstance(postal, dict), f"geo_postal_areas not an object: {postal!r}"
+    assert country in postal, f"geo_postal_areas has no native country key {country!r}: {sorted(postal)}"
+    assert token in postal[country], f"geo_postal_areas.{country} does not contain {token!r}: {postal[country]!r}"
+
+
+@then(parsers.parse("media_buy.execution.targeting should not contain {names}"))
+def then_targeting_absent_keys(ctx: dict, names: str) -> None:
+    """Removed-in-3.1 dimensions: device_platform / device_type ("implied by
+    media_buy support") and audience_include / audience_exclude (moved to the
+    presence of media_buy.audience_targeting) MUST NOT appear on targeting."""
+    targeting = wire_field(ctx, "media_buy.execution.targeting")
+    forbidden = [name.strip() for name in re.split(r",|\bor\b|\band\b", names) if name.strip()]
+    present = [name for name in forbidden if name in targeting]
+    assert not present, f"targeting carries removed dimensions {present}: {sorted(targeting)}"
+
+
 @then(parsers.parse("media_buy.audience_targeting.{field} should equal {expected}"))
 def then_audience_field_equals(ctx: dict, field: str, expected: str) -> None:
     """Exact value on an audience_targeting sub-field. Required members
@@ -654,12 +796,14 @@ def then_audience_field_equals(ctx: dict, field: str, expected: str) -> None:
     _assert_wire_equals(ctx, f"media_buy.audience_targeting.{field}", expected)
 
 
-@then("media_buy.conversion_tracking should be present")
-def then_conversion_tracking_present(ctx: dict) -> None:
-    """conversion_tracking is an object whose PRESENCE indicates support (3.1.1:
-    the features.conversion_tracking flag was removed in 3.0). wire_dict pins the
-    dual assert — present AND non-null AND a JSON object."""
-    wire_dict(ctx, "media_buy.conversion_tracking")
+@then(parsers.parse("media_buy.{section} should be present"))
+def then_media_buy_section_present(ctx: dict, section: str) -> None:
+    """3.1.1 presence-indicates-support model: content_standards /
+    conversion_tracking / audience_targeting are objects whose PRESENCE is the
+    support signal (the equivalent features.* flags were removed in 3.0). wire_dict
+    pins the dual assert — present AND non-null AND a JSON object. Covers each
+    presence-object under media_buy with one grounded helper (DRY)."""
+    wire_dict(ctx, f"media_buy.{section}")
 
 
 @then(
@@ -961,13 +1105,202 @@ def then_details_build_version(ctx: dict, build_version: str) -> None:
     assert actual == build_version, f"details.build_version {actual!r} != {build_version!r}"
 
 
-# ── Thens: outline row→assertion dispatch (features-partitions) ──────
+# ── Thens: targeting outline row→assertion dispatch (targeting-partitions) ──
 
-# Row-text → assertion closure. Batch-1 wires ONLY the account.sandbox rows;
-# unwired rows raise NotImplementedError → auto-xfail (honest pending state).
+#: The 9 canonical targeting property names
+#: (get-adcp-capabilities-response.json#/.../targeting/properties).
+_NINE_TARGETING_KEYS = {
+    "geo_countries",
+    "geo_regions",
+    "geo_metros",
+    "geo_postal_areas",
+    "age_restriction",
+    "language",
+    "keyword_targets",
+    "negative_keywords",
+    "geo_proximity",
+}
+
+_TARGETING_PREFIX = "media_buy.execution.targeting"
+
+
+def _tp_full_adapter(ctx: dict) -> None:
+    targeting = wire_field(ctx, _TARGETING_PREFIX)
+    assert set(targeting) == _NINE_TARGETING_KEYS, f"targeting keys != 9 canonical: {sorted(targeting)}"
+    assert targeting["geo_countries"] is True and targeting["geo_regions"] is True, (
+        f"geo flags not both true: {targeting!r}"
+    )
+
+
+def _tp_defaults(ctx: dict) -> None:
+    targeting = wire_field(ctx, _TARGETING_PREFIX)
+    assert targeting == {"geo_countries": True, "geo_regions": True}, f"targeting != production default: {targeting!r}"
+
+
+def _tp_partial(ctx: dict) -> None:
+    targeting = wire_field(ctx, _TARGETING_PREFIX)
+    assert targeting.get("geo_countries") is True, f"geo_countries not true: {targeting!r}"
+    assert targeting.get("geo_regions") is False, f"geo_regions not false: {targeting!r}"
+    assert targeting.get("age_restriction", {}).get("supported") is True, (
+        f"age_restriction.supported not true: {targeting!r}"
+    )
+    stray = {"geo_metros", "geo_postal_areas"} & set(targeting)
+    assert not stray, f"partial config leaked geo keys {sorted(stray)}: {sorted(targeting)}"
+
+
+def _tp_nested_populated(ctx: dict) -> None:
+    targeting = wire_field(ctx, _TARGETING_PREFIX)
+    assert targeting.get("geo_metros") == {"nielsen_dma": True}, (
+        f"geo_metros != {{nielsen_dma: true}}: {targeting.get('geo_metros')!r}"
+    )
+    postal = targeting.get("geo_postal_areas") or {}
+    assert "US" in postal and "zip" in postal["US"], f"geo_postal_areas US containing zip not present: {postal!r}"
+
+
+def _tp_nested_absent(ctx: dict) -> None:
+    targeting = wire_field(ctx, _TARGETING_PREFIX)
+    stray = {"geo_metros", "geo_postal_areas"} & set(targeting)
+    assert not stray, f"geo_metros/geo_postal_areas should be absent: {sorted(targeting)}"
+
+
+def _tp_keyword(ctx: dict) -> None:
+    targeting = wire_field(ctx, _TARGETING_PREFIX)
+    assert targeting.get("keyword_targets", {}).get("supported_match_types") == ["broad", "phrase", "exact"], (
+        f"keyword_targets match types wrong: {targeting.get('keyword_targets')!r}"
+    )
+    assert targeting.get("negative_keywords", {}).get("supported_match_types") == ["exact"], (
+        f"negative_keywords match types wrong: {targeting.get('negative_keywords')!r}"
+    )
+
+
+def _tp_postal_legacy(ctx: dict) -> None:
+    postal = wire_field(ctx, f"{_TARGETING_PREFIX}.geo_postal_areas")
+    assert isinstance(postal, dict) and "DE" in postal and "plz" in postal["DE"], (
+        f"native DE containing plz not present: {postal!r}"
+    )
+
+
+#: Targeting outline expected-column → assertion. Rows production satisfies
+#: (adapter_unavailable_defaults, nested_absent) pass; the rest execute the real
+#: assertion and fail on dimensions the builder never emits (#1592 gaps, marked
+#: strict via conftest _SELECTIVE_XFAIL).
+_TARGETING_SATISFY: dict[str, Any] = {
+    "targeting has exactly the keys geo_countries, geo_regions, geo_metros, geo_postal_areas, "
+    "age_restriction, language, keyword_targets, negative_keywords and geo_proximity with "
+    "geo_countries true and geo_regions true": _tp_full_adapter,
+    "targeting equals exactly {geo_countries: true, geo_regions: true}": _tp_defaults,
+    "geo_countries true, geo_regions false, age_restriction.supported true, no other geo keys": _tp_partial,
+    'geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"': _tp_nested_populated,
+    "geo_metros and geo_postal_areas absent from targeting": _tp_nested_absent,
+    "age_restriction equals {supported: true, verification_methods: [id_document]}": lambda ctx: _assert_wire_equals(
+        ctx, f"{_TARGETING_PREFIX}.age_restriction", '{"supported": true, "verification_methods": ["id_document"]}'
+    ),
+    "keyword_targets match types equal [broad, phrase, exact] and negative_keywords match types equal [exact]": _tp_keyword,
+    "geo_proximity equals {radius: true, travel_time: true, geometry: false, transport_modes: [driving, walking]}": lambda ctx: (
+        _assert_wire_equals(
+            ctx,
+            f"{_TARGETING_PREFIX}.geo_proximity",
+            '{"radius": true, "travel_time": true, "geometry": false, "transport_modes": ["driving", "walking"]}',
+        )
+    ),
+    "geo_postal_areas equals {DE: [plz], CH: [plz], AT: [plz]}": lambda ctx: _assert_wire_equals(
+        ctx, f"{_TARGETING_PREFIX}.geo_postal_areas", '{"DE": ["plz"], "CH": ["plz"], "AT": ["plz"]}'
+    ),
+    'geo_postal_areas has native DE containing "plz" and MAY carry the deprecated de_plz alias': _tp_postal_legacy,
+}
+
+
+@then(parsers.parse("media_buy.execution.targeting should satisfy {expected_targeting}"))
+def then_targeting_satisfies(ctx: dict, expected_targeting: str) -> None:
+    assertion = _TARGETING_SATISFY.get(expected_targeting.strip())
+    if assertion is None:
+        raise NotImplementedError(f"UC-010 targeting assertion row not wired: {expected_targeting!r} (#1592)")
+    assertion(ctx)
+
+
+# ── Thens: degradation + features-partitions outline dispatch ────────
+
+
+def _deg_full_response(ctx: dict) -> None:
+    wire = wire_dict(ctx)
+    for key in ("adcp", "supported_protocols", "account", "media_buy", "last_updated"):
+        assert key in wire, f"full_response missing top-level {key!r}: {sorted(wire)}"
+    billing = wire["account"].get("supported_billing")
+    assert isinstance(billing, list) and billing, f"account.supported_billing not non-empty: {billing!r}"
+    assert isinstance(wire["adcp"].get("idempotency"), dict), f"adcp.idempotency absent: {wire['adcp']!r}"
+
+
+def _deg_no_tenant(ctx: dict) -> None:
+    wire = wire_dict(ctx)
+    assert set(wire) <= {"adcp", "supported_protocols"}, f"no_tenant top-level not minimal: {sorted(wire)}"
+    adcp = wire["adcp"]
+    for key in ("major_versions", "supported_versions", "idempotency"):
+        assert key in adcp, f"no_tenant adcp missing {key!r}: {sorted(adcp)}"
+
+
+def _deg_display_default(ctx: dict) -> None:
+    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
+    assert channels == ["display"], f"primary_channels not the [display] default: {channels!r}"
+    targeting = wire_field(ctx, _TARGETING_PREFIX)
+    assert targeting == {"geo_countries": True, "geo_regions": True}, (
+        f"targeting not the degraded default: {targeting!r}"
+    )
+    for path in (
+        "media_buy.reporting_delivery_methods",
+        "media_buy.audience_targeting",
+        "media_buy.conversion_tracking",
+    ):
+        wire_absent(ctx, path)
+
+
+def _assert_placeholder_domain(ctx: dict) -> None:
+    domains = wire_field(ctx, "media_buy.portfolio.publisher_domains")
+    assert isinstance(domains, list) and len(domains) == 1 and str(domains[0]).endswith(".example.com"), (
+        f"publisher_domains not the single placeholder domain: {domains!r}"
+    )
+
+
+def _deg_db_fail(ctx: dict) -> None:
+    _assert_placeholder_domain(ctx)
+    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
+    assert channels == ["display", "social", "ctv"], f"adapter channels degraded on a DB-only failure: {channels!r}"
+
+
+def _deg_adapter_and_db_fail(ctx: dict) -> None:
+    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
+    assert channels == ["display"], f"primary_channels not the [display] default: {channels!r}"
+    _assert_placeholder_domain(ctx)
+    for path in ("media_buy.audience_targeting", "media_buy.conversion_tracking"):
+        wire_absent(ctx, path)
+
+
+def _deg_account_degraded(ctx: dict) -> None:
+    account = wire_field(ctx, "account")
+    billing = account.get("supported_billing")
+    assert isinstance(billing, list) and billing, f"degraded account.supported_billing not non-empty: {billing!r}"
+    extras = set(account) - {"supported_billing"}
+    assert not extras, f"degraded account carries optional fields: {sorted(extras)}"
+
+
+# Row-text → assertion closure (features-partitions account.sandbox + degradation rows).
+# Rows production satisfies pass; production-gap rows execute the real assertion and
+# fail (strict per-row xfail in conftest _SELECTIVE_XFAIL).
 _SATISFY_TABLE: dict[str, Any] = {
     "account.sandbox is true": lambda ctx: _expect_flag(ctx, "account.sandbox", "equal to true"),
     "account.sandbox is false": lambda ctx: _expect_flag(ctx, "account.sandbox", "equal to false"),
+    "top-level keys include adcp, supported_protocols, account, media_buy and last_updated "
+    "with account.supported_billing non-empty and adcp.idempotency present": _deg_full_response,
+    "only adcp and supported_protocols at top level, with adcp carrying major_versions, "
+    "supported_versions and idempotency": _deg_no_tenant,
+    "primary_channels equals [display] and targeting equals exactly {geo_countries: true, "
+    "geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking": _deg_display_default,
+    "publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]": _deg_db_fail,
+    "primary_channels equals [display] and publisher_domains equals the placeholder domain, "
+    "adapter-dependent sections absent": _deg_adapter_and_db_fail,
+    "account present with non-empty supported_billing and no optional account fields": _deg_account_degraded,
+    "media_buy.audience_targeting absent": lambda ctx: wire_absent(ctx, "media_buy.audience_targeting"),
+    "media_buy.conversion_tracking absent": lambda ctx: wire_absent(ctx, "media_buy.conversion_tracking"),
+    "creative section absent": lambda ctx: wire_absent(ctx, "creative"),
 }
 
 

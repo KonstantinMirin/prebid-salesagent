@@ -637,19 +637,29 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities
-    Then media_buy.features should include inline_creative_management as a boolean
-    And media_buy.features should include property_list_filtering as a boolean
-    And media_buy.features should include catalog_management as a boolean
-    And media_buy.features should include committed_metrics_supported as a boolean
-    And media_buy.content_standards presence should indicate content-standards support
-    And media_buy.conversion_tracking presence should indicate conversion-tracking support
-    And media_buy.audience_targeting presence should indicate audience-targeting support
-    And account.sandbox should be a boolean
+    Then media_buy.features should have boolean flags inline_creative_management, property_list_filtering, catalog_management and committed_metrics_supported
+    And media_buy.content_standards should be present
+    And media_buy.conversion_tracking should be present
+    And media_buy.audience_targeting should be present
+    And a present audience_targeting section should include supported_identifier_types and minimum_audience_size
+    And account.sandbox should equal false
     # POST-S4: 3.1.1 feature model — 4 named boolean flags in media_buy.features
     # (core/media-buy-features.json, additionalProperties boolean); content_standards /
     # conversion_tracking / audience_targeting are presence-objects directly under media_buy
     # (flags removed in 3.0); sandbox moved to account.sandbox.
+    # Spec-pinned Thens (salesagent-tmpd): the four tautological "presence should indicate
+    # support" lines and the two type-only lines are pinned to observables — the 4-flag
+    # boolean SHAPE (media-buy-features.json: 4 named flags, additionalProperties boolean,
+    # none required; per-flag VALUE is config-derived / spec-silent so the shape is graded
+    # and the value reported), each presence-object asserted PRESENT (its presence IS the
+    # 3.1.1 support signal, replacing the removed flags), audience_targeting's two required
+    # members, and account.sandbox pinned to false (schema default). PRODUCTION GAP
+    # (strict xfail): the capabilities builder emits media_buy.features but NOT the
+    # content_standards / conversion_tracking / audience_targeting presence-objects nor the
+    # account block (account.sandbox) — the scenario executes, grades the features shape,
+    # then fails at the first missing presence-object (#1592).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/media-buy-features.json pointer=/properties
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/audience_targeting/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
 
   @T-UC-010-features-partitions @partition @boundary @features @post-s4
@@ -687,16 +697,29 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the adapter provides full targeting capabilities
     When the Buyer Agent calls get_adcp_capabilities
-    Then media_buy.execution.targeting should include geo_countries and geo_regions as booleans
-    And targeting.geo_metros should be an object with only nielsen_dma, uk_itl1, uk_itl2 and eurostat_nuts2 keys
-    And targeting.geo_postal_areas should be a country-keyed map where US contains "zip"
-    And targeting.age_restriction.supported should be a boolean
-    And media_buy.execution.targeting should include language as a boolean
-    And targeting.keyword_targets.supported_match_types should be a non-empty subset of [broad, phrase, exact]
-    And targeting.negative_keywords.supported_match_types should be a non-empty subset of [broad, phrase, exact]
-    And media_buy.execution.targeting should include geo_proximity section
-    And targeting should not contain device_platform, device_type, audience_include or audience_exclude
+    Then media_buy.execution.targeting.geo_countries should equal true
+    And media_buy.execution.targeting.geo_regions should equal true
+    And media_buy.execution.targeting.geo_metros should equal {"nielsen_dma": true, "uk_itl1": true, "uk_itl2": true, "eurostat_nuts2": true}
+    And media_buy.execution.targeting.geo_postal_areas should be a country-keyed map where US contains "postal_code"
+    And media_buy.execution.targeting.age_restriction.supported should equal true
+    And media_buy.execution.targeting.language should equal true
+    And media_buy.execution.targeting.keyword_targets.supported_match_types should equal ["broad", "phrase", "exact"]
+    And media_buy.execution.targeting.negative_keywords.supported_match_types should equal ["broad", "phrase", "exact"]
+    And media_buy.execution.targeting.geo_proximity should equal {"radius": true, "travel_time": true, "geometry": true, "transport_modes": ["driving", "walking", "cycling", "public_transport"]}
+    And media_buy.execution.targeting should not contain device_platform, device_type, audience_include or audience_exclude
     # POST-S5: Buyer knows execution capabilities
+    # Spec-pinned Thens (salesagent-tmpd): under the full-caps fixture every dimension value is
+    # knowable, so the type-only / subset lines are pinned to exact values — geo_countries /
+    # geo_regions / language / age_restriction.supported = true; geo_metros = the 4-key all-true
+    # object (additionalProperties: false); keyword_targets / negative_keywords match types =
+    # the full [broad, phrase, exact] enum (minItems 1); geo_proximity = the full member object;
+    # geo_postal_areas = the native country-keyed map (items enum [postal_code, custom], NOT the
+    # deprecated country-fused boolean aliases). PRODUCTION GAP (strict xfail): the capabilities
+    # builder emits only geo_countries / geo_regions / geo_metros / geo_postal_areas, and
+    # geo_postal_areas is built from the DEPRECATED us_zip/de_plz boolean aliases (not the native
+    # US=[...] map) — age_restriction, language, keyword_targets, negative_keywords and
+    # geo_proximity are never built. The scenario executes, grades geo_countries/regions/metros,
+    # then fails at geo_postal_areas' native-map shape (#1592).
     # 3.1.1: targeting is FLAT — there is NO nested geo object; geo_countries/geo_regions are
     # boolean siblings of the geo_metros/geo_postal_areas objects. geo_postal_areas is the
     # native country-keyed map of core/postal-area-support.json (legacy country-fused boolean
@@ -722,7 +745,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
 
     Examples:
       | partition                                                                            | targeting_config                                                                                             | expected_targeting                                                                                    |
-      | full_adapter adapter available with full capabilities                                | all dimensions reported                                                                                      | all nine targeting properties present and schema-shaped                                               |
+      | full_adapter adapter available with full capabilities                                | all dimensions reported                                                                                      | targeting has exactly the keys geo_countries, geo_regions, geo_metros, geo_postal_areas, age_restriction, language, keyword_targets, negative_keywords and geo_proximity with geo_countries true and geo_regions true |
       | adapter_unavailable_defaults adapter unavailable (production defaults apply)         | adapter unavailable                                                                                          | targeting equals exactly {geo_countries: true, geo_regions: true}                                     |
       | partial_dimensions                                                                   | geo_countries=true, geo_regions=false, age_restriction.supported=true                                        | geo_countries true, geo_regions false, age_restriction.supported true, no other geo keys              |
       | nested_populated native postal map and metros                                        | geo_metros.nielsen_dma=true, geo_postal_areas US=["zip"]                                                     | geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"                    |
@@ -764,17 +787,29 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # schema-legal partition (supported_billing always present and non-empty when the block
     # is emitted); adapter_fail expected reworded to portfolio.primary_channels ("channels"
     # is not a field of the 3.1.1 response).
+    # Vague expected columns pinned (salesagent-tmpd): full_response → the concrete top-level
+    # key-set + account.supported_billing non-empty + adcp.idempotency present; adapter_fail /
+    # no_principal "default targeting" → the exact production default {geo_countries: true,
+    # geo_regions: true} (spec-silent on degradation — production authoritative; the same
+    # concrete value is pinned by @T-UC-010-targeting-partitions' adapter_unavailable_defaults
+    # row); db_fail "other sections unaffected" → the two observables (placeholder
+    # publisher_domains + intact [display, social, ctv] channels). PRODUCTION GAPS (strict
+    # per-row xfail via conftest _SELECTIVE_XFAIL): the account block, adcp.supported_versions,
+    # and no_principal's [display] degradation (INV-4 keeps the adapter principal-free, so a
+    # missing principal does NOT degrade adapter-derived channels) are not emitted/enforced —
+    # those rows execute and fail; the rows that DO hold (adapter_fail, db_fail,
+    # adapter_and_db_fail, *_absent) pass on the wire (#1592).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
 
     Examples:
       | partition                  | precondition                                                                | expected_degradation                                                                                                      |
-      | full_response              | a tenant is resolvable and adapter and DB are available with all features   | complete capabilities including account, media_buy and last_updated                                                       |
+      | full_response              | a tenant is resolvable and adapter and DB are available with all features   | top-level keys include adcp, supported_protocols, account, media_buy and last_updated with account.supported_billing non-empty and adcp.idempotency present |
       | no_tenant                  | no tenant can be resolved from the request context                          | only adcp and supported_protocols at top level, with adcp carrying major_versions, supported_versions and idempotency     |
-      | adapter_fail               | a tenant is resolvable but adapter is unavailable                           | portfolio.primary_channels equals [display], default targeting, no reporting_delivery_methods, audience_targeting or conversion_tracking |
-      | db_fail                    | a tenant is resolvable but database query fails                             | portfolio.publisher_domains equals the placeholder domain, other sections unaffected                                      |
+      | adapter_fail               | a tenant is resolvable but adapter is unavailable                           | primary_channels equals [display] and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking |
+      | db_fail                    | a tenant is resolvable but database query fails                             | publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]                        |
       | adapter_and_db_fail        | a tenant is resolvable but both adapter and DB fail                         | primary_channels equals [display] and publisher_domains equals the placeholder domain, adapter-dependent sections absent  |
-      | no_principal               | a tenant is resolvable but no auth principal available                      | primary_channels equals [display], default targeting, no reporting_delivery_methods, audience_targeting or conversion_tracking |
+      | no_principal               | a tenant is resolvable but no auth principal available                      | primary_channels equals [display] and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking |
       | account_degraded           | a tenant is resolvable with partial account config                          | account present with non-empty supported_billing and no optional account fields                                           |
       | audience_targeting_absent  | a tenant is resolvable but adapter unavailable or audience targeting disabled | media_buy.audience_targeting absent                                                                                       |
       | conversion_tracking_absent | a tenant is resolvable but adapter unavailable or conversion tracking disabled | media_buy.conversion_tracking absent                                                                                      |
@@ -836,11 +871,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities
     Then adcp.idempotency should be present in the response
-    And adcp.idempotency.supported should be a boolean discriminator
+    And adcp.idempotency.supported should be exactly true or false, and when false replay_ttl_seconds and in_flight_max_seconds should be absent
     # Sellers without idempotency declaration are non-compliant and unsafe for retries
     # ("Clients MUST NOT assume a default").
     # POST-S15: Buyer knows the idempotency posture (required for safe retry on mutating requests)
+    # Spec-pinned Then (salesagent-tmpd): "should be a boolean discriminator" described the
+    # schema ROLE, not a checkable value — replaced with the oneOf invariant: supported is
+    # exactly true or false, and on the IdempotencyUnsupported branch (supported=false) the
+    # schema's not.anyOf forbids replay_ttl_seconds and in_flight_max_seconds. Production
+    # emits Idempotency(supported=true, replay_ttl_seconds=DEFAULT_REPLAY_TTL), so this
+    # scenario passes on the wire (adcp.idempotency is REQUIRED and present).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf
 
   @T-UC-010-v31-idempotency-in-flight-bound @v31 @invariant @boundary
   Scenario: idempotency-in-flight-bound — in_flight_max_seconds must not exceed replay_ttl_seconds
