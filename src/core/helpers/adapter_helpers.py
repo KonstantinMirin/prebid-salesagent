@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from adcp.exceptions import ADCPError
 
     from src.adapters import AdServerAdapter
+    from src.adapters.base import TargetingCapabilities
 
 
 class _HasAgentFields(Protocol):
@@ -134,6 +135,34 @@ def resolve_tenant_adapter_type(tenant: Any = None) -> str:
     return selected_adapter or "mock"
 
 
+def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> dict:
+    """Read the per-tenant mock-adapter ``test_behavior`` fault-injection config.
+
+    Single seam (salesagent-689e Core Invariant) for reading
+    ``AdapterConfig.config_json["test_behavior"]`` outside an ``_impl`` file —
+    ``src/core/tools/capabilities.py`` is scanned by
+    ``test_architecture_repository_pattern.py`` with an EMPTY
+    ``IMPL_SESSION_ALLOWLIST``, so callers there must go through this helper
+    instead of opening their own ``get_db_session()``. Gated on
+    ``adapter_type == "mock"`` so the fault-injection channel never leaks onto
+    real ad-server adapters. Returns ``{}`` when not applicable/configured.
+    """
+    if adapter_type != "mock":
+        return {}
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+    with get_db_session() as session:
+        repo = AdapterConfigRepository(session, tenant_id)
+        row = repo.find_by_tenant()
+        if row and isinstance(row.config_json, dict):
+            behavior = row.config_json.get("test_behavior", {})
+            if isinstance(behavior, dict):
+                return behavior
+    return {}
+
+
 def get_adapter_class_for_tenant(tenant: Any = None) -> type[AdServerAdapter]:
     """Resolve the ad-server adapter CLASS for a tenant, without a Principal.
 
@@ -145,13 +174,53 @@ def get_adapter_class_for_tenant(tenant: Any = None) -> type[AdServerAdapter]:
     TritonDigital unconditionally require a principal-bound config in
     ``__init__`` and would crash for a synthetic/tenant-only Principal.
 
+    Raises when the tenant's mock-adapter ``test_behavior["unavailable"]``
+    fault-injection flag is set (salesagent-689e) — deliberately pinned here,
+    not in ``resolve_tenant_adapter_type()``, because that function also backs
+    ``get_adapter()``/the real media-buy path for the same tenant; raising
+    there would leak the fault onto ``create_media_buy`` during an e2e run.
+
     Args:
         tenant: Tenant context (dict or ORM model). Falls back to ContextVar if not provided.
     """
     from src.adapters import get_adapter_class
 
     adapter_type = resolve_tenant_adapter_type(tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
+
+    test_behavior = _read_mock_test_behavior(tenant_id, adapter_type)
+    if test_behavior.get("unavailable"):
+        from src.core.exceptions import AdCPAdapterError
+
+        raise AdCPAdapterError(
+            test_behavior.get("error_message", "Adapter unavailable (test fault injection)"),
+            recovery=test_behavior.get("recovery", "transient"),
+            suggestion="Retry the operation or contact ad server support",
+        )
+
     return get_adapter_class(adapter_type)
+
+
+def get_targeting_capabilities_override(tenant: Any = None) -> TargetingCapabilities | None:
+    """Return the per-tenant mock-adapter targeting-capability override, if any.
+
+    Reads the same ``test_behavior`` seam as ``get_adapter_class_for_tenant``
+    (salesagent-689e). Callers in ``_impl`` files (e.g. ``capabilities.py``)
+    must use this instead of opening their own DB session — it stays legal
+    under ``test_architecture_repository_pattern.py``'s empty
+    ``IMPL_SESSION_ALLOWLIST`` because the session lives in this file, not theirs.
+    """
+    adapter_type = resolve_tenant_adapter_type(tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
+
+    test_behavior = _read_mock_test_behavior(tenant_id, adapter_type)
+    override = test_behavior.get("targeting_capabilities")
+    if not isinstance(override, dict):
+        return None
+
+    from src.adapters.base import TargetingCapabilities as _TargetingCapabilities
+
+    return _TargetingCapabilities(**override)
 
 
 def get_adapter(

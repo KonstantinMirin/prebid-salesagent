@@ -39,6 +39,7 @@ from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 
 from src.adapters.base import TargetingCapabilities
 from tests.harness._base import IntegrationEnv
+from tests.harness._realize import e2e_unsupported, realize_e2e
 
 #: Default channels seeded on the adapter mock — matches the feature fixture
 #: comment ("fixture seeds channels 'display, social, ctv' on the adapter").
@@ -87,26 +88,61 @@ class CapabilitiesEnv(IntegrationEnv):
 
     # -- Given-step helpers ---------------------------------------------------
 
+    @realize_e2e(
+        e2e_unsupported(
+            "no production test_behavior channel for overriding reported default_channels "
+            "(only 'unavailable' and 'targeting_capabilities' are wired to AdapterConfig "
+            "test_behavior — salesagent-689e)"
+        )
+    )
     def set_adapter_channels(self, channels: list[str]) -> None:
         """Configure the channel names the adapter reports."""
         self._adapter_mock.default_channels = list(channels)
 
+    def _realize_targeting_capabilities(self, **dims: bool) -> None:
+        """E2E realization: persist targeting_capabilities into test_behavior."""
+        from tests.factories.core import set_adapter_test_behavior
+
+        set_adapter_test_behavior(self, self._tenant_id, targeting_capabilities=dims)
+
+    @realize_e2e(_realize_targeting_capabilities)
     def set_targeting_capabilities(self, **dims: bool) -> None:
         """Configure adapter targeting capabilities from keyword flags.
 
         Unnamed dimensions default to False (TargetingCapabilities defaults).
+        In-process: overrides the adapter mock directly. E2E: persists the
+        override into AdapterConfig.config_json['test_behavior'], read by
+        get_targeting_capabilities_override (src/core/helpers/adapter_helpers.py).
         """
         self._adapter_mock.get_targeting_capabilities.return_value = TargetingCapabilities(**dims)
 
+    def _realize_adapter_unavailable(self) -> None:
+        """E2E realization: persist the 'unavailable' fault-injection flag."""
+        from tests.factories.core import set_adapter_test_behavior
+
+        set_adapter_test_behavior(self, self._tenant_id, unavailable=True)
+
+    @realize_e2e(_realize_adapter_unavailable)
     def make_adapter_unavailable(self) -> None:
-        """Adapter factory raises — production degrades to default channels."""
+        """Adapter factory raises — production degrades to default channels.
+
+        In-process: the adapter-class mock raises directly. E2E: persists
+        test_behavior['unavailable']=True, read by get_adapter_class_for_tenant
+        (src/core/helpers/adapter_helpers.py), which raises for mock-adapter
+        tenants only.
+        """
         self.mock["adapter"].side_effect = Exception("adapter unavailable (harness)")
 
+    @realize_e2e(
+        e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
+    )
     def break_tenant_config_db(self) -> None:
         """Make the publisher-partner DB read fail — production degrades to placeholder.
 
         Patches TenantConfigUoW at the capabilities module seam. Tracked on
-        ctx-independent env teardown via the standard patcher list.
+        ctx-independent env teardown via the standard patcher list. In-process
+        only — no server-side DB-fault-injection surface exists (e2e branch
+        declares E2EUnsupportedSetup).
         """
         patcher = patch(
             "src.core.tools.capabilities.TenantConfigUoW",

@@ -37,7 +37,7 @@ from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TT
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
-from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
+from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant, get_targeting_capabilities_override
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
@@ -186,9 +186,16 @@ def _get_adcp_capabilities_impl(
         catalog_management=False,
     )
 
-    # Build targeting capabilities from adapter
+    # Build targeting capabilities from adapter, unless a per-tenant
+    # test_behavior override is configured (salesagent-689e fault injection).
+    # Same degrade-on-exception posture as the adapter-channels block above —
+    # the override read is a DB call, not a hard requirement.
     targeting_caps = None
-    if adapter and hasattr(adapter, "get_targeting_capabilities"):
+    try:
+        targeting_caps = get_targeting_capabilities_override(tenant)
+    except Exception as e:
+        logger.warning(f"Could not get targeting capabilities override: {e}")
+    if targeting_caps is None and adapter and hasattr(adapter, "get_targeting_capabilities"):
         targeting_caps = adapter.get_targeting_capabilities()
 
     # Build GeoMetros if any metro targeting is supported

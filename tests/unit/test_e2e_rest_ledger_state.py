@@ -67,17 +67,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # uc003 ext-a-unknown graduated at salesagent-z9e0 (harness identity_for()
         # now nulls principal_id on a failed token->principal DB lookup, mirroring
         # production's resolve_identity() — all transports agree now).
-        # UC-010 capability-degradation scenarios added 2026-07-24 (eiww batches
-        # chbi/tmpd): mock-incompatible on e2e_rest — Givens inject adapter/DB
-        # failure or a specific adapter targeting config not realizable over real
-        # HTTP; they run + assert on a2a/mcp/rest, only e2e_rest cannot set up the
-        # precondition. Mirrored in tests/bdd/e2e_rest_known_failures.txt.
-        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_degraded_response_is_always_schemavalid[e2e_rest]",
-        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-adapter_unavailable_defaults adapter unavailable (production defaults apply)-adapter unavailable-targeting equals exactly {geo_countries: true, geo_regions: true}]",
-        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_degradation_path__partition[e2e_rest-adapter_fail-a tenant is resolvable but adapter is unavailable-primary_channels equals [display] and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking]",
-        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_degradation_path__partition[e2e_rest-adapter_and_db_fail-a tenant is resolvable but both adapter and DB fail-primary_channels equals [display] and publisher_domains equals the placeholder domain, adapter-dependent sections absent]",
-        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_degradation_path__partition[e2e_rest-db_fail-a tenant is resolvable but database query fails-publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]]",
-        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_absent no nested sub-properties declared-no nested sub-properties true-geo_metros and geo_postal_areas absent from targeting]",
     }
 )
 
