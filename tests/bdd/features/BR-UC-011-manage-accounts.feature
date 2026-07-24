@@ -501,9 +501,13 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent retries the sync_accounts request with billing "agent" and a fresh idempotency_key
     Then the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "agent"
-    # XFAIL-EXPECTED: production gap — #1592 (recover leg ungraded; retry-with-supported-value flow unwired)
-    # Recovery: pick a value from supported_billing and retry — a NEW request under a FRESH
-    # idempotency_key (same key + different payload would be IDEMPOTENCY_CONFLICT)
+    # GRADED GREEN (salesagent-9jiu): the retry-with-supported-value recovery flow is now
+    # wired and passes on a2a/mcp/rest — the rejected first leg is not persisted
+    # (_check_billing_policy continues), so the keyless re-dispatch provisions a fresh account.
+    # Recovery: pick a value from supported_billing and retry — a NEW request (the rejected
+    # leg left no natural-key row, so no IDEMPOTENCY_CONFLICT). NOTE: production does not carry
+    # idempotency_key on the sync_accounts wire (REST request model rejects it as extra), so the
+    # "fresh idempotency_key" is realized as a fresh keyless request.
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover (recover-leg mechanics; capability-gate recovery narrative in the storyboard header)
 
   @T-UC-011-billing-agent-gate-reject @sync @billing @per-agent-gate @error @partition
@@ -518,7 +522,7 @@ Feature: BR-UC-011 Manage Accounts
     And the per-account errors array contains an error with code "BILLING_NOT_PERMITTED_FOR_AGENT"
     And the per-account error recovery is "correctable"
     And the per-account error details rejected_billing is "agent"
-    And the per-account error details include a suggested_billing value from the billing-party enum
+    And the per-account error details suggested_billing is "operator"
     And the per-account error details do not include permitted_billing, rate_card, payment_terms, credit_limit, billing_entity, or account_id
     # XFAIL-EXPECTED: production gap — #1592 (no per-buyer-agent commercial gate exists in production)
     # Clamped details shape (additionalProperties: false) — the per-agent code MUST NOT act as
@@ -537,7 +541,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the per-account errors array contains an error with code "BILLING_NOT_PERMITTED_FOR_AGENT"
     When the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key
     Then the account for brand domain "acme-corp.com" has action "created"
-    And the account billing matches the seller's suggested_billing value
+    And the account billing is "operator"
     # XFAIL-EXPECTED: production gap — #1592 (per-agent gate + autonomous recovery unimplemented)
     # The recover phase is NOT a replay: different payload requires a fresh idempotency_key
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover/steps/sync_accounts_recover_with_suggested

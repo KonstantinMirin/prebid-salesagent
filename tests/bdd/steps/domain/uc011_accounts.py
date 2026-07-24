@@ -237,6 +237,30 @@ def given_seller_partial_billing(ctx: dict, supported: str, rejected: str) -> No
     _set_billing_policy(ctx, [supported])
 
 
+@given("the Buyer Agent is registered with the seller as passthrough-only")
+def given_agent_passthrough_only(ctx: dict) -> None:
+    """Register the calling buyer agent as passthrough-only (no payments relationship).
+
+    Spec (error-details/billing-not-permitted-for-agent.json#/description): the
+    per-agent gate fires when "the seller's declared ``supported_billing``
+    capability ACCEPTS the requested value but the calling buyer agent's
+    commercial relationship with the seller does not (e.g., the agent is
+    onboarded as passthrough-only — no payments relationship — so ``agent`` and
+    ``advertiser`` reject)." The correct fixture therefore declares agent (and
+    advertiser) as *capability-supported* — the value is enum-valid AND in the
+    seller's supported_billing — so the ONLY thing that could reject it is the
+    per-buyer-agent commercial gate. Production has no such gate (#1592), so it
+    accepts the capability-supported value and provisions the account; that is
+    the gap these scenarios grade (strict xfail in conftest _XFAIL_TAGS).
+
+    Real DB seeding via ``set_billing_policy`` (writes the tenant
+    ``supported_billing`` column) — NOT mock injection — so the setup is
+    e2e_rest-compatible.
+    """
+    _set_billing_policy(ctx, ["operator", "agent", "advertiser"])
+    ctx["agent_passthrough_only"] = True
+
+
 def _set_approval_mode(ctx: dict, mode: str) -> None:
     """Set approval mode via the harness."""
     ctx["env"].set_approval_mode(mode)
@@ -1054,6 +1078,9 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
     accounts = _parse_sync_table(rows)
 
     ctx["sync_request_brand_pairs"] = _extract_brand_pairs(accounts)
+    # Retain the parsed entries so a recovery retry (fresh idempotency_key,
+    # changed billing) can re-issue against the SAME natural key(s).
+    ctx["last_sync_accounts"] = accounts
 
     kwargs: dict[str, Any] = {}
 
@@ -1299,6 +1326,155 @@ def then_operation_error_naming_field(ctx: dict, code: str, field: str) -> None:
         f"No transport result captured — the request did not reach a transport. Recorded error: {ctx.get('error')!r}"
     )
     result.assert_wire_error(code, field=field)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-011 billing-gate recovery + per-agent-gate wiring (salesagent-9jiu / eiww batch B3)
+#
+# Wires the previously-dormant billing recovery scenarios (retry Whens) and the
+# per-agent-gate reject detail-field Thens, spec-grounded against v3.1.1
+# (docs/adcp-spec-version.md — the pinned target).
+#
+# Production trace (src/core/tools/accounts.py, verified empirically):
+#   - _check_billing_policy rejects an UNSUPPORTED billing value with
+#     Error(code="BILLING_NOT_SUPPORTED", message, suggestion) — it emits NO
+#     ``recovery`` and NO ``details`` (scope/supported_billing), and the rejected
+#     entry is NOT persisted (the loop ``continue``s), so a recovery retry with a
+#     supported value provisions a fresh account (action "created").
+#   - There is NO per-buyer-agent commercial gate anywhere in production: a
+#     capability-supported billing value ("agent" when the tenant declares it in
+#     supported_billing) is accepted and the account is provisioned. Production
+#     therefore never emits BILLING_NOT_PERMITTED_FOR_AGENT — the per-agent
+#     reject/recover scenarios stay strict tag-level xfails (conftest _XFAIL_TAGS).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _retry_sync_with_billing(ctx: dict, billing: str) -> None:
+    """Re-issue the prior sync_accounts request with a new billing value + fresh idempotency_key.
+
+    Reconstructs the previously-parsed entries (``ctx['last_sync_accounts']``),
+    swaps every entry's ``billing`` to ``billing``, and re-dispatches. A recovery
+    retry is a NEW request against the SAME natural key — not a replay. The prior
+    (rejected) leg was never persisted (``_check_billing_policy`` ``continue``s
+    without creating the account), so the natural key is fresh and no
+    idempotency_key is needed to avoid an IDEMPOTENCY_CONFLICT — production does
+    not carry idempotency_key on the sync_accounts wire (the REST request model
+    rejects it as an extra input; #1592), so a keyless re-dispatch IS the fresh
+    request the recovery contract calls for.
+
+    Spec: enums/error-code.json#/enumMetadata/BILLING_NOT_SUPPORTED (recovery
+    contract: "resubmit with a supported value"); compliance/3.1.1/universal/
+    billing-gate-dispatch.yaml phase per_agent_gate_recover.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    prior = ctx.get("last_sync_accounts")
+    assert prior, "No prior sync_accounts request captured — a table When must run before the retry"
+    retried = [{**entry, "billing": billing} for entry in prior]
+    try:
+        req = SyncAccountsRequest(accounts=retried)
+        dispatch_request(ctx, req=req)
+    except Exception as exc:  # noqa: BLE001 — capture for the error-path Thens
+        ctx["error"] = exc
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent retries the sync_accounts request with billing "{billing}" and a fresh idempotency_key'
+    )
+)
+def when_retry_sync_with_billing(ctx: dict, billing: str) -> None:
+    """Retry the prior request with an explicit supported billing value (BILLING_NOT_SUPPORTED recovery)."""
+    _retry_sync_with_billing(ctx, billing)
+
+
+@when(
+    "the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key"
+)
+def when_retry_sync_with_suggested_billing(ctx: dict) -> None:
+    """Retry the prior request with the seller's suggested_billing value.
+
+    For a passthrough-only agent the single canonical retry value is
+    ``operator`` (error-details/billing-not-permitted-for-agent.json:
+    "Typically ``operator`` for passthrough-only agents"; examples[0] =
+    {"rejected_billing": "agent", "suggested_billing": "operator"}). Production
+    never emits ``suggested_billing`` (no per-agent gate, #1592), so this leg is
+    only reached after the scenario has already xfailed on the missing
+    BILLING_NOT_PERMITTED_FOR_AGENT error — the step exists so the scenario runs
+    non-dormant.
+    """
+    _retry_sync_with_billing(ctx, "operator")
+
+
+def _last_account_errors(ctx: dict) -> list[Any]:
+    """Resolve the referenced per-account result's errors[] array.
+
+    Prefers ``ctx['last_account']`` (set by a prior action/error Then); falls
+    back to the first response account so an error-code Then placed first in a
+    scenario grades the real response instead of erroring on step ordering.
+    """
+    acct = ctx.get("last_account")
+    if acct is None:
+        acct = _require_response(ctx).accounts[0]
+        ctx["last_account"] = acct
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
+    return list(acct.errors)
+
+
+def _agent_gate_error_details(ctx: dict) -> dict[str, Any]:
+    """Return the details dict of the per-account BILLING_NOT_PERMITTED_FOR_AGENT error."""
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if e.code == "BILLING_NOT_PERMITTED_FOR_AGENT"), None)
+    assert err is not None, f"No BILLING_NOT_PERMITTED_FOR_AGENT error present, got codes {[e.code for e in errors]}"
+    details = getattr(err, "details", None) or {}
+    return dict(details)
+
+
+@then(parsers.parse('the per-account error details rejected_billing is "{value}"'))
+def then_agent_gate_rejected_billing(ctx: dict, value: str) -> None:
+    """Assert details.rejected_billing echoes the rejected value verbatim.
+
+    Spec: error-details/billing-not-permitted-for-agent.json#/properties/rejected_billing
+    ("echoed verbatim from the request"), required; examples[0].rejected_billing = "agent".
+    """
+    details = _agent_gate_error_details(ctx)
+    actual = details.get("rejected_billing")
+    assert actual == value, f"Expected details.rejected_billing '{value}', got {actual!r}"
+
+
+@then(parsers.parse('the per-account error details suggested_billing is "{value}"'))
+def then_agent_gate_suggested_billing(ctx: dict, value: str) -> None:
+    """Assert details.suggested_billing is the single canonical retry value.
+
+    Spec: error-details/billing-not-permitted-for-agent.json#/properties/suggested_billing
+    ("A single billing value the calling buyer agent MAY retry with autonomously.
+    Typically ``operator`` for passthrough-only agents"); examples[0].suggested_billing
+    = "operator"; the value is a member of enums/billing-party.json#/enum
+    (["operator","agent","advertiser"]).
+    """
+    details = _agent_gate_error_details(ctx)
+    actual = details.get("suggested_billing")
+    assert actual == value, f"Expected details.suggested_billing '{value}', got {actual!r}"
+
+
+@then(
+    "the per-account error details do not include permitted_billing, rate_card, "
+    "payment_terms, credit_limit, billing_entity, or account_id"
+)
+def then_agent_gate_details_clamped(ctx: dict) -> None:
+    """Assert the clamped details shape carries no commercial-state oracle keys.
+
+    Spec: error-details/billing-not-permitted-for-agent.json — the object is
+    ``additionalProperties: false`` with only ``rejected_billing`` (required) and
+    ``suggested_billing`` (optional) permitted; the description forbids "the
+    agent's full permitted-billing subset, the agent's other commercial state
+    (rate cards, payment terms, credit limit, billing entity), or any per-account
+    state — those are commercial-state oracles."
+    """
+    details = _agent_gate_error_details(ctx)
+    forbidden = {"permitted_billing", "rate_card", "payment_terms", "credit_limit", "billing_entity", "account_id"}
+    leaked = forbidden & set(details)
+    assert not leaked, f"Clamped agent-gate details leaked commercial-state keys: {sorted(leaked)}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1776,10 +1952,18 @@ def then_no_operation_level_errors(ctx: dict) -> None:
 
 @then(parsers.parse('the per-account errors array contains an error with code "{code}"'))
 def then_per_account_error_code(ctx: dict, code: str) -> None:
-    """Assert the failed account's errors contain a specific error code."""
+    """Assert the failed account's errors contain a specific error code.
+
+    Resolves the account from ``ctx['last_account']`` when a prior action/error
+    Then set it, else from the first response account — so an error-code Then
+    placed first in a scenario grades the real response (e.g. a provisioned
+    account with an empty errors[]) rather than erroring on step ordering.
+    """
     acct = ctx.get("last_account")
-    assert acct is not None, "No account referenced"
-    assert acct.errors is not None, "No errors on account"
+    if acct is None:
+        acct = _require_response(ctx).accounts[0]
+        ctx["last_account"] = acct
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
     codes = [e.code for e in acct.errors]
     assert code in codes, f"Expected error code '{code}' in {codes}"
 
@@ -2736,10 +2920,17 @@ def then_account_sandbox_true(ctx: dict) -> None:
 
 @then("the account should have a seller-assigned account_id")
 def then_sandbox_account_has_id(ctx: dict) -> None:
-    """Assert the account has a seller-assigned account_id."""
+    """Assert the account has a non-empty seller-assigned account_id.
+
+    Matches ``then_account_has_id`` (a bare ``is not None`` accepts ``""``, which
+    is not a seller assignment): the account_id must be a non-empty string.
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/account_id.
+    """
     acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
     account_id = getattr(acct, "account_id", None)
-    assert account_id is not None, f"Account missing seller-assigned account_id: {acct}"
+    assert isinstance(account_id, str) and len(account_id) > 0, (
+        f"Account missing non-empty seller-assigned account_id: {acct}"
+    )
 
 
 @then("no real ad platform account should have been created")

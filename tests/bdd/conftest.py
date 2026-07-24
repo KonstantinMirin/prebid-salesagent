@@ -481,6 +481,22 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-011-ext-c-rejected": "per-account BILLING_NOT_SUPPORTED error carries no recovery — _check_billing_policy "
     "builds Error(code, message, suggestion) without the recovery field the enum mandates (correctable) — "
     "#1592 spec-production gap",
+    # ── UC-011 per-buyer-agent commercial gate wiring (FIXME(#1592), salesagent-9jiu) ──
+    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
+    # v3.1.1 shape (error-details/billing-not-permitted-for-agent.json); each
+    # fails because production (src/core/tools/accounts.py) has NO per-buyer-agent
+    # commercial gate. The passthrough-only Given declares agent as
+    # capability-supported (supported_billing), so _check_billing_policy accepts
+    # the value and production PROVISIONS the account (action "created") instead
+    # of rejecting it with BILLING_NOT_PERMITTED_FOR_AGENT — the code is never
+    # emitted anywhere in production.
+    "T-UC-011-billing-agent-gate-reject": "no per-buyer-agent commercial gate exists in production — agent billing is "
+    "capability-supported so _check_billing_policy accepts it and the account is provisioned (action 'created') "
+    "instead of rejected with BILLING_NOT_PERMITTED_FOR_AGENT + clamped rejected_billing/suggested_billing details — "
+    "#1592 spec-production gap",
+    "T-UC-011-billing-agent-gate-recover": "no per-buyer-agent commercial gate exists in production — the first leg "
+    "never emits BILLING_NOT_PERMITTED_FOR_AGENT (capability-supported agent billing is provisioned), so the "
+    "autonomous suggested_billing recovery flow is unreachable — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
