@@ -1689,21 +1689,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (The boundary counterpart below still masks mcp/rest — those transports
             # ARE parametrized there and still gap.)
             # Transport-scoped: impl genuinely PASSES start>=end on the _impl
-            # path now. mcp/rest boundary rows still don't enforce the gap.
-            (
-                "T-UC-004-boundary-date-range",
-                {
-                    # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
-                    # #1417) — removed. mcp/rest still gap.
-                    "mcp-start_date after end_date",
-                    "[rest-start_date after end_date",
-                    "mcp-start_date equals end_date",
-                    "[rest-start_date equals end_date",
-                },
-                "production does not validate start_date>=end_date on a2a/mcp/rest "
-                "(impl passes). Same gap as T-UC-004-daterange-invalid/-equal. "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # path now.
+            # GRADUATED (salesagent-auac, 2026-07-25): mcp/rest now also validate
+            # start_date>=end_date (confirmed XPASS on both once the single-transport
+            # dedup fix stopped hiding them) — entry removed. The stricter standalone
+            # T-UC-004-daterange-invalid/-equal scenarios (exact error_code/message/
+            # suggestion pin) are unaffected and still genuinely xfail — this boundary
+            # outline only asserts the looser "date handling should be invalid".
             # end-only date_range default (salesagent-losz / debt C7, Gap G40):
             # when only end_date is provided, the spec says start_date defaults
             # to MediaBuy.created_at but production sets start = today-30d
@@ -2045,15 +2037,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 and not is_e2e_rest
                 and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
             )
-            # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
-            # #1417); mcp/rest still don't enforce the gap.
-            _dr_invalid_fail = (
-                not is_impl
-                and not is_a2a
-                and not is_e2e_rest
-                and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date"))
-            )
-            if _dr_valid_fail or _dr_invalid_fail:
+            # GRADUATED (salesagent-auac, 2026-07-25): a2a/mcp/rest all now validate
+            # start_date>=end_date (impl passes too) — the invalid-rows branch is
+            # removed; only the valid-rows gap remains.
+            if _dr_valid_fail:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
@@ -3060,12 +3047,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # strict-xfail wire variant removes the scenario entirely and loses the
         # xpass tripwire. Keep ONE wire representative per scenario.
         #
-        # Scoped to UC-010 for now: running a representative suite-wide
-        # immediately surfaces ~24 STALE strict-xfail entries in other UCs
-        # (they xpass when actually run — the tripwire has been dead since the
-        # IMPL sunset). Graduating those needs per-scenario inspection and is
-        # tracked separately (salesagent-4sn7 follow-up bead); extend
-        # _REPRESENTATIVE_UC_PREFIXES as each UC's entries are reconciled.
+        # UC-010 opt-in retained for scenarios that want an mcp/rest
+        # representative even when a2a ALSO carries the strict marker (pure
+        # runtime-reduction opt-out, not a correctness requirement — see the
+        # a2a-strict-marker check below for the correctness half).
         _REPRESENTATIVE_UC_PREFIXES = ("T-UC-010-",)
         _transport_param = re.compile(r"^(?P<head>.*?\[)(?:impl|a2a|mcp|rest)(?P<tail>[-\]].*)$")
 
@@ -3075,6 +3060,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         impl_bases = {
             base for base in (_scenario_base(i.nodeid) for i in items if "[impl" in i.nodeid) if base is not None
+        }
+        # salesagent-auac: the kept a2a variant is NOT always the one carrying
+        # the strict-xfail marker — several UC-004 markers are deliberately
+        # transport-selective (applied to mcp/rest only because a2a already
+        # validates). Deselecting every mcp/rest sibling in that case removes
+        # the ONLY items that could ever XPASS(strict), killing the tripwire
+        # for that scenario. Only treat mcp/rest as redundant when the a2a
+        # sibling ALSO carries an equivalent strict marker — otherwise keep
+        # one mcp/rest representative, same as the UC-010 opt-in.
+        a2a_strict_bases = {
+            base
+            for i in items
+            if ("[a2a]" in i.nodeid or "[a2a-" in i.nodeid)
+            and any(m.name == "xfail" and m.kwargs.get("strict", False) for m in i.iter_markers())
+            for base in [_scenario_base(i.nodeid)]
+            if base is not None
         }
         kept_representatives: set[str] = set()
 
@@ -3093,7 +3094,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 continue
             base = _scenario_base(nodeid)
             item_markers = {m.name for m in item.iter_markers()}
-            opted_in = any(t.startswith(_REPRESENTATIVE_UC_PREFIXES) for t in item_markers)
+            opted_in = any(t.startswith(_REPRESENTATIVE_UC_PREFIXES) for t in item_markers) or (
+                base is not None and base not in a2a_strict_bases
+            )
             if opted_in and base is not None and base not in impl_bases and base not in kept_representatives:
                 # No impl sibling to catch the xpass — keep this variant as
                 # the scenario's single strict-xfail representative.
