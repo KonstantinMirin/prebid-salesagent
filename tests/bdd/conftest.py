@@ -438,25 +438,18 @@ _XFAIL_TAGS: dict[str, str] = {
     # release-precision supported_versions in VERSION_UNSUPPORTED details on
     # every row. T-UC-010-v31-version-unsupported-details-bounds removed.
     # ── UC-011 list wiring (FIXME(#1592), salesagent-9if1) ─────────────────
-    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
-    # v3.1.1 shape; each fails on a surface _list_accounts_impl does not build.
-    # T-UC-011-list-account-filter: req.account is ignored (accounts.py only
-    # filters on status/sandbox), so an exact filter returns every accessible
-    # account instead of the one match — strict on both key_shape rows.
-    "T-UC-011-list-account-filter": "list_accounts exact `account` filter (account-ref oneOf) not implemented — "
-    "_list_accounts_impl ignores req.account and returns all accessible accounts — #1592 spec-production gap",
+    # Graduated (salesagent-tm97): _apply_list_account_filters honors req.account
+    # (AccountReference oneOf, both account_id and natural-key arms), forwarded by
+    # all 3 transports. T-UC-011-list-account-filter removed.
     # T-UC-011-list-authorization: the Account schema carries no authorization
     # object (account-with-authorization item shape is new in 3.1.1), so the
-    # wire items never expose allowed_tasks.
+    # wire items never expose allowed_tasks. Out of scope (GH #1615).
     "T-UC-011-list-authorization": "per-account authorization block (account-with-authorization / allowed_tasks) not "
-    "emitted — production Account schema has no authorization field, list items are bare — #1592 spec-production gap",
-    # T-UC-011-list-read-idempotency-tolerance: list-accounts-request declares
-    # additionalProperties:true and read tools MUST tolerate the 3.1
-    # idempotency_key envelope, but ListAccountsRequest runs extra="forbid" in
-    # dev/CI, so the read wrapper rejects idempotency_key instead of ignoring it.
-    "T-UC-011-list-read-idempotency-tolerance": "read-wrapper tolerance of the 3.1 idempotency_key envelope not "
-    "graded — ListAccountsRequest (extra=forbid) rejects the undeclared idempotency_key that additionalProperties:true "
-    "requires it to accept — #1592 spec-production gap",
+    "emitted — production Account schema has no authorization field, list items are bare — tracked as GH #1615, "
+    "out of #1592 A3 core scope",
+    # Graduated (salesagent-tm97): ListAccountsRequest.idempotency_key added --
+    # the read wrapper now tolerates the 3.1 idempotency envelope instead of
+    # rejecting it under extra=forbid. T-UC-011-list-read-idempotency-tolerance removed.
     # Graduated (salesagent-5g8e): settings-update (AccountReference) mode implemented
     # via _process_settings_update_entry (both AccountReference1/account_id and
     # AccountReference2/natural-key arms), mode-exclusivity enforced in _impl before

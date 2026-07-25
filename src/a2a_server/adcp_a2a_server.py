@@ -1905,9 +1905,12 @@ class AdCPRequestHandler(RequestHandler):
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_accounts request"):
             request = ListAccountsRequest(
+                account=parameters.get("account"),
                 status=parameters.get("status"),
                 pagination=parameters.get("pagination"),
                 sandbox=parameters.get("sandbox"),
+                idempotency_key=parameters.get("idempotency_key"),
+                ext=parameters.get("ext"),
                 context=parameters.get("context"),
             )
         return core_list_accounts_tool(req=request, identity=identity)

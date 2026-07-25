@@ -65,10 +65,16 @@ class Account(LibraryAccountDomain):
 class ListAccountsRequest(LibraryListAccountsRequest):
     """Extends library ListAccountsRequest.
 
-    Library provides: status, pagination, sandbox, context, ext.
+    Library provides: account, status, pagination, sandbox, context, ext.
+    idempotency_key added locally -- the library type doesn't declare it
+    (unlike SyncAccountsRequest), but v3.1.1's read-tool-idempotency.yaml
+    compliance phase requires read tools to tolerate it (salesagent-tm97 F5;
+    previously rejected under Pattern #7 extra=forbid).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    idempotency_key: str | None = None
 
 
 class SyncAccountsRequest(LibrarySyncAccountsRequest):

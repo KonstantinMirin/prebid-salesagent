@@ -199,8 +199,11 @@ class ListAuthorizedPropertiesBody(SalesAgentBaseModel):
 
 
 class ListAccountsBody(SalesAgentBaseModel):
+    account: dict[str, Any] | None = None
     status: str | None = None
     sandbox: bool | None = None
+    idempotency_key: str | None = None
+    ext: dict[str, Any] | None = None
     pagination: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"

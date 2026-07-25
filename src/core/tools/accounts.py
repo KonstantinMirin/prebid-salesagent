@@ -19,6 +19,7 @@ import uuid
 from datetime import UTC
 from typing import Annotated, Any
 
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, PaginationRequest, PaginationResponse
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
@@ -114,6 +115,50 @@ def _apply_pagination(
     )
 
 
+def _matches_account_ref(db_account: Any, ref: Any) -> bool:
+    """Whether *db_account* matches an AccountReference (account_id XOR natural key).
+
+    AccountReference1 carries account_id; AccountReference2 carries the natural
+    key (brand + operator, optionally sandbox) -- mirrors the RootModel
+    discrimination in _process_settings_update_entry (salesagent-5g8e).
+    """
+    if isinstance(ref, AccountReference1):
+        return bool(db_account.account_id == ref.account_id)
+    brand_domain = ref.brand.domain if ref.brand else None
+    if db_account.operator != ref.operator:
+        return False
+    # brand is Mapped[BrandReference | None] (JSONType(model=BrandReference),
+    # models.py:828) -- hydrated as the typed model, not a plain dict.
+    domain = db_account.brand.domain if db_account.brand else None
+    if domain != brand_domain:
+        return False
+    if ref.sandbox is not None and db_account.sandbox != ref.sandbox:
+        return False
+    return True
+
+
+def _apply_list_account_filters(db_accounts: list[Any], req: Any) -> list[Any]:
+    """Apply every list_accounts predicate filter in one place (DRY --
+    salesagent-tm97 disease scan; status/sandbox/account were 3 near-identical
+    inline list-comprehension filters before this extraction).
+    """
+    status_filter = getattr(req, "status", None)
+    if status_filter is not None:
+        status_str = enum_value(status_filter)
+        db_accounts = [a for a in db_accounts if a.status == status_str]
+
+    sandbox_filter = getattr(req, "sandbox", None)
+    if sandbox_filter is not None:
+        db_accounts = [a for a in db_accounts if a.sandbox == sandbox_filter]
+
+    account_filter = getattr(req, "account", None)
+    if account_filter is not None:
+        # account_filter is always AccountReference (a RootModel) when present.
+        db_accounts = [a for a in db_accounts if _matches_account_ref(a, account_filter.root)]
+
+    return db_accounts
+
+
 def _list_accounts_impl(
     req: ListAccountsRequest | None = None,
     identity: ResolvedIdentity | None = None,
@@ -142,17 +187,7 @@ def _list_accounts_impl(
         assert uow.accounts is not None
         # BR-RULE-054: agent-scoped results
         db_accounts = uow.accounts.list_for_agent(principal_id)
-
-        # Apply status filter if requested
-        status_filter = getattr(req, "status", None)
-        if status_filter is not None:
-            status_str = enum_value(status_filter)
-            db_accounts = [a for a in db_accounts if a.status == status_str]
-
-        # Apply sandbox filter if requested
-        sandbox_filter = getattr(req, "sandbox", None)
-        if sandbox_filter is not None:
-            db_accounts = [a for a in db_accounts if a.sandbox == sandbox_filter]
+        db_accounts = _apply_list_account_filters(db_accounts, req)
 
         # Sort for deterministic pagination
         db_accounts.sort(key=lambda a: a.account_id)
@@ -176,9 +211,14 @@ def _list_accounts_impl(
 
 
 async def list_accounts(
+    account: LibraryAccountReference | None = None,
     status: AccountStatus | None = None,
     pagination: PaginationRequest | None = None,
     sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
+    idempotency_key: Annotated[
+        str | None, Field(description="Read-tool idempotency tolerance per v3.1.1 -- accepted, has no effect")
+    ] = None,
+    ext: Annotated[dict | None, Field(description="AdCP extension object -- accepted, has no effect")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -188,9 +228,12 @@ async def list_accounts(
     FastMCP automatically validates and coerces JSON inputs to Pydantic models.
 
     Args:
+        account: Exact account filter (account_id, or natural key brand+operator[+sandbox]).
         status: Filter accounts by status (active, closed, etc.).
         pagination: Pagination parameters (max_results, cursor).
         sandbox: Filter by sandbox flag.
+        idempotency_key: Read-tool idempotency tolerance (accepted, no effect on a read).
+        ext: AdCP extension object (accepted, no effect).
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
 
@@ -198,9 +241,12 @@ async def list_accounts(
         ToolResult with human-readable text and structured data.
     """
     req = ListAccountsRequest(
+        account=account,
         status=status,
         pagination=pagination,
         sandbox=sandbox,
+        idempotency_key=idempotency_key,
+        ext=ext,
         context=context,
     )
 
