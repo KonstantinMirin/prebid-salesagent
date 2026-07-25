@@ -3089,10 +3089,24 @@ def given_sandbox_not_supported(ctx: dict) -> None:
     response (get-adcp-capabilities-response.json#/properties/account/properties/sandbox,
     default false). This Given is the negative of ``given_sandbox_supported``: the
     seller has not opted in, so a sync_accounts request carrying sandbox: true MUST
-    be rejected per-account (BR-RULE-209 INV-6). Real DB seeding (tenant/principal),
-    no capability flag set.
+    be rejected per-account (BR-RULE-209 INV-6). Sets Tenant.account_sandbox=False
+    via the real DB (env.setup_default_data), the production capability-gate column
+    read by the sandbox provisioning gate — not just a ctx-level test flag.
     """
-    _setup_tenant_and_principal(ctx)
+    env = ctx["env"]
+    # setup_default_data is idempotent (get-or-create) and safe even when a prior
+    # Given (e.g. "the Buyer Agent has an authenticated connection") already
+    # created the tenant.
+    tenant, principal = env.setup_default_data()
+    # configure_tenant_field writes BOTH paths: the in-memory _tenant_overrides
+    # PrincipalFactory.make_identity() reads to build REST's synthetic identity
+    # (REST's auth-dep override installs a pre-built ResolvedIdentity, bypassing
+    # the real DB-backed resolution a2a/mcp exercise -- so a plain DB write alone
+    # is invisible to REST), AND the real Tenant row a2a/mcp read via the
+    # production auth chain. Also clears the identity cache.
+    env.configure_tenant_field("account_sandbox", False)
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
     ctx["sandbox_supported"] = False
 
 

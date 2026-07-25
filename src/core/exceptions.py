@@ -62,6 +62,16 @@ _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     # re-pin to a version this seller advertises via get_adcp_capabilities.adcp
     # and retry (salesagent-rldj, #1592 C4).
     "VERSION_UNSUPPORTED": {"recovery": "correctable", "message": "Requested AdCP version is not supported"},
+    # v3.1.1 error-code.json: a settings-update (AccountReference) sync_accounts
+    # entry matched no existing account -- settings-update entries MUST NOT
+    # provision a new account, so the mismatch is rejected rather than silently
+    # falling through to provisioning. Recovery: correctable -- the buyer can
+    # provision the account via 'brand'/'operator'/'billing' instead
+    # (salesagent-5g8e, #1592 A2).
+    "UNSUPPORTED_PROVISIONING": {
+        "recovery": "correctable",
+        "message": "Settings-update entry matched no existing account",
+    },
 }
 
 # SDK STANDARD_ERROR_CODES entries AdCP v3.1.1 dropped; translated to their

@@ -457,35 +457,12 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-011-list-read-idempotency-tolerance": "read-wrapper tolerance of the 3.1 idempotency_key envelope not "
     "graded — ListAccountsRequest (extra=forbid) rejects the undeclared idempotency_key that additionalProperties:true "
     "requires it to accept — #1592 spec-production gap",
-    # ── UC-011 sync settings-update / mode-exclusive wiring (FIXME(#1592), salesagent-ce1u) ──
-    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
-    # v3.1.1 shape; each fails on a surface _sync_accounts_impl does not build.
-    # Verified empirically against src/core/tools/accounts.py (see uc011_accounts.py
-    # batch-B2 header for the production trace).
-    # T-UC-011-sync-settings-update: settings-update (AccountReference) mode is
-    # unimplemented — _extract_natural_key rejects the brandless account_id-keyed
-    # entry with an operation-level VALIDATION_ERROR ("the account-reference
-    # (settings-update) form is not supported by this seller") instead of updating
-    # the referenced account's payment_terms, so no success response is produced.
-    "T-UC-011-sync-settings-update": "settings-update (AccountReference) mode not implemented — _extract_natural_key "
-    "rejects the brandless account_id-keyed entry with an operation-level VALIDATION_ERROR instead of updating the "
-    "referenced account's payment_terms — #1592 spec-production gap",
-    # T-UC-011-sync-settings-update-no-provision: same unimplemented mode — an
-    # unknown account_id is rejected wholesale with an operation-level
-    # VALIDATION_ERROR rather than surfacing a per-account action "failed" bearing
-    # UNSUPPORTED_PROVISIONING(recovery=correctable); the MUST-NOT-provision path
-    # is not built.
-    "T-UC-011-sync-settings-update-no-provision": "settings-update mode not implemented — a brandless account_id-keyed "
-    "entry is rejected with an operation-level VALIDATION_ERROR rather than a per-account action 'failed' bearing "
-    "UNSUPPORTED_PROVISIONING(recovery=correctable) — #1592 spec-production gap",
-    # T-UC-011-sync-mode-exclusive: the item union does not enforce
-    # oneOf(ProvisioningMode XOR SettingsUpdateMode) — a both-shapes entry
-    # validates as the ProvisioningMode arm and the extra `account` is silently
-    # ignored, so production PROVISIONS it (action "created") instead of rejecting
-    # the oneOf violation with an operation-level VALIDATION_ERROR naming accounts[0].
-    "T-UC-011-sync-mode-exclusive": "SyncAccountsRequest item union does not enforce ProvisioningMode XOR "
-    "SettingsUpdateMode — a both-shapes entry validates as the provisioning arm (extra `account` ignored) and is "
-    "provisioned instead of rejected with an operation-level VALIDATION_ERROR — #1592 spec-production gap",
+    # Graduated (salesagent-5g8e): settings-update (AccountReference) mode implemented
+    # via _process_settings_update_entry (both AccountReference1/account_id and
+    # AccountReference2/natural-key arms), mode-exclusivity enforced in _impl before
+    # dispatch (VALIDATION_ERROR naming accounts[i]), unmatched references rejected
+    # with UNSUPPORTED_PROVISIONING. T-UC-011-sync-settings-update,
+    # T-UC-011-sync-settings-update-no-provision, T-UC-011-sync-mode-exclusive removed.
     # Graduated (salesagent-hh1f): _check_billing_policy now emits recovery="correctable"
     # + details={scope, supported_billing} (conditionally, honest-absence on an empty
     # policy) on the per-account BILLING_NOT_SUPPORTED error. T-UC-011-ext-c-rejected removed.
@@ -525,14 +502,9 @@ _XFAIL_TAGS: dict[str, str] = {
     "leave persisted subscribers unchanged cannot be graded because the pre-created subscriber is never persisted "
     "or echoed (SyncResponseAccount carries no notification_configs field), so the read observes 0 subscribers — "
     "#1592 spec-production gap",
-    # sandbox capability gate: production has no account.sandbox capability check —
-    # _sync_accounts_impl provisions the account (action 'created') with sandbox=true
-    # regardless of whether the seller declared the capability, so the expected
-    # per-account UNSUPPORTED_FEATURE rejection is never emitted.
-    "T-UC-011-sandbox-capability-not-declared": "no account.sandbox capability gate exists in production — "
-    "_sync_accounts_impl provisions the account (action 'created') with sandbox=true regardless of declared "
-    "capabilities, so the expected per-account UNSUPPORTED_FEATURE rejection (accounts[0].sandbox) is never "
-    "emitted — #1592 spec-production gap",
+    # Graduated (salesagent-5g8e): _check_sandbox_capability gate added -- rejects
+    # sandbox provisioning with UNSUPPORTED_FEATURE (accounts[i].sandbox) when the
+    # tenant's account_sandbox capability is not declared. T-UC-011-sandbox-capability-not-declared removed.
     # ── UC-011 notification_configs per-account rejections (FIXME(#1592), salesagent-m12f) ──
     # Steps execute non-dormant on a2a/mcp/rest; each provisions the account and grades
     # the spec-mandated per-account rejection, which production never emits because

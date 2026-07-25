@@ -2,7 +2,7 @@
 
 SyncResponseAccount replaced an SDK-provided type after SDK 5.7 restructured
 the sync_accounts response. This contract test verifies:
-  1. All 10 expected fields exist and are constructable
+  1. All 11 expected fields exist and are constructable
   2. Fields serialize correctly via model_dump
   3. None-valued fields are excluded by default
 
@@ -15,7 +15,9 @@ from adcp.types.generated_poc.core.brand_ref import BrandReference
 
 from src.core.schemas import SyncResponseAccount
 
-# The 10 fields that production code (_build_per_account_result) constructs.
+# The 11 fields that production code (_build_sync_result / _build_failed_result)
+# constructs. payment_terms added salesagent-5g8e (F1 settings-update Then needs a
+# field to read).
 EXPECTED_FIELDS = {
     "brand",
     "operator",
@@ -24,6 +26,7 @@ EXPECTED_FIELDS = {
     "account_id",
     "name",
     "billing",
+    "payment_terms",
     "sandbox",
     "errors",
     "setup",
@@ -41,7 +44,7 @@ class TestSyncResponseAccountFields:
         )
 
     def test_construct_with_all_fields(self):
-        """All 10 fields can be populated without validation errors."""
+        """All 11 fields can be populated without validation errors."""
         account = SyncResponseAccount(
             brand=BrandReference(domain="acme.com"),
             operator="create",
@@ -50,6 +53,7 @@ class TestSyncResponseAccountFields:
             account_id="acc_123",
             name="Test Account",
             billing="prepaid",
+            payment_terms="net_45",
             sandbox=False,
             errors=[LibraryError(code="VALIDATION_ERROR", message="test error")],
             setup=LibrarySetup(message="Complete billing setup"),
@@ -60,6 +64,7 @@ class TestSyncResponseAccountFields:
         assert account.name == "Test Account"
         assert account.operator == "create"
         assert account.billing == "prepaid"
+        assert account.payment_terms == "net_45"
         assert account.sandbox is False
         assert len(account.errors) == 1
         assert account.errors[0].code == "VALIDATION_ERROR"
@@ -71,7 +76,7 @@ class TestSyncResponseAccountFields:
     # tests/unit/test_pydantic_schema_alignment.py::TestResponseModelAlignment.
 
     def test_optional_fields_remain_optional(self):
-        """Non-required fields (account_id, name, billing, sandbox, errors, setup) stay optional."""
+        """Non-required fields (account_id, name, billing, payment_terms, sandbox, errors, setup) stay optional."""
         account = SyncResponseAccount(
             brand=BrandReference(domain="acme.com"),
             operator="create",

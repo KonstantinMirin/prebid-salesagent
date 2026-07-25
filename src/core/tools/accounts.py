@@ -26,6 +26,10 @@ from adcp.types.generated_poc.account.list_accounts_request import (
 from adcp.types.generated_poc.account.sync_accounts_request import (
     Accounts as SyncAccountInput,  # SDK 5.7: Account → Accounts
 )
+from adcp.types.generated_poc.account.sync_accounts_request import (
+    Accounts1 as SettingsUpdateAccountInput,  # the account-reference / settings-update arm
+)
+from adcp.types.generated_poc.core.account_ref import AccountReference1
 from fastmcp.server.context import Context
 from pydantic import Field
 
@@ -315,6 +319,7 @@ def _build_sync_result(
     account_id: str | None = None,
     name: str | None = None,
     billing: str | None = None,
+    payment_terms: str | None = None,
     sandbox: bool | None = None,
     errors: list[Any] | None = None,
     setup: Any | None = None,
@@ -334,9 +339,34 @@ def _build_sync_result(
         account_id=account_id,
         name=name,
         billing=billing,
+        payment_terms=payment_terms,
         sandbox=sandbox,
         errors=errors,
         setup=setup,
+    )
+
+
+def _build_failed_result(
+    *,
+    brand: Any,
+    operator: str,
+    billing: str | None,
+    sandbox: bool | None,
+    errors: list[Any],
+) -> SyncResponseAccount:
+    """Build a failed/rejected sync result -- the single source for every
+    per-entry gate rejection (domain validity, billing policy, sandbox
+    capability, settings-update-not-found), so a shared shape can't drift
+    across call sites (salesagent-5g8e disease scan).
+    """
+    return _build_sync_result(
+        brand=brand,
+        operator=operator,
+        action="failed",
+        status="rejected",
+        billing=billing,
+        sandbox=sandbox,
+        errors=errors,
     )
 
 
@@ -432,25 +462,27 @@ def _check_billing_policy(
 
 
 def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]:
-    """Extract natural key components from a sync request account entry.
+    """Extract natural key components from a PROVISIONING-mode sync request entry.
 
     Returns (brand_domain, brand_id, operator, sandbox).
 
+    Callers dispatch settings-update entries (``entry.account`` set) to
+    ``_process_settings_update_entry`` BEFORE reaching this function — an
+    entry that lands here with no ``brand`` carries neither the provisioning
+    trio nor an account reference, a genuinely malformed request the pinned
+    3.1 spec's ``required: ["brand", "operator", "billing"]`` (provisioning
+    arm) rejects as a buyer-correctable 400 (salesagent-5g8e; previously this
+    branch also caught settings-update entries before that mode was
+    implemented — it no longer does).
+
     Raises:
-        AdCPValidationError: if the entry omits ``brand``. SDK 5.7's
-            ``SyncAccountsRequest.accounts`` is ``list[Accounts | Accounts3]``;
-            the ``Accounts3`` (account-reference / settings-update) arm makes
-            ``brand`` optional, so a brandless entry parses with ``brand=None``.
-            The pinned 3.1 spec (sync-accounts-request.json) marks each entry
-            ``required: ["brand", "operator", "billing"]``, so a brandless
-            entry must be a clean buyer-correctable 400 — not an unguarded
-            ``None.domain`` AttributeError (which fell through to a 500).
+        AdCPValidationError: if the entry omits ``brand``.
     """
     brand = entry.brand
     if brand is None:
         raise AdCPValidationError(
-            "Each account entry must include 'brand', 'operator', and 'billing'; "
-            "the account-reference (settings-update) form is not supported by this seller.",
+            "Each provisioning account entry must include 'brand', 'operator', and 'billing' "
+            "(or 'account' for a settings-update entry).",
             recovery="correctable",
         )
     brand_domain = brand.domain
@@ -460,6 +492,110 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     operator = entry.operator
     sandbox = entry.sandbox
     return brand_domain, brand_id, operator, sandbox
+
+
+def _check_sandbox_capability(entry_sandbox: bool | None, tenant: Any, index: int) -> list[Any] | None:
+    """Reject sandbox provisioning when the seller has not declared account.sandbox support.
+
+    Mirrors the ``_check_domain_validity``/``_check_billing_policy`` per-entry
+    gate shape. BR-RULE-209 INV-6: only a seller with ``account.sandbox: true``
+    (Tenant.account_sandbox) supports sandbox provisioning.
+    """
+    from adcp.types import Error
+
+    if not entry_sandbox:
+        return None
+    if tenant and tenant.get("account_sandbox", True):
+        return None
+    return [
+        Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+            code="UNSUPPORTED_FEATURE",
+            message="Sandbox account provisioning was requested, but this seller does not "
+            "declare account.sandbox support.",
+            field=f"accounts[{index}].sandbox",
+            suggestion="Check get_adcp_capabilities and remove the unsupported sandbox field, "
+            "or provision a production account instead.",
+            recovery="correctable",
+        )
+    ]
+
+
+def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount:
+    """Handle a settings-update entry (keyed by AccountReference) -- update an
+    EXISTING account's settable fields, NEVER provision (F1b/F1c).
+
+    ``entry.account`` is ``RootModel[AccountReference1 | AccountReference2]``:
+    ``AccountReference1`` carries ``account_id`` (seller-assigned handle);
+    ``AccountReference2`` carries the natural key (``brand``/``operator``/
+    ``sandbox``). An unmatched reference is rejected with
+    UNSUPPORTED_PROVISIONING -- a settings-update entry MUST NOT provision a
+    new account under any circumstance.
+    """
+    from adcp.types import Error
+
+    ref = entry.account.root
+    if isinstance(ref, AccountReference1):
+        existing = repo.get_by_id(ref.account_id)
+    else:
+        brand_domain = ref.brand.domain if ref.brand else None
+        brand_id = None
+        if ref.brand is not None and hasattr(ref.brand, "brand_id") and ref.brand.brand_id is not None:
+            brand_id = str(ref.brand.brand_id)
+        existing = repo.get_by_natural_key(
+            operator=ref.operator,
+            brand_domain=brand_domain,
+            brand_id=brand_id,
+            sandbox=ref.sandbox,
+        )
+
+    if existing is None:
+        # brand/operator are REQUIRED on SyncResponseAccount. A natural-key reference
+        # (AccountReference2) still carries brand/operator to echo even when unmatched;
+        # an account_id reference (AccountReference1) carries none -- "unknown" is the
+        # established placeholder convention in this file for exactly that situation
+        # (cf. the publisher-domain placeholder above), not a fabricated real value.
+        if isinstance(ref, AccountReference1):
+            fail_brand: Any = {"domain": "unknown"}
+            fail_operator = "unknown"
+        else:
+            fail_brand = ref.brand if ref.brand else {"domain": "unknown"}
+            fail_operator = ref.operator or "unknown"
+        return _build_failed_result(
+            brand=fail_brand,
+            operator=fail_operator,
+            billing=None,
+            sandbox=None,
+            errors=[
+                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                    code="UNSUPPORTED_PROVISIONING",
+                    message="No existing account matches the provided account reference; "
+                    "a settings-update entry never provisions a new account.",
+                    suggestion="Provide 'brand', 'operator', and 'billing' to provision a new account instead.",
+                    recovery="correctable",
+                )
+            ],
+        )
+
+    payment_terms_val = _enum_to_str(entry.payment_terms)
+    changes: dict[str, Any] = {}
+    if payment_terms_val is not None and payment_terms_val != existing.payment_terms:
+        changes["payment_terms"] = payment_terms_val
+    action = "unchanged"
+    if changes:
+        repo.update_fields(existing.account_id, **changes)
+        action = "updated"
+
+    return _build_sync_result(
+        brand=existing.brand,
+        operator=existing.operator,
+        action=action,
+        status=existing.status,
+        account_id=existing.account_id,
+        name=existing.name,
+        billing=existing.billing,
+        payment_terms=existing.payment_terms,
+        sandbox=existing.sandbox,
+    )
 
 
 async def _sync_accounts_impl(
@@ -509,7 +645,27 @@ async def _sync_accounts_impl(
         assert uow.accounts is not None
         repo = uow.accounts
 
-        for entry in req.accounts:
+        for index, entry in enumerate(req.accounts):
+            # Mode-exclusivity guard (F1a): an entry carrying BOTH an account
+            # reference and any provisioning-trio field violates the request
+            # schema's item oneOf -- a structural, operation-level rejection,
+            # not a per-account business-rule failure. Must run before any
+            # dispatch; the SDK union has no real oneOf enforcement and would
+            # otherwise silently parse this as the provisioning arm.
+            if entry.account is not None and (
+                entry.brand is not None or entry.operator is not None or entry.billing is not None
+            ):
+                raise AdCPValidationError(
+                    f"accounts[{index}] carries both an account reference (settings-update) and "
+                    "provisioning fields (brand/operator/billing) -- these are mutually exclusive.",
+                    field=f"accounts[{index}]",
+                    recovery="correctable",
+                )
+
+            if entry.account is not None:
+                results.append(_process_settings_update_entry(entry, repo))
+                continue
+
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
             billing_val = _enum_to_str(entry.billing)
 
@@ -517,11 +673,9 @@ async def _sync_accounts_impl(
             domain_errors = _check_domain_validity(brand_domain)
             if domain_errors is not None:
                 results.append(
-                    _build_sync_result(
+                    _build_failed_result(
                         brand=entry.brand,
                         operator=operator,
-                        action="failed",
-                        status="rejected",
                         billing=billing_val,
                         sandbox=sandbox,
                         errors=domain_errors,
@@ -533,14 +687,26 @@ async def _sync_accounts_impl(
             billing_errors = _check_billing_policy(billing_val, identity)
             if billing_errors is not None:
                 results.append(
-                    _build_sync_result(
+                    _build_failed_result(
                         brand=entry.brand,
                         operator=operator,
-                        action="failed",
-                        status="rejected",
                         billing=billing_val,
                         sandbox=sandbox,
                         errors=billing_errors,
+                    )
+                )
+                continue
+
+            # BR-RULE-209 INV-6: sandbox provisioning requires a declared capability
+            sandbox_errors = _check_sandbox_capability(sandbox, tenant, index)
+            if sandbox_errors is not None:
+                results.append(
+                    _build_failed_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        billing=billing_val,
+                        sandbox=sandbox,
+                        errors=sandbox_errors,
                     )
                 )
                 continue
@@ -704,7 +870,7 @@ async def _sync_accounts_impl(
 
 
 async def sync_accounts(
-    accounts: list[SyncAccountInput] | None = None,
+    accounts: list[SyncAccountInput | SettingsUpdateAccountInput] | None = None,
     delete_missing: Annotated[
         bool | None, Field(description="Deactivate accounts not present in the sync list")
     ] = None,

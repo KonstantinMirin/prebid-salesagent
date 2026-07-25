@@ -133,6 +133,7 @@ class SyncResponseAccount(SalesAgentBaseModel):
     account_id: str | None = None
     name: str | None = None
     billing: str | None = None
+    payment_terms: str | None = None
     sandbox: bool | None = None
     errors: list[LibraryError] | None = None
     setup: LibrarySetup | None = None
