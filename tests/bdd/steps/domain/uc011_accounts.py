@@ -2452,11 +2452,14 @@ def then_dry_run_true(ctx: dict) -> None:
 
 @then("the response does not include a dry_run field")
 def then_no_dry_run_include(ctx: dict) -> None:
-    """Assert the response doesn't include dry_run (alias for 'does not contain')."""
-    resp = ctx.get("response")
-    if resp is not None:
-        dry_run = getattr(resp, "dry_run", None)
-        assert dry_run is None, f"Expected no dry_run, got {dry_run}"
+    """Assert the wire response omits the dry_run field entirely (not just None).
+
+    ``wire_absent`` distinguishes "field genuinely absent from the wire" from
+    "field present with a null value" — the distinction the prior
+    ``getattr(..., None)`` check collapsed, and it fails loudly (rather than
+    silently passing) when the response never arrived at all.
+    """
+    wire_absent(ctx, "dry_run")
 
 
 @then(parsers.parse('the account for brand domain "{domain}" shows action "{action}"'))

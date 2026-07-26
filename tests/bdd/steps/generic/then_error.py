@@ -401,20 +401,34 @@ def then_error_tenant_context(ctx: dict) -> None:
 
 @then("the error message should indicate which parameters are invalid")
 def then_error_invalid_params(ctx: dict) -> None:
-    """Assert error message indicates which specific parameters are invalid."""
+    """Assert the error names the SPECIFIC invalid parameter(s), not just that "something" is invalid.
+
+    A bare "invalid"/"field"/"parameter" satisfies "invalid" but not "WHICH
+    parameter" — the step promises the buyer can identify the offending field.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
-    # Pydantic ValidationError: has per-field error details with field paths
+    # Pydantic ValidationError: has per-field error details with named field paths
     if hasattr(error, "errors"):
         field_errors = error.errors()
         assert field_errors, "ValidationError has no field-level error details"
-        assert all("loc" in e for e in field_errors), f"Expected field locations in error details: {field_errors}"
+        assert all(e.get("loc") for e in field_errors), (
+            f"Expected non-empty field locations naming which parameter is invalid: {field_errors}"
+        )
         return
-    # AdCPError: message must reference parameter/field specifics
-    msg = _get_error_message(error)
-    msg_lower = msg.lower()
-    assert any(kw in msg_lower for kw in ("parameter", "field", "invalid", "format_id", "agent_url")), (
-        f"Expected error to indicate which parameters are invalid, got: {msg}"
+    # AdCPError: the offending field must be named — via error.field / details["field"]
+    # — AND actually mentioned in the message text, not just a generic complaint.
+    from src.core.exceptions import AdCPError
+
+    field_name = getattr(error, "field", None) if isinstance(error, AdCPError) else None
+    if not field_name:
+        field_name = _get_error_details(error).get("field")
+    assert field_name, (
+        f"Expected the error to name a specific invalid parameter (error.field or details['field']), got: {error!r}"
+    )
+    msg_lower = _get_error_message(error).lower()
+    assert str(field_name).lower() in msg_lower, (
+        f"Expected error message to name the invalid parameter {field_name!r}, got: {_get_error_message(error)}"
     )
 
 
