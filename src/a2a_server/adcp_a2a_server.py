@@ -54,12 +54,12 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
+    AUTH_MISSING_SUGGESTION,
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
@@ -266,7 +266,12 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise InvalidRequestError(
+                message="Missing authentication token",
+                data=build_two_layer_error_envelope(
+                    AdCPAuthRequiredError("Missing authentication token", suggestion=AUTH_MISSING_SUGGESTION)
+                ),
+            )
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -280,13 +285,30 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+            # resolve_identity raises AdCPAuthenticationError (AUTH_INVALID)
+            # for a presented-but-invalid token. Route through the same
+            # two-layer envelope builder used elsewhere in this file instead
+            # of dropping the wire code entirely (salesagent-mkso — this
+            # branch previously re-wrapped as a bare InvalidRequestError with
+            # no error_code/wire-code field at all).
+            raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                # No principal_id at all -> AUTH_MISSING per v3.1.1
+                # error-code.json.
+                raise InvalidRequestError(
+                    message="Authentication token is invalid or expired.",
+                    data=build_two_layer_error_envelope(
+                        AdCPAuthRequiredError(
+                            "Authentication token is invalid or expired.", suggestion=AUTH_MISSING_SUGGESTION
+                        )
+                    ),
+                )
 
             if not identity.tenant:
+                # DEFER: tenant-axis, out of scope for the AUTH_MISSING/
+                # AUTH_INVALID split (salesagent-40kk) — left unchanged.
                 raise InvalidRequestError(
                     message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
                 )
@@ -615,16 +637,17 @@ class AdCPRequestHandler(RequestHandler):
             # Require authentication for non-public skills. Stay a JSON-RPC
             # InvalidRequestError (protocol-level rejection, top-level error), but
             # carry the two-layer envelope in ``data`` so the buyer-facing
-            # AUTH_REQUIRED code + AUTH_REQUIRED_SUGGESTION reach the A2A wire —
-            # matching REST's no-identity envelope (auth_context.py), which the
-            # bare A2AError previously dropped. (#1417)
+            # AUTH_MISSING code + suggestion reach the A2A wire — matching
+            # REST's no-identity envelope (auth_context.py), which the bare
+            # A2AError previously dropped. (#1417; split to AUTH_MISSING per
+            # v3.1.1 error-code.json — salesagent-mkso)
             if requires_auth and not auth_token:
                 raise InvalidRequestError(
                     message="Missing authentication token - Bearer token required in Authorization header",
                     data=build_two_layer_error_envelope(
                         AdCPAuthRequiredError(
                             "Authentication required - Bearer token required in Authorization header",
-                            suggestion=AUTH_REQUIRED_SUGGESTION,
+                            suggestion=AUTH_MISSING_SUGGESTION,
                         )
                     ),
                 )
@@ -634,7 +657,16 @@ class AdCPRequestHandler(RequestHandler):
             # to all downstream handlers. No handler should call resolve_identity().
             identity: ResolvedIdentity | None = None
             if auth_token:
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
+                # A PRESENTED token must always be validated, regardless of
+                # whether the requested skill itself requires auth — absent
+                # token -> proceed anonymous (fine); presented-but-invalid
+                # token -> must reject with AUTH_INVALID (terminal), even on
+                # a public/discovery-only skill request. Previously this
+                # reused `requires_auth` (skill-based) here, so an invalid
+                # token on a discovery-only request was silently swallowed as
+                # anonymous by resolve_identity()'s require_valid_token=False
+                # path instead of being rejected (salesagent-7moz).
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
             elif not requires_auth:
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
@@ -1444,9 +1476,20 @@ class AdCPRequestHandler(RequestHandler):
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
-        # Validate identity for non-discovery skills
+        # Validate identity for non-discovery skills. No identity / no
+        # principal_id resolved at all -> AUTH_MISSING per v3.1.1
+        # error-code.json. Previously a bare InvalidRequestError with no
+        # error_code/wire-code field at all — same layering violation as
+        # the :282-283/:286-287 sites above (salesagent-mkso).
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
+            raise InvalidRequestError(
+                message="Authentication required for skill invocation",
+                data=build_two_layer_error_envelope(
+                    AdCPAuthRequiredError(
+                        "Authentication required for skill invocation", suggestion=AUTH_MISSING_SUGGESTION
+                    )
+                ),
+            )
 
         # Map skill names to handlers. Handler signatures are heterogeneous
         # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
@@ -1836,6 +1879,9 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with identity
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
+            context=parameters.get("context"),
+            adcp_version=parameters.get("adcp_version"),
+            adcp_major_version=parameters.get("adcp_major_version"),
             identity=identity,
         )
 
@@ -1885,9 +1931,12 @@ class AdCPRequestHandler(RequestHandler):
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_accounts request"):
             request = ListAccountsRequest(
+                account=parameters.get("account"),
                 status=parameters.get("status"),
                 pagination=parameters.get("pagination"),
                 sandbox=parameters.get("sandbox"),
+                idempotency_key=parameters.get("idempotency_key"),
+                ext=parameters.get("ext"),
                 context=parameters.get("context"),
             )
         return core_list_accounts_tool(req=request, identity=identity)

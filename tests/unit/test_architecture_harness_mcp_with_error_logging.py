@@ -112,13 +112,13 @@ def test_known_violations_not_stale():
 
 
 def test_migrated_update_site_is_guarded():
-    """The #1417 fix: media_buy_dual update MCP path must run the guarded pipeline.
+    """The #1417 fix: media_buy_dual update MCP path must surface the wire envelope.
 
-    Since the adcp 6.6 merge the update path mirrors the create path: it routes
-    through ``_run_mcp_client`` (the real FastMCP Client pipeline, whose server
-    registration applies ``with_error_logging`` in src/core/main.py) instead of
-    wrapping the tool inline. Pin that routing plus the absence of a direct
-    ``update_media_buy(ctx=...)`` call.
+    Two compliant shapes: wrapping the tool explicitly (with_error_logging(...)),
+    or the stronger real-pipeline form — routing through _run_mcp_client, which
+    drives the REGISTERED tool where src/core/main.py applies
+    mcp.tool()(with_error_logging(fn)). The create-side call_mcp migrated the
+    same way (see allowlist comment above).
     """
     source = (_HARNESS_DIR / "media_buy_dual.py").read_text()
     tree = ast.parse(source)
@@ -131,8 +131,8 @@ def test_migrated_update_site_is_guarded():
     explicit_wrap = _func_references_with_error_logging(source, "_call_update_mcp")
     real_pipeline = _func_references_name(source, "_call_update_mcp", "_run_mcp_client")
     assert explicit_wrap or real_pipeline, (
-        "_call_update_mcp must either route through _run_mcp_client (production-registered "
-        "with_error_logging) or wrap the tool with with_error_logging inline (the #1417 fix regressed)."
+        "_call_update_mcp must apply with_error_logging — explicitly, or by routing "
+        "through _run_mcp_client (registration-applied decorator). The ihwl fix regressed."
     )
     # And it must not appear as a direct-call violation.
     assert ("media_buy_dual.py", "_call_update_mcp") not in _scan_violations()

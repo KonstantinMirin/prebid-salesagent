@@ -337,7 +337,8 @@ class GoogleAdManager(AdServerAdapter):
         """Check if order has guaranteed line items (delegated to orders manager)."""
         return self._require_orders_manager().check_order_has_guaranteed_items(order_id)
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Return set of pricing models GAM adapter supports.
 
         Google Ad Manager supports:
@@ -351,7 +352,8 @@ class GoogleAdManager(AdServerAdapter):
         """
         return {"cpm", "vcpm", "cpc", "flat_rate"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities GAM adapter supports.
 
         Google Ad Manager supports comprehensive geo targeting:

@@ -37,12 +37,12 @@ from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp_boundary import build_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 
 
@@ -591,13 +591,13 @@ async def list_creative_formats(
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_creative_formats_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 def list_creative_formats_raw(
     req: ListCreativeFormatsRequest | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (raw function for A2A server use).
 
@@ -611,6 +611,5 @@ def list_creative_formats_raw(
     Returns:
         ListCreativeFormatsResponse with all available formats
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     return _list_creative_formats_impl(req, identity)

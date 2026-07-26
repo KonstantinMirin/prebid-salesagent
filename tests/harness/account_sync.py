@@ -68,7 +68,7 @@ class AccountSyncEnv(IntegrationEnv):
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
-    def setup_default_data(self) -> tuple[Any, Any]:
+    def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Create tenant + principal, then fold constructor billing config into the DB.
 
         Constructor-passed ``supported_billing`` / ``account_approval_mode`` only
@@ -76,8 +76,12 @@ class AccountSyncEnv(IntegrationEnv):
         live server reads tenant config from its own DB. Once the tenant row
         exists, write those values through the same setters so the DB and the
         in-memory identity agree.
+
+        ``tenant_kwargs`` are forwarded to the base ``setup_default_data`` (e.g.
+        ``account_sandbox=False``) — applied on create, or written to the
+        existing row when the tenant was already seeded by a prior Given.
         """
-        tenant, principal = super().setup_default_data()
+        tenant, principal = super().setup_default_data(**tenant_kwargs)
         if self._supported_billing is not None:
             self.set_billing_policy(self._supported_billing)
         if self._account_approval_mode is not None:

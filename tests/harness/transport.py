@@ -38,6 +38,20 @@ def _pinned_error_metadata() -> dict[str, dict[str, str]]:
     return json.loads(_PINNED_ERROR_ENUM.read_text())["enumMetadata"]
 
 
+def is_pinned_error_code(code: str | None) -> bool:
+    """Whether ``code`` is a canonical AdCP error code in the pinned enum.
+
+    The guard an outcome-dispatch step needs BEFORE calling
+    :meth:`TransportResult.assert_wire_error`: that method HARD-FAILS on any
+    non-pinned code (a scenario-only code like ``DOMAIN_INVALID_FORMAT`` that
+    production never emits), so a step whose scenarios can carry a non-pinned
+    code must route those through a reconstructed-exception branch instead of
+    the wire assertion. Same pinned source as ``assert_wire_error`` (pin-wins),
+    so the two never disagree on what "canonical" means.
+    """
+    return code is not None and code in _pinned_error_metadata()
+
+
 def extract_wire_suggestion(envelope: dict | None) -> str | None:
     """The buyer-facing ``suggestion`` from a two-layer AdCP wire error envelope.
 
@@ -148,6 +162,7 @@ class TransportResult:
         recovery: str | None = None,
         require_suggestion: bool = False,
         message_substr: str | None = None,
+        field: str | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -158,6 +173,11 @@ class TransportResult:
         non-vacuous without per-scenario duplication. This is the single
         harness-provided way to verify an error on the wire — step definitions
         must not hand-roll envelope parsing.
+
+        ``field`` pins ``errors[0].field``, the error.json pointer naming WHICH
+        request field was rejected. It is a kwarg here rather than a separate
+        wire_error_field() helper on purpose: one sanctioned error surface means a
+        step never has to decide which mechanism to reach for.
         """
         from tests.helpers import assert_envelope_shape
 
@@ -175,7 +195,7 @@ class TransportResult:
             f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
             "succeeded or errored before reaching a transport."
         )
-        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr)
+        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr, field=field)
         if require_suggestion:
             suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"

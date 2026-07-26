@@ -894,7 +894,7 @@ class TestMainFlowObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
     @pytest.mark.asyncio
     async def test_tenant_setup_validation(self):
@@ -1081,7 +1081,7 @@ class TestPreconditionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
 
 class TestAsapStartTimingObligations:
@@ -1650,7 +1650,7 @@ class TestExtensionObligations:
                     )
 
                 assert "not registered" in str(exc_info.value).lower()
-                assert exc_info.value.error_code == "AUTH_REQUIRED"
+                assert exc_info.value.error_code == "PERMISSION_DENIED"
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
@@ -1696,7 +1696,7 @@ class TestExtensionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
         # Identity with no principal_id -> requires authentication
 
@@ -1710,7 +1710,7 @@ class TestExtensionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity_no_principal)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
     def test_no_database_record_on_adapter_failure(self, integration_db):
         """When adapter fails, no database records are created.

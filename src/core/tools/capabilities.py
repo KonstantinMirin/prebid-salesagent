@@ -7,42 +7,138 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 """
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Annotated
 
-from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
 from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types.generated_poc.enums.pricing_model import PricingModel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    Account,
     Adcp,
+    CreativeApprovalMode,
     Execution,
     GeoMetros,
-    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
     PublisherDomain,
+    RequestSigning,
     SupportedProtocol,
-    # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
+    # NOTE: src.core.schemas.Targeting is an UNRELATED SDK type (media-buy targeting
+    # overlay), not a local subclass of this Targeting (capabilities declared-dimensions
+    # shape) -- confirmed via subclass-identity check, salesagent-3s5a. Importing the SDK
+    # type directly here is correct, not a Pattern #1 bypass.
     Targeting,
+    WebhookSigning,
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
-from src.core.auth import get_principal_object, require_identity
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
+from src.core.auth import require_identity
+from src.core.billing_policy import BillingParty, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
-from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant, get_targeting_capabilities_override
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp_boundary import build_tool_result
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
+from src.core.validation_helpers import adcp_validation_boundary
+from src.core.version_negotiation import negotiate_adcp_version
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
+
+# webhook_signing / request_signing: agent-level facts (no RFC 9421 request/webhook
+# signing implemented today), not tenant config -- declared identically on every
+# response, in-process and no-tenant alike (salesagent-3s5a). The
+# must_equal_when(webhook emission -> supported=true) x-adcp-validation invariant is
+# satisfied vacuously today because production emits no webhook-triggering fields
+# either; RFC 9421 signing support is tracked as follow-up work, not this task's scope.
+_WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
+_REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
+
+
+def _build_adcp_block(tenant: Mapping | None) -> Adcp:
+    """Build the top-level adcp.* envelope -- single source for both the
+    no-tenant minimal response and the tenant-resolved full response
+    (salesagent-rldj DRY fix; the two literal Adcp(...) constructions this
+    replaces had drifted apart before, the exact class of bug DRY exists to
+    prevent).
+
+    major_versions/supported_versions derive from SUPPORTED_ADCP_MAJORS/
+    VERSIONS (src/core/version_negotiation.py), themselves derived from the
+    pinned SDK spec version -- never a literal. idempotency derives from
+    get_idempotency_posture(tenant), the single source shared by both
+    response paths.
+    """
+    from src.core.database.repositories.idempotency_attempt import get_idempotency_posture
+    from src.core.version_negotiation import SUPPORTED_ADCP_MAJORS, SUPPORTED_ADCP_VERSIONS
+
+    posture = get_idempotency_posture(tenant)
+    posture.check_bounds()
+    return Adcp(
+        major_versions=[MajorVersion(root=m) for m in SUPPORTED_ADCP_MAJORS],
+        supported_versions=list(SUPPORTED_ADCP_VERSIONS),
+        idempotency=posture.to_sdk_union(),
+    )
+
+
+def _build_account_block(tenant: Mapping) -> Account:
+    """Build the account block from real tenant config -- never fabricated.
+
+    supported_billing derives from resolve_supported_billing (src/core/billing_policy.py),
+    the single source shared with the sync_accounts billing gate (_check_billing_policy)
+    -- the two can never diverge. require_operator_auth is a true architectural constant
+    (no per-tenant operator-auth config or enforcement exists yet). sandbox reflects the
+    tenant's account_sandbox column (default true). authorization_endpoint/
+    required_for_products/account_financials stay omitted -- declaring them would be an
+    aspirational capability the platform doesn't back yet, not an honest one
+    (salesagent-3s5a Core Invariant).
+    """
+    return Account(
+        supported_billing=[BillingParty(v) for v in resolve_supported_billing(tenant)],
+        require_operator_auth=False,
+        sandbox=tenant.get("account_sandbox", True),
+        # SDK field defaults are False, not None -- pass None explicitly or these
+        # would fabricate "not required"/"no financials" instead of honestly omitting.
+        authorization_endpoint=None,
+        required_for_products=None,
+        account_financials=None,
+    )
+
+
+def build_get_adcp_capabilities_request(
+    *,
+    protocols: list[str] | None = None,
+    context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
+    ext: dict | None = None,
+) -> GetAdcpCapabilitiesRequest:
+    """Build the shared get_adcp_capabilities request for transport wrappers.
+
+    Mirrors build_list_creative_formats_request (creative_formats.py) -- the
+    single seam every transport wrapper constructs the typed request through,
+    so a future request field lands here once instead of in wrapper lockstep
+    (salesagent-5yik).
+    """
+    return GetAdcpCapabilitiesRequest(
+        protocols=protocols,
+        context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
+        ext=ext,
+    )
 
 
 # Mapping from adapter channel names to MediaChannel enum values
@@ -68,7 +164,42 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "influencer": MediaChannel.influencer,
     "affiliate": MediaChannel.affiliate,
     "product_placement": MediaChannel.product_placement,
+    "sponsored_intelligence": MediaChannel.sponsored_intelligence,
 }
+
+# TargetingCapabilities boolean field -> (native country key, native system value),
+# per core/postal-area-support.json's native country-keyed map. Single shared table
+# drives BOTH the presence guard and the PostalAreaSupport construction (DRY --
+# salesagent-y9ld R4; the old code had 9 field-by-field kwargs plus a hand-enumerated
+# `any([...])` guard, two sites that could omit a field independently).
+_POSTAL_AREA_TABLE: dict[str, tuple[str, str]] = {
+    "us_zip": ("US", "zip"),
+    "us_zip_plus_four": ("US", "zip_plus_four"),
+    "gb_outward": ("GB", "outward"),
+    "gb_full": ("GB", "full"),
+    "ca_fsa": ("CA", "fsa"),
+    "ca_full": ("CA", "full"),
+    "de_plz": ("DE", "plz"),
+    "ch_plz": ("CH", "plz"),
+    "at_plz": ("AT", "plz"),
+    "fr_code_postal": ("FR", "code_postal"),
+    "au_postcode": ("AU", "postcode"),
+}
+
+
+def _build_geo_postal_areas(targeting_caps: object | None) -> PostalAreaSupport | None:
+    """Native country-keyed geo_postal_areas, built from _POSTAL_AREA_TABLE --
+    never the deprecated boolean-alias shape. None when the adapter declares no
+    postal targeting at all (honest absence, not an empty object)."""
+    if not targeting_caps:
+        return None
+    by_country: dict[str, list[str]] = {}
+    for field, (country, system) in _POSTAL_AREA_TABLE.items():
+        if getattr(targeting_caps, field, False):
+            by_country.setdefault(country, []).append(system)
+    if not by_country:
+        return None
+    return PostalAreaSupport(**by_country)
 
 
 def _get_adcp_capabilities_impl(
@@ -85,19 +216,23 @@ def _get_adcp_capabilities_impl(
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    # Extract principal and tenant from resolved identity
-    principal_id = identity.principal_id if identity else None
+    # Negotiate FIRST -- a bad version pin is rejected even with no tenant
+    # context (salesagent-rldj: version negotiation is not tenant-gated).
+    if req:
+        negotiate_adcp_version(req.adcp_version, req.adcp_major_version)
+
+    # Extract tenant from resolved identity
     tenant = identity.tenant if identity else None
 
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
-            adcp=Adcp(
-                major_versions=[MajorVersion(root=3)],
-                idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-            ),
+            adcp=_build_adcp_block(None),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
+            request_signing=_REQUEST_SIGNING_UNSUPPORTED,
+            context=req.context if req else None,
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -109,25 +244,44 @@ def _get_adcp_capabilities_impl(
     # Log activity
     log_tool_activity(identity, "get_adcp_capabilities")
 
-    # Get adapter to determine channels and capabilities
+    # Get adapter CLASS to determine channels and capabilities. Tenant-only,
+    # principal-free: capabilities describe the SELLER (tenant), not the
+    # caller — INV-4 (AdCP v3.1.1). Resolved via get_adcp_capabilities.mdx
+    # L23 + get_adapter_class_for_tenant (adapter_helpers.py), which bypasses
+    # Adapter.__init__ entirely — Kevel/TritonDigital would crash __init__
+    # for a synthetic/tenant-only Principal (salesagent-dn2s).
     primary_channels: list[MediaChannel] = []
-    adapter = None
+    adapter: type | None = None
     try:
-        # Get the Principal object to pass to adapter
-        principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
-
-        if principal:
-            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
-            if adapter and hasattr(adapter, "default_channels"):
-                for channel_name in adapter.default_channels:
-                    if channel_name.lower() in CHANNEL_MAPPING:
-                        primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
+        adapter = get_adapter_class_for_tenant(tenant)
+        if adapter and hasattr(adapter, "default_channels"):
+            for channel_name in adapter.default_channels:
+                if channel_name.lower() in CHANNEL_MAPPING:
+                    primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
     except Exception as e:
         logger.warning(f"Could not get adapter channels: {e}")
 
     # Default to display if we couldn't determine from adapter
     if not primary_channels:
         primary_channels = [MediaChannel.display]
+
+    # supported_pricing_models: pre-flight buyer signal, sorted+deterministic.
+    # Same source as the per-product "supported" annotation (products.py:721) --
+    # never a literal/default set. Adapter unavailable -> omit (honest absence,
+    # matching the primary_channels/reporting degradation posture elsewhere in
+    # this function; do NOT invent a default set).
+    supported_pricing_models: list[PricingModel] | None = None
+    if adapter and hasattr(adapter, "get_supported_pricing_models"):
+        try:
+            resolved_models = sorted(
+                (PricingModel(m) for m in adapter.get_supported_pricing_models()), key=lambda m: m.value
+            )
+            # minItems 1 -- an empty result means "nothing determined", the same
+            # honest-absence posture as the exception path below, never an
+            # empty array (which the SDK model itself rejects).
+            supported_pricing_models = resolved_models or None
+        except Exception as e:
+            logger.warning(f"Could not get supported pricing models: {e}")
 
     # Get publisher domains from database
     publisher_domains: list[PublisherDomain] = []
@@ -182,11 +336,22 @@ def _get_adcp_capabilities_impl(
         # UNSUPPORTED_FEATURE there instead of being warned at capability
         # discovery. Mirrors the property_list_filtering=False rationale above.
         catalog_management=False,
+        # committed_metrics_supported: declared False until a committed-metrics
+        # surface exists (no product/media-buy data model backs a delivery
+        # commitment today). Mirrors the catalog_management=False rationale above.
+        committed_metrics_supported=False,
     )
 
-    # Build targeting capabilities from adapter
+    # Build targeting capabilities from adapter, unless a per-tenant
+    # test_behavior override is configured (salesagent-689e fault injection).
+    # Same degrade-on-exception posture as the adapter-channels block above —
+    # the override read is a DB call, not a hard requirement.
     targeting_caps = None
-    if adapter and hasattr(adapter, "get_targeting_capabilities"):
+    try:
+        targeting_caps = get_targeting_capabilities_override(tenant)
+    except Exception as e:
+        logger.warning(f"Could not get targeting capabilities override: {e}")
+    if targeting_caps is None and adapter and hasattr(adapter, "get_targeting_capabilities"):
         targeting_caps = adapter.get_targeting_capabilities()
 
     # Build GeoMetros if any metro targeting is supported
@@ -206,32 +371,10 @@ def _get_adcp_capabilities_impl(
             uk_itl2=targeting_caps.uk_itl2 or None,
         )
 
-    # Build PostalAreaSupport if any postal targeting is supported
-    geo_postal_areas = None
-    if targeting_caps and any(
-        [
-            targeting_caps.us_zip,
-            targeting_caps.us_zip_plus_four,
-            targeting_caps.ca_fsa,
-            targeting_caps.ca_full,
-            targeting_caps.gb_outward,
-            targeting_caps.gb_full,
-            targeting_caps.de_plz,
-            targeting_caps.fr_code_postal,
-            targeting_caps.au_postcode,
-        ]
-    ):
-        geo_postal_areas = PostalAreaSupport(
-            us_zip=targeting_caps.us_zip or None,
-            us_zip_plus_four=targeting_caps.us_zip_plus_four or None,
-            ca_fsa=targeting_caps.ca_fsa or None,
-            ca_full=targeting_caps.ca_full or None,
-            gb_outward=targeting_caps.gb_outward or None,
-            gb_full=targeting_caps.gb_full or None,
-            de_plz=targeting_caps.de_plz or None,
-            fr_code_postal=targeting_caps.fr_code_postal or None,
-            au_postcode=targeting_caps.au_postcode or None,
-        )
+    # Build PostalAreaSupport as the native country-keyed map (postal-area-support.json;
+    # the boolean aliases us_zip/de_plz/... are `deprecated: true` at 3.1.1) --
+    # native-only, no alias co-emission (plan Q5 recommendation).
+    geo_postal_areas = _build_geo_postal_areas(targeting_caps)
 
     targeting = Targeting(
         geo_countries=targeting_caps.geo_countries if targeting_caps else True,
@@ -245,11 +388,29 @@ def _get_adcp_capabilities_impl(
         targeting=targeting,
     )
 
+    # creative_approval_mode: require_human when this tenant's configuration
+    # genuinely requires manual review (resolve_manual_approval_signal, the
+    # same signal _create_media_buy_impl enforces); omit entirely otherwise --
+    # NEVER claim auto_approve without an explicit tenant-level affirmation
+    # that no product/account requires review (no such config surface exists
+    # yet, salesagent-y9ld plan Q2 -- declaring it would be a false
+    # conformance claim, not a "legacy-unspecified" honest omission).
+    from src.core.helpers.adapter_helpers import resolve_manual_approval_signal
+
+    manual_approval_signal = False
+    try:
+        manual_approval_signal = resolve_manual_approval_signal(tenant)
+    except Exception as e:
+        logger.warning(f"Could not resolve manual approval signal: {e}")
+    creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
+
     # Build media_buy capabilities
     media_buy = MediaBuy(
         portfolio=portfolio,
         features=features,
         execution=execution,
+        supported_pricing_models=supported_pricing_models,
+        creative_approval_mode=creative_approval_mode,
     )
 
     # Build response
@@ -264,21 +425,34 @@ def _get_adcp_capabilities_impl(
     # failures don't block merge, and the public declaration forces
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
-        adcp=Adcp(
-            major_versions=[MajorVersion(root=3)],
-            idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-        ),
+        adcp=_build_adcp_block(tenant),
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,
+        account=_build_account_block(tenant),
+        webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
+        request_signing=_REQUEST_SIGNING_UNSUPPORTED,
         last_updated=datetime.now(UTC),
+        context=req.context if req else None,
     )
+
+    # Filter protocol-domain sections to the requested protocols. adcp/
+    # supported_protocols/account are protocol-invariant (describe the seller
+    # as a whole, not a specific protocol domain) and always survive.
+    if req and req.protocols:
+        requested = {enum_value(p) for p in req.protocols}
+        for field_name in ("media_buy", "signals", "governance", "sponsored_intelligence", "creative"):
+            if field_name not in requested:
+                setattr(response, field_name, None)
 
     return response
 
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
+    adcp_version: Annotated[str | None, Field(description="Requested AdCP spec version")] = None,
+    adcp_major_version: Annotated[int | None, Field(description="Requested AdCP major version")] = None,
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -286,7 +460,10 @@ async def get_adcp_capabilities(
     MCP tool wrapper aligned with adcp v3.x spec.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Filter response sections to these protocol domains (optional)
+        context: Application-level context per AdCP spec, echoed on the response
+        adcp_version: Requested AdCP spec version (optional)
+        adcp_major_version: Requested AdCP major version (optional)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -294,17 +471,22 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object (currently minimal)
-    req = GetAdcpCapabilitiesRequest()
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = build_get_adcp_capabilities_request(
+            protocols=protocols,
+            context=context,
+            adcp_version=adcp_version,
+            adcp_major_version=adcp_major_version,
+        )
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
 
     # Build human-readable summary
-    protocols = [enum_value(p) for p in response.supported_protocols]
+    summary_protocols = [enum_value(p) for p in response.supported_protocols]
     summary_parts = [
         f"AdCP v{response.adcp.major_versions[0].root} Capabilities",
-        f"Supported protocols: {', '.join(protocols)}",
+        f"Supported protocols: {', '.join(summary_protocols)}",
     ]
 
     if response.media_buy and response.media_buy.portfolio:
@@ -318,29 +500,38 @@ async def get_adcp_capabilities(
     summary = "\n".join(summary_parts)
 
     # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=summary, structured_content=response)
+    return build_tool_result(summary, response)
 
 
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetAdcpCapabilitiesResponse:
     """Get the capabilities of this AdCP sales agent.
 
-    Raw function without @mcp.tool decorator for A2A server use.
+    Raw function without @mcp.tool decorator for A2A server / REST use.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Filter response sections to these protocol domains (optional)
+        context: Application-level context per AdCP spec, echoed on the response
+        adcp_version: Requested AdCP spec version (optional)
+        adcp_major_version: Requested AdCP major version (optional)
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest()
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = build_get_adcp_capabilities_request(
+            protocols=protocols,
+            context=context,
+            adcp_version=adcp_version,
+            adcp_major_version=adcp_major_version,
+        )
     return _get_adcp_capabilities_impl(req, identity)

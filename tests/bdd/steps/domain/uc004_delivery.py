@@ -2776,12 +2776,23 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         code = layer.get("code")
         recovery = layer.get("recovery")
         # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
-        # INTERNAL_ERROR to SERVICE_UNAVAILABLE, and the base AdCPError default
-        # recovery is "terminal" — so a {SERVICE_UNAVAILABLE, terminal} server fault
-        # would otherwise pass as a field rejection. (#1420 should-fix)
-        # CONFIGURATION_ERROR now passes through untranslated (salesagent-nr2q) and is
-        # likewise a seller-side fault, never a field rejection.
-        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR", "AUTH_REQUIRED"}, (
+        # INTERNAL_ERROR to SERVICE_UNAVAILABLE — a server fault would otherwise
+        # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now
+        # passes through untranslated (salesagent-nr2q) and is likewise a
+        # seller-side fault, never a field rejection. AUTH_MISSING/AUTH_INVALID
+        # (v3.1.1 split, salesagent-mkso) replace the deprecated AUTH_REQUIRED
+        # alias for auth failures — excluding only the literal "AUTH_REQUIRED"
+        # string let an auth failure (e.g. resolve_principal_or_raise's
+        # "principal not found" -> AUTH_INVALID) masquerade as a legitimate
+        # client field rejection once the split landed.
+        assert code and code not in {
+            "INTERNAL_ERROR",
+            "SERVICE_UNAVAILABLE",
+            "CONFIGURATION_ERROR",
+            "AUTH_REQUIRED",
+            "AUTH_MISSING",
+            "AUTH_INVALID",
+        }, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
         )

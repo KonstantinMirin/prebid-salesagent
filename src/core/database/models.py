@@ -31,6 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
+from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.json_type import JSONType
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
@@ -75,6 +76,9 @@ class Tenant(Base, JSONValidatorMixin):
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
+    account_sandbox: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )  # #1592 C2/A2
     account_approval_mode: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # BR-RULE-060: auto|credit_review|legal_review
@@ -849,7 +853,7 @@ class Account(Base):
             name="ck_accounts_status",
         ),
         CheckConstraint(
-            "billing IS NULL OR billing IN ('operator', 'agent')",
+            "billing IS NULL OR billing IN ({})".format(", ".join(repr(v) for v in BILLING_PARTY_VALUES)),
             name="ck_accounts_billing",
         ),
         CheckConstraint(

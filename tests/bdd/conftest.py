@@ -300,7 +300,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # Removed stale xfails: T-UC-002-partition-optimization-goals, T-UC-002-boundary-optimization-goals
     # Valid rows now pass; invalid rows xfail via _assert_error_outcome _SPEC_PRODUCTION_CODE_MAP.
     # Removed: T-UC-003-partition-optimization-goals, T-UC-003-boundary-optimization-goals, T-UC-003-alt-optimization-goals
-    # NOTE: principal-ownership error code gap handled in _assert_error_outcome (PERMISSION_DENIED→AUTHORIZATION_ERROR)
+    # NOTE: principal-ownership error code gap — spec expects ACCOUNT_NOT_FOUND,
+    # production raises AdCPAuthorizationError (PERMISSION_DENIED, salesagent-otc5)
+    # — see T-UC-003-ext-c below
     # RESOLVED(salesagent-0t6h): UpdateMediaBuySuccess status="submitted" now handled
     # by then_response_status (empty affected_packages = approval pending).
     # Removed T-UC-003-alt-manual xfail — tests pass with the fix.
@@ -353,33 +355,168 @@ _XFAIL_TAGS: dict[str, str] = {
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
     # No ASGI middleware checks content-length for oversized bodies.
     "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
-    # FIXME(#1521, #1592): ck_accounts_billing CHECK (models.py:852, migration 51d4f9009db4)
-    # allows only ('operator','agent') while billing-party at 3.1.1 is
-    # ["operator","agent","advertiser"] — a spec-valid billing="advertiser" passes request
-    # validation and the billing policy check, then IntegrityErrors on INSERT (500).
-    "T-UC-011-sync-billing-advertiser": "billing='advertiser' violates ck_accounts_billing CHECK — #1521/#1592 spec-production gap",
     # ── UC-010 batch-1 wiring (FIXME(#1592), salesagent-4sn7) ──────────────
     # Verified against a real run 2026-07-14: every entry below fails on all
     # three wire transports (strict holds); per-row / per-transport gaps use
     # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
     "T-UC-010-main": "account block, supported_pricing_models, reporting_delivery_methods not emitted — #1592 spec-production gap",
-    "T-UC-010-ext-a": "adcp.supported_versions not emitted; no-tenant identity re-resolves to a tenant on A2A/REST raw wrappers — #1592",
-    "T-UC-010-auth-data-identity": "INV-4 gap: response data varies with principal (adapter-derived channels/geo only for authenticated callers) — #1592",
-    "T-UC-010-ext-c-a2a": "A2A public-skill list exempts get_adcp_capabilities from token validation — invalid token accepted, no AUTH_INVALID emitted — #1592",
-    "T-UC-010-ext-c-mcp": "MCP structured_content serializes unset fields as JSON null — audience_targeting: null violates the absent-section contract — #1592",
-    "T-UC-010-ext-d-filter": "protocols filter ignored by the capabilities builder; account block missing from protocol-invariant set — #1592",
+    # Graduated (salesagent-rldj): _build_adcp_block() now always emits
+    # adcp.supported_versions (derived from SUPPORTED_ADCP_VERSIONS) on both
+    # the no-tenant and tenant-resolved paths. T-UC-010-ext-a removed.
+    # Graduated (salesagent-dn2s): T-UC-010-auth-data-identity — capability
+    # discovery now resolves the adapter CLASS tenant-only (INV-4), identical
+    # for anonymous and authenticated callers.
+    # Graduated (salesagent-7moz): T-UC-010-ext-c-a2a — A2A public-skill list
+    # now always validates a presented token (adcp_a2a_server.py), rejecting
+    # an invalid one with AUTH_INVALID regardless of skill-level auth
+    # requirement, matching v3.1.1 error-code.json.
+    # Graduated (salesagent-rrz8): T-UC-010-ext-c-mcp — MCP ToolResult now
+    # pre-serializes via model_dump(mode="json"), so audience_targeting is
+    # correctly omitted instead of serialized as null.
+    # T-UC-010-ext-d-filter FULLY GRADUATED (salesagent-5yik): the new POST
+    # /api/v1/capabilities route carries protocols/context/adcp_version on all
+    # 3 transports, so a2a/mcp/rest all now pass (removed from both this dict
+    # and the _SELECTIVE_XFAIL rest-only entry below).
+    # T-UC-010-ext-d-invalid-value / -empty / T-UC-010-ext-e-echo / -nested / -empty
+    # FULLY GRADUATED (salesagent-5yik): build_get_adcp_capabilities_request now
+    # constructs a real typed GetAdcpCapabilitiesRequest (Pydantic enforces the
+    # protocols enum + minItems:1), and _get_adcp_capabilities_impl echoes
+    # req.context verbatim onto the response on every transport.
     "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1592",
-    "T-UC-010-ext-d-invalid-value": "request params ignored — schema-invalid protocols filter silently accepted — #1592",
-    "T-UC-010-ext-d-empty": "request params ignored — empty protocols filter (minItems 1) silently accepted — #1592",
-    "T-UC-010-ext-e-echo": "context echo not implemented (3.1.1 MUST preserve byte-for-byte) — #1592",
-    "T-UC-010-ext-e-nested": "context echo not implemented — #1592",
-    "T-UC-010-ext-e-empty": "context echo not implemented — #1592",
-    "T-UC-010-v31-supported-versions": "adcp.supported_versions not emitted — #1592",
-    "T-UC-010-v31-version-unsupported": "version negotiation not implemented (adcp_version ignored, no VERSION_UNSUPPORTED) — #1592",
-    "T-UC-010-v31-version-unsupported-major-fallback": "version negotiation not implemented — #1592",
-    "T-UC-010-v31-version-unsupported-build-version-advisory": "version negotiation not implemented — #1592",
-    "T-UC-010-account-supported-billing": "account.supported_billing not derived from tenant billing config on the capabilities response — #1592",
-    "T-UC-010-account-block-presence": "account block emission incomplete — #1592",
+    # Graduated (salesagent-rldj): T-UC-010-v31-supported-versions removed —
+    # see T-UC-010-ext-a graduation note above (same _build_adcp_block fix).
+    # Graduated (salesagent-rldj): version negotiation now implemented
+    # (src/core/version_negotiation.py) — a bad adcp_version/adcp_major_version
+    # pin raises AdCPVersionUnsupportedError -> VERSION_UNSUPPORTED on all
+    # transports. T-UC-010-v31-version-unsupported /
+    # -major-fallback / -build-version-advisory removed from this dict.
+    # Wired non-dormant + strengthened (salesagent-e4ad): steps execute and grade the
+    # spec-pinned shape, then fail on the unemitted/hard-coded block (strict xfail on all transports).
+    "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1592 spec-production gap",
+    "T-UC-010-v31-specialisms": "specialisms hard-coded to [sales-non-guaranteed], not derived from tenant config; creative protocol not advertised — #1592 spec-production gap",
+    "T-UC-010-v31-advisory-errors": "top-level advisory errors[] not emitted by the capabilities builder — #1592 spec-production gap",
+    # T-UC-010-account-supported-billing / T-UC-010-account-block-presence GRADUATED
+    # (salesagent-3s5a): account.supported_billing now derives from resolve_supported_billing(tenant)
+    # and the account block is now emitted on the tenant-resolved path.
+    # Graduated (salesagent-y9ld R1): media_buy.supported_pricing_models now derives from
+    # adapter.get_supported_pricing_models() (mirrors products.py:721). T-UC-010-pricing removed.
+    "T-UC-010-audience-caps": "media_buy.audience_targeting not emitted by the capabilities builder — #1592 spec-production gap",
+    # Wired non-dormant + strengthened (salesagent-ytq6): steps execute and grade the
+    # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
+    "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1592 spec-production gap",
+    "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1592 spec-production gap",
+    # Graduated (salesagent-y9ld R2): CHANNEL_MAPPING now includes sponsored_intelligence,
+    # the 20th canonical channel. T-UC-010-channel-all-canonical removed.
+    # Wired non-dormant + strengthened (salesagent-tmpd): each scenario executes and grades the
+    # spec-pinned shapes, then fails on a block the capabilities builder never emits (strict
+    # xfail on all transports).
+    "T-UC-010-features": "media_buy.content_standards / conversion_tracking / audience_targeting presence-objects and the account block (account.sandbox) not emitted by the capabilities builder — #1592 spec-production gap",
+    "T-UC-010-targeting": "targeting emits only geo_countries/geo_regions/geo_metros/geo_postal_areas — age_restriction, language, keyword_targets, negative_keywords, geo_proximity not built and geo_postal_areas uses the deprecated boolean-alias shape not the native country-keyed map — #1592 spec-production gap",
+    # Wired non-dormant + strengthened (salesagent-scgh): each scenario executes and grades the
+    # spec-pinned v3.1.1 shape, then fails on a block the capabilities builder never emits
+    # (brand is not in supported_protocols; measurement block never built). Strict xfail, all
+    # transports.
+    "T-UC-010-v31-brand-block": "the capabilities builder advertises only media_buy in supported_protocols and never emits the brand top-level block (rights/right_types/available_uses/generation_providers) — #1592 spec-production gap",
+    "T-UC-010-v31-measurement-catalog": "the capabilities builder never emits the measurement block (metrics[] + measurement.core in experimental_features); measurement is not in supported_protocols — #1592 spec-production gap",
+    # Wired non-dormant + strengthened (salesagent-jd6a): each row executes and grades the
+    # spec-pinned bound/relation, then fails on all transports because the capabilities builder
+    # never derives idempotency from tenant config and runs no version negotiation (#1592).
+    # Strict tag-level xfail — every parametrized row fails.
+    # T-UC-010-v31-request-signing-monotonicity / T-UC-010-v31-webhook-signing-bounds moved to
+    # _SELECTIVE_XFAIL (salesagent-3s5a): request_signing/webhook_signing={supported:false} now
+    # emitted, so the "valid" rows (which only assert schema-valid subset/disjoint relations or
+    # must_equal_when bounds against an unsupported posture) pass; the "invalid" rows (which
+    # require the builder to REJECT a relation-violating/out-of-bounds posture with
+    # CONFIGURATION_ERROR) still fail — no per-tenant signing-posture config surface exists.
+    # Graduated (salesagent-rldj): get_idempotency_posture() now returns a
+    # typed IdempotencyPosture whose check_bounds() enforces the
+    # replay_ttl_seconds/in_flight_max_seconds schema bounds, raising
+    # CONFIGURATION_ERROR (terminal) on the invalid rows; the harness
+    # CapabilitiesEnv.set_idempotency_posture override lets the boundary rows
+    # drive it. T-UC-010-v31-idempotency-ttl-bounds removed from this dict.
+    # Graduated (salesagent-rldj): version negotiation now emits a non-empty,
+    # release-precision supported_versions in VERSION_UNSUPPORTED details on
+    # every row. T-UC-010-v31-version-unsupported-details-bounds removed.
+    # ── UC-011 list wiring (FIXME(#1592), salesagent-9if1) ─────────────────
+    # Graduated (salesagent-tm97): _apply_list_account_filters honors req.account
+    # (AccountReference oneOf, both account_id and natural-key arms), forwarded by
+    # all 3 transports. T-UC-011-list-account-filter removed.
+    # T-UC-011-list-authorization: the Account schema carries no authorization
+    # object (account-with-authorization item shape is new in 3.1.1), so the
+    # wire items never expose allowed_tasks. Out of scope (GH #1615).
+    "T-UC-011-list-authorization": "per-account authorization block (account-with-authorization / allowed_tasks) not "
+    "emitted — production Account schema has no authorization field, list items are bare — tracked as GH #1615, "
+    "out of #1592 A3 core scope",
+    # Graduated (salesagent-tm97): ListAccountsRequest.idempotency_key added --
+    # the read wrapper now tolerates the 3.1 idempotency envelope instead of
+    # rejecting it under extra=forbid. T-UC-011-list-read-idempotency-tolerance removed.
+    # Graduated (salesagent-5g8e): settings-update (AccountReference) mode implemented
+    # via _process_settings_update_entry (both AccountReference1/account_id and
+    # AccountReference2/natural-key arms), mode-exclusivity enforced in _impl before
+    # dispatch (VALIDATION_ERROR naming accounts[i]), unmatched references rejected
+    # with UNSUPPORTED_PROVISIONING. T-UC-011-sync-settings-update,
+    # T-UC-011-sync-settings-update-no-provision, T-UC-011-sync-mode-exclusive removed.
+    # Graduated (salesagent-hh1f): _check_billing_policy now emits recovery="correctable"
+    # + details={scope, supported_billing} (conditionally, honest-absence on an empty
+    # policy) on the per-account BILLING_NOT_SUPPORTED error. T-UC-011-ext-c-rejected removed.
+    # ── UC-011 per-buyer-agent commercial gate wiring (FIXME(#1592), salesagent-9jiu) ──
+    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
+    # v3.1.1 shape (error-details/billing-not-permitted-for-agent.json); each
+    # fails because production (src/core/tools/accounts.py) has NO per-buyer-agent
+    # commercial gate. The passthrough-only Given declares agent as
+    # capability-supported (supported_billing), so _check_billing_policy accepts
+    # the value and production PROVISIONS the account (action "created") instead
+    # of rejecting it with BILLING_NOT_PERMITTED_FOR_AGENT — the code is never
+    # emitted anywhere in production.
+    "T-UC-011-billing-agent-gate-reject": "no per-buyer-agent commercial gate exists in production — agent billing is "
+    "capability-supported so _check_billing_policy accepts it and the account is provisioned (action 'created') "
+    "instead of rejected with BILLING_NOT_PERMITTED_FOR_AGENT + clamped rejected_billing/suggested_billing details — "
+    "#1592 spec-production gap",
+    "T-UC-011-billing-agent-gate-recover": "no per-buyer-agent commercial gate exists in production — the first leg "
+    "never emits BILLING_NOT_PERMITTED_FOR_AGENT (capability-supported agent billing is provisioned), so the "
+    "autonomous suggested_billing recovery flow is unreachable — #1592 spec-production gap",
+    # ── UC-011 account-level notification_configs + sandbox capability gate (FIXME(#1592), salesagent-psr7) ──
+    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned v3.1.1
+    # shape; each fails on a genuine missing production surface (not a wiring stub).
+    # notification_configs: _sync_accounts_impl ignores accounts[].notification_configs
+    # and SyncResponseAccount declares no notification_configs field, so nothing is
+    # persisted or echoed — the "echo exactly N subscriber" assertion sees 0.
+    "T-UC-011-notif-register-paused": "account-level notification_configs unimplemented — _sync_accounts_impl "
+    "ignores accounts[].notification_configs and the per-account result model (SyncResponseAccount) carries no "
+    "notification_configs field, so a registered paused subscriber is never persisted or echoed on sync_accounts "
+    "or list_accounts — #1592 spec-production gap",
+    "T-UC-011-notif-replace-clear": "account-level notification_configs unimplemented — the declarative-replace "
+    "surface (re-send subscriber_id replaces in place; [] clears) does not exist; notification_configs is neither "
+    "persisted nor echoed, so the replace and clear reads both observe 0 subscribers — #1592 spec-production gap",
+    # notif-omit-preserves shares the "account … exists with notification config subscriber" Given and the
+    # echo Thens wired for notif-replace-clear (salesagent-psr7). Same total-absence gap: the omitted-field
+    # preserve semantics cannot be graded because nothing is persisted or echoed in the first place.
+    "T-UC-011-notif-omit-preserves": "account-level notification_configs unimplemented — omitting the field to "
+    "leave persisted subscribers unchanged cannot be graded because the pre-created subscriber is never persisted "
+    "or echoed (SyncResponseAccount carries no notification_configs field), so the read observes 0 subscribers — "
+    "#1592 spec-production gap",
+    # Graduated (salesagent-5g8e): _check_sandbox_capability gate added -- rejects
+    # sandbox provisioning with UNSUPPORTED_FEATURE (accounts[i].sandbox) when the
+    # tenant's account_sandbox capability is not declared. T-UC-011-sandbox-capability-not-declared removed.
+    # ── UC-011 notification_configs per-account rejections (FIXME(#1592), salesagent-m12f) ──
+    # Steps execute non-dormant on a2a/mcp/rest; each provisions the account and grades
+    # the spec-mandated per-account rejection, which production never emits because
+    # _sync_accounts_impl ignores accounts[].notification_configs (the request validator
+    # rejects neither media-buy-anchored event_types nor duplicate subscriber_ids, and no
+    # proof-of-control challenge exists). The account is provisioned (action 'created')
+    # instead of failing, so each fails at the "has action failed" assertion.
+    "T-UC-011-notif-event-scope-reject": "account-level notification_configs unimplemented — _sync_accounts_impl "
+    "ignores accounts[].notification_configs, so a media-buy-anchored event_type ('scheduled') on the account "
+    "surface is never validated; the account is provisioned (action 'created') instead of failing with "
+    "INVALID_REQUEST/VALIDATION_ERROR at notification_configs[0].event_types[0] — #1592 spec-production gap",
+    "T-UC-011-notif-duplicate-subscriber": "account-level notification_configs unimplemented — _sync_accounts_impl "
+    "ignores accounts[].notification_configs, so duplicate subscriber_id entries in one submitted array are never "
+    "detected; the account is provisioned (action 'created') instead of failing with INVALID_REQUEST/VALIDATION_ERROR "
+    "at notification_configs[1].subscriber_id — #1592 spec-production gap",
+    "T-UC-011-notif-activation-proof-fail": "account-level notification_configs unimplemented — no proof-of-control "
+    "challenge exists and _sync_accounts_impl ignores accounts[].notification_configs, so an active subscriber whose "
+    "url is unreachable is never challenged or rejected; the account is provisioned (action 'created') instead of "
+    "failing with VALIDATION_ERROR at notification_configs[0].url and keeping the prior set — #1592 spec-production gap",
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
@@ -464,27 +601,19 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"delayed"},
         "BR-RULE-029: production webhook service has no is_delayed flag — only scheduled/final/adjusted emitted",
     ),
-    # FIXME(#1521, #1592): advertiser row of the billing-enum outline — spec-valid
-    # billing-party value rejected by the ck_accounts_billing CHECK constraint (500).
-    # operator/agent rows keep passing.
-    (
-        "T-UC-011-sync-billing-enum",
-        {"advertiser"},
-        "billing='advertiser' violates ck_accounts_billing CHECK — #1521/#1592 spec-production gap",
-    ),
     # ── UC-010 batch-1 per-row gaps (FIXME(#1592), salesagent-4sn7) ────────
     # The 'omitted' / absence rows of these outlines pass vacuously (the field
     # is absent because the whole block is missing), so only the value rows xfail.
-    (
-        "T-UC-010-auth",
-        {"invalid_token_a2a"},
-        "A2A public-skill list exempts get_adcp_capabilities from token validation — "
-        "invalid token accepted, no AUTH_INVALID emitted — #1592",
-    ),
+    # Graduated (salesagent-7moz): invalid_token_a2a row — A2A now always
+    # validates a presented token, rejecting invalid ones with AUTH_INVALID.
+    # operator_auth_not_required GRADUATED (salesagent-3s5a): require_operator_auth is now
+    # emitted as the true constant False. operator_auth_required (expects True) can never
+    # pass with this plan — no per-tenant operator-auth config surface exists.
     (
         "T-UC-010-account-require-operator-auth",
-        {"operator_auth_required", "operator_auth_not_required"},
-        "account.require_operator_auth not emitted — #1592",
+        {"operator_auth_required"},
+        "account.require_operator_auth is a hardcoded False constant — no config surface to "
+        "make it True exists — #1592",
     ),
     (
         "T-UC-010-account-required-for-products",
@@ -498,13 +627,141 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     ),
     (
         "T-UC-010-features-partitions",
-        {"sandbox_enabled", "sandbox_disabled"},
-        "account.sandbox not emitted — #1592",
+        {"sandbox_disabled"},
+        "account.sandbox Given-side gap: no step writes account_sandbox=false for this row "
+        "(the DB column defaults true, owner decision) — #1592",
     ),
     (
         "T-UC-010-degradation-account",
-        {"full_response", "account_degraded"},
-        "account block not emitted for resolved tenants — #1592",
+        {"account_degraded"},
+        "account_degraded row gap not yet root-caused (same underlying assertion as the sibling "
+        "T-UC-010-degradation-partitions account_degraded row) — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-chbi): the 'absent' rows (adapter
+    # fails / capability disabled) pass — the block is genuinely off the wire; only the
+    # 'present' rows (full_response: adapter succeeds AND capability enabled) fail,
+    # because production never emits the media_buy.audience_targeting /
+    # conversion_tracking blocks yet (#1592). Strict on the present rows only.
+    (
+        "T-UC-010-degradation-sections",
+        {"full_response"},
+        "media_buy.audience_targeting / conversion_tracking sections not emitted by the capabilities builder — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-tmpd): targeting-partitions rows that
+    # production satisfies (adapter_unavailable_defaults, nested_absent) pass; the rest execute
+    # the real assertion and fail because the capabilities builder never emitted the richer
+    # non-geo dimensions (age_restriction/language/keyword_targets/negative_keywords/geo_proximity
+    # -- R8 follow-up, out of core scope). Graduated (salesagent-y9ld R4): nested_populated /
+    # postal_areas_native / postal_areas_legacy_alias now pass -- the native country-keyed
+    # geo_postal_areas map is built (_build_geo_postal_areas, capabilities.py), no longer the
+    # deprecated boolean-alias shape.
+    (
+        "T-UC-010-targeting-partitions",
+        {
+            "full_adapter",
+            "partial_dimensions",
+            "age_restriction_supported",
+            "keyword_targeting",
+            "geo_proximity_supported",
+        },
+        "targeting builder never emits the non-geo dimensions (age_restriction/language/"
+        "keyword_targets/negative_keywords/geo_proximity) — R8 follow-up, out of core scope — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-tmpd): degradation-partitions rows that
+    # production satisfies (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass; the
+    # gap rows fail — no_tenant needs adcp.supported_versions (not emitted), and no_principal
+    # expects [display] but INV-4 keeps the adapter principal-free so channels are NOT degraded
+    # by a missing principal. full_response GRADUATED (salesagent-3s5a): the account block is
+    # now emitted with non-empty supported_billing and adcp.idempotency is already present.
+    # account_degraded stays xfailed — a separate, still-ungraded gap (needs investigation).
+    (
+        "T-UC-010-degradation-partitions",
+        {"no_tenant", "no_principal", "account_degraded"},
+        "adcp.supported_versions not emitted; INV-4 keeps adapter channels "
+        "principal-free so no_principal does not degrade to [display]; account_degraded gap "
+        "not yet root-caused — #1592",
+    ),
+    # Wired (salesagent-y9ld R7): approval_unspecified (creative_approval_mode omitted
+    # by default -- TenantFactory.human_review_required=False and no
+    # gam/kevel/mock_manual_approval_required column set) passes today with zero
+    # production change -- honest-absence regression armor. Graduated: approval_human
+    # now passes -- resolve_manual_approval_signal() derives require_human from
+    # tenant.human_review_required (adapter_helpers.py), wired into the MediaBuy build.
+    # approval_auto stays xfailed -- no config surface exists to affirmatively claim
+    # auto_approve (Q2, deferred; declaring it without certainty would be a false
+    # conformance claim).
+    (
+        "T-UC-010-v31-creative-approval-mode",
+        {"approval_auto"},
+        "media_buy.creative_approval_mode=auto_approve has no backing config surface "
+        "(Q2 deferred) — #1592 spec-production gap",
+    ),
+    # Moved from _XFAIL_TAGS (salesagent-3s5a): request_signing/webhook_signing={supported:false}
+    # now emitted, so "valid" rows (asserting schema-valid relations/bounds against an
+    # unsupported posture) pass; "invalid" rows (requiring the builder to REJECT a
+    # relation-violating/out-of-bounds posture with CONFIGURATION_ERROR) still fail — no
+    # per-tenant signing-posture config surface exists to reject against.
+    (
+        "T-UC-010-v31-request-signing-monotonicity",
+        {
+            "required_for adds one operation not in supported_for",
+            "warn_for and required_for share exactly one operation",
+            "protocol_methods_required_for adds one method not in protocol_methods_supported_for",
+        },
+        "capabilities builder never rejects a relation-violating request_signing posture with "
+        "CONFIGURATION_ERROR — no per-tenant signing-posture config surface exists — #1592",
+    ),
+    (
+        "T-UC-010-v31-webhook-signing-bounds",
+        {
+            "reporting_delivery_methods=['webhook'], supported=false",
+            "supports_webhook_delivery=true, supported absent",
+            "algorithms=['rsa-pss-sha512']",
+        },
+        "capabilities builder never rejects a supported!=true-under-trigger or out-of-enum-algorithm "
+        "webhook_signing posture with CONFIGURATION_ERROR — no per-tenant signing-posture config "
+        "surface exists — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-scgh): the baseline-absence row passes
+    # (polling_only → reporting_delivery_methods/offline_delivery_protocols absent, webhook_signing
+    # honest-tautology); the push-delivery rows fail because the capabilities builder never emits
+    # media_buy.reporting_delivery_methods / offline_delivery_protocols / webhook_signing.
+    (
+        "T-UC-010-v31-reporting-delivery-methods",
+        {"webhook_only", "offline_only", "mixed_delivery"},
+        "media_buy.reporting_delivery_methods / offline_delivery_protocols / webhook_signing not "
+        "emitted by the capabilities builder — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-scgh): the no-emission row passes (no
+    # must_equal_when trigger fires → webhook_signing absent is schema-valid); the emission rows
+    # grade the conditional invariant (supported MUST equal true) and fail because the
+    # capabilities builder emits no webhook_signing block.
+    (
+        "T-UC-010-v31-webhook-signing-required-when",
+        {"reporting_webhook_emission", "content_standards_webhook", "wholesale_feed_webhook"},
+        "webhook_signing block not emitted — the must_equal_when(webhook emission → supported=true) "
+        "invariant is ungraded in production — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-scgh): the no-posture row passes (a valid
+    # capabilities response is emitted); the signing-posture-without-brand_json_url rows grade the
+    # required_when rejection (CONFIGURATION_ERROR, recovery terminal) and fail because the builder
+    # never builds identity/the signing posture and so never rejects the invalid config.
+    (
+        "T-UC-010-v31-identity-required-when-signing",
+        {"posture_declared_identity_absent", "posture_declared_identity_empty"},
+        "capabilities builder never emits identity/request_signing and never rejects a signing "
+        "posture missing identity.brand_json_url — #1592",
+    ),
+    # Wired non-dormant + strengthened (salesagent-jd6a): the no-posture / brand_json_url-present
+    # valid rows pass (a degraded-but-schema-valid baseline response is emitted and no malformed
+    # brand_json_url is on the wire); the signing-posture-without-brand_json_url invalid rows grade
+    # the required_when rejection (CONFIGURATION_ERROR, recovery terminal, naming brand_json_url)
+    # and fail because the builder never builds identity/the signing posture and so never rejects.
+    (
+        "T-UC-010-v31-identity-brand-json-url-bounds",
+        {"posture_url_absent", "posture_identity_empty"},
+        "capabilities builder never emits identity/request_signing and never rejects a signing "
+        "posture missing identity.brand_json_url — #1592",
     ),
 ]
 
@@ -519,20 +776,11 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 # strict=True  → must fail (genuine xfail)
 # strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
 _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
-    # ── UC-010: MCP structured_content serializes unset fields as JSON null
-    # (schema-invalid wire for optional object fields) — FIXME(#1592).
-    (
-        "T-UC-010-ext-e-absent",
-        set(),
-        "MCP structured_content serializes unset fields — context: null on the wire — #1592",
-        True,
-    ),
-    (
-        "T-UC-010-degradation-account",
-        {"no_tenant"},
-        "MCP structured_content serializes unset fields — account: null on the wire — #1592",
-        True,
-    ),
+    # Graduated (salesagent-rrz8): MCP ToolResult now pre-serializes via
+    # model_dump(mode="json") (src/core/tools/_mcp_boundary.py), so unset
+    # fields are correctly omitted instead of serialized as JSON null.
+    # Former entries: T-UC-010-ext-e-absent (context: null), T-UC-010-
+    # degradation-account/no_tenant (account: null).
 ]
 
 # NOTE: the former _REST_XFAIL_TAGS set was retired once the stale
@@ -753,7 +1001,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # no longer drops it), and the unknown-principal ownership check
             # (AdCPAuthorizationError) carries a "verify your x-adcp-auth token" suggestion.
             # T-UC-003-ext-a / -ext-a-unknown pass on a2a/mcp/rest.
-            "T-UC-003-ext-c": "production returns AUTHORIZATION_ERROR, spec expects ACCOUNT_NOT_FOUND",
+            "T-UC-003-ext-c": "production returns PERMISSION_DENIED (AdCPAuthorizationError), spec expects ACCOUNT_NOT_FOUND",
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
             "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
@@ -1458,21 +1706,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # Transport-scoped: impl genuinely PASSES start>=end on the _impl
-            # path now. mcp/rest boundary rows still don't enforce the gap.
-            (
-                "T-UC-004-boundary-date-range",
-                {
-                    # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
-                    # #1417) — removed. mcp/rest still gap.
-                    "mcp-start_date after end_date",
-                    "[rest-start_date after end_date",
-                    "mcp-start_date equals end_date",
-                    "[rest-start_date equals end_date",
-                },
-                "production does not validate start_date>=end_date on a2a/mcp/rest "
-                "(impl passes). Same gap as T-UC-004-daterange-invalid/-equal. "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # path now.
+            # GRADUATED (2026-07-25): mcp/rest now also validate
+            # start_date>=end_date (confirmed XPASS on both once the single-transport
+            # dedup fix stopped hiding them) — entry removed. The stricter standalone
+            # T-UC-004-daterange-invalid/-equal scenarios (exact error_code/message/
+            # suggestion pin) are unaffected and still genuinely xfail — this boundary
+            # outline only asserts the looser "date handling should be invalid".
             # end-only date_range default (salesagent-losz / debt C7, Gap G40):
             # when only end_date is provided, the spec says start_date defaults
             # to MediaBuy.created_at but production sets start = today-30d
@@ -1822,15 +2062,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 and not is_e2e_rest
                 and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
             )
-            # a2a now validates start_date>=end_date (wire-drop confirmed XPASS,
-            # #1417); mcp/rest still don't enforce the gap.
-            _dr_invalid_fail = (
-                not is_impl
-                and not is_a2a
-                and not is_e2e_rest
-                and any(s in nodeid for s in ("start_date equals end_date", "start_date after end_date"))
-            )
-            if _dr_valid_fail or _dr_invalid_fail:
+            # GRADUATED (2026-07-25): a2a/mcp/rest all now validate
+            # start_date>=end_date (impl passes too) — the invalid-rows branch is
+            # removed; only the valid-rows gap remains.
+            if _dr_valid_fail:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
@@ -2185,11 +2420,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (was an inert ctx flag); Then steps assert wire-first.
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
+            # Graduated (salesagent-mkso): T-UC-019-ext-a (no-auth get_media_buys)
+            # now correctly emits AUTH_MISSING per the v3.1.1 AUTH_MISSING/
+            # AUTH_INVALID split — was previously stale on AUTH_TOKEN_INVALID/
+            # AUTH_REQUIRED.
             # Extension errors — error code mismatches / not implemented.
-            # ext-a (no-auth get_media_buys): once wired, the missing-credentials
-            # path emits AUTH_TOKEN_INVALID, not the spec's AUTH_REQUIRED — a
-            # pre-existing auth-code gap unrelated to this PR's status work.
-            "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
             # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected
@@ -2847,12 +3082,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # strict-xfail wire variant removes the scenario entirely and loses the
         # xpass tripwire. Keep ONE wire representative per scenario.
         #
-        # Scoped to UC-010 for now: running a representative suite-wide
-        # immediately surfaces ~24 STALE strict-xfail entries in other UCs
-        # (they xpass when actually run — the tripwire has been dead since the
-        # IMPL sunset). Graduating those needs per-scenario inspection and is
-        # tracked separately (salesagent-4sn7 follow-up bead); extend
-        # _REPRESENTATIVE_UC_PREFIXES as each UC's entries are reconciled.
+        # UC-010 opt-in retained for scenarios that want an mcp/rest
+        # representative even when a2a ALSO carries the strict marker (pure
+        # runtime-reduction opt-out, not a correctness requirement — see the
+        # a2a-strict-marker check below for the correctness half).
         _REPRESENTATIVE_UC_PREFIXES = ("T-UC-010-",)
         _transport_param = re.compile(r"^(?P<head>.*?\[)(?:impl|a2a|mcp|rest)(?P<tail>[-\]].*)$")
 
@@ -2862,6 +3095,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         impl_bases = {
             base for base in (_scenario_base(i.nodeid) for i in items if "[impl" in i.nodeid) if base is not None
+        }
+        # The kept a2a variant is NOT always the one carrying
+        # the strict-xfail marker — several UC-004 markers are deliberately
+        # transport-selective (applied to mcp/rest only because a2a already
+        # validates). Deselecting every mcp/rest sibling in that case removes
+        # the ONLY items that could ever XPASS(strict), killing the tripwire
+        # for that scenario. Only treat mcp/rest as redundant when the a2a
+        # sibling ALSO carries an equivalent strict marker — otherwise keep
+        # one mcp/rest representative, same as the UC-010 opt-in.
+        a2a_strict_bases = {
+            base
+            for i in items
+            if ("[a2a]" in i.nodeid or "[a2a-" in i.nodeid)
+            and any(m.name == "xfail" and m.kwargs.get("strict", False) for m in i.iter_markers())
+            for base in [_scenario_base(i.nodeid)]
+            if base is not None
         }
         kept_representatives: set[str] = set()
 
@@ -2880,7 +3129,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 continue
             base = _scenario_base(nodeid)
             item_markers = {m.name for m in item.iter_markers()}
-            opted_in = any(t.startswith(_REPRESENTATIVE_UC_PREFIXES) for t in item_markers)
+            opted_in = any(t.startswith(_REPRESENTATIVE_UC_PREFIXES) for t in item_markers) or (
+                base is not None and base not in a2a_strict_bases
+            )
             if opted_in and base is not None and base not in impl_bases and base not in kept_representatives:
                 # No impl sibling to catch the xpass — keep this variant as
                 # the scenario's single strict-xfail representative.
@@ -3423,11 +3674,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-partition-targeting-overlay",
             "T-UC-003-boundary-targeting-overlay",
         }
-        # The 3 manual-approval submitted-envelope scenarios (PR #1567) are graded
-        # too (they exercise UpdateMediaBuySubmitted cross-transport, adcp 6.6 /
-        # spec 3.1.1). Every other UC-003 scenario stays dormant; full UC-003
-        # graduation is tracked separately. See the BOUNDED branch below.
-        _UC003_MANUAL_APPROVAL_TAGS = {
+        # The 3 manual-approval submitted-envelope scenarios (PR #1567) — see the
+        # BOUNDED branch below.
+        _UC003_WIRED_TAGS = {
             "T-UC-003-alt-manual",
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
@@ -3454,7 +3703,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 _setup_existing_media_buy(ctx, env, tenant, principal, product)
                 env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
                 yield
-        elif marker_names & _UC003_MANUAL_APPROVAL_TAGS:
+        elif marker_names & _UC003_WIRED_TAGS:
             # BOUNDED (PR #1567): the 3 manual-approval submitted-envelope
             # scenarios are graded here (they exercise UpdateMediaBuySubmitted
             # cross-transport). Every other non-extension UC-003 scenario stays
@@ -3565,6 +3814,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-main",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
+            "T-UC-010-pricing",
+            "T-UC-010-audience-caps",
+            "T-UC-010-conversion-caps",
+            "T-UC-010-creative-caps",
+            "T-UC-010-ext-b-schema-valid",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",
@@ -3590,6 +3844,37 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-version-unsupported",
             "T-UC-010-v31-version-unsupported-major-fallback",
             "T-UC-010-v31-version-unsupported-build-version-advisory",
+            # Batch 3 — degradation-sections + channel-all-canonical (salesagent-chbi)
+            "T-UC-010-degradation-sections",
+            "T-UC-010-channel-all-canonical",
+            # Batch 4 — features / targeting / idempotency-required (salesagent-tmpd)
+            "T-UC-010-features",
+            "T-UC-010-targeting",
+            "T-UC-010-targeting-partitions",
+            "T-UC-010-degradation-partitions",
+            "T-UC-010-v31-idempotency-required",
+            # Batch 5 — v3.1 signing / brand / reporting / measurement (salesagent-scgh)
+            "T-UC-010-v31-reporting-delivery-methods",
+            "T-UC-010-v31-brand-block",
+            "T-UC-010-v31-webhook-signing-required-when",
+            "T-UC-010-v31-identity-required-when-signing",
+            "T-UC-010-v31-measurement-catalog",
+            # Batch 6 — compliance_testing / specialisms / advisory errors (salesagent-e4ad)
+            "T-UC-010-v31-compliance-testing",
+            "T-UC-010-v31-specialisms",
+            "T-UC-010-v31-advisory-errors",
+            # Batch 7 — bounds / monotonicity outlines (salesagent-jd6a)
+            "T-UC-010-v31-request-signing-monotonicity",
+            "T-UC-010-v31-idempotency-ttl-bounds",
+            "T-UC-010-v31-version-unsupported-details-bounds",
+            "T-UC-010-v31-identity-brand-json-url-bounds",
+            # Batch 8 — webhook-signing bounds outline (salesagent-8wuu)
+            "T-UC-010-v31-webhook-signing-bounds",
+            # Batch 9 — version negotiation + idempotency posture (salesagent-rldj)
+            "T-UC-010-v31-idempotency-supported",
+            "T-UC-010-v31-idempotency-in-flight-bound",
+            # Batch 10 — creative_approval_mode (salesagent-y9ld R7)
+            "T-UC-010-v31-creative-approval-mode",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

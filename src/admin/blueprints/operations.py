@@ -499,7 +499,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                         # Echo the buyer's request context (shared helper, also used by
                         # the creative approval webhook in blueprints/creatives.py).
-                        approve_context = echo_context(request_data)
+                        approve_context = echo_context(step_data["request_data"])
 
                         # The buy IS committed at this point, so a confirmed Success
                         # (status/confirmed_at/revision from the subclass defaults) is

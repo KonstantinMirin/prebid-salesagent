@@ -15,7 +15,6 @@ from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
@@ -23,8 +22,8 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPError,
     AdCPPolicyViolationError,
     AdCPValidationError,
@@ -38,7 +37,12 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.tools._mcp_boundary import build_tool_result
+from src.core.transport_helpers import (
+    NOT_PROVIDED,
+    IdentityOrNotProvided,
+    resolve_identity_if_not_provided,
+)
 from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -197,7 +201,9 @@ async def _get_products_impl(
     if brand_manifest_policy == "require_brand" and not offering:
         raise AdCPAuthorizationError("Brand manifest required by tenant policy", recovery="correctable")
     elif brand_manifest_policy == "require_auth" and not principal_id:
-        raise AdCPAuthenticationError("Authentication required by tenant policy")
+        # No credential presented at all -> AUTH_MISSING per v3.1.1
+        # error-code.json.
+        raise AdCPAuthRequiredError("Authentication required by tenant policy")
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching
@@ -701,16 +707,18 @@ async def _get_products_impl(
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
     # Annotate pricing options with adapter support (AdCP PR #88)
-    # Do this BEFORE serialization to avoid reconstruction issues
-    if principal and eligible_products:
+    # Do this BEFORE serialization to avoid reconstruction issues.
+    # Tenant-level (not Principal-level) resolution: which pricing models an
+    # adapter supports is a fact about the SELLER's ad server, not the caller
+    # (same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
+    # must not depend on whether principal_id happens to resolve to a DB
+    # Principal (salesagent-r9rf).
+    if eligible_products:
         try:
-            # Use correct get_adapter from adapter_helpers (accepts Principal and dry_run)
-            from src.core.helpers.adapter_helpers import get_adapter
+            from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
 
-            # Get adapter in dry-run mode (no actual ad server calls)
-            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
-
-            supported_models = adapter.get_supported_pricing_models()
+            adapter_class = get_adapter_class_for_tenant(tenant)
+            supported_models = adapter_class.get_supported_pricing_models()
 
             for product in eligible_products:
                 if product.pricing_options:
@@ -829,7 +837,7 @@ async def get_products(
     response = await _get_products_impl(req, identity)
 
     # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    return build_tool_result(str(response), response)
 
 
 async def get_products_raw(
@@ -839,7 +847,7 @@ async def get_products_raw(
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
 
@@ -859,9 +867,8 @@ async def get_products_raw(
     Returns:
         GetProductsResponse containing matching products
     """
-    # Resolve identity from transport context if not provided
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    # Resolve identity from transport context only if the caller omitted it
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
 
     # Create request object - adcp library validates schema
     req = create_get_products_request(

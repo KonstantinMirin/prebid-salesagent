@@ -719,9 +719,9 @@ def when_send_create_media_buy(ctx: dict) -> None:
 
     - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
       ``request_kwargs`` so the production idempotency replay path runs end-to-end.
-    - manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch a
-      FULL create built from the idempotency request defaults, carrying the
-      Given-step account reference so boundary account resolution runs too.
+    - Manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch
+      the harness-seeded base request with a fresh idempotency key, carrying the
+      Given-step account reference, so the submitted-envelope path runs end-to-end.
     - ``dispatch_mode == "create"`` builds a typed ``CreateMediaBuyRequest`` from
       ctx["request_kwargs"] (carrying a typed ``account`` for account-resolution
       and budget/pricing scenarios) and dispatches it. Production resolves the
@@ -1298,6 +1298,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     contract the buyer sees — instead of a reconstructed exception.
     """
     from src.core.exceptions import AdCPError
+    from tests.harness.transport import extract_wire_suggestion
 
     assert "error" in ctx, f"Expected an error for outcome: {outcome}"
     error = ctx["error"]
@@ -1315,8 +1316,16 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     # Suggestion-only: "error with suggestion"
     if remainder.startswith("with suggestion"):
         if result is not None and result.wire_error_envelope is not None:
-            code = result.wire_error_envelope.get("adcp_error", {}).get("code")
-            result.assert_wire_error(code, require_suggestion=True)
+            # No Gherkin code to pin here; assert the buyer-facing suggestion is
+            # present on the wire via the canonical harness reader (the same
+            # top-level lookup assert_wire_error uses), not a hand-rolled envelope
+            # index — and without round-tripping the wire's own code back through
+            # assert_wire_error, which would hard-fail on a non-pinned code.
+            suggestion = extract_wire_suggestion(result.wire_error_envelope)
+            assert suggestion, (
+                f"Expected a non-empty top-level suggestion on the wire error, got envelope: "
+                f"{result.wire_error_envelope}"
+            )
             return
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
@@ -1445,8 +1454,42 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-# Step "the tenant is configured for auto-approval" is defined in
-# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
+# Canonical owner of "the tenant is configured for auto-approval" — the
+# generic given_media_buy.py module keeps only the
+# "tenant human_review_required is false" alias to avoid a cross-module shadow.
+@given("the tenant is configured for auto-approval")
+def given_tenant_auto_approval(ctx: dict) -> None:
+    """Configure the tenant for auto-approval and verify the env reflects it.
+
+    Turns OFF ``human_review_required`` on the real tenant row AND in the
+    identity's tenant dict, and confirms the adapter mock is not gating on
+    manual approval — so the create returns ``status='completed'`` rather than
+    pending. The production approval gate (media_buy_create.py) is
+    ``tenant.human_review_required OR adapter.manual_approval_required`` AND
+    ``'create_media_buy' in adapter.manual_approval_operations``.
+
+    Only the wired idempotency scenarios (MediaBuyCreateEnv, with ctx["tenant"]
+    provisioned by conftest's _harness_env) reach this step; every other UC-002
+    scenario using this text is blanket-xfailed before any step runs.
+    """
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+
+    tenant.human_review_required = False
+    env._commit_factory_data()
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
+
+    adapter_mock = env.mock["adapter"].return_value
+    assert adapter_mock.manual_approval_required is False, (
+        "Step claims 'tenant is configured for auto-approval' but the adapter mock "
+        f"reports manual_approval_required={adapter_mock.manual_approval_required!r}"
+    )
+    assert "create_media_buy" not in (adapter_mock.manual_approval_operations or []), (
+        "Step claims auto-approval but the adapter mock gates create_media_buy on "
+        f"manual approval: {adapter_mock.manual_approval_operations!r}"
+    )
+    ctx["tenant_auto_approval"] = True
 
 
 # ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──

@@ -186,18 +186,16 @@ def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
         adapter_mock.manual_approval_operations = operations
 
 
-@given("the tenant is configured for auto-approval")
 @given("tenant human_review_required is false")
 def given_tenant_auto_approval(ctx: dict) -> None:
     """Configure tenant for auto-approval (human_review_required=False).
 
-    Canonical owner of the "the tenant is configured for auto-approval"
-    alias: uc002_create_media_buy holds only a pointer comment to this
-    module (real DB-aware version, PR #1430), so registering the alias
-    here creates no cross-module shadow.
+    The "the tenant is configured for auto-approval" alias is owned by
+    uc002_create_media_buy (canonical) to avoid a cross-module shadow now that
+    this module is registered; UC-003 scenarios reach this via the
+    "human_review_required is false" alias.
     """
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
+    assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for auto-approval' but no tenant exists to configure"
     )
     _seed_auto_approval(ctx)

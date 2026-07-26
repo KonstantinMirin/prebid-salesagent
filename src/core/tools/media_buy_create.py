@@ -35,7 +35,6 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
@@ -150,12 +149,14 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp_boundary import build_tool_result
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
@@ -2701,7 +2702,14 @@ async def _create_media_buy_impl(
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
 
         # Check if manual approval is required
-        # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
+        # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback.
+        # NOTE: capabilities.py's resolve_manual_approval_signal() (adapter_helpers.py,
+        # salesagent-y9ld) reads a SIMILAR but not identical signal (no default-True
+        # fallback, honest-absence semantics for reporting) -- deliberately NOT reused
+        # here: this is the live enforcement path (a pure dict read with zero DB calls
+        # today), and resolve_manual_approval_signal()'s DB fallback would add an
+        # unconditional query to this hot path for a stylistic DRY win. Tracked as a
+        # follow-up (salesagent-3rhn) alongside the sibling media_buy_update.py gap.
         tenant_approval_required = tenant.get("human_review_required", True)
         adapter_approval_required = adapter.manual_approval_required
         # Tenant setting takes precedence - if tenant requires approval, it's required
@@ -4489,7 +4497,7 @@ async def create_media_buy(
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
     )
-    return ToolResult(content=str(result), structured_content=result)
+    return build_tool_result(str(result), result)
 
 
 async def create_media_buy_raw(
@@ -4508,7 +4516,7 @@ async def create_media_buy_raw(
     idempotency_key: str | None = None,
     paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (tracked in #1619)
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
     raw_wire_payload: dict[str, Any] | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
@@ -4552,10 +4560,7 @@ async def create_media_buy_raw(
         paused=paused,
     )
 
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
 
     # Resolve account at transport boundary (before _impl)
     from src.core.transport_helpers import enrich_identity_with_account

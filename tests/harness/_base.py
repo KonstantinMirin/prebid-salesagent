@@ -64,6 +64,7 @@ def _adcp_error_from_code(
         AdCPAccountSuspendedError,
         AdCPAdapterError,
         AdCPAuthenticationError,
+        AdCPAuthRequiredError,
         AdCPBudgetExhaustedError,
         AdCPBudgetTooLowError,
         AdCPCapabilityNotSupportedError,
@@ -88,6 +89,7 @@ def _adcp_error_from_code(
         for cls in (
             AdCPValidationError,
             AdCPAuthenticationError,
+            AdCPAuthRequiredError,
             AdCPNotFoundError,
             AdCPAccountNotFoundError,
             AdCPAccountSetupRequiredError,
@@ -113,12 +115,16 @@ def _adcp_error_from_code(
             AdCPIdempotencyExpiredError,
         )
     }
-    # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED
-    # wire code — we can't disambiguate auth-missing from auth-insufficient at
-    # the wire, and Authentication (missing token/tenant) is the more common
-    # buyer-facing case. Pin Authentication explicitly here so the mapping
-    # doesn't depend on dict-comprehension insertion order.
-    _CODE_TO_CLASS[AdCPAuthenticationError._default_error_code] = AdCPAuthenticationError
+    # AUTH_MISSING -> AdCPAuthRequiredError and AUTH_INVALID -> AdCPAuthenticationError
+    # are unambiguous per v3.1.1 error-code.json (salesagent-mkso) — each class's
+    # own _default_error_code disambiguates them via the dict comprehension above.
+    # AUTH_REQUIRED (deprecated alias) is no longer emitted by any subclass
+    # (salesagent-otc5 migrated AdCPAuthorizationError to PERMISSION_DENIED and
+    # split the former tenant-axis raises across AUTH_MISSING/AUTH_INVALID).
+    # PERMISSION_DENIED is not in the class list above, so it still falls
+    # through to the base AdCPError below — matching prior behavior for
+    # AdCPAuthorizationError (no test currently needs isinstance() on it via
+    # wire reconstruction).
     from src.core.exceptions import INTERNAL_CODES
 
     assert error_code not in INTERNAL_CODES, (
@@ -448,12 +454,29 @@ class BaseTestEnv:
             # is visible to other sessions (e.g., get_principal_from_token
             # in the MCP auth chain uses a separate get_db_session() call).
             auth_token = None
+            principal_id = self._principal_id
             if self.use_real_db:
                 self._commit_factory_data()
-                auth_token = self._resolve_auth_token()
+                # _resolve_auth_token() returns None for two different reasons:
+                # (a) a real DB lookup ran and found no matching Principal row, or
+                # (b) self._session isn't bound yet (env constructed/used outside
+                # its `with` context). Only (a) is a genuine "principal doesn't
+                # exist" signal — gate on self._session directly so a session-
+                # timing case doesn't get misread as a missing-principal one.
+                if self._session:
+                    auth_token = self._resolve_auth_token()
+                    if auth_token is None:
+                        # No Principal row for this principal_id+tenant_id (never
+                        # created, or deleted after "authenticating") — mirror
+                        # production's resolve_identity() (src/core/resolved_identity.py:
+                        # 168-172), which nulls principal_id on a failed token->principal
+                        # lookup, so in-process transports agree with e2e_rest's real DB
+                        # lookup instead of diverging on the deleted-principal case
+                        # (salesagent-z9e0).
+                        principal_id = None
 
             self._identity_cache[protocol] = PrincipalFactory.make_identity(
-                principal_id=self._principal_id,
+                principal_id=principal_id,
                 tenant_id=self._tenant_id,
                 protocol=protocol,
                 dry_run=self._dry_run,
@@ -461,6 +484,37 @@ class BaseTestEnv:
                 **self._tenant_overrides,
             )
         return self._identity_cache[protocol]
+
+    def invalid_token_identity(self) -> ResolvedIdentity:
+        """An identity carrying a token that matches no Principal row.
+
+        Per-transport behavior is production's: A2A rejects a presented-but-
+        invalid credential; MCP/REST treat it as absent (auth-optional tool).
+        """
+        from tests.harness._identity import make_identity
+
+        return make_identity(
+            principal_id=None,
+            tenant_id=self._tenant_id,
+            auth_token="invalid-token-harness",
+            **self._tenant_overrides,
+        )
+
+    def anonymous_identity(self) -> ResolvedIdentity:
+        """Tenant-resolvable identity with NO credential and NO principal.
+
+        Models the production no-auth discovery call where the tenant still
+        resolves (Host header / subdomain) — distinct from identity=None,
+        which is the no-tenant case.
+        """
+        from tests.harness._identity import make_identity
+
+        return make_identity(
+            principal_id=None,
+            tenant_id=self._tenant_id,
+            auth_token=None,
+            **self._tenant_overrides,
+        )
 
     def _resolve_auth_token(self) -> str | None:
         """Look up the real access_token from the session-bound Principal.

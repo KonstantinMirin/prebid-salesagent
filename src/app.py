@@ -260,7 +260,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
 
 @app.exception_handler(PermissionError)
 async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
-    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as AUTH_REQUIRED.
+    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as PERMISSION_DENIED.
 
     Mirror of the MCP / A2A boundaries which translate ``PermissionError`` to
     a synthetic ``AdCPAuthorizationError`` envelope. Without this handler a

@@ -57,6 +57,44 @@ class TestSyncAccountsCreate:
         assert result.operator == "example.com"
 
     @pytest.mark.asyncio
+    async def test_creates_advertiser_billing_account(self, integration_db):
+        """billing='advertiser' is a spec-valid billing-party value and must persist (#1521).
+
+        Mirrors the operator/agent create cases. An unconfigured tenant accepts
+        the full billing-party enum — including 'advertiser' — and the DB CHECK
+        (ck_accounts_billing) must permit the INSERT; before the #1521 fix a
+        spec-valid advertiser entry IntegrityError'd against the 2-value CHECK.
+        @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
+        """
+        from src.core.database.repositories.uow import AccountUoW
+
+        with AccountSyncEnv(tenant_id="sync_adv1", principal_id="agent_sync_adv") as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acme.com"},
+                        "operator": "example.com",
+                        "billing": "advertiser",
+                    }
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+        assert len(response.accounts) == 1
+        result = response.accounts[0]
+        assert _action_value(result.action) == "created"
+        assert _status_value(result.status) == "active"
+
+        # Round-trip: the row must actually be persisted with billing='advertiser'
+        with AccountUoW("sync_adv1") as uow:
+            assert uow.accounts is not None
+            rows = uow.accounts.list_all()
+            assert len(rows) == 1
+            assert rows[0].billing == "advertiser"
+
+    @pytest.mark.asyncio
     async def test_creates_multiple_accounts(self, integration_db):
         with AccountSyncEnv(tenant_id="sync_t2", principal_id="agent_sync2") as env:
             env.setup_default_data()
