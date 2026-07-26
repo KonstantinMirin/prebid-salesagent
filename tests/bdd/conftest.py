@@ -1690,7 +1690,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # ARE parametrized there and still gap.)
             # Transport-scoped: impl genuinely PASSES start>=end on the _impl
             # path now.
-            # GRADUATED (salesagent-auac, 2026-07-25): mcp/rest now also validate
+            # GRADUATED (2026-07-25): mcp/rest now also validate
             # start_date>=end_date (confirmed XPASS on both once the single-transport
             # dedup fix stopped hiding them) — entry removed. The stricter standalone
             # T-UC-004-daterange-invalid/-equal scenarios (exact error_code/message/
@@ -2037,7 +2037,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 and not is_e2e_rest
                 and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
             )
-            # GRADUATED (salesagent-auac, 2026-07-25): a2a/mcp/rest all now validate
+            # GRADUATED (2026-07-25): a2a/mcp/rest all now validate
             # start_date>=end_date (impl passes too) — the invalid-rows branch is
             # removed; only the valid-rows gap remains.
             if _dr_valid_fail:
@@ -3061,7 +3061,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         impl_bases = {
             base for base in (_scenario_base(i.nodeid) for i in items if "[impl" in i.nodeid) if base is not None
         }
-        # salesagent-auac: the kept a2a variant is NOT always the one carrying
+        # The kept a2a variant is NOT always the one carrying
         # the strict-xfail marker — several UC-004 markers are deliberately
         # transport-selective (applied to mcp/rest only because a2a already
         # validates). Deselecting every mcp/rest sibling in that case removes

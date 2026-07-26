@@ -1,5 +1,5 @@
-"""Regression test for salesagent-auac: the BDD strict-xfail xpass tripwire is
-dead for scenarios outside the T-UC-010 opt-in.
+"""Guard: the BDD strict-xfail xpass tripwire must not go dead for scenarios
+outside the T-UC-010 opt-in.
 
 ``pytest_collection_modifyitems`` (tests/bdd/conftest.py) deselects the
 mcp/rest variants of any strict-xfail scenario by default (BDD_ALL_TRANSPORTS
