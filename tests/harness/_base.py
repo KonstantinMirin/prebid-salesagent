@@ -410,8 +410,6 @@ class BaseTestEnv:
         # with NO artifacts — and the synthesized submitted wire above cannot
         # prove artifact absence, so guards assert on this captured Task.
         self._last_a2a_task: Any = None
-        # Relative date-token resolver for media-buy Given steps (env.clock).
-        self.clock = _TestClock()
 
     # -- Transport mode -----------------------------------------------------
 
@@ -1248,7 +1246,7 @@ class IntegrationEnv(BaseTestEnv):
 
     use_real_db = True
 
-    def setup_default_data(self) -> tuple[Any, Any]:
+    def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Get-or-create default tenant + principal via factories.
 
         Must be called inside the ``with env:`` block (factories are bound
@@ -1258,6 +1256,13 @@ class IntegrationEnv(BaseTestEnv):
         and self._principal_id from constructor. Idempotent: reuses existing
         rows rather than re-creating, so it is safe to call after the e2e
         discovery-path auto-seed (``_seed_e2e_identity``) already created them.
+
+        Extra ``tenant_kwargs`` are tenant policy columns the live e2e_rest
+        server reads from the shared DB (e.g. ``human_review_required``).
+        Forwarded to ``TenantFactory`` on the create path; APPLIED to the
+        existing row on the get path — the __enter__ auto-seed creates the
+        tenant with model defaults, so the kwargs must win over those defaults
+        regardless of which call created the row.
         """
         from sqlalchemy import select
 
@@ -1266,7 +1271,11 @@ class IntegrationEnv(BaseTestEnv):
 
         tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
         if tenant is None:
-            tenant = TenantFactory(tenant_id=self._tenant_id)
+            tenant = TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
+        elif tenant_kwargs:
+            for column, value in tenant_kwargs.items():
+                setattr(tenant, column, value)
+            self._commit_factory_data()
 
         principal = self._session.scalars(
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)

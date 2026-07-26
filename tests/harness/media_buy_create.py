@@ -101,7 +101,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """
         from tests.factories import AuthorizedPropertyFactory
 
-        tenant, principal = self.setup_default_data()
+        # Seed the tenant as auto-approve (human_review_required=False). The
+        # in-process transports never hit the tenant approval gate because this
+        # env's mocked adapter sets manual_approval_operations=[] — but the live
+        # e2e_rest server has no patches and reads the REAL tenant row, where
+        # the column defaults to True, routing every create to the submitted
+        # (manual-approval) envelope instead of completing it. Seeding False
+        # makes the live server's gate state match what every other transport
+        # already grades (#1418 class; #1417/#1537 scenarios re-triaged after
+        # the adcp-6.6 merge). Scenarios that grade the approval path flip it
+        # explicitly via the "tenant requires manual approval" Given (which
+        # commits the change to the shared DB).
+        tenant, principal = self.setup_default_data(human_review_required=False)
         # Satisfy the create_media_buy setup-checklist "Authorized Properties"
         # gate. In-process transports skip it via the testing context, but the
         # live e2e_rest server enforces it (validate_setup_complete), so a
@@ -186,18 +197,6 @@ class MediaBuyCreateEnv(IntegrationEnv):
             kwargs.setdefault("tool_name", tool_name)
             return real.create_workflow_step(**kwargs)
 
-        def _get_or_create_context(*_args: Any, **kwargs: Any):
-            # The async update path calls get_or_create_context (not
-            # create_context) to obtain a persistent Context whose real
-            # context_id backs the workflow_steps FK. Delegate to the real
-            # manager so the persisted context_id is a string, not a MagicMock.
-            return real.get_or_create_context(
-                tenant_id=kwargs.get("tenant_id", self._tenant_id),
-                principal_id=kwargs.get("principal_id", self._principal_id),
-                context_id=kwargs.get("context_id"),
-                is_async=kwargs.get("is_async", True),
-            )
-
         def _link_workflow_to_object(*_args: Any, **kwargs: Any):
             return real.link_workflow_to_object(**kwargs)
 
@@ -205,7 +204,6 @@ class MediaBuyCreateEnv(IntegrationEnv):
         mgr.get_context.return_value = None
         mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.create_workflow_step.side_effect = _create_workflow_step
-        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
         mgr.update_workflow_step.return_value = None
         mgr.add_message.return_value = None

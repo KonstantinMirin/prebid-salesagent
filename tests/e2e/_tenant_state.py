@@ -7,36 +7,15 @@ every later e2e test (pytest-randomly ordering), turning their creates into
 spec-3.1.1 submitted envelopes with no media_buy_id.
 """
 
-import psycopg2
-
 
 def set_mock_approval(live_server: dict, *, manual: bool) -> None:
-    """Set ci-test's mock adapter approval mode (SHARED tenant state)."""
-    try:
-        conn = psycopg2.connect(live_server["postgres"])
-        cursor = conn.cursor()
+    """Set ci-test's mock adapter approval mode (SHARED tenant state).
 
-        cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
-        tenant_row = cursor.fetchone()
-        if tenant_row:
-            tenant_id = tenant_row[0]
-            cursor.execute(
-                """
-                INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
-                VALUES (%s, 'mock', %s)
-                ON CONFLICT (tenant_id)
-                DO UPDATE SET mock_manual_approval_required = EXCLUDED.mock_manual_approval_required,
-                              adapter_type = 'mock'
-                """,
-                (tenant_id, manual),
-            )
-            conn.commit()
-            mode = "manual approval required" if manual else "auto-approval enabled"
-            print(f"Updated adapter config for tenant {tenant_id}: {mode}")
-        else:
-            print("Warning: ci-test tenant not found for adapter config update")
+    Thin domain-specific alias for :func:`tests.e2e.utils.set_live_adapter_behavior`
+    — the sole e2e adapter-config mutator (which itself delegates to the one
+    factory-level home, ``tests.factories.core.set_adapter_test_behavior``).
+    Fails loud on a missing tenant or DB error; never print-and-continue.
+    """
+    from tests.e2e.utils import set_live_adapter_behavior
 
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        print(f"Failed to update adapter config: {e}")
+    set_live_adapter_behavior(live_server, manual_approval_required=manual)

@@ -71,10 +71,10 @@ def find_e2e_rest_xfail_conditions(tree: ast.Module) -> list[str]:
 # removed, or reworded, update this pin IN THE SAME CHANGE and say why in the
 # commit — exactly like EXPECTED_LEDGER graduations.
 EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
-    # T-UC-002-alt-manual route retired (feature/spec-gaps-1210 merge): the
-    # Submitted-envelope alignment made the scenario grade for real on
-    # mcp/rest/e2e_rest (RestE2EDispatcher stashes the submitted wire) — the
-    # scenario passes on all transports, so the reroute is gone, not hidden.
+    # The T-UC-002-alt-manual route ("... and (is_mcp or is_rest or is_e2e_rest)")
+    # was retired in PR #1567: it xfailed the pre-3.1.1 workflow_step_id assertion,
+    # which the spec-reconciled scenario no longer makes — the scenario now grades
+    # the CreateMediaBuySubmitted envelope live on all four transports.
     "'T-UC-004-boundary-ownership' in marker_names and is_e2e_rest and ('differs from owner' in nodeid)",
     "'T-UC-004-dim-sortby-fallback' in marker_names and is_e2e_rest",
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",

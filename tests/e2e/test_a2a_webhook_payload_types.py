@@ -9,22 +9,22 @@ Per AdCP A2A spec (https://docs.adcontextprotocol.org/docs/protocols/a2a-guide#p
 This test validates that our A2A server sends the correct payload type based on status.
 """
 
-import json
-import socket
 import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
 from time import sleep
 from typing import Any
 
 import httpx
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e._tenant_state import set_mock_approval
-from tests.e2e._webhook_capture import run_webhook_capture_server
-from tests.e2e.adcp_request_builder import build_adcp_media_buy_request, get_test_date_range, parse_tool_result
+from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
+from tests.e2e.adcp_request_builder import (
+    build_a2a_message_send,
+    build_adcp_media_buy_request,
+    get_test_date_range,
+    parse_tool_result,
+)
+from tests.e2e.utils import make_mcp_client
 
 
 async def _discover_product_and_pricing(live_server: dict, test_auth_token: str) -> tuple[str, str]:
@@ -37,9 +37,7 @@ async def _discover_product_and_pricing(live_server: dict, test_auth_token: str)
     (salesagent-18h.3). Building a valid packages request needs a real
     pricing_option_id; discover it like test_adcp_full_lifecycle does.
     """
-    headers = {"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"}
-    transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-    async with Client(transport=transport) as client:
+    async with make_mcp_client(live_server, token=test_auth_token) as client:
         products_result = await client.call_tool(
             "get_products",
             {"brand": {"domain": "testbrand.com"}, "brief": "video advertising"},
@@ -118,110 +116,56 @@ def assert_no_classification_errors(received: list[dict[str, Any]]) -> None:
     )
 
 
-def _build_create_media_buy_message(
-    media_buy_params: dict[str, Any],
-    webhook_url: str,
-    *,
-    context_id: str | None = None,
-    webhook_auth: bool = False,
-) -> dict[str, Any]:
-    """Build a JSON-RPC message/send envelope invoking create_media_buy with a push webhook."""
-    push_config: dict[str, Any] = {"url": webhook_url}
-    if webhook_auth:
-        push_config["authentication"] = {"schemes": ["Bearer"], "credentials": "test-webhook-token"}
-    return {
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": "message/send",
-        "params": {
-            "message": {
-                "messageId": str(uuid.uuid4()),
-                "contextId": context_id or str(uuid.uuid4()),
-                "role": "user",  # Required by A2A spec
-                "parts": [{"data": {"skill": "create_media_buy", "parameters": media_buy_params}}],
-            },
-            "configuration": {"pushNotificationConfig": push_config},
-        },
-    }
+class WebhookPayloadCapture(WebhookCaptureHandler):
+    """Webhook receiver that captures each payload with its A2A classification.
 
+    Extends the shared capture handler via the ``record`` hook — only the
+    classification logic lives here, never a copied ``do_POST``.
+    """
 
-class WebhookPayloadCapture(BaseHTTPRequestHandler):
-    """Simple webhook receiver that captures all payloads with their types."""
+    received_webhooks: list[dict[str, Any]] = []
 
-    received_payloads: list[dict[str, Any]] = []
+    def record(self, payload):
+        # Extract status
+        status = None
+        if "status" in payload:
+            status_obj = payload["status"]
+            if isinstance(status_obj, dict):
+                status = status_obj.get("state")
+            else:
+                status = str(status_obj)
 
-    def do_POST(self):
-        """Handle POST requests (webhook notifications)."""
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
-
+        # A2A wire contract is camelCase (proto json_name): taskId, contextId,
+        # messageId. snake_case (task_id, context_id) is a spec violation — the
+        # a2a-sdk protobuf descriptor declares the JSON names explicitly. Record
+        # the classification (or its failure) BEFORE responding so a regression
+        # in protocol_webhook_service is observable to the test instead of being
+        # swallowed by an "unknown" classification (gh-#1299 follow-up).
+        classification_error = None
+        payload_type = None
         try:
-            payload = json.loads(body.decode("utf-8"))
+            payload_type = classify_a2a_payload(payload)
+        except AssertionError as classify_exc:
+            classification_error = str(classify_exc)
 
-            # Extract status
-            status = None
-            if "status" in payload:
-                status_obj = payload["status"]
-                if isinstance(status_obj, dict):
-                    status = status_obj.get("state")
-                else:
-                    status = str(status_obj)
-
-            # A2A wire contract is camelCase (proto json_name): taskId, contextId,
-            # messageId. snake_case (task_id, context_id) is a spec violation — the
-            # a2a-sdk protobuf descriptor declares the JSON names explicitly. Record
-            # the classification (or its failure) BEFORE responding so a regression
-            # in protocol_webhook_service is observable to the test instead of being
-            # swallowed by an "unknown" classification (gh-#1299 follow-up).
-            classification_error = None
-            payload_type = None
-            try:
-                payload_type = classify_a2a_payload(payload)
-            except AssertionError as classify_exc:
-                classification_error = str(classify_exc)
-
-            self.received_payloads.append(
-                {
-                    "payload": payload,
-                    "payload_type": payload_type,
-                    "classification_error": classification_error,
-                    "status": status,
-                    "path": self.path,
-                }
-            )
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "received"}')
-        except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
-
-    def log_message(self, format, *args):
-        """Silence HTTP server logs during tests."""
-        pass
+        return {
+            "payload": payload,
+            "payload_type": payload_type,
+            "classification_error": classification_error,
+            "status": status,
+            "path": self.path,
+        }
 
 
 @pytest.fixture
 def webhook_capture_server():
     """Start a local HTTP server to capture webhook payloads."""
-    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_payloads) as info:
+    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks) as info:
         yield info
 
 
 class TestA2AWebhookPayloadTypes:
     """Test A2A webhook payload type compliance with AdCP spec."""
-
-    def setup_auto_approval(self, live_server):
-        """Configure adapter for auto-approval to get completed webhooks."""
-        set_mock_approval(live_server, manual=False)
-
-    def setup_manual_approval(self, live_server):
-        """Configure adapter for manual approval to get submitted webhooks."""
-        set_mock_approval(live_server, manual=True)
 
     @pytest.mark.asyncio
     async def test_completed_status_sends_task_payload(
@@ -239,7 +183,7 @@ class TestA2AWebhookPayloadTypes:
         - Final states should send Task object with artifacts
         """
         # Enable auto-approval so create_media_buy completes immediately
-        self.setup_auto_approval(live_server)
+        set_mock_approval(live_server, manual=False)
 
         a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
@@ -256,8 +200,14 @@ class TestA2AWebhookPayloadTypes:
             context={"e2e": "webhook_completed_test"},
         )
 
-        message = _build_create_media_buy_message(
-            media_buy_params, webhook_capture_server["url"], context_id=context_id, webhook_auth=True
+        message = build_a2a_message_send(
+            skill="create_media_buy",
+            parameters=media_buy_params,
+            context_id=context_id,
+            push_notification_config={
+                "url": webhook_capture_server["url"],
+                "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
+            },
         )
 
         headers = {
@@ -337,7 +287,7 @@ class TestA2AWebhookPayloadTypes:
         # tenant state — leaving manual approval on leaks into every later
         # e2e test (pytest-randomly ordering), turning their creates into
         # spec-3.1.1 submitted envelopes with no media_buy_id.
-        self.setup_manual_approval(live_server)
+        set_mock_approval(live_server, manual=True)
         try:
             a2a_url = f"{live_server['a2a']}/a2a"
             context_id = str(uuid.uuid4())
@@ -357,8 +307,14 @@ class TestA2AWebhookPayloadTypes:
             )
 
             # Send A2A create_media_buy message that triggers approval workflow
-            message = _build_create_media_buy_message(
-                media_buy_params, webhook_capture_server["url"], context_id=context_id, webhook_auth=True
+            message = build_a2a_message_send(
+                skill="create_media_buy",
+                parameters=media_buy_params,
+                context_id=context_id,
+                push_notification_config={
+                    "url": webhook_capture_server["url"],
+                    "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
+                },
             )
 
             headers = {
@@ -418,7 +374,7 @@ class TestA2AWebhookPayloadTypes:
             assert "state" in payload["status"], "TaskStatusUpdateEvent.status must have 'state' field"
         finally:
             # Restore shared tenant state for subsequent e2e tests.
-            self.setup_auto_approval(live_server)
+            set_mock_approval(live_server, manual=False)
 
     @pytest.mark.asyncio
     async def test_webhook_payload_type_matches_status(
@@ -436,7 +392,7 @@ class TestA2AWebhookPayloadTypes:
         - Intermediate states (working, input-required, submitted): TaskStatusUpdateEvent
         """
         # Enable auto-approval
-        self.setup_auto_approval(live_server)
+        set_mock_approval(live_server, manual=False)
 
         a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
@@ -453,8 +409,11 @@ class TestA2AWebhookPayloadTypes:
             context={"e2e": "webhook_payload_type_match_test"},
         )
 
-        message = _build_create_media_buy_message(
-            media_buy_params, webhook_capture_server["url"], context_id=context_id
+        message = build_a2a_message_send(
+            skill="create_media_buy",
+            parameters=media_buy_params,
+            context_id=context_id,
+            push_notification_config={"url": webhook_capture_server["url"]},
         )
 
         headers = {
@@ -512,10 +471,6 @@ class TestA2AWebhookPayloadTypes:
 class TestWebhookPayloadStructure:
     """Test webhook payload structure compliance."""
 
-    def setup_auto_approval(self, live_server):
-        """Configure adapter for auto-approval."""
-        set_mock_approval(live_server, manual=False)
-
     @pytest.mark.asyncio
     async def test_task_payload_has_required_fields(
         self,
@@ -525,7 +480,7 @@ class TestWebhookPayloadStructure:
         webhook_capture_server,
     ):
         """Test that Task payload has all required A2A fields."""
-        self.setup_auto_approval(live_server)
+        set_mock_approval(live_server, manual=False)
 
         a2a_url = f"{live_server['a2a']}/a2a"
 
@@ -541,7 +496,11 @@ class TestWebhookPayloadStructure:
             context={"e2e": "webhook_task_required_fields_test"},
         )
 
-        message = _build_create_media_buy_message(media_buy_params, webhook_capture_server["url"])
+        message = build_a2a_message_send(
+            skill="create_media_buy",
+            parameters=media_buy_params,
+            push_notification_config={"url": webhook_capture_server["url"]},
+        )
 
         headers = {
             "Authorization": f"Bearer {test_auth_token}",
@@ -619,7 +578,11 @@ class TestWebhookPayloadStructure:
             )
 
             # Trigger an async operation that sends intermediate status
-            message = _build_create_media_buy_message(media_buy_params, webhook_capture_server["url"])
+            message = build_a2a_message_send(
+                skill="create_media_buy",
+                parameters=media_buy_params,
+                push_notification_config={"url": webhook_capture_server["url"]},
+            )
 
             headers = {
                 "Authorization": f"Bearer {test_auth_token}",
@@ -678,38 +641,30 @@ class TestProtocolWebhookWireFormat:
 
     def _send_and_capture(self, payload) -> dict[str, Any]:
         """Send `payload` via the real service and return the classified capture."""
+        import asyncio
+
         from src.core.database.models import PushNotificationConfig
         from src.services.protocol_webhook_service import ProtocolWebhookService
 
-        WebhookPayloadCapture.received_payloads.clear()
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-        sock.close()
-
-        server = HTTPServer(("127.0.0.1", port), WebhookPayloadCapture)
-        thread = Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
+        # host='127.0.0.1': this class is unit-style (no Docker) — the service
+        # runs in-process, so loopback is always the right callback host.
+        with run_webhook_capture_server(
+            WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
+        ) as info:
             config = PushNotificationConfig(
                 id="pnc-test",
                 tenant_id="t-test",
                 principal_id="p-test",
-                url=f"http://127.0.0.1:{port}/webhook",
+                url=info["url"],
                 authentication_type=None,
                 authentication_token=None,
             )
             service = ProtocolWebhookService()
-            import asyncio
-
             sent = asyncio.run(service.send_notification(config, payload, metadata={"task_type": "create_media_buy"}))
             assert sent is True, "ProtocolWebhookService.send_notification should report success"
-        finally:
-            server.shutdown()
-            server.server_close()
 
-        received = WebhookPayloadCapture.received_payloads
+            received = list(info["received"])
+
         assert len(received) == 1, f"Expected exactly one captured webhook, got {len(received)}"
         return received[0]
 

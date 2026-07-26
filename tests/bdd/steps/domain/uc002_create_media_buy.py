@@ -714,7 +714,7 @@ def given_request_natural_key_sandbox(ctx: dict) -> None:
 def when_send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
-    Three dispatch modes share this step text — every one routes a full
+    Four dispatch modes share this step text — every one routes a full
     ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
     - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
@@ -1602,8 +1602,12 @@ def given_package_positive_budget(ctx: dict) -> None:
     ctx["package_budget_valid"] = True
 
 
-# Step "the ad server adapter is available" is defined in
-# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
+# Canonical owner of "the ad server adapter is available" — removed from the
+# generic given_media_buy.py module to avoid a cross-module shadow.
+@given("the ad server adapter is available")
+def given_adapter_available(ctx: dict) -> None:
+    """Mark the ad server adapter as available for the scenario."""
+    ctx["adapter_available"] = True
 
 
 @given("the request does NOT include an idempotency_key")

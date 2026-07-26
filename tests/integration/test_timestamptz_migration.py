@@ -127,6 +127,12 @@ class TestTimestamptzMigration:
             col_type = _get_column_type(engine, "tenants", "created_at")
         assert col_type == "timestamp with time zone", f"Expected TIMESTAMPTZ before downgrade, got: {col_type}"
 
+        # Seed the survival-check row if the sibling test didn't (fresh worker).
+        with engine.connect() as conn:
+            existing = conn.execute(text("SELECT 1 FROM tenants WHERE tenant_id = 'test_tz_tenant'")).fetchone()
+        if existing is None:
+            _insert_test_tenant(engine, datetime(2025, 6, 15, 12, 30, 0))
+
         # Step 1: Downgrade
         run_alembic_downgrade(db_url, PRE_MIGRATION_REV)
 

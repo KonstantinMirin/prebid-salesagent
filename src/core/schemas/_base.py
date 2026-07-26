@@ -333,24 +333,15 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         """
         return cls(**kwargs)
 
-    # SDK 5.7 removed these from parent — declare locally
-    account: Any | None = None
-    sandbox: bool | None = None
-    # SDK 5.7 dropped creative_deadline from the parent, but adapters still emit
-    # it (adapters/base.py _build_create_success). Declare it for parity/typing so
-    # it survives extra='forbid' in dev/test, not just extra='ignore' in prod.
-    creative_deadline: datetime | None = None
-    # SDK 5.7 wrongly declares buyer_ref on the parent (removed from AdCP 3.1
-    # create-media-buy-response; pinned 04f59d2d5). Override to keep it off the
-    # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
-    buyer_ref: str | None = Field(default=None, exclude=True)
-    # SDK 5.7 also dropped valid_actions and context from the parent, but production
-    # emits both (media_buy_create.py). Declare them so the wire contract is deliberate
-    # and survives a parent extra-mode change, not riding inherited extra='allow'.
-    # valid_actions_for_status() yields strings that are all valid MediaBuyValidAction
-    # members; typed list[MediaBuyValidAction] matches the sibling GetMediaBuysMediaBuy.
-    valid_actions: list[MediaBuyValidAction] | None = None
-    context: ContextObject | None = None
+    # account/sandbox/creative_deadline/valid_actions/context: inherited from the
+    # adcp 6.6 parent, which re-added all five typed (Account, AwareDatetime,
+    # list[MediaBuyValidAction], ContextObject) — the SDK-5.7-era local
+    # redeclarations were deleted as stale (PR #1567 round-3; same cleanup
+    # Product/SyncCreativeResult got, exemplar 5a8953a46). Pinned by
+    # test_adcp_contract.py::test_create_media_buy_success_inherits_parent_typed_annotations.
+    # buyer_ref: the SDK-5.7 parent wrongly declared it (removed from AdCP 3.1
+    # create-media-buy-response; SDK bug adcontextprotocol/adcp-client-python#950,
+    # excluded here by #1417); adcp 6.6 no longer declares it, so no override needed.
 
     # Internal fields (excluded from AdCP responses)
     workflow_step_id: str | None = None
@@ -492,16 +483,21 @@ class CreateMediaBuyResult(TaskResultEnvelope):
     response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
     # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
-    # envelope / top of the structured result). Set True ONLY when this response
-    # is a verbatim replay of a previously cached success. Injected at response
-    # time, never stored in the cached body; omitted when False so fresh
-    # responses are byte-identical to before. Only valid on a successful result.
+    # envelope / top of the structured result). Wrapper-owned: set True ONLY when
+    # this response is a verbatim replay of a previously cached result (success
+    # OR submitted — the replay test asserts True on a submitted replay). Injected
+    # at response time, never stored in the cached body; omitted when False on
+    # EVERY variant so fresh responses are byte-identical across variants.
     replayed: bool = False
 
     @model_serializer(mode="wrap")
     def _serialize(self, serializer, info):
         result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
+        # The adcp 6.6 submitted base declares replayed=False as a FIELD, so it
+        # rides response.model_dump(); strip it — the wrapper is the marker's
+        # single source (PR #1567 round-3).
+        result.pop("replayed", None)
         if self.replayed:
             result["replayed"] = True
         return result

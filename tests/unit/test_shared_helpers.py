@@ -409,14 +409,14 @@ class TestBuildCreateSuccess:
         assert len(result.packages) == 1
         assert result.packages[0].package_id == "custom-p1"
 
-    def test_buyer_ref_no_longer_on_success_response(self):
-        """buyer_ref must never appear on the CreateMediaBuySuccess wire response.
+    def test_buyer_ref_not_serialized_on_success_response(self):
+        """buyer_ref must never reach the wire on CreateMediaBuySuccess.
 
-        SDK 5.7 codegen incorrectly declared buyer_ref on the response schema; adcp 6.6
-        (spec 3.1.1) removed it — buyer_ref belongs on the request, not the response.
-        The schema layer keeps a defensive exclude=True override (so the field may still
-        exist on the model), therefore the invariant graded here is the wire shape:
-        buyer_ref never serializes onto the response.
+        adcp 6.6 (spec 3.1.1) removed buyer_ref from the create-media-buy response type —
+        it belongs on the request, not the response. The adcp 6.6 parent therefore no
+        longer declares it, so it is not a field on CreateMediaBuySuccess at all and can
+        never be serialized. (The obsolete SDK-5.7 exclude=True redeclaration that used to
+        neutralize a wrongly-inherited parent field is gone with the 6.6 bump.)
         """
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
@@ -425,8 +425,11 @@ class TestBuildCreateSuccess:
             packages=[_make_media_package()],
         )
 
-        # buyer_ref never appears on the serialized response
+        # The obligation is on the wire: buyer_ref never serializes. Under adcp 6.6 that
+        # holds because it is not a field on the response type at all.
+        assert "buyer_ref" not in type(result).model_fields
         assert "buyer_ref" not in result.model_dump()
+        assert "buyer_ref" not in result.model_dump_json()
 
     def test_result_is_create_media_buy_success_type(self):
         """Return type is CreateMediaBuySuccess."""
