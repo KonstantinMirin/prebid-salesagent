@@ -43,22 +43,22 @@ this document.
 
 ## Behavior target vs SDK pin
 
-The SDK **pin** (3.1.0-beta.3) fixes the request/response *type shapes* we
+The SDK **pin** (3.1.1) fixes the request/response *type shapes* we
 build against. It does **not** always fix the graded *behavior*. One field
 diverges deliberately: the `media_buy_status` dual-emit on
 create-/update-media-buy responses.
 
-- **beta.3 storyboard** (`dist/compliance/3.1.0-beta.3/.../pending_creatives_to_start.yaml`,
-  ~L131-134) grades the body `status` as `field_value_or_absent` that MUST equal
-  `media_buy_status` — the deprecated "both identical" model (#4908).
-- **Target GA** — graded by the published **3.1.0** compliance
-  (`dist/compliance/3.1.0/.../pending_creatives_to_start.yaml`, ~L146-153;
-  `3.1.1` is byte-identical for this storyboard) — grades `media_buy_status`
+- **The superseded beta.3 storyboard** (`dist/compliance/3.1.0-beta.3/.../pending_creatives_to_start.yaml`,
+  ~L131-134) graded the body `status` as `field_value_or_absent` that MUST equal
+  `media_buy_status` — the deprecated "both identical" model (#4908). We no longer
+  pin beta.3; this row is kept only to explain why the dual-emit backfill exists.
+- **The pinned 3.1.1 storyboard** (`dist/compliance/3.1.1/.../pending_creatives_to_start.yaml`;
+  byte-identical to `dist/compliance/3.1.0/...`, ~L146-153) grades `media_buy_status`
   as `field_value` (the DOMAIN status) and the top-level `status` as
   `field_value` `'completed'` (the PROTOCOL `TaskStatus`, protocol envelope).
   The two are DIFFERENT namespaces and are NOT identical.
 
-Our wire already implements the divergent (target GA) model:
+Our wire already implements the pinned-3.1.1 model:
 `TaskResultEnvelope._serialize` sets the top-level `status` to the protocol
 `TaskStatus`, while the domain status survives under `media_buy_status`
 (`src/core/schemas/_base.py` `_mirror_media_buy_status`). The dual-emit
@@ -66,11 +66,14 @@ validator only backfills the deprecated **body** `status` from the domain
 `media_buy_status` for the deprecation window; it does not touch the wire
 top-level `status`.
 
-**Known SDK type defect (SDK not authoritative):** adcp 5.7 types the response
-`status` as `MediaBuyStatus | None`, but the wire top-level `status` carries a
-protocol `TaskStatus` (`submitted` / `completed`). This is fine because that
-protocol value lives on `TaskResultEnvelope.status` (typed `str`), never on the
-SDK-typed body field. Grounding for the divergent behavior is the value-pinned
+**Resolved SDK type defect (kept for history):** adcp 5.7 typed the response
+`status` as `MediaBuyStatus | None`, while the wire top-level `status` carries a
+protocol `TaskStatus` (`submitted` / `completed`). That was never a problem for us
+because the protocol value lives on `TaskResultEnvelope.status` (typed `str`), never
+on the SDK-typed body field. As of the pinned 6.6.0 the SDK agrees with the wire —
+each `CreateMediaBuyResponse` variant types `status` as the protocol literal
+(`Literal['completed']` / `Literal[TaskStatus.submitted]`), verified with
+`typing.get_args(CreateMediaBuyResponse)`. Grounding for the behavior is the value-pinned
 `media_buy_status` assertions in
 `tests/bdd/features/BR-UC-002-media-buy-status-dual-emit.feature` and the
 `then_dual_emit_media_buy_status` step in
