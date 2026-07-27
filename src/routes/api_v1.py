@@ -208,8 +208,8 @@ class GetSignalsBody(SalesAgentBaseModel):
     discovery_mode: str | None = None
     account: dict[str, Any] | None = None
     signal_spec: str | None = None
-    signal_refs: list[str] | None = None
-    signal_ids: list[str] | None = None
+    signal_refs: list[dict[str, Any]] | None = None
+    signal_ids: list[dict[str, Any]] | None = None
     destinations: list[dict[str, Any]] | None = None
     countries: list[str] | None = None
     filters: dict[str, Any] | None = None

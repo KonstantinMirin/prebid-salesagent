@@ -204,8 +204,8 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
 
 async def get_signals(
     signal_spec: str | None = None,
-    signal_ids: list[str] | None = None,
-    signal_refs: list[str] | None = None,
+    signal_ids: list[dict[str, Any]] | None = None,
+    signal_refs: list[dict[str, Any]] | None = None,
     discovery_mode: str | None = None,
     filters: dict[str, Any] | None = None,
     destinations: list[dict[str, Any]] | None = None,
@@ -213,7 +213,7 @@ async def get_signals(
     fields: list[str] | None = None,
     max_results: int | None = None,
     pagination: dict[str, Any] | None = None,
-    account: str | None = None,
+    account: dict[str, Any] | None = None,
     context: ContextObject | dict | None = None,
     ext: dict[str, Any] | None = None,
     push_notification_config: dict[str, Any] | None = None,
@@ -230,6 +230,16 @@ async def get_signals(
     buyer sends per the v3.1.1 get-signals-request — matching every sibling
     MCP tool (a single ``req:`` parameter would nest the schema as
     ``{"req": {...}}`` and reject spec-shaped calls).
+
+    Every parameter type is the schema's, not a hand-written narrowing:
+    ``account`` ($ref core/account-ref.json), ``signal_refs[]``
+    ($ref core/signal-ref.json) and ``signal_ids[]`` ($ref core/signal-id.json)
+    are OBJECTS, so they are declared as dicts here (the SDK RootModels coerce
+    them in ``GetSignalsRequest.model_validate``), the same way
+    ``destinations`` / ``filters`` / ``pagination`` are handled. Declaring any
+    of them as ``str`` rejects a conformant buyer at the FastMCP TypeAdapter
+    before the boundary runs — while A2A, which validates raw params, accepts
+    it. Mirrored by ``GetSignalsBody`` in src/routes/api_v1.py.
 
     Args:
         ctx: FastMCP context (automatically provided)

@@ -13,6 +13,7 @@ This would have caught the status_filter bug where:
 """
 
 import inspect
+import types
 import typing
 from typing import Any, get_args, get_origin
 
@@ -235,6 +236,106 @@ class TestParameterTypeDocumentation:
         for name, hint in hints.items():
             if name not in ["return"]:
                 print(f"  {name}: {hint}")
+
+
+class TestGetSignalsObjectTypedParams:
+    """get_signals' $ref'd OBJECT params must not be hand-narrowed to strings.
+
+    Regression test for the round-2 finding: ``account``, ``signal_refs[]`` and
+    ``signal_ids[]`` are objects per v3.1.1
+    (dist/schemas/3.1.1/signals/get-signals-request.json $refs core/account-ref.json,
+    core/signal-ref.json, core/signal-id.json), and ``GetSignalsRequest`` types them as
+    the SDK's AccountReference / SignalRef / SignalId. The flat MCP wrapper and the REST
+    body model had them as ``str`` / ``list[str]``, so a conformant buyer was rejected at
+    the FastMCP TypeAdapter (MCP) and the body model (REST) before the boundary ran —
+    while A2A accepted the same payload. Same input, opposite accept/reject per transport.
+
+    Pins the SHAPE (object, not scalar) rather than an exact annotation, so a later switch
+    between ``dict[str, Any]`` and the SDK types stays green while a regression back to
+    ``str``/``list[str]`` fails.
+    """
+
+    OBJECT_PARAMS = ("account", "signal_refs", "signal_ids")
+
+    @staticmethod
+    def _scalar_leaves(hint) -> set[str]:
+        """Scalar type names reachable through unions and list element types.
+
+        Both union spellings must be handled: ``get_origin`` returns ``typing.Union`` for
+        ``Optional[X]`` / ``Union[X, Y]`` but ``types.UnionType`` for the PEP 604 ``X | None``
+        that this codebase actually writes. Matching only ``typing.Union`` makes the whole
+        walk fall through to the scalar check, which a parameterised generic fails — so the
+        function returns "no scalars" for every annotation and the guard silently passes.
+        (That exact defect was present in the first draft of this guard and caught by
+        mutation, not by review.)
+        """
+        origin, args = get_origin(hint), get_args(hint)
+        if origin is typing.Union or origin is types.UnionType:
+            leaves: set[str] = set()
+            for arg in args:
+                leaves |= TestGetSignalsObjectTypedParams._scalar_leaves(arg)
+            return leaves
+        if origin is list:
+            return TestGetSignalsObjectTypedParams._scalar_leaves(args[0]) if args else set()
+        if isinstance(hint, type) and hint.__name__ in ("str", "int", "float", "bool"):
+            return {hint.__name__}
+        return set()
+
+    def test_scalar_leaves_detects_both_union_spellings(self):
+        """Meta-test: the detector must not be blind to PEP 604 unions.
+
+        Without this, a regression to ``list[str] | None`` — the exact shape being
+        guarded against — reads as clean.
+        """
+        assert self._scalar_leaves(list[str] | None) == {"str"}
+        # noqa UP045: the explicit typing.Optional spelling is the POINT of this
+        # assertion — the two spellings have different get_origin() results, and the
+        # detector must handle both. Rewriting it to `X | None` would delete the test.
+        assert self._scalar_leaves(typing.Optional[list[str]]) == {"str"}  # noqa: UP045
+        assert self._scalar_leaves(str | None) == {"str"}
+        assert self._scalar_leaves(list[dict[str, Any]] | None) == set()
+        assert self._scalar_leaves(dict[str, Any] | None) == set()
+
+    def test_mcp_wrapper_declares_object_typed_params(self):
+        from src.core.tools.signals import get_signals
+
+        hints = typing.get_type_hints(get_signals)
+        for param in self.OBJECT_PARAMS:
+            assert param in hints, f"get_signals lost the {param!r} parameter"
+            scalars = self._scalar_leaves(hints[param])
+            assert not scalars, (
+                f"get_signals MCP wrapper types {param!r} as {hints[param]} — a scalar "
+                f"({', '.join(sorted(scalars))}) where v3.1.1 declares an object. A conformant "
+                f"buyer's payload is rejected at the FastMCP TypeAdapter before the boundary runs."
+            )
+
+    def test_rest_body_declares_object_typed_params(self):
+        from src.routes.api_v1 import GetSignalsBody
+
+        for param in self.OBJECT_PARAMS:
+            assert param in GetSignalsBody.model_fields, f"GetSignalsBody lost the {param!r} field"
+            annotation = GetSignalsBody.model_fields[param].annotation
+            scalars = self._scalar_leaves(annotation)
+            assert not scalars, (
+                f"GetSignalsBody types {param!r} as {annotation} — a scalar "
+                f"({', '.join(sorted(scalars))}) where v3.1.1 declares an object. The REST body "
+                f"model rejects a conformant buyer before the boundary runs."
+            )
+
+    def test_request_model_still_types_them_as_objects(self):
+        """If the SDK ever widened these to accept strings, the guard above is moot.
+
+        Pins the premise, so this file cannot keep enforcing a constraint the schema
+        has dropped — the failure would point at the pin bump, not at the wrappers.
+        """
+        from src.core.schemas import GetSignalsRequest
+
+        for param in self.OBJECT_PARAMS:
+            annotation = GetSignalsRequest.model_fields[param].annotation
+            assert not self._scalar_leaves(annotation), (
+                f"GetSignalsRequest.{param} now accepts a scalar ({annotation}); "
+                f"re-derive this guard against the current pin."
+            )
 
 
 if __name__ == "__main__":

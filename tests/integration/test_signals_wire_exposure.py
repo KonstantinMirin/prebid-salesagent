@@ -32,6 +32,19 @@ from tests.harness import SignalsEnv, Transport
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
+# The three v3.1.1 get-signals-request properties that are $ref'd OBJECTS, in
+# spec-valid shapes. Single source for every leg below so one edit moves all of
+# them (and so no leg can quietly send a different, weaker shape):
+#   account      -> core/account-ref.json      oneOf {account_id} | {brand, operator}
+#   signal_refs[]-> core/signal-ref.json       discriminated on scope, required [scope, signal_id]
+#   signal_ids[] -> core/signal-id.json        discriminated on source, required [source, ..., id]
+OBJECT_TYPED_FIELDS: dict[str, object] = {
+    "account": {"account_id": "acct_signals_wire"},
+    "signal_refs": [{"scope": "product", "signal_id": "sports_content"}],
+    "signal_ids": [{"source": "catalog", "data_provider_domain": "pinnacle-data.example", "id": "sports_content"}],
+}
+
+
 def _assert_sports_signal_response(response: GetSignalsResponse) -> None:
     """Shared payload contract: signal_spec='sports' selects exactly sports_content.
 
@@ -126,6 +139,67 @@ class TestGetSignalsWireExposure:
             _assert_sports_signal_response(GetSignalsResponse(**response.json()))
 
 
+class TestGetSignalsObjectTypedFieldsAcceptedOnEveryTransport:
+    """account / signal_refs / signal_ids are OBJECTS — every transport must accept them.
+
+    v3.1.1 dist/schemas/3.1.1/signals/get-signals-request.json declares
+    ``account`` -> $ref core/account-ref.json, ``signal_refs[]`` -> $ref
+    core/signal-ref.json, ``signal_ids[]`` -> $ref core/signal-id.json — all
+    three objects, and ``GetSignalsRequest`` types them as the SDK's
+    AccountReference / SignalRef / SignalId accordingly.
+
+    The MCP wrapper (src/core/tools/signals.py) and the REST body model
+    (GetSignalsBody in src/routes/api_v1.py) had hand-written them as
+    ``str`` / ``list[str]``, so a conformant buyer's payload was rejected at the
+    FastMCP TypeAdapter (MCP) and at the body model (REST) BEFORE the boundary
+    ran — while A2A, which passes raw parameters to ``model_validate``,
+    accepted the same payload. Same input, opposite accept/reject per
+    transport. This is a declared-field TYPE mismatch, so production
+    ``extra="ignore"`` (Pattern #7) does not mask it.
+
+    The fields are inert in the mock catalog (``_get_signals_impl`` filters on
+    signal_spec / filters / max_results only), so ``signal_spec="sports"``
+    still selects exactly ``sports_content``: the assertion proves the request
+    was carried through the wrapper unchanged, not merely that it parsed.
+    """
+
+    @pytest.mark.parametrize(
+        "transport",
+        [Transport.MCP, Transport.A2A, Transport.REST],
+        ids=["mcp", "a2a", "rest"],
+    )
+    def test_object_shaped_fields_accepted(self, integration_db, transport):
+        with SignalsEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(
+                transport,
+                req=GetSignalsRequest(signal_spec="sports", **OBJECT_TYPED_FIELDS),
+            )
+
+            assert result.is_success, (
+                f"spec-shaped object-typed account/signal_refs/signal_ids rejected on {transport}: "
+                f"{result.error!r} (wire_error_envelope={result.wire_error_envelope!r})"
+            )
+            _assert_sports_signal_response(result.payload)
+            assert result.wire_response is not None
+            assert [s["signal_agent_segment_id"] for s in result.wire_response["signals"]] == ["sports_content"]
+
+    def test_rest_leg_sends_the_object_fields_not_an_empty_body(self, integration_db):
+        """Guard: the REST leg above cannot pass vacuously on an empty body.
+
+        ``SignalsEnv.build_rest_body`` serializes ONLY a typed ``req=`` and
+        returns ``{}`` for raw field kwargs — a REST leg written with raw kwargs
+        would POST an empty body and get a happy 200 without ever exercising
+        GetSignalsBody's field types. Pin that the body the REST leg actually
+        posts carries all three object-typed fields, in object shape.
+        """
+        with SignalsEnv() as env:
+            body = env.build_rest_body(req=GetSignalsRequest(signal_spec="sports", **OBJECT_TYPED_FIELDS))
+
+            assert {k: body[k] for k in OBJECT_TYPED_FIELDS} == OBJECT_TYPED_FIELDS
+
+
 class TestGetSignalsBodyDeclaresAllSpecFields:
     """REST boundary ACCEPTS every declared v3.1.1 get-signals-request property.
 
@@ -135,6 +209,15 @@ class TestGetSignalsBodyDeclaresAllSpecFields:
     rejected with INVALID_REQUEST; in production they were silently dropped.
     Spec: dist/schemas/3.1.1/signals/get-signals-request.json @ v3.1.1 declares
     16 properties including these four.
+
+    The payload sends the $ref'd OBJECT properties (account / signal_refs /
+    signal_ids) in object shape as well: with string-typed values only, the
+    "accepts every declared property" claim above was not graded — GetSignalsBody
+    declared those three as ``str`` / ``list[str]`` and rejected the spec shape
+    (fa3p). This class grades the Body model's field inventory and TYPES; the
+    request-level conditional (if_pricing_version implies
+    ``discovery_mode: "wholesale"``, which in turn forbids
+    signal_spec/signal_refs/signal_ids) is deliberately not exercised here.
     """
 
     def test_spec_valid_request_with_all_declared_fields_accepted(self, integration_db):
@@ -149,6 +232,7 @@ class TestGetSignalsBodyDeclaresAllSpecFields:
                     push_notification_config={"url": "https://buyer.example.com/hooks"},
                     if_pricing_version="abc123",
                     if_wholesale_feed_version="def456",
+                    **OBJECT_TYPED_FIELDS,
                 ),
             )
 
