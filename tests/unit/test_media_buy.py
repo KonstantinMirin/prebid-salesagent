@@ -3020,7 +3020,6 @@ class TestUpdateMediaBuyManualApproval:
         assert result.task_id == "step_1"
         # The submitted envelope must not claim any applied change: no affected_packages
         # (the pre-3.1.1 success shape reported `affected_packages == []` for this case).
-        # 6.6 reconciliation of main's "affected_packages empty (not yet applied)" check.
         assert "affected_packages" not in result.model_dump()
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY

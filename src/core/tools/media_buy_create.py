@@ -4328,7 +4328,8 @@ async def create_media_buy(
         Field(
             description=(
                 "Accepted for AdCP 3.1.1 compatibility; pause-on-create is NOT yet honored — "
-                "delivery starts per start_time regardless of this flag. Tracked in #1619."
+                "the flag is carried into CreateMediaBuyRequest but _impl never reads it, so "
+                "the buy delivers as if paused=false, starting per start_time. Tracked in #1619."
             )
         ),
     ] = None,

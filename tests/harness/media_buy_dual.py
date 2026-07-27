@@ -102,12 +102,11 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         # Set the update-vs-create routing flag and leave it set THROUGH the base
-        # dispatch's subsequent parse_rest_response call: _base.py runs
+        # dispatch's subsequent parse_rest_response call: the base dispatch runs
         # _run_rest_request then parse_rest_response sequentially, so a finally-reset
         # here would flip the flag back before the parse and misroute the update
-        # response to the create parser (yielding None). The flag is reset in
-        # parse_rest_response after routing, and each request re-sets it here
-        # (unconditional assignment, so a create request clears a stale flag).
+        # response to the create parser (yielding None). parse_rest_response resets
+        # it after routing, and each request re-sets it (False on create requests).
         self._active_update = _is_update_request(kwargs)
         if self._active_update:
             return self._run_update_rest_request(**kwargs)
@@ -194,10 +193,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # would not be caught. A SUBMITTED update never carries an artifact body:
         # on_message_send early-returns a Task (state=SUBMITTED, no artifacts) and the
         # base handler synthesizes the submitted wire from the Task (tests/harness/
-        # _base.py) — production has no A2A submitted reconstruction (PR #1567 round-2
-        # follow-up). Completed/error results DO carry an artifact, stashed as
-        # wire_response; _parse_update_rest_response recovers the union from the
-        # flattened artifact (needs the top-level status the plain model drops).
+        # _base.py) — the adcp_a2a_server submitted branch is only a defensive backstop
+        # on this path (PR #1567 round-2 follow-up). Completed/error results DO carry an
+        # artifact, stashed as wire_response; the flattened artifact is a
+        # (submitted|success|error) union needing status/media_buy_id discrimination
+        # plus the top-level status the plain domain model drops, so it is recovered
+        # via _parse_update_rest_response.
         return self._run_a2a_handler(
             "update_media_buy",
             lambda **data: self._parse_update_rest_response(data),
@@ -207,11 +208,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _call_update_mcp(self, **kwargs: Any) -> Any:
         # Drive the REAL FastMCP Client pipeline (mirrors MediaBuyCreateEnv.call_mcp) so the
         # structured_content — the real MCP wire body — is stashed as wire_response and the
-        # full middleware/auth chain runs. This subsumes the earlier mock-Context invocation
-        # through with_error_logging (#1417): the real pipeline applies the production
-        # boundary decorator via registration (src/core/main.py: mcp.tool()(with_error_logging(fn))),
-        # so a raised AdCPError still surfaces as the two-layer wire envelope captured as
-        # wire_error_envelope.
+        # full middleware/auth chain runs, including the production with_error_logging
+        # boundary decorator (src/core/main.py: mcp.tool()(with_error_logging(fn))): on
+        # error it translates the raised AdCPError into an AdCPToolError carrying the
+        # two-layer wire envelope, which the dispatcher captures as wire_error_envelope
+        # (#1417). A prior version hand-built a mocked Context and invoked the wrapper
+        # directly, which bypassed the client/middleware chain.
         return self._run_mcp_client(
             "update_media_buy",
             lambda **data: self._parse_update_rest_response(data),
@@ -259,21 +261,32 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         )
 
         # Harness-side union discrimination mirroring production _update_media_buy_impl
-        # per path. A submitted result (status="submitted"+task_id, no applied
-        # media_buy_id) is reconstructed BARE: production returns the bare
+        # per path (its declared return type is UpdateMediaBuyResult | UpdateMediaBuySubmitted).
+        #
+        # Submitted first: a submitted result (status="submitted" + task_id, no applied
+        # media_buy_id) must not be mis-reconstructed as Success, whose status is
+        # Literal["completed"]. It is reconstructed BARE because production returns the bare
         # UpdateMediaBuySubmitted variant (media_buy_update.py `return approval_response`),
-        # which spec 3.1.1 serializes flat (status+task_id at top level), so the harness
-        # must not wrap it. This arm serves the REST wire and the harness-synthesized A2A
-        # submitted dict — production A2A has NO submitted reconstruction (Task
-        # early-return). Completed/error results ARE wrapped in the UpdateMediaBuyResult
-        # task envelope carrying the top-level wire status (#1417), matching production's
+        # which spec 3.1.1 serializes flat (status+task_id at top level) — so the harness
+        # must not wrap it. That arm serves the REST wire and the harness-synthesized A2A
+        # submitted dict; on A2A the submitted result early-returns a Task with no artifact,
+        # so the adcp_a2a_server submitted branch is only a defensive backstop there.
+        #
+        # Completed/error results ARE wrapped in the UpdateMediaBuyResult task envelope
+        # carrying the top-level wire status (#1417), matching production's
         # `return UpdateMediaBuyResult(response=..., status=...)` on those paths.
+        # Success-vs-error is discriminated on media_buy_id (required on
+        # UpdateMediaBuySuccess, absent from UpdateMediaBuyError), the same exact test
+        # production A2A uses (adcp_a2a_server._reconstruct_response_object) — NOT on a
+        # non-empty `errors` list, which UpdateMediaBuySuccess also carries for non-fatal
+        # advisories (e.g. property_list UNSUPPORTED_FEATURE) and would misclassify an
+        # applied update as a failure.
         status = data.pop("status", "completed")
         if status == "submitted":
             return UpdateMediaBuySubmitted(status=status, **data)
         response: UpdateMediaBuyError | UpdateMediaBuySuccess
-        if "errors" in data and data["errors"]:
-            response = UpdateMediaBuyError(**data)
-        else:
+        if "media_buy_id" in data:
             response = UpdateMediaBuySuccess(**data)
+        else:
+            response = UpdateMediaBuyError(**data)
         return UpdateMediaBuyResult(response=response, status=status)

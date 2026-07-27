@@ -1788,11 +1788,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # GRADUATED (#1270): production now validates date range over e2e_rest, so the
-            # invalid cases (equals, after) are rejected — the former strict-xfail tripwire
-            # here XPASSed deterministically (two consecutive in-network runs) and was
-            # removed. The non-strict e2e_rest ledger entries for these 2 nodeids remain as
-            # a graceful guard against e2e environment flakiness.
+            # GRADUATED (#1270): the live server now validates start>=end (the
+            # merged #1417 validation embed), so the invalid cases (equals, after)
+            # are rejected over e2e_rest — the former strict-xfail tripwire here
+            # XPASSed deterministically on in-network CI runs (first fired
+            # 2026-07-09) and was removed. The non-strict e2e_rest ledger entries
+            # for these 2 nodeids remain as a graceful guard against e2e
+            # environment flakiness.
             # GRADUATED (#1417 round-8 follow-up, same tripwire from main's side): the
             # #1417 validation refactor made the live server reject invalid date ranges;
             # the invalid cases (equals, after) pass on e2e_rest and main removed their
@@ -3390,9 +3392,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-partition-targeting-overlay",
             "T-UC-003-boundary-targeting-overlay",
         }
-        # The 3 manual-approval submitted-envelope scenarios (PR #1567, adcp 6.6 /
-        # spec 3.1.1) — see the BOUNDED branch below.
-        _UC003_WIRED_TAGS = {
+        # The 3 manual-approval submitted-envelope scenarios (PR #1567) are graded
+        # too (they exercise UpdateMediaBuySubmitted cross-transport, adcp 6.6 /
+        # spec 3.1.1). Every other UC-003 scenario stays dormant; graduating the
+        # full UC-003 file is tracked separately. See the BOUNDED branch below.
+        _UC003_MANUAL_APPROVAL = {
             "T-UC-003-alt-manual",
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
@@ -3419,7 +3423,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 _setup_existing_media_buy(ctx, env, tenant, principal, product)
                 env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
                 yield
-        elif marker_names & _UC003_WIRED_TAGS:
+        elif marker_names & _UC003_MANUAL_APPROVAL:
             # BOUNDED (PR #1567): the 3 manual-approval submitted-envelope
             # scenarios are graded here (they exercise UpdateMediaBuySubmitted
             # cross-transport). Every other non-extension UC-003 scenario stays
