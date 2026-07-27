@@ -393,8 +393,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # Wired non-dormant + strengthened (salesagent-e4ad): steps execute and grade the
     # spec-pinned shape, then fail on the unemitted/hard-coded block (strict xfail on all transports).
     "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1592 spec-production gap",
-    "T-UC-010-v31-specialisms": "specialisms hard-coded to [sales-non-guaranteed], not derived from tenant config; creative protocol not advertised — #1592 spec-production gap",
-    "T-UC-010-v31-advisory-errors": "top-level advisory errors[] not emitted by the capabilities builder — #1592 spec-production gap",
+    # Re-cited #1592 -> #1724 (salesagent-3xmz batch B3). The OLD reason ("hard-coded,
+    # not derived from tenant config") is now FALSE: specialisms ARE declaration-driven
+    # and registry-validated. The scenario stays xfailed for a different, permanent
+    # reason — it claims postures this deployment does not back.
+    "T-UC-010-v31-specialisms": "scenario claims unbacked postures the STRICT policy forbids declaring: `creative-generative` (no generative creative implemented) and the `creative` protocol (bundle required_tools unimplemented) — #1724",
+    # Ledger SHRINK (salesagent-3xmz batch B5): T-UC-010-v31-advisory-errors removed —
+    # the capabilities builder now emits top-level advisory errors[] for genuinely
+    # faulted discovery lookups (except-path only), so the gap the row recorded is closed.
     # T-UC-010-account-supported-billing / T-UC-010-account-block-presence GRADUATED
     # (salesagent-3s5a): account.supported_billing now derives from resolve_supported_billing(tenant)
     # and the account block is now emitted on the tenant-resolved path.
@@ -416,8 +422,18 @@ _XFAIL_TAGS: dict[str, str] = {
     # spec-pinned v3.1.1 shape, then fails on a block the capabilities builder never emits
     # (brand is not in supported_protocols; measurement block never built). Strict xfail, all
     # transports.
-    "T-UC-010-v31-brand-block": "the capabilities builder advertises only media_buy in supported_protocols and never emits the brand top-level block (rights/right_types/available_uses/generation_providers) — #1592 spec-production gap",
-    "T-UC-010-v31-measurement-catalog": "the capabilities builder never emits the measurement block (metrics[] + measurement.core in experimental_features); measurement is not in supported_protocols — #1592 spec-production gap",
+    # Re-cited #1592 -> #1724 (salesagent-3xmz, owner decision 2026-07-27). The brand family
+    # was re-homed ENTIRELY rather than partially delivered: `brand` in supported_protocols
+    # commits the seller to `get_brand_identity` (protocols/brand/index.yaml#required_tools),
+    # which has zero implementations here, and the schema forbids emitting the block without
+    # that protocol claim ("Only present if brand is in supported_protocols"). Emitting roster
+    # facts either way would be the over-advertising STRICT exists to prevent.
+    "T-UC-010-v31-brand-block": "scenario requires the brand protocol claim, which commits to get_brand_identity (unimplemented), and brand.rights=true, an unbacked tool commitment — #1724",
+    # Ledger SHRINK (salesagent-3xmz batch B1): T-UC-010-v31-measurement-catalog removed.
+    # The tenant's measurement catalog is a declarable business fact, so the scenario is
+    # graded by the capability-declaration store (measurement block + supported_protocols
+    # union + the measurement.core experimental-feature implication) rather than ledgered
+    # as a permanent production gap.
     # Wired non-dormant + strengthened (salesagent-jd6a): each row executes and grades the
     # spec-pinned bound/relation, then fails on all transports because the capabilities builder
     # never derives idempotency from tenant config and runs no version negotiation (#1592).
@@ -3807,6 +3823,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-creative-approval-mode",
             # Batch 11 — trusted_match surfaces (salesagent-3xmz)
             "T-UC-010-v31-trusted-match-surfaces",
+            # Batch 12 — measurement accreditations (salesagent-3xmz)
+            "T-UC-010-v31-measurement-accreditations",
+            # Batch 13 — locally-added declaration-backing graders (salesagent-3xmz).
+            # These grade validate_backing()'s rejection rules, which the generated
+            # specialisms scenario cannot: it declares creative-generative + the
+            # creative protocol, both unbacked, so it stays xfailed against #1724.
+            "T-UC-010-local-backed-specialism",
+            "T-UC-010-local-unbacked-specialism",
+            "T-UC-010-local-orphaned-specialism",
+            "T-UC-010-local-unbacked-protocol",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

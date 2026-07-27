@@ -11,14 +11,13 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated
 
-from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import ContextObject, Error, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
 from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.pricing_model import PricingModel
-from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Account,
     Adcp,
@@ -30,11 +29,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Portfolio,
     PublisherDomain,
     RequestSigning,
-    SupportedProtocol,
-    # NOTE: src.core.schemas.Targeting is an UNRELATED SDK type (media-buy targeting
-    # overlay), not a local subclass of this Targeting (capabilities declared-dimensions
-    # shape) -- confirmed via subclass-identity check, salesagent-3s5a. Importing the SDK
-    # type directly here is correct, not a Pattern #1 bypass.
     Targeting,
     WebhookSigning,
 )
@@ -45,11 +39,16 @@ from pydantic import Field
 from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.exceptions import normalize_advisory_errors
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant, get_targeting_capabilities_override
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas.capability_declarations import CapabilityDeclarations
+from src.core.schemas.capability_declarations import (
+    DEFAULT_SPECIALISMS,
+    DEFAULT_SUPPORTED_PROTOCOLS,
+    CapabilityDeclarations,
+)
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
@@ -68,18 +67,43 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
 _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
 
-# The protocol set this agent backs with a real tool surface. ONE source consumed
-# by both the no-tenant minimal response and the tenant-resolved response -- the
-# two used to carry independent `[SupportedProtocol.media_buy]` literals, the same
-# drift class _build_adcp_block was extracted to prevent (salesagent-rldj).
-_DEFAULT_SUPPORTED_PROTOCOLS = [SupportedProtocol.media_buy]
+# The baseline protocol/specialism sets every response advertises before any tenant
+# declaration is applied. ONE source consumed by both the no-tenant minimal response
+# and the tenant-resolved response -- the two used to carry independent
+# `[SupportedProtocol.media_buy]` literals, the same drift class _build_adcp_block was
+# extracted to prevent (salesagent-rldj). They now live in the declarations schema,
+# because validate_backing() has to reason about the EMITTED set (defaults unioned with
+# the declaration) to check specialism roll-up.
+_DEFAULT_SUPPORTED_PROTOCOLS = DEFAULT_SUPPORTED_PROTOCOLS
+_DEFAULT_SPECIALISMS = DEFAULT_SPECIALISMS
 
-# Likewise for specialisms. Whether a tenant may DECLARE specialisms is an open
-# owner decision (salesagent-3g2n): `creative-generative` appears in the scenario
-# fixture but nothing implements generative creative, so echoing a declaration
-# would be a false conformance claim the AAO runner grades. Until that is decided
-# this stays a derived constant.
-_DEFAULT_SPECIALISMS = [AdcpSpecialism.sales_non_guaranteed]
+
+def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> None:
+    """Log a discovery degradation AND surface it to the buyer as an advisory.
+
+    ONE helper for all five degradation sites in ``_get_adcp_capabilities_impl``.
+    Before this, each site logged and fell through to a default, so the response
+    silently carried a placeholder (or an omission) and the buyer had no way to
+    tell "this seller has none" from "the lookup failed" — the quiet-failure class
+    CLAUDE.md bans.
+
+    EXCEPT-PATH ONLY, deliberately. Two of these sites also degrade on an EMPTY
+    result with no exception (``primary_channels``, ``publisher_domains``), and a
+    tenant with zero publisher partners is the COMMON case — advising there would
+    put ``errors[]`` on nearly every tenant-resolved capabilities response across
+    every use case. A genuinely faulted lookup is the advisory-worthy event.
+
+    The advisory is a WARNING, not a failure: ``errors`` is "Task-specific errors
+    and warnings" and the envelope still reports success, so discovery is not
+    failed by a partial result.
+    """
+    logger.warning(f"Could not get {what}: {exc}")
+    advisories.append(
+        Error(  # structural-guard: advisory degradation in GetAdcpCapabilitiesResponse.errors[]
+            code="SERVICE_UNAVAILABLE",
+            message=f"Could not resolve {what}; the response omits or defaults this section.",
+        )
+    )
 
 
 def _build_adcp_block(tenant: Mapping | None) -> Adcp:
@@ -265,6 +289,10 @@ def _get_adcp_capabilities_impl(
     # Adapter.__init__ entirely — Kevel/TritonDigital would crash __init__
     # for a synthetic/tenant-only Principal (salesagent-dn2s).
     primary_channels: list[MediaChannel] = []
+    # Degradation advisories collected across this build and emitted as the
+    # response's top-level errors[] (advisory warnings, not a failed task).
+    advisories: list[Error] = []
+
     adapter: type | None = None
     try:
         adapter = get_adapter_class_for_tenant(tenant)
@@ -273,7 +301,7 @@ def _get_adcp_capabilities_impl(
                 if channel_name.lower() in CHANNEL_MAPPING:
                     primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
     except Exception as e:
-        logger.warning(f"Could not get adapter channels: {e}")
+        _record_degradation(advisories, "adapter channels", e)
 
     # Default to display if we couldn't determine from adapter
     if not primary_channels:
@@ -295,7 +323,7 @@ def _get_adcp_capabilities_impl(
             # empty array (which the SDK model itself rejects).
             supported_pricing_models = resolved_models or None
         except Exception as e:
-            logger.warning(f"Could not get supported pricing models: {e}")
+            _record_degradation(advisories, "supported pricing models", e)
 
     # Get publisher domains from database
     publisher_domains: list[PublisherDomain] = []
@@ -307,7 +335,7 @@ def _get_adcp_capabilities_impl(
                 if partner.publisher_domain:
                     publisher_domains.append(PublisherDomain(root=partner.publisher_domain))
     except Exception as e:
-        logger.warning(f"Could not get publisher domains: {e}")
+        _record_degradation(advisories, "publisher domains", e)
 
     # If no domains found, use a placeholder
     if not publisher_domains:
@@ -364,7 +392,7 @@ def _get_adcp_capabilities_impl(
     try:
         targeting_caps = get_targeting_capabilities_override(tenant)
     except Exception as e:
-        logger.warning(f"Could not get targeting capabilities override: {e}")
+        _record_degradation(advisories, "targeting capabilities override", e)
     if targeting_caps is None and adapter and hasattr(adapter, "get_targeting_capabilities"):
         targeting_caps = adapter.get_targeting_capabilities()
 
@@ -424,7 +452,7 @@ def _get_adcp_capabilities_impl(
     try:
         manual_approval_signal = resolve_manual_approval_signal(tenant)
     except Exception as e:
-        logger.warning(f"Could not resolve manual approval signal: {e}")
+        _record_degradation(advisories, "manual approval signal", e)
     creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
 
     # Build media_buy capabilities
@@ -449,12 +477,24 @@ def _get_adcp_capabilities_impl(
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=_build_adcp_block(tenant),
-        supported_protocols=list(_DEFAULT_SUPPORTED_PROTOCOLS),
-        specialisms=list(_DEFAULT_SPECIALISMS),
+        # Declared protocols UNION the defaults -- see
+        # CapabilityDeclarations.emitted_supported_protocols for why replacement
+        # would emit a specialism whose parent protocol is absent.
+        supported_protocols=(
+            declarations.emitted_supported_protocols(_DEFAULT_SUPPORTED_PROTOCOLS)
+            if declarations
+            else list(_DEFAULT_SUPPORTED_PROTOCOLS)
+        ),
+        specialisms=(
+            declarations.emitted_specialisms(_DEFAULT_SPECIALISMS) if declarations else list(_DEFAULT_SPECIALISMS)
+        ),
+        measurement=declarations.measurement if declarations else None,
+        experimental_features=declarations.emitted_experimental_features() if declarations else None,
         media_buy=media_buy,
         account=_build_account_block(tenant),
         webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
         request_signing=_REQUEST_SIGNING_UNSUPPORTED,
+        errors=normalize_advisory_errors(advisories) or None,
         last_updated=datetime.now(UTC),
         context=req.context if req else None,
     )

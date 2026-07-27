@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
 
-    from adcp.types import ContextObject
+    from adcp.types import ContextObject, Error
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +214,73 @@ def to_wire_error_code(code: str) -> str:
     """
     translated = translate_error_code(code)
     return translated if translated in WIRE_STANDARD_CODES else "SERVICE_UNAVAILABLE"
+
+
+def advisory_recovery_for(code: str) -> RecoveryHint:
+    """Recovery classification for a hand-built ``errors[]`` advisory.
+
+    Derived from the ``AdCPError`` subclass that owns *code* — each subclass's
+    ``_default_recovery`` is already the spec-cited classification (see the
+    per-class docstrings citing v3.1.1 ``error-code.json`` enumMetadata), so this
+    reads the existing authority rather than adding a parallel table that could
+    drift from it.
+
+    Falls back to ``transient`` for a code no subclass claims, which is exactly
+    what the spec tells receivers to assume: ``#/properties/code`` — "read
+    ``error.recovery`` ... and fall back to ``transient`` when ``recovery`` is
+    absent". ``to_wire_error_code`` collapses unmapped codes to
+    ``SERVICE_UNAVAILABLE``, whose pinned classification is also ``transient``,
+    so the fallback and the collapse agree.
+    """
+    for cls in _iter_adcp_error_subclasses():
+        if getattr(cls, "_default_error_code", None) == code:
+            return cls._default_recovery
+    return "transient"
+
+
+def _iter_adcp_error_subclasses() -> Iterator[type[AdCPError]]:
+    """Every concrete AdCPError subclass, depth-first."""
+    stack: list[type[AdCPError]] = [AdCPError]
+    seen: set[type] = set()
+    while stack:
+        cls = stack.pop()
+        if cls in seen:
+            continue
+        seen.add(cls)
+        yield cls
+        stack.extend(cls.__subclasses__())
+
+
+def normalize_advisory_errors(errors: list[Error]) -> list[Error]:
+    """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes
+    and populate ``recovery``.
+
+    Unlike a raised ``AdCPError`` (translated at the transport boundary), advisory
+    entries serialize verbatim, so an internal-only code would leak to the buyer.
+    ``to_wire_error_code`` both translates mapped codes AND collapses anything
+    still non-standard to ``SERVICE_UNAVAILABLE``, so no internal code can reach
+    the buyer even if a future advisory is built with an unmapped internal code.
+
+    ``recovery`` is populated even though ``core/error.json`` lists only
+    ``[code, message]`` as required: the ``recovery`` property description is
+    normative in the other direction — "Senders SHOULD populate ``recovery`` on
+    every error from 3.1 onward — it is the normative carrier of recovery
+    semantics across version skew".
+
+    Lives here, beside ``to_wire_error_code``, rather than in a tool module: it is
+    shared by every ``_impl`` that emits advisories, and a tool importing an
+    advisory normalizer from a sibling tool module is a layering inversion.
+    """
+    from adcp.types import Error
+
+    return [
+        Error(  # structural-guard: advisory entry serialized verbatim into a response errors[]
+            code=(wire_code := to_wire_error_code(e.code)),
+            message=e.message,
+            recovery=advisory_recovery_for(wire_code),
+        )
+        for e in errors
+    ]
 
 
 def _serialize_context(

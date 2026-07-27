@@ -22,6 +22,21 @@ silently clamping or emitting a non-conformant response.
 
 from typing import Any
 
+from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import ExperimentalFeature, SupportedProtocol
+
+# `Measurement` is aliased `LibraryMeasurementDeclaration`, NOT the conventional
+# `LibraryMeasurement`: the SDK has TWO distinct `Measurement` types, and
+# `src/core/schemas/_base.py:95` already binds `LibraryMeasurement` to the
+# product-level one (`adcp.types.Measurement`), whose local subclass is `Measurement`
+# (_base.py:1364). The schema-inheritance guard keys its Library*-alias map on the
+# un-prefixed name across ALL schema modules, so reusing the alias made it demand that
+# the product-level `Measurement` inherit the capabilities-response type. Aliasing to
+# match THIS module's subclass keeps the guard checking the right pair. Do not
+# "simplify" it back to `LibraryMeasurement`.
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    Measurement as LibraryMeasurementDeclaration,
+)
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -45,6 +60,86 @@ _UNBACKED_BLOCKS: dict[str, str] = {
     "reporting_delivery_methods": "#1291 (declaring [webhook] forces webhook_signing.supported=true)",
     "offline_delivery_protocols": "#1291 (no offline report delivery is implemented)",
 }
+
+
+# The protocols a tenant may CLAIM. Derivation rule, applied uniformly: a protocol
+# is backed iff every tool in its conformance bundle
+# (`dist/compliance/3.1.1/protocols/<p>/index.yaml#required_tools`) is implemented
+# in src/. Verified at v3.1.1:
+#   media_buy   -> [get_products, create_media_buy]  : both implemented.
+#   measurement -> NO protocol bundle exists (only brand, creative, governance,
+#                  media-buy, signals, sponsored-intelligence), and
+#                  #/properties/supported_protocols scopes 3.1 measurement to
+#                  "get_adcp_capabilities catalog discovery" -- so the claim commits
+#                  us to nothing beyond the catalog this batch implements.
+# Deliberately ABSENT, same rule, opposite answer -- this is what keeps STRICT honest:
+#   brand    -> [get_brand_identity] : ZERO hits in src/  -> #1724.
+#   creative -> generative creative unimplemented         -> #1724.
+#   signals     -> [get_signals] : implemented (src/core/tools/signals.py), and the
+#                  bundle narrative is exactly what we do ("declare the signals protocol
+#                  in get_adcp_capabilities; respond to get_signals"). Graded by the
+#                  `signal-owned` accept scenario, which needs it as the parent protocol.
+_BACKED_PROTOCOLS: frozenset[SupportedProtocol] = frozenset(
+    {SupportedProtocol.media_buy, SupportedProtocol.measurement, SupportedProtocol.signals}
+)
+
+# What every response advertises before any declaration is applied. Lives HERE rather
+# than in the tools layer because ``validate_backing`` must reason about the EMITTED
+# protocol set (defaults unioned with the declaration) to check specialism roll-up --
+# and a schema importing from src/core/tools would invert the layering.
+# ``capabilities.py`` imports these as its single source for both the no-tenant and
+# tenant-resolved constructions.
+DEFAULT_SUPPORTED_PROTOCOLS: list[SupportedProtocol] = [SupportedProtocol.media_buy]
+DEFAULT_SPECIALISMS: list[AdcpSpecialism] = [AdcpSpecialism.sales_non_guaranteed]
+
+# The specialisms a tenant may CLAIM, hand-maintained with a per-entry justification.
+#
+# Deliberately NOT derived from `specialisms/<id>/index.yaml#required_tools`: that
+# derivation would REJECT `sales-non-guaranteed`, which production already emits
+# unconditionally (`_DEFAULT_SPECIALISMS`, capabilities.py) -- its bundle requires
+# `sync_governance`, which has zero implementations here, plus 15 scenarios. Deriving
+# would therefore regress the wire for every tenant. That pre-existing inconsistency is
+# recorded, not "fixed" here; changing the default is a separate, wire-visible decision.
+#
+# Each entry states the bundle requirement and why this deployment meets it:
+_BACKED_SPECIALISMS: dict[AdcpSpecialism, SupportedProtocol] = {
+    # required_tools [sync_governance, get_products, create_media_buy], 15 scenarios.
+    # PRE-EXISTING and unconditional -- see the note above. Kept so a tenant redeclaring
+    # the default is not rejected for stating what we already advertise.
+    AdcpSpecialism.sales_non_guaranteed: SupportedProtocol.media_buy,
+    # required_tools [get_signals] ONLY, and requires_scenarios: 0. `get_signals` is
+    # implemented (src/core/tools/signals.py). This is the one specialism a tenant can
+    # declare that genuinely CHANGES the wire, which is what makes its accept scenario
+    # non-vacuous rather than an echo of the default.
+    AdcpSpecialism.signal_owned: SupportedProtocol.signals,
+}
+
+# Declaring a block whose surface is x-status:experimental obliges the agent to list
+# the feature id: "Sellers that implement any experimental surface MUST list its
+# feature id here" (#/properties/experimental_features). The ids are therefore
+# DERIVED from the declared blocks, not echoed from operator config -- a bare echo
+# would let a tenant declare the block while omitting the id the spec requires.
+_EXPERIMENTAL_FEATURE_BY_BLOCK: dict[str, str] = {
+    "measurement": "measurement.core",
+    "trusted_match": "trusted_match.core",
+}
+
+
+class MeasurementDeclaration(LibraryMeasurementDeclaration):
+    """The tenant's measurement vendor/metric catalog.
+
+    ``extra="forbid"`` is RESTATED because the library type is ``extra="ignore"``:
+    inherited as-is, an operator's typo'd key would be silently dropped and their
+    declaration would never reach the wire with no indication why. Metric field
+    constraints (id pattern, 1..64 length, ``minItems``, ``Accreditation`` shape)
+    ride the SDK unchanged.
+
+    Declarable under STRICT: the catalog is a tenant business fact the response
+    echoes. At 3.1 the measurement protocol is scoped to catalog discovery via
+    ``get_adcp_capabilities``, so echoing it promises nothing further.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class TrustedMatchDeclaration(LibraryTrustedMatch):
@@ -72,6 +167,9 @@ class CapabilityDeclarations(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trusted_match: TrustedMatchDeclaration | None = None
+    measurement: MeasurementDeclaration | None = None
+    supported_protocols: list[SupportedProtocol] | None = None
+    specialisms: list[AdcpSpecialism] | None = None
 
     @classmethod
     def from_tenant(cls, declared: Any) -> "CapabilityDeclarations | None":
@@ -120,16 +218,101 @@ class CapabilityDeclarations(BaseModel):
     def validate_backing(self) -> None:
         """Cross-field and platform-backing rules the JSON Schema cannot express.
 
-        Batch A declares only ``trusted_match``, whose every constraint (closed
-        surface enum, uniqueItems, minItems) is enforced by the library type, so
-        there is nothing left to check here yet. The method exists as the single
-        seam later batches extend -- ``measurement`` requires
-        ``supported_protocols`` to contain ``measurement``; ``creative_specs`` must
-        be a subset of what the bound adapter advertises -- each landing with the
-        scenario that grades it, so no rule ever ships ungraded.
-
-        Rule ORDER when the signing family lands under #1291: spec cross-field
-        coherence BEFORE platform backing, so an identity rejection still names
-        ``brand_json_url`` rather than being pre-empted by a backing error.
+        Rule ORDER is load-bearing: spec cross-field coherence runs BEFORE platform
+        backing, so when the signing family lands under #1291 an identity rejection
+        still names ``brand_json_url`` rather than being pre-empted by a backing
+        error. No rule lands here without a scenario that executes it.
         """
-        return
+        from src.core.exceptions import AdCPConfigurationError
+
+        # Platform backing: a tenant may only claim protocols this deployment
+        # actually serves. Advertising an unserved protocol is the exact
+        # over-promise STRICT exists to prevent -- the buyer would route traffic
+        # for a domain we cannot answer.
+        unbacked = sorted({p.value for p in (self.supported_protocols or []) if p not in _BACKED_PROTOCOLS})
+        if unbacked:
+            backed = sorted(p.value for p in _BACKED_PROTOCOLS)
+            raise AdCPConfigurationError(
+                f"capability_declarations.supported_protocols cannot claim {', '.join(unbacked)}: this "
+                f"deployment does not implement the required tool surface, and advertising it would "
+                f"promise buyers a protocol domain that cannot answer. Backed protocols: "
+                f"{', '.join(backed)}.",
+                details={"unbacked_protocols": unbacked, "backed_protocols": backed},
+            )
+
+        # Platform backing: same rule, applied to specialisms. `creative-generative`
+        # is the scenario's case -- nothing implements generative creative, and the
+        # AAO runner grades the claim.
+        unbacked_specialisms = sorted({s.value for s in (self.specialisms or []) if s not in _BACKED_SPECIALISMS})
+        if unbacked_specialisms:
+            backed_specialisms = sorted(s.value for s in _BACKED_SPECIALISMS)
+            raise AdCPConfigurationError(
+                f"capability_declarations.specialisms cannot claim "
+                f"{', '.join(unbacked_specialisms)}: this deployment does not implement the tools "
+                f"the specialism's conformance bundle requires, and the compliance runner grades "
+                f"the claim. Backed specialisms: {', '.join(backed_specialisms)}. Generative "
+                f"creative is tracked by #1724.",
+                details={
+                    "unbacked_specialisms": unbacked_specialisms,
+                    "backed_specialisms": backed_specialisms,
+                },
+            )
+
+        # Roll-up coherence: "the runner rejects a specialism claim whose parent
+        # protocol is missing" (#/properties/specialisms). Checked against the
+        # EMITTED protocol set, not the declared one, because the defaults are
+        # unioned in -- a tenant declaring only `signal-owned` still gets media_buy.
+        emitted_protocols = set(self.emitted_supported_protocols(DEFAULT_SUPPORTED_PROTOCOLS))
+        orphaned = sorted(
+            f"{s.value} (needs {_BACKED_SPECIALISMS[s].value})"
+            for s in (self.specialisms or [])
+            if s in _BACKED_SPECIALISMS and _BACKED_SPECIALISMS[s] not in emitted_protocols
+        )
+        if orphaned:
+            raise AdCPConfigurationError(
+                f"capability_declarations.specialisms claims {', '.join(orphaned)} but the parent "
+                f"protocol is not in supported_protocols. Declare the parent protocol alongside "
+                f"the specialism, or drop the claim.",
+                details={
+                    "orphaned_specialisms": orphaned,
+                    "emitted_protocols": sorted(p.value for p in emitted_protocols),
+                },
+            )
+
+    def emitted_specialisms(self, defaults: list[AdcpSpecialism]) -> list[AdcpSpecialism]:
+        """Defaults UNIONED with the declaration -- same rule as protocols."""
+        return sorted(set(defaults) | set(self.specialisms or []), key=lambda s: s.value)
+
+    def emitted_supported_protocols(self, defaults: list[SupportedProtocol]) -> list[SupportedProtocol]:
+        """Defaults UNIONED with the declaration -- never replaced.
+
+        Replacing would drop ``media_buy`` and leave the unconditionally-emitted
+        ``sales-non-guaranteed`` specialism without its parent protocol, which the
+        spec forbids: #/properties/specialisms -- "the runner rejects a specialism
+        claim whose parent protocol is missing"
+        (``specialisms/sales-non-guaranteed/index.yaml#protocol`` -> ``media-buy``).
+        A replacing semantics would therefore emit a self-inconsistent wire.
+        """
+        return sorted(set(defaults) | set(self.supported_protocols or []), key=lambda p: p.value)
+
+    def emitted_experimental_features(self) -> list[ExperimentalFeature] | None:
+        """Feature ids DERIVED from the declared experimental blocks.
+
+        Derivation, not echo. ``#/properties/experimental_features`` obliges an
+        agent implementing an experimental surface to list its id, so the ids
+        follow from which blocks were declared -- a tenant cannot declare
+        ``measurement`` and omit ``measurement.core``, and cannot invent an id for
+        a block it did not declare.
+
+        There is deliberately NO declarable ``experimental_features`` field. The
+        one scenario that would grade an operator-supplied list
+        (``T-UC-010-v31-experimental-features``) demands ``brand.rights_lifecycle``
+        -- an unbacked surface re-homed to #1724 -- so a declarable half would ship
+        with no grader, which this codebase does not allow.
+        """
+        ids = sorted(
+            feature_id
+            for block, feature_id in _EXPERIMENTAL_FEATURE_BY_BLOCK.items()
+            if getattr(self, block, None) is not None
+        )
+        return [ExperimentalFeature(root=i) for i in ids] or None

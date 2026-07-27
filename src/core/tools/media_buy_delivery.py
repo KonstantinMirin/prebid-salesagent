@@ -20,7 +20,7 @@ from rich.console import Console
 from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
-    to_wire_error_code,
+    normalize_advisory_errors,
 )
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
@@ -144,22 +144,13 @@ def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt:
     return default_dt, False
 
 
-def _normalize_advisory_errors(errors: list[Error]) -> list[Error]:
-    """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes.
-
-    Unlike a raised ``AdCPError`` (translated at the transport boundary), advisory
-    entries serialize verbatim, so an internal-only code would leak to the buyer.
-    ``to_wire_error_code`` both translates mapped codes AND collapses anything
-    still non-standard to ``SERVICE_UNAVAILABLE``, so no internal code can reach
-    the buyer even if a future advisory is built with an unmapped internal code.
-    """
-    return [
-        Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-            code=to_wire_error_code(e.code),
-            message=e.message,
-        )
-        for e in errors
-    ]
+# Advisory normalization moved to src/core/exceptions.normalize_advisory_errors
+# (salesagent-3xmz B5): capabilities emits advisories too, and a tool importing an
+# advisory normalizer from a SIBLING tool module is a layering inversion. The hoisted
+# version additionally populates `recovery`, which this local copy omitted — the
+# core/error.json `recovery` description is normative ("Senders SHOULD populate
+# recovery on every error from 3.1 onward"), so the omission was under-conformant.
+_normalize_advisory_errors = normalize_advisory_errors
 
 
 def _is_circuit_breaker_open(tenant_id: str) -> bool:

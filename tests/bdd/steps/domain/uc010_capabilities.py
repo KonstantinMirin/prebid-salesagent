@@ -1546,9 +1546,16 @@ def given_brand_in_supported_protocols(ctx: dict) -> None:
 
 @given('"measurement" is in supported_protocols')
 def given_measurement_in_supported_protocols(ctx: dict) -> None:
-    """Declare the measurement protocol. Production advertises only media_buy, so
-    the measurement block is never emitted (#1592) — records intent."""
-    _config(ctx).setdefault("supported_protocols", []).append("measurement")
+    """Declare the measurement protocol on the tenant's capability declaration
+    store (batch B1, salesagent-3xmz — a REAL tenant-config write, not a ctx
+    record-intent dict, so the Given runs identically on a2a/mcp/rest/e2e_rest).
+
+    ``measurement`` is a protocol CLAIM, not a replacement: the seller keeps
+    everything it already advertises and adds this one, so the emitted list is
+    the union of the defaults and the declaration.
+    """
+    env = ctx["env"]
+    env.declare_capabilities(supported_protocols=["measurement"])
 
 
 @given(
@@ -1601,9 +1608,95 @@ def given_signing_posture_with_identity(ctx: dict, signing_posture: str, identit
 
 @given(parsers.parse('the tenant declares measurement.metrics with metric_id "{metric_id}"'))
 def given_measurement_metric(ctx: dict, metric_id: str) -> None:
-    """Declare one measurement metric by metric_id. Records intent; production
-    emits no measurement block (#1592)."""
-    _config(ctx).setdefault("measurement_metrics", []).append(metric_id)
+    """Declare the tenant's measurement metric catalog (batch B1, salesagent-3xmz).
+
+    ``metric_id`` is the only required field of a metrics entry
+    (get-adcp-capabilities-response.json#/properties/measurement/properties/
+    metrics/items, required ["metric_id"]), so a one-metric catalog is the
+    minimal conformant declaration — the seller's own vocabulary, a business
+    fact the response echoes.
+    """
+    env = ctx["env"]
+    env.declare_capabilities(measurement={"metrics": [{"metric_id": metric_id}]})
+
+
+@given(parsers.parse("the tenant declares specialisms {specialisms} with supported_protocols {protocols}"))
+def given_declares_specialisms_and_protocols(ctx: dict, specialisms: str, protocols: str) -> None:
+    """Declare both halves of a specialism claim (local-uc010-declaration-backing).
+
+    Backing rules are evaluated on the READ path, so an UNBACKED declaration
+    persists here and surfaces as CONFIGURATION_ERROR at the
+    ``get_adcp_capabilities`` call — the graded observable — rather than blowing
+    up inside this Given where no wire assertion could see it.
+    """
+    ctx["env"].declare_capabilities(
+        specialisms=_quoted_list(specialisms),
+        supported_protocols=_quoted_list(protocols),
+    )
+
+
+@given(parsers.parse("the tenant declares specialisms {specialisms} without declaring its parent protocol"))
+def given_declares_orphaned_specialism(ctx: dict, specialisms: str) -> None:
+    """Declare a specialism but NOT its parent protocol — the roll-up boundary.
+
+    Distinct from the unbacked case: the specialism itself IS backed, so only the
+    roll-up rule ("the runner rejects a specialism claim whose parent protocol is
+    missing", #/properties/specialisms) can catch it.
+    """
+    ctx["env"].declare_capabilities(specialisms=_quoted_list(specialisms))
+
+
+@given(parsers.parse("the tenant declares supported_protocols {protocols}"))
+def given_declares_protocols(ctx: dict, protocols: str) -> None:
+    """Declare protocol claims alone, with no specialism, to grade the protocol
+    backing rule in isolation from the specialism rules."""
+    ctx["env"].declare_capabilities(supported_protocols=_quoted_list(protocols))
+
+
+# metric_id is required on every metrics entry, but the accreditation outline does
+# not vary it — it varies only the accreditation fields. Pinning one id here keeps
+# the Examples table about the thing under test.
+_ACCREDITED_METRIC_ID = "viewable_impressions"
+
+
+def _parse_accreditation_fixture(raw: str) -> dict[str, str]:
+    """Parse a ``k=v k=v`` accreditation fixture into the declared field map.
+
+    ONE parser shared by the Given that declares it and the Then that asserts on
+    it — if the two parsed independently they could drift, and the Then would be
+    grading its own copy of the fixture rather than the round-trip.
+    """
+    fields: dict[str, str] = {}
+    for token in raw.strip().split():
+        key, _, value = token.partition("=")
+        assert value, f"malformed accreditation fixture token {token!r} in {raw!r}"
+        fields[key] = value
+    assert "accrediting_body" in fields, f"accrediting_body is required by the schema, missing in {raw!r}"
+    return fields
+
+
+@given(parsers.parse("the tenant declares a measurement metric with accreditation {accreditation}"))
+def given_measurement_metric_accreditation(ctx: dict, accreditation: str) -> None:
+    """Declare a one-metric catalog carrying one third-party accreditation.
+
+    accreditations[] items: ``accrediting_body`` required (open string), optional
+    ``certification_id`` / ``valid_until`` (date) / ``evidence_url`` (uri), with
+    ``additionalProperties: false``
+    (get-adcp-capabilities-response.json#/properties/measurement/properties/
+    metrics/items/properties/accreditations). Only the declared keys are sent, so
+    the exact-field-set Then can prove absent keys stay absent.
+    """
+    env = ctx["env"]
+    env.declare_capabilities(
+        measurement={
+            "metrics": [
+                {
+                    "metric_id": _ACCREDITED_METRIC_ID,
+                    "accreditations": [_parse_accreditation_fixture(accreditation)],
+                }
+            ]
+        }
+    )
 
 
 # ── Thens: reporting_delivery_methods outline ────────────────────────────
@@ -1720,6 +1813,33 @@ def then_measurement_metric_present(ctx: dict, metric_id: str) -> None:
     assert metric_id in ids, f"no metrics entry carries metric_id {metric_id!r}: {ids!r}"
 
 
+@then(parsers.parse("the metric accreditation should equal the declared {accreditation} fields exactly"))
+def then_measurement_accreditation_exact(ctx: dict, accreditation: str) -> None:
+    """The declared accreditation round-trips with EXACTLY the declared field set.
+
+    Exact-set equality, not a subset check: the scenario says "exactly", and
+    ``Accreditation`` is ``additionalProperties: false``, so a key the operator did
+    not declare appearing on the wire is a defect just as much as a declared key
+    going missing. A "may include" style assert would pass on both.
+
+    Compares SERIALIZED values — ``valid_until`` is a ``date`` and ``evidence_url``
+    an ``AnyUrl`` in the model, so the wire carries ``"2027-01-01"`` /
+    ``"https://abc.org/listing"``. Asserting against the coerced Python objects
+    would grade the harness's deserialization instead of the buyer's bytes.
+    """
+    expected = _parse_accreditation_fixture(accreditation)
+    metrics = wire_field(ctx, "measurement.metrics")
+    entry = next((m for m in metrics if m.get("metric_id") == _ACCREDITED_METRIC_ID), None)
+    assert entry is not None, f"no metrics entry with metric_id {_ACCREDITED_METRIC_ID!r}: {metrics!r}"
+
+    accreditations = entry.get("accreditations")
+    assert isinstance(accreditations, list) and len(accreditations) == 1, (
+        f"expected exactly one accreditation on {_ACCREDITED_METRIC_ID}, got {accreditations!r}"
+    )
+    actual = {key: value for key, value in accreditations[0].items() if value is not None}
+    assert actual == expected, f"accreditation field set differs — expected {expected!r}, wire carried {actual!r}"
+
+
 @then(parsers.parse('experimental_features should contain "{feature}"'))
 def then_experimental_features_contains(ctx: dict, feature: str) -> None:
     """Agents implementing measurement MUST list measurement.core in
@@ -1799,10 +1919,21 @@ def given_tenant_specialisms(ctx: dict, specialisms: str) -> None:
 
 @given("the seller surfaces an advisory warning during discovery")
 def given_advisory_warning(ctx: dict) -> None:
-    """Declare an advisory (non-fatal) warning. Production surfaces no top-level
-    errors[] array on the capabilities response (#1592) — records intent; the
-    errors[] Then xfails while the success envelope stays intact."""
-    _config(ctx)["advisory_warning"] = True
+    """Make a real discovery degradation happen (batch B5, salesagent-3xmz).
+
+    Realized through the EXISTING ``make_adapter_unavailable`` rather than a new
+    "declare a warning" store field: a warning is a real CONDITION, not a
+    declarable business fact, and letting config assert one would be exactly the
+    fabrication the STRICT policy forbids. It also needs no new escape hatch —
+    ``make_adapter_unavailable`` is already ``@realize_e2e``-backed via
+    ``AdapterConfig.config_json["test_behavior"]["unavailable"]``, so the e2e pin
+    does not grow.
+
+    The unavailable adapter makes the adapter-channels lookup RAISE, landing in
+    the except handler that records the advisory — the except path is the only
+    one that advises (see ``_record_degradation``).
+    """
+    ctx["env"].make_adapter_unavailable()
 
 
 # ── Thens: compliance_testing block ──────────────────────────────────────
@@ -1873,6 +2004,47 @@ def then_specialisms_equal(ctx: dict, expected: str) -> None:
     want = _quoted_list(expected)
     actual = wire_field(ctx, "specialisms")
     assert sorted(actual) == sorted(want), f"specialisms {actual!r} != {want!r}"
+
+
+@then(parsers.parse("supported_protocols should equal {expected}"))
+def then_supported_protocols_equal(ctx: dict, expected: str) -> None:
+    """supported_protocols is the UNION of the platform baseline and the tenant's
+    declaration — exact set equality, so a REPLACING semantics (which would drop
+    media_buy and orphan the unconditional sales-non-guaranteed specialism) fails
+    here rather than only surfacing as a runner rejection downstream."""
+    want = _quoted_list(expected)
+    actual = wire_field(ctx, "supported_protocols")
+    assert sorted(actual) == sorted(want), f"supported_protocols {actual!r} != {want!r}"
+
+
+# ── Thens: STRICT declaration-backing rejections (local-uc010-declaration-backing) ──
+
+
+@then("the capability declaration should be rejected as terminal misconfiguration")
+def then_declaration_rejected(ctx: dict) -> None:
+    """An unbacked declaration is a DEPLOYMENT fault, not a buyer error.
+
+    CONFIGURATION_ERROR with recovery ``terminal`` (enums/error-code.json): the
+    buyer can do nothing about it and must not retry — only the operator can fix
+    the tenant config. Asserted on the WIRE envelope via the canonical helper, so
+    the recovery value is pinned from the AdCP enum rather than restated here.
+    """
+    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal")
+
+
+@then(parsers.parse('the rejection should name "{token}"'))
+def then_rejection_names(ctx: dict, token: str) -> None:
+    """The rejection identifies WHICH claim was unbacked.
+
+    An operator who declared several blocks needs to know which one to remove; a
+    bare CONFIGURATION_ERROR would make them bisect their own config. Pins the
+    message content because ``core/error.json`` leaves ``message`` a free string,
+    so only production's actual wording can be asserted.
+    """
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
+    message = (envelope.get("errors") or [{}])[0].get("message") or ""
+    assert token in message, f"rejection message does not name {token!r}: {message!r}"
 
 
 @then("each specialism should be a member of the 3.1.1 specialism enum")

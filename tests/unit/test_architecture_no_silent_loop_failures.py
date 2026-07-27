@@ -37,6 +37,7 @@ from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
     assert_violations_match_allowlist,
     format_failure,
+    iter_call_expressions,
     iter_module_trees,
 )
 
@@ -243,3 +244,249 @@ class TestNoSilentLoopFailuresInImpl:
         assert not false_positives, "Detector flagged known-good snippet(s):\n" + "\n".join(
             f"  {s}" for s in false_positives
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Straight-line degradation handlers (salesagent-3xmz B6)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# The detector above only sees handlers INSIDE a for/while loop, and it exempts
+# "handlers that assign a fallback value and let iteration proceed". Both
+# exclusions are right for the per-item case, and both make it structurally blind
+# to the OTHER shape of the same disease: a straight-line `try/except` around a
+# whole lookup that logs, falls through to a placeholder, and returns a silently
+# degraded response.
+#
+# That is what `_get_adcp_capabilities_impl` did at five sites before B5 — the
+# buyer could not tell "this seller has none" from "the lookup failed".
+#
+# Keyed STRUCTURALLY, not by function name: an `*_impl` that builds an advisory
+# list and passes it to a response `errors=` argument has opted into surfacing
+# degradations, so every straight-line handler in it must append to that list. A
+# rule keyed to the literal name `_get_adcp_capabilities_impl` would die silently
+# on a rename or a helper extraction — which the B5 "extract ONE helper" step
+# makes likely. Keying on the advisory list means the guard follows the pattern,
+# not the identifier.
+#
+# Deliberately NARROW: functions with no advisory list are not in scope, so
+# products.py (which degrades but builds no advisory list) stays invisible here.
+# Widening the detector to those is salesagent-gr4z, which would surface that
+# group all at once.
+
+_ADVISORY_FIX_HINT = (
+    "This _impl builds an advisory list passed to a response errors= argument, so "
+    "every straight-line except handler in it must append to that list (see "
+    "_record_degradation in src/core/tools/capabilities.py). Log-and-fall-through "
+    "leaves the buyer with a silently degraded response. If the handler genuinely "
+    "needs no advisory, raise instead, or allowlist it with a FIXME(#gh-issue)."
+)
+
+# Straight-line handlers that log without surfacing, in _impl functions that DO
+# build an advisory list. This is the NEW guard's initial baseline (the same way
+# SILENT_LOOP_HANDLER_ALLOWLIST above was seeded), not allowlist growth: these
+# predate the guard. Shrink-only from here.
+#
+# `_get_adcp_capabilities_impl` is deliberately ABSENT — salesagent-3xmz B5 fixed
+# all five of its sites, and that absence is what makes this guard a pin on the
+# fix rather than a description of it.
+SILENT_ADVISORY_HANDLER_ALLOWLIST: set[tuple[str, str]] = {
+    # FIXME(#1566): 4 straight-line handlers degrade the formats response
+    # (registry/template lookups) with no errors[] entry. Same disease as the
+    # loop-shaped row already allowlisted for this function above.
+    ("src/core/tools/creative_formats.py", "_list_creative_formats_impl"),
+    # FIXME(#1566): 8 straight-line handlers. MOSTLY audit-log / activity-feed
+    # side effects that do not alter the response — the sibling detector exempts
+    # that shape explicitly ("best-effort cleanup like audit-log writes"), and
+    # this one does not yet model it. Triage per-site before migrating: some are
+    # genuinely exempt, not all are debt.
+    ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
+}
+
+
+def _advisory_list_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Names this function passes to a response ``errors=`` keyword argument.
+
+    Matches both the direct form (``errors=advisories``) and the normalized form
+    (``errors=normalize_advisory_errors(advisories) or None``), since the
+    normalizer is the sanctioned wrapper.
+    """
+    names: set[str] = set()
+    for node in iter_call_expressions(func):
+        for kw in node.keywords:
+            if kw.arg != "errors" or kw.value is None:
+                continue
+            names.update(n.id for n in ast.walk(kw.value) if isinstance(n, ast.Name))
+    return names
+
+
+def _handler_appends_to(handler: ast.ExceptHandler, names: set[str]) -> bool:
+    """True when the handler surfaces via one of *names*, directly or via a helper.
+
+    A call passing an advisory-list name as an argument counts: the B5 fix routes
+    all five sites through ``_record_degradation(advisories, ...)``, and requiring
+    a literal ``advisories.append`` would punish exactly the DRY extraction the
+    disease scan asked for.
+    """
+    if any(isinstance(n, ast.Raise) for n in ast.walk(handler)):
+        return True
+    for node in iter_call_expressions(handler):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"append", "extend"}
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in names
+        ):
+            return True
+        if any(isinstance(a, ast.Name) and a.id in names for a in node.args):
+            return True
+    return False
+
+
+def find_silent_advisory_handlers(tree: ast.Module, relpath: str) -> list[tuple[str, str, int]]:
+    """Return (relpath, function_name, lineno) for straight-line handlers that
+    fail to surface a degradation in an advisory-emitting ``*_impl``."""
+    violations: list[tuple[str, str, int]] = []
+
+    for func in ast.walk(tree):
+        if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        if not func.name.endswith("_impl"):
+            continue
+        names = _advisory_list_names(func)
+        if not names:
+            continue  # not an advisory-emitting _impl — out of scope (see gr4z)
+
+        def visit(
+            node: ast.AST,
+            in_loop: bool,
+            in_handler: bool,
+            _names: set[str] = names,
+            _fname: str = func.name,
+        ) -> None:
+            if isinstance(node, ast.For | ast.AsyncFor | ast.While):
+                in_loop = True
+            if isinstance(node, ast.ExceptHandler):
+                # loop handlers belong to the per-item detector above; nested
+                # handlers are best-effort cleanup, exempt by the same rule
+                if not in_loop and not in_handler and not _handler_appends_to(node, _names):
+                    violations.append((relpath, _fname, node.lineno))
+                in_handler = True
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue  # nested function: its own scope
+                visit(child, in_loop, in_handler)
+
+        visit(func, False, False)
+
+    return violations
+
+
+def _scan_all_advisory() -> list[tuple[str, str, int]]:
+    found: list[tuple[str, str, int]] = []
+    for tree, relpath in iter_module_trees(SCAN_DIRS):
+        found.extend(find_silent_advisory_handlers(tree, relpath))
+    return found
+
+
+_ADVISORY_BAD = {
+    "log_only_in_advisory_impl": (
+        "def _thing_impl():\n"
+        "    advisories = []\n"
+        "    try:\n"
+        "        x = lookup()\n"
+        "    except Exception as e:\n"
+        "        logger.warning(e)\n"
+        "    return Response(errors=advisories or None)\n"
+    ),
+    "fallback_without_advisory": (
+        "def _thing_impl():\n"
+        "    advisories = []\n"
+        "    try:\n"
+        "        channels = lookup()\n"
+        "    except Exception:\n"
+        "        channels = [DEFAULT]\n"
+        "    return Response(errors=normalize(advisories))\n"
+    ),
+}
+
+_ADVISORY_GOOD = {
+    "appends_directly": (
+        "def _thing_impl():\n"
+        "    advisories = []\n"
+        "    try:\n"
+        "        x = lookup()\n"
+        "    except Exception as e:\n"
+        "        advisories.append(Err(code='SERVICE_UNAVAILABLE', message=str(e)))\n"
+        "    return Response(errors=advisories or None)\n"
+    ),
+    # would-be-missed: the DRY extraction the disease scan asked for. A detector
+    # requiring a literal `advisories.append` would flag this CORRECT code.
+    "appends_via_helper": (
+        "def _thing_impl():\n"
+        "    advisories = []\n"
+        "    try:\n"
+        "        x = lookup()\n"
+        "    except Exception as e:\n"
+        "        _record_degradation(advisories, 'thing', e)\n"
+        "    return Response(errors=normalize(advisories) or None)\n"
+    ),
+    "no_advisory_list_is_out_of_scope": (
+        "def _other_impl():\n"
+        "    try:\n"
+        "        x = lookup()\n"
+        "    except Exception as e:\n"
+        "        logger.warning(e)\n"
+        "    return Response()\n"
+    ),
+    "raises_instead": (
+        "def _thing_impl():\n"
+        "    advisories = []\n"
+        "    try:\n"
+        "        x = lookup()\n"
+        "    except Exception as e:\n"
+        "        raise AdCPError(str(e)) from e\n"
+        "    return Response(errors=advisories or None)\n"
+    ),
+}
+
+
+class TestNoSilentAdvisoryHandlersInImpl:
+    """Straight-line degradations in advisory-emitting _impls must be surfaced."""
+
+    @pytest.mark.arch_guard
+    def test_no_new_silent_advisory_handlers(self):
+        found = _scan_all_advisory()
+        new = [(f, fn, line) for f, fn, line in found if (f, fn) not in SILENT_ADVISORY_HANDLER_ALLOWLIST]
+        assert not new, format_failure(
+            summary=(
+                f"Found {len(new)} straight-line except handler(s) in advisory-emitting "
+                "_impl functions that degrade the response without surfacing it:"
+            ),
+            violations=[f"{f}:{line}: in {fn}" for f, fn, line in new],
+            fix_hint=_ADVISORY_FIX_HINT,
+            docs_link="CLAUDE.md § No Quiet Failures",
+        )
+
+    @pytest.mark.arch_guard
+    def test_advisory_allowlist_entries_still_exist(self):
+        assert_violations_match_allowlist(
+            {(f, fn) for f, fn, _ in _scan_all_advisory()},
+            SILENT_ADVISORY_HANDLER_ALLOWLIST,
+            fix_hint=_ADVISORY_FIX_HINT,
+        )
+
+    @pytest.mark.arch_guard
+    def test_advisory_detector_catches_known_bad(self):
+        assert_detector_catches_ast_snippets(
+            lambda tree: [line for _, _, line in find_silent_advisory_handlers(tree, "<snippet>")],
+            snippets=_ADVISORY_BAD,
+        )
+
+    @pytest.mark.arch_guard
+    def test_advisory_detector_passes_known_good(self):
+        false_positives = []
+        for label, source in _ADVISORY_GOOD.items():
+            tree = ast.parse(source, filename=f"<known-good:{label}>")
+            if find_silent_advisory_handlers(tree, f"<known-good:{label}>"):
+                false_positives.append(label)
+        assert not false_positives, f"detector flagged correct shapes: {false_positives}"
