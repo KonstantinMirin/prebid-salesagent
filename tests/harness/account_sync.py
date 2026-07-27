@@ -76,10 +76,13 @@ class AccountSyncEnv(IntegrationEnv):
         """Set up happy-path defaults for audit logger and the proof-of-control seam."""
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
-        # Default: endpoints prove successfully, so a Given can seed an ACTIVE
-        # subscriber through a real sync (which really does run the proof path).
-        # Scenarios grading a failure scope it to their own url.
-        self.set_notification_proof_result(succeeds=True)
+        # Install the in-process prover mock DIRECTLY, not through the public
+        # setter: the public setter is @realize_e2e-decorated and its e2e branch
+        # rejects `succeeds=True` as unrealizable. Establishing an in-process
+        # DEFAULT is not a scenario intent, so it must not go through realization —
+        # routing it there raised at env construction on e2e_rest and cascaded into
+        # "Factory session already bound" for every later test on the worker.
+        self._apply_proof_mock()
 
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Create tenant + principal, then fold constructor billing config into the DB.
@@ -197,7 +200,14 @@ class AccountSyncEnv(IntegrationEnv):
             self._proof_default = succeeds
         else:
             self._proof_overrides[url] = succeeds
+        self._apply_proof_mock()
 
+    def _apply_proof_mock(self) -> None:
+        """Rebuild the in-process prover mock from the current default + overrides.
+
+        Separate from the public setter so ``_configure_mocks`` can establish the
+        default without going through @realize_e2e — see the note there.
+        """
         prover = MagicMock()
         overrides = self._proof_overrides
         default = self._proof_default
