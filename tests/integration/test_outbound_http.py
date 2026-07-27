@@ -1,0 +1,405 @@
+"""Integration tests for the outbound egress seam (`src.core.security.outbound_http`).
+
+Every case drives the real seam against a real local origin. Nothing is mocked:
+no patched ``getaddrinfo``, no substituted transport, no faked ``httpx``. The
+refusals under test are genuinely produced by the live ``adcp.signing``
+validator against real addresses — ``127.0.0.1`` really is in a reserved range
+and ``169.254.169.254`` really is a cloud-metadata address — so a mock could
+only restate the assertion, never grade it. The same goes for the two facts
+that matter most here: "the redirect was not followed" and "the 404 was not
+retried" are only provable by counting hits on an origin that actually ran.
+
+Spec grounding: AdCP 3.1.1, ``building/by-layer/L1/security.mdx``, "Webhook URL
+validation (SSRF)". A fetcher MUST (1) reject non-HTTPS in production, (2)
+reject reserved ranges, (3) pin the connection to the validated IP, (4) refuse
+redirects, (5) cap size and timeouts, (6) not echo fetch errors back to the
+party that supplied the URL. Conformance storyboard: ungraded — this is an L1
+security obligation, not a wire contract.
+
+Every case runs for BOTH ``send`` and ``asend``: the async twin is a separate
+code path and an untested one would ship the epic's defect in half the repo.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any
+
+import pytest
+
+from src.core.exceptions import build_two_layer_error_envelope
+from tests.helpers import assert_envelope_shape
+
+# Both entry points get every case. Parametrising instead of duplicating the
+# module keeps the two paths literally the same test.
+SEAM_CALLS = ["send", "asend"]
+
+# A cloud-metadata address: refused unconditionally, escape hatches or not.
+METADATA_URL = "https://169.254.169.254/"
+
+
+def _seam():
+    """Import the seam lazily.
+
+    A module-level import would turn "the seam does not exist yet" into a
+    collection error for the whole file, which would also stop the local-origin
+    fixture from ever running. Importing per-call keeps each case an
+    independent, individually diagnosable failure.
+    """
+    from src.core.security import outbound_http
+
+    return outbound_http
+
+
+def call_seam(seam_call: str, url: str, **kwargs: Any):
+    """Dispatch to ``send`` or ``asend`` — the one place the two differ."""
+    seam = _seam()
+    if seam_call == "send":
+        return seam.send(url, **kwargs)
+    return asyncio.run(seam.asend(url, **kwargs))
+
+
+def set_flags(monkeypatch, *, private: bool = False, insecure: bool = False) -> None:
+    """Set both escape hatches explicitly.
+
+    Always writing both — including the off case, as the literal ``"false"`` the
+    repo's ``== "true"`` convention treats as off — pins the test against
+    ambient environment rather than assuming the variables are unset.
+    """
+    monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true" if private else "false")
+    monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true" if insecure else "false")
+
+
+def assert_blocked(seam_call: str, url: str, **kwargs: Any):
+    """Assert the call is refused before any request leaves, and return the error."""
+    with pytest.raises(_seam().OutboundRequestBlocked) as excinfo:
+        call_seam(seam_call, url, **kwargs)
+    return excinfo.value
+
+
+def assert_delivery_failed(seam_call: str, url: str, **kwargs: Any):
+    """Assert the call reached the network but did not deliver, and return the error."""
+    with pytest.raises(_seam().OutboundDeliveryFailed) as excinfo:
+        call_seam(seam_call, url, **kwargs)
+    return excinfo.value
+
+
+# ---------------------------------------------------------------------------
+# 1. Scheme policy — the one address-adjacent rule the seam owns itself
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com/webhook",
+        "ftp://example.com/webhook",
+        "file:///etc/passwd",
+        "/no/scheme",
+    ],
+)
+def test_non_https_scheme_is_refused_by_default(seam_call, url, monkeypatch):
+    """Anything that is not https:// is refused when ADCP_OUTBOUND_ALLOW_INSECURE is off.
+
+    ``example.com`` is a public address, so nothing but the scheme rule can be
+    refusing these — that is what makes this a scheme test rather than a
+    restatement of the address test below. No DNS lookup happens either: the
+    scheme is checked before the transport is built.
+    """
+    set_flags(monkeypatch)
+
+    error = assert_blocked(seam_call, url)
+
+    assert isinstance(error, _seam().OutboundError)
+
+
+# ---------------------------------------------------------------------------
+# 2. Address policy — delegated to adcp.signing, graded here
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_loopback_over_https_is_refused_without_connecting(seam_call, monkeypatch, local_origin):
+    """A reserved-range destination is refused, and the origin is never reached."""
+    set_flags(monkeypatch)
+
+    assert_blocked(seam_call, f"https://127.0.0.1:{local_origin.port}/")
+
+    assert local_origin.hits == 0, f"seam connected to a refused address: {local_origin.requests}"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_cloud_metadata_address_is_refused(seam_call, monkeypatch):
+    """The cloud-metadata address is refused under default flags."""
+    set_flags(monkeypatch)
+
+    assert_blocked(seam_call, METADATA_URL)
+
+
+# ---------------------------------------------------------------------------
+# 3. Escape hatches, graded one at a time
+#
+# Under default flags http://127.0.0.1:<port>/ is refused by BOTH the scheme
+# rule and the address rule, so a bare `raises` cannot say which one fired and a
+# both-flags-on success grades neither alone. One flag at a time fixes that.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_allow_insecure_alone_does_not_open_private_addresses(seam_call, monkeypatch, local_origin):
+    """ALLOW_INSECURE relaxes the scheme rule only — the address rule still refuses loopback."""
+    set_flags(monkeypatch, insecure=True)
+
+    assert_blocked(seam_call, f"{local_origin.base_url}/webhook")
+
+    assert local_origin.hits == 0
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_allow_private_alone_does_not_open_plain_http(seam_call, monkeypatch, local_origin):
+    """ALLOW_PRIVATE relaxes the address rule only — the scheme rule still refuses http://."""
+    set_flags(monkeypatch, private=True)
+
+    assert_blocked(seam_call, f"{local_origin.base_url}/webhook")
+
+    assert local_origin.hits == 0
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_both_flags_allow_plain_http_to_the_local_origin(seam_call, monkeypatch, local_origin):
+    """With both hatches open the request is delivered, and the result carries the response."""
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_with(200, body=b'{"ok": true}')
+
+    result = call_seam(seam_call, f"{local_origin.base_url}/webhook", json={"hello": "world"})
+
+    assert result.status_code == 200
+    assert result.json() == {"ok": True}
+    assert result.attempts == 1
+    assert result.duration_seconds >= 0
+    assert local_origin.hits == 1
+    assert local_origin.paths == ["/webhook"]
+    # The body has to be streamed so the size cap can be enforced while
+    # accumulating, and an exhausted stream makes `.content`/`.text` raise
+    # ResponseNotRead. Every migrating call site logs one of those, so the
+    # handed-back response must be readable like any other.
+    assert result.response.text == '{"ok": true}'
+    assert result.response.json() == {"ok": True}
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_cloud_metadata_stays_refused_with_both_flags_on(seam_call, monkeypatch):
+    """Metadata blocking is unconditional — no flag combination reaches it."""
+    set_flags(monkeypatch, private=True, insecure=True)
+
+    assert_blocked(seam_call, METADATA_URL)
+
+
+# ---------------------------------------------------------------------------
+# 4. Redirects are not followed — the regression that matters most
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_redirect_to_metadata_address_is_not_followed(seam_call, monkeypatch, local_origin):
+    """A 302 towards the metadata address is returned, never chased.
+
+    ``requests.Session.request`` defaults ``allow_redirects=True``, so the code
+    this seam replaces validated the URL and then followed a 302 to an internal
+    address unchecked. The exact hit count is the proof: one hit means the
+    seam stopped at the redirect.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.redirect_to(METADATA_URL, status=302)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert error.last_status == 302
+    assert local_origin.hits == 1, f"seam followed the redirect: {local_origin.requests}"
+
+
+# ---------------------------------------------------------------------------
+# 5. Retry classification by status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_server_error_is_retried_to_max_attempts(seam_call, monkeypatch, local_origin):
+    """A 5xx is retried up to max_attempts, then reported as a delivery failure."""
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert error.attempts == 3
+    assert error.last_status == 503
+    assert local_origin.hits == 3
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_client_error_is_terminal_and_not_retried(seam_call, monkeypatch, local_origin):
+    """A 4xx fails on the first attempt — retrying a rejected request only doubles the damage."""
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_with(404, body=b'{"error": "no such hook"}')
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert error.attempts == 1
+    assert error.last_status == 404
+    assert local_origin.hits == 1
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_max_attempts_one_sends_exactly_once(seam_call, monkeypatch, local_origin):
+    """max_attempts counts TOTAL attempts, not retries after the first."""
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_with(503)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=1)
+
+    assert error.attempts == 1
+    assert local_origin.hits == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Retry classification by exception — httpx signals these as exceptions,
+#    never as a status, and they must not escape the seam
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypatch, local_origin):
+    """A stalled origin trips the per-request timeout, is retried, then fails typed.
+
+    ``last_status`` is None because there was never a response to read a status
+    from. If this leaked a raw ``httpx.ReadTimeout`` instead, every migrated
+    call site would have to keep its own ``except httpx...`` — which is the
+    duplication the seam exists to delete.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.delay(2.0)
+
+    error = assert_delivery_failed(
+        seam_call,
+        f"{local_origin.base_url}/webhook",
+        timeout=0.5,
+        max_attempts=2,
+    )
+
+    assert error.attempts == 2
+    assert error.last_status is None
+    assert local_origin.hits == 2
+
+
+# ---------------------------------------------------------------------------
+# 7. Response-size cap — spec point 5's other half
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_oversized_response_body_is_refused_and_not_retried(seam_call, monkeypatch, local_origin):
+    """A chunked body past the cap aborts the read; retrying it would only re-read it.
+
+    httpx applies no default body limit, so an unbounded counterparty response
+    is a memory-exhaustion vector. The body is chunked, not Content-Length'd,
+    so the cap has to be enforced while accumulating rather than by reading a
+    declared length.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    cap = _seam()._MAX_RESPONSE_BYTES
+    local_origin.respond_chunked(cap + 1, chunk_size=64 * 1024)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert error.attempts == 1
+    assert local_origin.hits == 1
+
+
+# ---------------------------------------------------------------------------
+# 8. Error opacity, asserted on the wire envelope (spec point 6)
+#
+# The repo's error-verification policy makes the envelope the authority, not
+# `.message` — `details` rides to the buyer too, via
+# build_two_layer_error_envelope -> adcp_error(details=...).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, monkeypatch):
+    """A refused address yields one indistinguishable envelope, whatever the real cause.
+
+    The SDK's own messages say "resolved IP <IP> is in a reserved range" versus
+    "cannot resolve host '<host>'". Echoing either back tells whoever supplied
+    the URL both the resolved address and whether the name exists — an internal
+    port and host scanner. The two envelopes must be identical.
+    """
+    set_flags(monkeypatch)
+
+    reserved = assert_blocked(seam_call, "https://127.0.0.1/webhook")
+    unresolvable = assert_blocked(seam_call, "https://no-such-host.invalid/webhook")
+
+    reserved_envelope = build_two_layer_error_envelope(reserved)
+    unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
+
+    assert_envelope_shape(reserved_envelope, "INVALID_REQUEST", recovery="correctable")
+    assert_envelope_shape(unresolvable_envelope, "INVALID_REQUEST", recovery="correctable")
+
+    reserved_message = reserved_envelope["errors"][0]["message"]
+    unresolvable_message = unresolvable_envelope["errors"][0]["message"]
+    assert reserved_message == unresolvable_message, (
+        "blocked-message distinguishes an unresolvable host from a reserved address: "
+        f"{unresolvable_message!r} vs {reserved_message!r}"
+    )
+
+    for envelope, forbidden in (
+        (reserved_envelope, "127.0.0.1"),
+        (unresolvable_envelope, "no-such-host.invalid"),
+    ):
+        assert forbidden not in json.dumps(envelope), f"{forbidden!r} leaked into {envelope}"
+
+    for term in ("reserved", "resolve", "metadata", "private"):
+        assert term not in reserved_message.lower(), f"refusal reason {term!r} leaked into {reserved_message!r}"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_delivery_failure_envelope_hides_the_origin_response(seam_call, monkeypatch, local_origin):
+    """A failed fetch reports attempts and status — never the origin's body or address."""
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    envelope = build_two_layer_error_envelope(error)
+
+    assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
+    assert envelope["errors"][0]["details"] == {"attempts": 2, "last_status": 503}
+
+    serialized = json.dumps(envelope)
+    assert "LEAKED-ORIGIN-BODY-MARKER" not in serialized
+    assert local_origin.host not in serialized
+    assert str(local_origin.port) not in serialized
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_transport_failure_envelope_hides_the_httpx_error(seam_call, monkeypatch, local_origin):
+    """A timeout reports last_status=None — never the httpx error string, which names the address."""
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.delay(2.0)
+
+    error = assert_delivery_failed(
+        seam_call,
+        f"{local_origin.base_url}/webhook",
+        timeout=0.5,
+        max_attempts=1,
+    )
+    envelope = build_two_layer_error_envelope(error)
+
+    assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
+    assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
+
+    serialized = json.dumps(envelope)
+    assert local_origin.host not in serialized
+    assert str(local_origin.port) not in serialized
+    for term in ("timeout", "timed out", "readtimeout", "connecterror"):
+        assert term not in serialized.lower(), f"httpx internals {term!r} leaked into {envelope}"

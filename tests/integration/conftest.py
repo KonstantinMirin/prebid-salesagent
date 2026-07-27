@@ -19,6 +19,7 @@ admin_app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
 from tests.fixtures import TenantFactory
+from tests.helpers.local_http_origin import run_local_origin
 from tests.integration.migration_helpers import parse_postgres_url
 
 # ---------------------------------------------------------------------------
@@ -71,6 +72,18 @@ def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
         package_id=package_id,
         **defaults,
     )
+
+
+@pytest.fixture
+def local_origin():
+    """A programmable HTTP origin on an ephemeral loopback port.
+
+    Deliberately does NOT depend on ``integration_db``: outbound-egress tests
+    need a real remote to talk to, not a database. Function-scoped and bound to
+    port 0 because the integration suite runs under xdist.
+    """
+    with run_local_origin() as origin:
+        yield origin
 
 
 @pytest.fixture

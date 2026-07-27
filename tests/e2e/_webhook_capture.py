@@ -6,15 +6,21 @@ async notifications). They all need the same bootstrap: bind a free port, serve
 on a daemon thread, hand back the callback URL, and tear the socket down
 cleanly afterwards. This is the single implementation of that — kept here
 instead of copy-pasted per test (PR #1420 / #1423).
+
+The bootstrap itself now lives in the suite-neutral
+``tests.helpers.local_http_origin``, shared with the integration suite's
+programmable local origin. What stays here is genuinely e2e-specific: the
+capture semantics, and the ``0.0.0.0`` listen host with a separate callback
+host, which a containerised server needs to reach this receiver.
 """
 
 import contextlib
 import json
 import os
-import socket
 from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
+from http.server import BaseHTTPRequestHandler
+
+from tests.helpers.local_http_origin import serve_in_thread
 
 
 class WebhookCaptureHandler(BaseHTTPRequestHandler):
@@ -79,26 +85,19 @@ def run_webhook_capture_server(
     """
     received.clear()
 
-    # Bind 0.0.0.0 (all interfaces), not 127.0.0.1: the in-network runner reaches
-    # this receiver by its compose network alias, so a loopback-only bind would be
-    # unreachable from the server container. The callback host (below) is what
-    # narrows reachability for loopback-only callers, not the listen address.
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("0.0.0.0", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-
-    server = HTTPServer(("0.0.0.0", port), handler_class)
-    Thread(target=server.serve_forever, daemon=True).start()
-
-    webhook_host = host if host is not None else os.getenv("ADCP_WEBHOOK_HOST", "localhost")
-    try:
-        yield {
-            "url": f"http://{webhook_host}:{port}/webhook",
-            "server": server,
-            "received": received,
-        }
-    finally:
-        server.shutdown()
-        server.server_close()
-        received.clear()
+    # Listen on 0.0.0.0 (all interfaces), not 127.0.0.1: the in-network runner
+    # reaches this receiver by its compose network alias, so a loopback-only
+    # bind would be unreachable from the server container. The callback host
+    # (below) is what narrows reachability for loopback-only callers, not the
+    # listen address.
+    with serve_in_thread(handler_class, listen_host="0.0.0.0") as server:
+        port = server.server_address[1]
+        webhook_host = host if host is not None else os.getenv("ADCP_WEBHOOK_HOST", "localhost")
+        try:
+            yield {
+                "url": f"http://{webhook_host}:{port}/webhook",
+                "server": server,
+                "received": received,
+            }
+        finally:
+            received.clear()
