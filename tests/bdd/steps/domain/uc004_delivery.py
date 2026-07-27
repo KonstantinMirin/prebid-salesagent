@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require
+from tests.bdd.steps._outcome_helpers import _require, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -2348,6 +2348,36 @@ def then_placement_sorted(ctx: dict, metric: str) -> None:
 # ── Attribution window assertions ─────────────────────────────────
 
 
+def _wire_attribution_window(ctx: dict, *, expectation: str) -> dict:
+    """Return the response's attribution_window as the buyer sees it on the WIRE.
+
+    The one reader every attribution assertion in this module goes through.
+    Asserts the request succeeded, that the response carries deliveries, and
+    that attribution_window is present — BR-RULE-092 requires the seller to echo
+    the applied window on every successful delivery response, so its absence is
+    a failure here rather than a skipped assertion.
+
+    Reads through ``wire_dict``, which raises when a real-wire transport did not
+    stash a body, so this cannot silently degrade into asserting on a typed
+    payload whose fields are already coerced.
+    """
+    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
+    wire = wire_dict(ctx)
+    assert wire.get("media_buy_deliveries"), "Expected non-empty media_buy_deliveries"
+    assert "attribution_window" in wire, f"Response omits attribution_window — {expectation}. Wire keys: {sorted(wire)}"
+    aw = wire["attribution_window"]
+    assert isinstance(aw, dict), f"attribution_window is {type(aw).__name__}, expected an object"
+    return aw
+
+
+def _wire_attribution_model(ctx: dict, *, expectation: str) -> str:
+    """Return attribution_window.model off the wire, asserting it is present."""
+    aw = _wire_attribution_window(ctx, expectation=expectation)
+    model = aw.get("model")
+    assert model is not None, "attribution_window.model is None — required by BR-RULE-092"
+    return model
+
+
 @then(parsers.parse('the response should include attribution_window with model "{model}"'))
 def then_attribution_model(ctx: dict, model: str) -> None:
     """Assert attribution window model matches the expected value.
@@ -2355,16 +2385,7 @@ def then_attribution_model(ctx: dict, model: str) -> None:
     Verifies the response carries an attribution_window whose model field
     equals the expected model string.
     """
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period"
-
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, f"Response missing attribution_window — expected model '{model}' to be echoed"
-    assert aw.model is not None, "attribution_window.model is None"
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
+    actual_model = _wire_attribution_model(ctx, expectation=f"expected model {model!r} to be echoed")
     assert actual_model == model, f"attribution_window.model should be '{model}', got '{actual_model}'"
 
 
@@ -2409,32 +2430,15 @@ def then_attribution_echo(ctx: dict) -> None:
     this fails, and the fix is to derive the expected day count from the flight
     dates the Given seeded — with that scenario as the thing proving it right.
     """
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
+    aw = _wire_attribution_window(ctx, expectation="expected the post_click window to be echoed")
 
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, "Response missing attribution_window — expected post_click echo"
-
-    pc = aw.post_click
+    pc = aw.get("post_click")
     assert pc is not None, (
         "attribution_window.post_click is None — buyer requested a post_click window which should be echoed"
     )
 
     requested = _dispatched_post_click(ctx)
-    req_interval = requested["interval"]
-    req_unit = requested["unit"]
-
-    assert pc.interval == req_interval, (
-        f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
-    )
-    # Duration.unit is the adcp Unit enum, so read .value directly — a
-    # hasattr/str() fallback would only turn a type change into a confusing
-    # "Unit.days" != "days" mismatch instead of a clean AttributeError.
-    assert pc.unit.value == req_unit, (
-        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc.unit.value!r}"
-    )
+    assert pc == requested, f"attribution_window.post_click should echo the request {requested}, got {pc}"
 
 
 @then("the response should include attribution_window with the seller's platform default")
@@ -2447,36 +2451,20 @@ def then_attribution_default(ctx: dict) -> None:
     """
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period in response"
-
-    # Attribution window must be present
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, (
-        "Response missing attribution_window — production should always "
-        "echo an attribution window even for unsupported sellers"
+    aw = _wire_attribution_window(
+        ctx, expectation="production should always echo an attribution window, even for unsupported sellers"
     )
-    assert aw.model is not None, "attribution_window.model is None — must carry the model"
-
-    # Model should be the platform default
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
-    expected_model = (
-        PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
-        if hasattr(PLATFORM_DEFAULT_ATTRIBUTION_MODEL, "value")
-        else str(PLATFORM_DEFAULT_ATTRIBUTION_MODEL)
-    )
+    actual_model = aw.get("model")
+    expected_model = PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
     assert actual_model == expected_model, (
         f"attribution_window.model should be platform default '{expected_model}', got '{actual_model}'"
     )
 
     # When seller does not support configurable windows, post_click/post_view
-    # should be None — the buyer's requested window must be discarded.
-    pc = getattr(aw, "post_click", "MISSING")
-    pv = getattr(aw, "post_view", "MISSING")
-    if pc != "MISSING" or pv != "MISSING":
+    # should be absent — the buyer's requested window must be discarded.
+    pc = aw.get("post_click")
+    pv = aw.get("post_view")
+    if pc is not None or pv is not None:
         # Production currently echoes the buyer request instead of stripping it.
         # Xfail only the specific assertion that checks the unimplemented behavior.
         try:
@@ -2505,17 +2493,8 @@ def then_attribution_has_model(ctx: dict) -> None:
     """
     from adcp.types.generated_poc.enums.attribution_model import AttributionModel
 
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, "Response missing attribution_window — BR-RULE-092 requires it"
-    assert aw.model is not None, "attribution_window.model is None — required by spec (BR-RULE-092)"
-    # Model must be one of the spec-allowed values
+    actual_model = _wire_attribution_model(ctx, expectation="BR-RULE-092 requires it")
     valid_models = {m.value for m in AttributionModel}
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
     assert actual_model in valid_models, (
         f"attribution_window.model '{actual_model}' is not a valid AttributionModel value: {valid_models}"
     )
@@ -2531,23 +2510,10 @@ def then_attribution_default_model(ctx: dict) -> None:
     """
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period in response"
-
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, (
-        "Response missing attribution_window — production should echo the platform default when buyer omits it"
+    actual_model = _wire_attribution_model(
+        ctx, expectation="production should echo the platform default when the buyer omits it"
     )
-    assert aw.model is not None, "attribution_window.model is None — must carry the platform default"
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
-    expected_model = (
-        PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
-        if hasattr(PLATFORM_DEFAULT_ATTRIBUTION_MODEL, "value")
-        else str(PLATFORM_DEFAULT_ATTRIBUTION_MODEL)
-    )
+    expected_model = PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
     assert actual_model == expected_model, (
         f"attribution_window.model should be platform default '{expected_model}', got '{actual_model}'"
     )
@@ -2562,33 +2528,19 @@ def then_attribution_campaign_length(ctx: dict) -> None:
     The response must carry an attribution_window with a post_click whose
     unit is 'days' and interval >= 1.
     """
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-
-    # Response-level structural assertions
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period in response"
-
-    # Attribution window assertions
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, (
-        "Response missing attribution_window — production should resolve "
-        "campaign-unit window and echo it in the response"
-    )
-    assert aw.model is not None, "attribution_window.model is None — must carry the attribution model"
+    aw = _wire_attribution_window(ctx, expectation="production should resolve the campaign-unit window and echo it")
+    assert aw.get("model") is not None, "attribution_window.model is None — must carry the attribution model"
 
     # post_click must be present and resolved from campaign to days
-    pc = aw.post_click
+    pc = aw.get("post_click")
     assert pc is not None, (
         "attribution_window.post_click is None — buyer requested post_click={interval:1, unit:campaign}"
     )
-    pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
-    assert pc_unit == "days", (
-        f"attribution_window.post_click.unit should be 'days' (resolved from 'campaign'), got '{pc_unit}'"
+    assert pc["unit"] == "days", (
+        f"attribution_window.post_click.unit should be 'days' (resolved from 'campaign'), got '{pc['unit']}'"
     )
-    assert pc.interval >= 1, (
-        f"attribution_window.post_click.interval should be >= 1 (campaign length in days), got {pc.interval}"
+    assert pc["interval"] >= 1, (
+        f"attribution_window.post_click.interval should be >= 1 (campaign length in days), got {pc['interval']}"
     )
 
 
@@ -2697,6 +2649,79 @@ def _delivery_boundary_handler(ctx: dict, field: str, expected: str) -> bool:
     return True
 
 
+def _dispatched_attribution_window(ctx: dict) -> dict:
+    """Return the attribution_window this scenario dispatched, or {} if it sent none.
+
+    ``{}`` is the honest answer for the ``omitted`` row — the buyer sent nothing,
+    so the seller's default applies. It is NOT a fallback that hides a missing
+    record: ``dispatched_kwargs`` itself is required, so a scenario that never
+    dispatched fails loudly rather than silently grading against a default.
+    """
+    dispatched = _require(
+        ctx,
+        "dispatched_kwargs",
+        hint="no request was dispatched — the When step must call dispatch_request()",
+    )
+    return dispatched.get("attribution_window") or {}
+
+
+def _expected_attribution_model(ctx: dict) -> str:
+    """The model value the seller must echo, derived from the dispatched request.
+
+    BR-RULE-092: the buyer's model when given, otherwise the seller's platform
+    default. The ``omitted`` and ``empty_object`` rows reach the default by two
+    different production branches (``requested is None`` at
+    media_buy_delivery.py:979 vs ``requested.model or default`` at :992), so both
+    are graded here rather than assumed equivalent.
+    """
+    from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
+
+    requested_model = _dispatched_attribution_window(ctx).get("model")
+    return requested_model or PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
+
+
+def _assert_attribution_echoed_on_wire(ctx: dict, field: str) -> None:
+    """Assert the applied attribution_window on the WIRE (BR-RULE-092 INV-1/2/3).
+
+    Unconditional by construction: reads through ``wire_dict``, which raises when
+    a real-wire transport did not stash a wire body, and indexes
+    ``attribution_window`` directly. A response that omits the field fails here
+    rather than skipping the assertion — the regression these rows exist to catch.
+
+    Grades the model VALUE (not key presence) and, when the buyer named a
+    lookback window, that it comes back verbatim. ``unit=campaign`` is the one
+    exception: production resolves it to the flight length in days
+    (media_buy_delivery.py:980-990), so only its shape is asserted.
+    """
+    aw = _wire_attribution_window(ctx, expectation=f"valid {field} row requires the seller to echo the applied window")
+    expected_model = _expected_attribution_model(ctx)
+    assert aw.get("model") == expected_model, (
+        f"Valid {field}: attribution_window.model should be {expected_model!r}, got {aw.get('model')!r}"
+    )
+
+    requested = _dispatched_attribution_window(ctx)
+    for window_name in ("post_click", "post_view"):
+        req_window = requested.get(window_name)
+        if req_window is None:
+            continue
+        echoed = aw.get(window_name)
+        assert echoed is not None, (
+            f"Valid {field}: buyer requested {window_name}={req_window} but the response did not echo it"
+        )
+        if req_window["unit"] == "campaign":
+            # Resolved to the flight length; assert the shape production promises.
+            assert echoed["unit"] == "days", (
+                f"Valid {field}: a campaign-unit {window_name} must be echoed resolved to days, got {echoed['unit']!r}"
+            )
+            assert echoed["interval"] >= 1, (
+                f"Valid {field}: resolved campaign {window_name} must span >= 1 day, got {echoed['interval']}"
+            )
+        else:
+            assert echoed == req_window, (
+                f"Valid {field}: {window_name} should be echoed verbatim as {req_window}, got {echoed}"
+            )
+
+
 def _assert_valid_content(ctx: dict, field: str) -> None:
     """Per-field content assertion for 'valid' partition/boundary outcomes."""
     resp = ctx.get("response")
@@ -2737,11 +2762,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             )
 
     elif field in ("attribution_window", "attribution window"):
-        resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else {}
-        if isinstance(resp_dict, dict):
-            aw = resp_dict.get("attribution_window")
-            if aw is not None:
-                assert "model" in aw, f"Valid {field}: attribution_window missing 'model'"
+        _assert_attribution_echoed_on_wire(ctx, field)
 
     elif field in ("daily_breakdown", "daily breakdown", "include_package_daily_breakdown"):
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
