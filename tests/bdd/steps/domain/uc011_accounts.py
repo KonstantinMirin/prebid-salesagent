@@ -3355,16 +3355,24 @@ def _find_subscriber(subs: list[Any], subscriber_id: str) -> Any:
     )
 )
 def given_account_with_notif_subscriber(ctx: dict, domain: str, sub: str, url: str) -> None:
-    """Pre-create an account carrying one active notification subscriber.
+    """Pre-create an account carrying one PAUSED notification subscriber.
 
-    Production ignores accounts[].notification_configs (#1592) but still provisions
-    the account, so the natural key exists for the subsequent replace/clear When.
+    Paused (``active: false``) deliberately, and it is the same prior state on every
+    transport. An active seed would need a successful proof-of-control challenge to
+    persist (#1592 T2 F4c), and the scenario urls are under a reserved TLD that
+    production's prover refuses by design — so on e2e_rest the seed itself would be
+    rejected and the "prior set" the scenario grades would never exist.
+
+    Nothing is weakened: the scenario text says only that a subscriber exists, and a
+    paused prior set grades the obligation MORE sharply — a failed activation must
+    leave the paused entry exactly as it was, rather than partially applying the
+    active re-send.
     """
     _setup_tenant_and_principal(ctx)
-    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=True)
+    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=False)
     _dispatch_sync_notification(ctx, domain, [cfg])
     ctx["notif_domain"] = domain
-    ctx["notif_prior"] = {"subscriber_id": sub, "url": url, "active": True}
+    ctx["notif_prior"] = {"subscriber_id": sub, "url": url, "active": False}
 
 
 @when(
