@@ -2400,11 +2400,14 @@ def then_attribution_echo(ctx: dict) -> None:
     Expected values come from what the scenario dispatched, so changing the
     scenario's requested window changes what this step demands.
 
-    ``unit=campaign`` is the one case where the echo is not the request:
-    ``_resolve_attribution_window`` (src/core/tools/media_buy_delivery.py:980-990)
-    resolves it to ``Duration(interval=max(campaign_length_days, 1), unit=days)``.
-    The applied window is asserted by shape there rather than by re-deriving the
-    flight length, which would only mirror production's own arithmetic.
+    Asserts exact equality for both interval and unit. ``unit=campaign`` is the
+    one window production does NOT echo verbatim — it resolves to the flight
+    length in days (src/core/tools/media_buy_delivery.py:980-990) — but no
+    scenario requests campaign through this step, so there is deliberately no
+    branch for it: a weaker "resolved to some positive number of days" check
+    would assert almost nothing. If a scenario ever does request campaign here,
+    this fails, and the fix is to derive the expected day count from the flight
+    dates the Given seeded — with that scenario as the thing proving it right.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = ctx.get("response")
@@ -2422,20 +2425,15 @@ def then_attribution_echo(ctx: dict) -> None:
     requested = _dispatched_post_click(ctx)
     req_interval = requested["interval"]
     req_unit = requested["unit"]
-    pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
-
-    if req_unit == "campaign":
-        assert pc_unit == "days", (
-            f"a requested unit=campaign window must be echoed resolved to days, got {pc_unit!r}"
-        )
-        assert pc.interval >= 1, f"resolved campaign window must span at least 1 day, got {pc.interval}"
-        return
 
     assert pc.interval == req_interval, (
         f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
     )
-    assert pc_unit == req_unit, (
-        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc_unit!r}"
+    # Duration.unit is the adcp Unit enum, so read .value directly — a
+    # hasattr/str() fallback would only turn a type change into a confusing
+    # "Unit.days" != "days" mismatch instead of a clean AttributeError.
+    assert pc.unit.value == req_unit, (
+        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc.unit.value!r}"
     )
 
 
