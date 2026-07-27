@@ -423,10 +423,22 @@ def supported_format_keys(format_ids: "list[Any] | None") -> set[tuple[str, str]
     return {format_id_identity(fmt) for fmt in format_ids or []}
 
 
-def format_key(agent_url: object, format_id: str) -> tuple[str, str]:
-    """Canonical comparison key for one (agent_url, id) pair — see supported_format_keys."""
+def format_key(agent_url: object, format_id: str) -> tuple[str | None, str]:
+    """Canonical comparison key for one (agent_url, id) pair — see supported_format_keys.
+
+    A missing ``agent_url`` keys to ``(None, format_id)``, the canonical
+    never-supported sentinel: product ``FormatId.agent_url`` is required, so that key
+    can never be a member of ``supported_format_keys``, and ``format_key_display``
+    renders it as the bare ``format_id``. The test is falsy, not ``is None`` — the
+    stored column is ``nullable=False``, so the case reachable in production is the
+    empty string. This decision lives here rather than at each call site because
+    ``canonical_agent_url`` does not reject a missing url, it stringifies it
+    (``None`` -> the literal ``"None"``).
+    """
     from src.core.schemas._base import canonical_agent_url
 
+    if not agent_url:
+        return (None, format_id)
     return (canonical_agent_url(agent_url), format_id)
 
 

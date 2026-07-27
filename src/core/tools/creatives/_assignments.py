@@ -9,7 +9,12 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPPackageNotFoundError,
 )
-from src.core.helpers.creative_helpers import format_key, supported_format_keys, supported_formats_display
+from src.core.helpers.creative_helpers import (
+    format_key,
+    format_key_display,
+    supported_format_keys,
+    supported_formats_display,
+)
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._processing import _failed_sync_result
@@ -164,20 +169,12 @@ def _process_assignments(
                             creative_agent_url = db_creative_result.agent_url
                             creative_format_id = db_creative_result.format
 
-                            creative_key = (
-                                format_key(creative_agent_url, creative_format_id)
-                                if creative_agent_url
-                                else (None, creative_format_id)
-                            )
+                            creative_key = format_key(creative_agent_url, creative_format_id)
                             is_supported = creative_key in supported_formats or not supported_formats
 
                             if not is_supported:
                                 # Creative format not supported by product
-                                creative_format_display = (
-                                    f"{creative_agent_url}/{creative_format_id}"
-                                    if creative_agent_url
-                                    else creative_format_id
-                                )
+                                creative_format_display = format_key_display(creative_key)
                                 supported_display = supported_formats_display(supported_formats)
                                 error_msg = (
                                     f"Creative {creative_id} format '{creative_format_display}' "

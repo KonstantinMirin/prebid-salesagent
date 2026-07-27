@@ -75,7 +75,12 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.helpers.creative_helpers import format_key, supported_format_keys, supported_formats_display
+from src.core.helpers.creative_helpers import (
+    format_key,
+    format_key_display,
+    supported_format_keys,
+    supported_formats_display,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
@@ -262,11 +267,9 @@ def _validate_creatives_for_assignment(
 
     incompatible: list[str] = []
     for creative in creatives_list:
-        creative_pair = (
-            format_key(creative.agent_url, creative.format) if creative.agent_url else (None, creative.format)
-        )
+        creative_pair = format_key(creative.agent_url, creative.format)
         if creative_pair not in supported_formats:
-            display = f"{creative.agent_url}/{creative.format}" if creative.agent_url else str(creative.format)
+            display = format_key_display(creative_pair)
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:

@@ -72,3 +72,76 @@ class TestSingleFormatIdentityCanonicalizer:
             "url = canonical_agent_url(u)\n"
         )
         assert _normalize_call_sites(tree) == []
+
+
+def _format_key_falsy_guards(tree: ast.AST) -> list[int]:
+    """Line numbers of ``format_key(url, id) if url else <fallback>`` ternaries.
+
+    ``format_key`` owns the url-less policy itself: a falsy ``agent_url`` keys to
+    ``(None, format_id)``, the never-supported sentinel. A call site that re-decides
+    that with its own ternary forks the policy — which is exactly how the guard it
+    replaced ended up copy-pasted verbatim at two consumers, each also hand-rolling
+    the matching display string instead of calling ``format_key_display``.
+    """
+    guarded: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.IfExp) or not isinstance(node.body, ast.Call):
+            continue
+        func = node.body.func
+        name = func.id if isinstance(func, ast.Name) else (func.attr if isinstance(func, ast.Attribute) else None)
+        if name not in ("format_key", "format_key_display"):
+            continue
+        if not isinstance(node.test, ast.Name | ast.Attribute):
+            continue
+        test_name = node.test.id if isinstance(node.test, ast.Name) else node.test.attr
+        call_args = {
+            a.id if isinstance(a, ast.Name) else a.attr
+            for a in node.body.args
+            if isinstance(a, ast.Name | ast.Attribute)
+        }
+        if test_name in call_args:
+            guarded.append(node.lineno)
+    return guarded
+
+
+class TestFormatKeyOwnsTheUrlLessPolicy:
+    """No call site may re-decide what a url-less format key is."""
+
+    @pytest.mark.arch_guard
+    def test_no_call_site_guards_format_key(self):
+        violations: list[str] = []
+        for path in _SRC.rglob("*.py"):
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+            except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - defensive
+                continue
+            rel = path.relative_to(_SRC.parent)
+            violations += [f"{rel}:{lineno}" for lineno in _format_key_falsy_guards(tree)]
+        assert not violations, (
+            "format_key/format_key_display wrapped in a call-site falsy guard — the helper "
+            "already returns (None, format_id) for a missing agent_url, so drop the ternary:\n  "
+            + "\n  ".join(violations)
+        )
+
+    @pytest.mark.arch_guard
+    def test_guard_detects_planted_ternary(self):
+        """Positive meta-test: the exact shape removed from both consumers."""
+        tree = ast.parse("key = format_key(url, fmt) if url else (None, fmt)\n")
+        assert _format_key_falsy_guards(tree) == [1]
+
+    @pytest.mark.arch_guard
+    def test_guard_detects_attribute_guarded_ternary(self):
+        """Would-be-missed meta-test: the guarded value reached via an attribute.
+
+        ``media_buy_update`` spelled it ``creative.agent_url``, not a bare name — a
+        detector matching only ``ast.Name`` would have missed the real site it exists
+        to catch.
+        """
+        tree = ast.parse("k = format_key(c.agent_url, c.format) if c.agent_url else (None, c.format)\n")
+        assert _format_key_falsy_guards(tree) == [1]
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_unguarded_call(self):
+        """Negative meta-test: the migrated form is clean."""
+        tree = ast.parse("key = format_key(url, fmt)\ndisplay = format_key_display(key)\n")
+        assert _format_key_falsy_guards(tree) == []
