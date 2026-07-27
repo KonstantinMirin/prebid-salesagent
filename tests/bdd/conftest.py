@@ -427,7 +427,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # emitted, so the "valid" rows (which only assert schema-valid subset/disjoint relations or
     # must_equal_when bounds against an unsupported posture) pass; the "invalid" rows (which
     # require the builder to REJECT a relation-violating/out-of-bounds posture with
-    # CONFIGURATION_ERROR) still fail — no per-tenant signing-posture config surface exists.
+    # CONFIGURATION_ERROR) still fail. NOTE (salesagent-z2cw): a per-tenant config surface DOES now
+    # exist (tenants.capability_declarations, #1592 T1a) — what it deliberately lacks is any
+    # signing field, under the STRICT capability policy. Re-cited #1592 -> #1291.
     # Graduated (salesagent-rldj): get_idempotency_posture() now returns a
     # typed IdempotencyPosture whose check_bounds() enforces the
     # replay_ttl_seconds/in_flight_max_seconds schema bounds, raising
@@ -694,8 +696,10 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "warn_for and required_for share exactly one operation",
             "protocol_methods_required_for adds one method not in protocol_methods_supported_for",
         },
-        "capabilities builder never rejects a relation-violating request_signing posture with "
-        "CONFIGURATION_ERROR — no per-tenant signing-posture config surface exists — #1592",
+        "the declaration store deliberately carries NO request_signing field under the STRICT "
+        "capability policy, so there is no relation-violating posture to reject: declaring one is "
+        "refused up front with CONFIGURATION_ERROR naming the block. Rejecting a relation VIOLATION "
+        "requires the posture to be declarable first, which lands with RFC 9421 signing — #1291",
     ),
     (
         "T-UC-010-v31-webhook-signing-bounds",
@@ -704,9 +708,11 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "supports_webhook_delivery=true, supported absent",
             "algorithms=['rsa-pss-sha512']",
         },
-        "capabilities builder never rejects a supported!=true-under-trigger or out-of-enum-algorithm "
-        "webhook_signing posture with CONFIGURATION_ERROR — no per-tenant signing-posture config "
-        "surface exists — #1592",
+        "the declaration store deliberately carries NO webhook_signing field under the STRICT "
+        "capability policy, so a supported!=true-under-trigger or out-of-enum-algorithm posture "
+        "cannot be declared and therefore cannot be rejected on its own terms; declaring the block "
+        "at all is refused with CONFIGURATION_ERROR. Grading these bounds needs the posture to be "
+        "declarable, which lands with RFC 9421 signing — #1291",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the baseline-absence row passes
     # (polling_only → reporting_delivery_methods/offline_delivery_protocols absent, webhook_signing
@@ -715,8 +721,11 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-v31-reporting-delivery-methods",
         {"webhook_only", "offline_only", "mixed_delivery"},
-        "media_buy.reporting_delivery_methods / offline_delivery_protocols / webhook_signing not "
-        "emitted by the capabilities builder — #1592",
+        "media_buy.reporting_delivery_methods / offline_delivery_protocols are not declarable: "
+        "declaring [webhook] fires the schema must_equal_when forcing webhook_signing.supported=true, "
+        "and no offline report delivery is implemented, so under the STRICT capability policy the "
+        "store carries no field for either. Both unlock with RFC 9421 signing / real report "
+        "delivery — #1291",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the no-emission row passes (no
     # must_equal_when trigger fires → webhook_signing absent is schema-valid); the emission rows
@@ -725,8 +734,9 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-v31-webhook-signing-required-when",
         {"reporting_webhook_emission", "content_standards_webhook", "wholesale_feed_webhook"},
-        "webhook_signing block not emitted — the must_equal_when(webhook emission → supported=true) "
-        "invariant is ungraded in production — #1592",
+        "no webhook-emitting field is declarable under the STRICT capability policy, so the "
+        "must_equal_when(webhook emission → webhook_signing.supported=true) invariant has no trigger "
+        "to fire on; it becomes gradable when signing makes the postures declarable — #1291",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the no-posture row passes (a valid
     # capabilities response is emitted); the signing-posture-without-brand_json_url rows grade the
@@ -735,8 +745,10 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-v31-identity-required-when-signing",
         {"posture_declared_identity_absent", "posture_declared_identity_empty"},
-        "capabilities builder never emits identity/request_signing and never rejects a signing "
-        "posture missing identity.brand_json_url — #1592",
+        "the store deliberately carries NO identity or request_signing field under the STRICT "
+        "capability policy (identity.brand_json_url/key_origins exist only to anchor signing keys we "
+        "do not publish), so a signing posture missing brand_json_url cannot be declared and the "
+        "required_when rejection has nothing to fire on — #1291",
     ),
     # Wired non-dormant + strengthened (salesagent-jd6a): the no-posture / brand_json_url-present
     # valid rows pass (a degraded-but-schema-valid baseline response is emitted and no malformed
@@ -746,8 +758,9 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-v31-identity-brand-json-url-bounds",
         {"posture_url_absent", "posture_identity_empty"},
-        "capabilities builder never emits identity/request_signing and never rejects a signing "
-        "posture missing identity.brand_json_url — #1592",
+        "same as -identity-required-when-signing: no identity/request_signing field exists in the "
+        "declaration store under the STRICT capability policy, so the required_when boundary rows "
+        "have no declarable posture to violate — #1291",
     ),
 ]
 
