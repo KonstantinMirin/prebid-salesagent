@@ -97,6 +97,21 @@ class Tenant(Base, JSONValidatorMixin):
         comment="Advertising policy configuration with prohibited categories, tactics, and advertisers",
     )
 
+    # Per-tenant AdCP capability declarations (#1592 T1a).
+    # STRICT policy: this store may carry only blocks the implementation BACKS --
+    # business facts the capabilities response echoes (trusted_match surfaces,
+    # measurement catalog, adapter-backed creative_specs, legacy axe_integrations).
+    # It deliberately has NO field for a behavioral posture we do not implement
+    # (request_signing / webhook_signing / identity signing / webhook or offline
+    # report delivery): declaring one would promise the buyer behavior production
+    # lacks. Those blocks land with RFC 9421 signing (#1291).
+    # NULL means "nothing declared" and reproduces the pre-#1592 wire exactly.
+    capability_declarations: Mapped[dict | None] = mapped_column(
+        JSONType,
+        nullable=True,
+        comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
+    )
+
     # Pydantic AI configuration for multi-model support
     # Structure: {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "encrypted:...", ...}
     ai_config: Mapped[dict | None] = mapped_column(

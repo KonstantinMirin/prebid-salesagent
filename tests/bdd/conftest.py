@@ -3806,6 +3806,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-v31-idempotency-in-flight-bound",
             # Batch 10 — creative_approval_mode (salesagent-y9ld R7)
             "T-UC-010-v31-creative-approval-mode",
+            # Batch 11 — trusted_match surfaces (salesagent-3xmz)
+            "T-UC-010-v31-trusted-match-surfaces",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

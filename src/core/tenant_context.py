@@ -61,6 +61,9 @@ class TenantContext(BaseModel):
     brand_manifest_policy: str = "require_auth"
     advertising_policy: dict[str, Any] | None = None
     product_ranking_prompt: str | None = None
+    # #1592 T1a: implementation-backed AdCP capability declaration blocks.
+    # None = nothing declared = the pre-#1592 capabilities wire.
+    capability_declarations: dict[str, Any] | None = None
 
     # --- Dict-like access for backward compatibility ---
 
@@ -123,6 +126,7 @@ class TenantContext(BaseModel):
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),
             product_ranking_prompt=tenant.product_ranking_prompt,
+            capability_declarations=safe_json_loads(tenant.capability_declarations, None),
         )
 
     @classmethod

@@ -94,8 +94,30 @@ class CapabilitiesEnv(IntegrationEnv):
         adapter.get_supported_pricing_models.return_value = set(DEFAULT_ADAPTER_PRICING_MODELS)
         self.mock["adapter"].return_value = adapter
         self._adapter_mock = adapter
+        self._capability_declarations: dict[str, Any] = {}
 
     # -- Given-step helpers ---------------------------------------------------
+
+    def declare_capabilities(self, **blocks: Any) -> None:
+        """Persist the tenant's capability declaration blocks (salesagent-3xmz).
+
+        Each keyword is one declaration block keyed exactly as it appears in the
+        capability-declaration store (``trusted_match``, ``creative_specs``,
+        ``measurement``, ...); repeated calls MERGE, so a scenario may build the
+        declaration across several Given steps.
+
+        No ``@realize_e2e``: this is a real tenant-config DB write, not a
+        monkeypatch. ``configure_tenant_field`` (tests/harness/_base.py) updates
+        both the in-memory tenant overrides (mock identity path) and the DB
+        ``tenants`` row, which the real MCP/A2A/e2e auth chain reads back via
+        ``config_loader.get_tenant_by_id`` — the same shape as the undecorated
+        ``set_billing_policy`` / ``set_approval_mode`` precedents
+        (tests/harness/account_sync.py). Because it needs no test-only injection
+        seam it declares no ``E2EUnsupportedSetup``, so the e2e escape-hatch pin
+        (``EXPECTED_UNSUPPORTED_DECLARATIONS``) does not grow.
+        """
+        self._capability_declarations.update(blocks)
+        self.configure_tenant_field("capability_declarations", dict(self._capability_declarations))
 
     @realize_e2e(
         e2e_unsupported(

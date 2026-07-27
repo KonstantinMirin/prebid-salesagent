@@ -49,6 +49,7 @@ from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant, get_targeting_capabilities_override
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas.capability_declarations import CapabilityDeclarations
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
@@ -66,6 +67,19 @@ logger = logging.getLogger(__name__)
 # either; RFC 9421 signing support is tracked as follow-up work, not this task's scope.
 _WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
 _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
+
+# The protocol set this agent backs with a real tool surface. ONE source consumed
+# by both the no-tenant minimal response and the tenant-resolved response -- the
+# two used to carry independent `[SupportedProtocol.media_buy]` literals, the same
+# drift class _build_adcp_block was extracted to prevent (salesagent-rldj).
+_DEFAULT_SUPPORTED_PROTOCOLS = [SupportedProtocol.media_buy]
+
+# Likewise for specialisms. Whether a tenant may DECLARE specialisms is an open
+# owner decision (salesagent-3g2n): `creative-generative` appears in the scenario
+# fixture but nothing implements generative creative, so echoing a declaration
+# would be a false conformance claim the AAO runner grades. Until that is decided
+# this stays a derived constant.
+_DEFAULT_SPECIALISMS = [AdcpSpecialism.sales_non_guaranteed]
 
 
 def _build_adcp_block(tenant: Mapping | None) -> Adcp:
@@ -228,8 +242,8 @@ def _get_adcp_capabilities_impl(
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
             adcp=_build_adcp_block(None),
-            supported_protocols=[SupportedProtocol.media_buy],
-            specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            supported_protocols=list(_DEFAULT_SUPPORTED_PROTOCOLS),
+            specialisms=list(_DEFAULT_SPECIALISMS),
             webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
             request_signing=_REQUEST_SIGNING_UNSUPPORTED,
             context=req.context if req else None,
@@ -383,9 +397,18 @@ def _get_adcp_capabilities_impl(
         geo_postal_areas=geo_postal_areas,
     )
 
-    # Build execution capabilities
+    # Per-tenant capability declarations (#1592 T1a). Parsed and backing-checked on
+    # the read path: the graded observable in every rejection scenario is the
+    # get_adcp_capabilities response, so an invalid declaration must surface as a
+    # terminal CONFIGURATION_ERROR here rather than being discovered only at some
+    # future write surface. `None` (nothing declared) reproduces the pre-#1592 wire.
+    declarations = CapabilityDeclarations.from_tenant(tenant.get("capability_declarations"))
+
+    # Build execution capabilities. Declared blocks merge in; undeclared stay absent
+    # (honest omission, never an empty object).
     execution = Execution(
         targeting=targeting,
+        trusted_match=declarations.trusted_match if declarations else None,
     )
 
     # creative_approval_mode: require_human when this tenant's configuration
@@ -426,8 +449,8 @@ def _get_adcp_capabilities_impl(
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=_build_adcp_block(tenant),
-        supported_protocols=[SupportedProtocol.media_buy],
-        specialisms=[AdcpSpecialism.sales_non_guaranteed],
+        supported_protocols=list(_DEFAULT_SUPPORTED_PROTOCOLS),
+        specialisms=list(_DEFAULT_SPECIALISMS),
         media_buy=media_buy,
         account=_build_account_block(tenant),
         webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,

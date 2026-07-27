@@ -42,6 +42,21 @@ REPORTING_DELIVERY_ENUM = {"webhook", "offline"}
 #: minItems 1, uniqueItems). Other values are reserved and MUST NOT be emitted under v1.
 WEBHOOK_SIGNING_ALGORITHM_ENUM = {"ed25519", "ecdsa-p256-sha256"}
 
+#: 3.1.1 TMP surface enum — the closed set media_buy.execution.trusted_match.surfaces
+#: items may carry (get-adcp-capabilities-response.json#/properties/media_buy/properties/
+#: execution/properties/trusted_match/properties/surfaces/items/enum).
+TRUSTED_MATCH_SURFACE_ENUM = {
+    "website",
+    "mobile_app",
+    "ctv_app",
+    "desktop_app",
+    "dooh",
+    "podcast",
+    "radio",
+    "streaming_audio",
+    "ai_assistant",
+}
+
 #: 3.1.1 media channels enum, in schema order — the 20 canonical values
 #: (dist/schemas/3.1.1/enums/channels.json#/enum). primary_channels items $ref
 #: this enum; there is no minItems/uniqueItems constraint, so the graded contract
@@ -2212,3 +2227,46 @@ def then_webhook_signing_bounds(ctx: dict, expected: str) -> None:
             f"{sorted(WEBHOOK_SIGNING_ALGORITHM_ENUM)}: {sorted(invalid)}"
         )
     _assert_webhook_signing_must_equal_when(ctx, webhook_signing)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Batch 11 (salesagent-3xmz): trusted_match TMP surfaces
+#
+# The declaration is a REAL tenant-config write through the env
+# (CapabilitiesEnv.declare_capabilities -> configure_tenant_field), not a ctx
+# record-intent dict: the same Given runs identically on a2a/mcp/rest/e2e_rest
+# because production resolves the tenant itself on every transport.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the tenant declares trusted_match surfaces {surfaces}"))
+def given_trusted_match_surfaces(ctx: dict, surfaces: str) -> None:
+    """Declare the seller's deployed TMP surfaces on the tenant's capability
+    declaration store. Presence of the trusted_match object is itself the signal
+    that TMP infrastructure is deployed, so the declared surface list is the
+    seller-configured fact the response echoes."""
+    env = ctx["env"]
+    env.declare_capabilities(trusted_match={"surfaces": _parse_bracket_list(surfaces)})
+
+
+@then(parsers.parse("media_buy.execution.trusted_match.surfaces should equal {expected}"))
+def then_trusted_match_surfaces_equal(ctx: dict, expected: str) -> None:
+    """Exact echo of the declared TMP surfaces, in declaration order, on the wire."""
+    want = _parse_bracket_list(expected)
+    actual = wire_field(ctx, "media_buy.execution.trusted_match.surfaces")
+    assert actual == want, f"media_buy.execution.trusted_match.surfaces expected {want!r}, got {actual!r}"
+
+
+@then(parsers.parse("each surface should be one of {allowed}"))
+def then_trusted_match_surfaces_in_enum(ctx: dict, allowed: str) -> None:
+    """surfaces items are drawn from the closed 3.1.1 TMP surface enum. The
+    scenario's own enumeration is pinned against the schema constant first, so a
+    drifted scenario fails loudly instead of grading a weaker set."""
+    scenario_enum = set(_quoted_list(allowed))
+    assert scenario_enum == TRUSTED_MATCH_SURFACE_ENUM, (
+        f"scenario surface enum drifted from get-adcp-capabilities-response.json: "
+        f"{sorted(scenario_enum ^ TRUSTED_MATCH_SURFACE_ENUM)}"
+    )
+    surfaces = wire_field(ctx, "media_buy.execution.trusted_match.surfaces")
+    invalid = set(surfaces) - TRUSTED_MATCH_SURFACE_ENUM
+    assert not invalid, f"trusted_match.surfaces carries non-enum values: {sorted(invalid)}"

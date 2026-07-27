@@ -92,6 +92,10 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     human_review_required = False
     authorized_emails = factory.LazyFunction(lambda: ["test@example.com"])
     authorized_domains = factory.LazyFunction(lambda: ["example.com"])
+    # #1592 T1a: no capability blocks declared by default, so a factory tenant
+    # reproduces the pre-declaration capabilities wire. Scenarios opt in through
+    # CapabilitiesEnv.declare_capabilities(), never by overriding this directly.
+    capability_declarations = None
 
     @classmethod
     def make_tenant(cls, tenant_id: str = "test_tenant", **overrides: Any) -> dict[str, Any]:
