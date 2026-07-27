@@ -35,6 +35,22 @@ BLOCKED_HOSTNAMES = {
 }
 
 
+# RFC 2606 / RFC 6761 reserved TLDs. These are guaranteed never to resolve to a
+# real host, so a URL under one can be judged unreachable WITHOUT a DNS lookup --
+# which is what makes "this endpoint cannot be proven" deterministic instead of
+# dependent on whether the local resolver happens to hijack NXDOMAIN.
+# Single source: _check_domain_validity (src/core/tools/accounts.py) rejects brand
+# domains under these, and the notification activation prover treats them as
+# unprovable. Two copies would drift.
+RESERVED_TLDS: frozenset[str] = frozenset({".test", ".invalid", ".example", ".localhost"})
+
+
+def is_reserved_tld_host(hostname: str) -> bool:
+    """Whether *hostname* sits under an RFC 2606/6761 reserved TLD."""
+    lowered = hostname.lower().rstrip(".")
+    return any(lowered == tld.lstrip(".") or lowered.endswith(tld) for tld in RESERVED_TLDS)
+
+
 def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, str]:
     """Check a URL's SHAPE without resolving DNS.
 

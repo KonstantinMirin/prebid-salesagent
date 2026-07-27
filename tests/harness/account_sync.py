@@ -31,6 +31,7 @@ from unittest.mock import MagicMock
 
 from src.core.schemas.account import SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._realize import realize_e2e
 
 
 class AccountSyncEnv(IntegrationEnv):
@@ -51,6 +52,11 @@ class AccountSyncEnv(IntegrationEnv):
 
     EXTERNAL_PATCHES = {
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
+        # The proof-of-control getter is the ONE injection seam. Patching the
+        # getter (not the class) means production always constructs a REAL prover:
+        # a test-scoped auto-pass prover would persist active:true without proof,
+        # which is the violation the service exists to prevent.
+        "notification_proof": "src.core.tools.accounts.get_notification_proof_service",
     }
 
     def __init__(
@@ -62,11 +68,18 @@ class AccountSyncEnv(IntegrationEnv):
         super().__init__(**kwargs)
         self._supported_billing = supported_billing
         self._account_approval_mode = account_approval_mode
+        # Proof-of-control outcomes: a default plus per-url overrides.
+        self._proof_default: bool = True
+        self._proof_overrides: dict[str, bool] = {}
 
     def _configure_mocks(self) -> None:
-        """Set up happy-path defaults for audit logger."""
+        """Set up happy-path defaults for audit logger and the proof-of-control seam."""
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
+        # Default: endpoints prove successfully, so a Given can seed an ACTIVE
+        # subscriber through a real sync (which really does run the proof path).
+        # Scenarios grading a failure scope it to their own url.
+        self.set_notification_proof_result(succeeds=True)
 
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Create tenant + principal, then fold constructor billing config into the DB.
@@ -117,6 +130,83 @@ class AccountSyncEnv(IntegrationEnv):
         if self._session:
             self._require_tenant_row("set_billing_policy")
         self.configure_tenant_field("supported_billing", supported)
+
+    def _realize_notification_proof_result(self, *, succeeds: bool, url: str | None = None) -> None:
+        """e2e realization: verify the REAL prover will produce the requested verdict.
+
+        The in-process injection seam cannot reach the live server, but this must
+        not silently no-op -- that is exactly the failure this project's
+        realize_e2e guard exists to prevent (a Given that thinks it configured a
+        fault while the server runs unconfigured).
+
+        Instead we check the property that makes the outcome hold out of process:
+        production's prover refuses any RFC 2606/6761 reserved TLD without a DNS
+        lookup, so a ``.example`` url fails closed on the live server for the same
+        reason it fails in process. If the request is anything else, the intent
+        genuinely has no realization and we say so rather than pretending.
+        """
+        from src.core.security.url_validator import is_reserved_tld_host
+
+        if succeeds:
+            raise RuntimeError(
+                "set_notification_proof_result(succeeds=True) has no e2e realization: forcing a "
+                "SUCCESSFUL challenge needs a reachable HTTPS endpoint the live stack can call. "
+                "Grade the success direction through proof REUSE (seed an already-active "
+                "subscriber and re-send the identical tuple) instead."
+            )
+        if url is None:
+            raise RuntimeError(
+                "set_notification_proof_result(url=None) has no e2e realization: a GLOBAL "
+                "proof-failure default has no server-side equivalent. Scope the failure to the "
+                "scenario's url so production's reserved-TLD refusal realizes it."
+            )
+        from urllib.parse import urlparse
+
+        hostname = urlparse(url).hostname or ""
+        if not is_reserved_tld_host(hostname):
+            raise RuntimeError(
+                f"cannot force a proof-of-control failure for {url!r} on the live server: the "
+                "host is not under a reserved TLD, so production would really try to reach it "
+                "and the verdict would depend on the environment. Use a reserved-TLD url."
+            )
+        # Reserved TLD: production's own prover refuses it. Nothing to inject --
+        # the intent is already true of the real system, and verified here.
+
+    @realize_e2e(_realize_notification_proof_result)
+    def set_notification_proof_result(self, *, succeeds: bool, url: str | None = None) -> None:
+        """Force the proof-of-control outcome, globally or for one url.
+
+        ``url=None`` sets the default for every endpoint; a url-scoped call
+        overrides just that endpoint. Scenarios that need a subscriber to exist as
+        active seed it through a real sync (which must therefore PROVE), and then
+        scope the failure to the url under test — so the success path is genuinely
+        exercised rather than assumed.
+
+        That is also what stops an always-``False`` prover from greening the suite:
+        with the default at False, the seeding Given can no longer create its active
+        subscriber and the scenario fails loudly. The positive direction is graded by
+        the setup, not by an assertion nobody wrote.
+
+        Over e2e the injection seam is unreachable, so ``_realize_notification_proof_result``
+        VERIFIES instead of injecting: the scenarios use reserved-TLD urls, which
+        production's own prover refuses without a DNS lookup, so the same verdict
+        holds on the live server. Anything it cannot verify is declared unrealizable
+        rather than silently no-oped.
+        """
+        if url is None:
+            self._proof_default = succeeds
+        else:
+            self._proof_overrides[url] = succeeds
+
+        prover = MagicMock()
+        overrides = self._proof_overrides
+        default = self._proof_default
+
+        async def _prove(_account_id: Any, config: Any) -> bool:
+            return overrides.get(str(getattr(config, "url", "")), default)
+
+        prover.prove = _prove
+        self.mock["notification_proof"].return_value = prover
 
     def set_approval_mode(self, mode: str) -> None:
         """Configure account approval mode (BR-RULE-060).

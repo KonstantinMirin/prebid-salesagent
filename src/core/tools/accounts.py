@@ -15,6 +15,7 @@ beads: salesagent-hl0, salesagent-619
 
 import base64
 import logging
+import time
 import uuid
 from datetime import UTC
 from typing import Annotated, Any
@@ -52,6 +53,7 @@ from src.core.schemas.account import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
+from src.services.notification_proof_service import get_notification_proof_service
 
 logger = logging.getLogger(__name__)
 
@@ -531,8 +533,9 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
     """
     from adcp.types import Error
 
-    reserved_tlds = {".test", ".invalid", ".example", ".localhost"}
-    for tld in reserved_tlds:
+    from src.core.security.url_validator import RESERVED_TLDS
+
+    for tld in RESERVED_TLDS:
         if brand_domain.endswith(tld):
             return [
                 Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
@@ -731,7 +734,7 @@ def _validate_notification_configs(configs: Any) -> list[Any] | None:
     return None
 
 
-def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount:
+def _process_settings_update_entry(entry: Any, repo: Any, proof_errors: list[Any] | None = None) -> SyncResponseAccount:
     """Handle a settings-update entry (keyed by AccountReference) -- update an
     EXISTING account's settable fields, NEVER provision (F1b/F1c).
 
@@ -790,6 +793,10 @@ def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount
     # Same shared validator as the provisioning arm, and BEFORE any write so a
     # rejected entry leaves the persisted array byte-identical.
     notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
+    if notif_errors is None:
+        # Same pre-computed verdicts as the provisioning arm: the proof ran before
+        # any transaction opened, and a failure writes nothing for this entry.
+        notif_errors = proof_errors
     if notif_errors is not None:
         return _build_failed_result(
             brand=existing.brand,
@@ -830,6 +837,182 @@ def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount
         # Post-write state: the applied array when this entry changed it, the
         # persisted one otherwise.
         notification_configs=changes.get("notification_configs", existing.notification_configs),
+    )
+
+
+#: Ceiling on how long ALL activation challenges in one request may take. The
+#: per-challenge timeout bounds a single endpoint; without a request-level bound a
+#: buyer could submit 16 configs x N accounts and hold a worker for minutes.
+_PROOF_BUDGET_SECONDS = 6.0
+
+
+def _proof_tuple(config: object) -> tuple:
+    """The identity of a proof, per the spec's proof-reuse allowance.
+
+    A re-sent config whose (subscriber_id, normalized url, auth binding, normalized
+    event_types) matches an already-proven persisted entry MAY skip re-proof.
+    """
+    auth = getattr(config, "authentication", None)
+    auth_scheme = getattr(auth, "scheme", None) if auth is not None else None
+    return (
+        getattr(config, "subscriber_id", None),
+        str(getattr(config, "url", "") or "").rstrip("/"),
+        enum_value(auth_scheme) if auth_scheme is not None else None,
+        tuple(sorted(enum_value(e) for e in (getattr(config, "event_types", None) or []))),
+    )
+
+
+def _collect_activating_entries(entries: list[Any]) -> list[tuple[int, Any, Any]]:
+    """(entry index, entry, config) for every config declaring ``active: true``."""
+    activating: list[tuple[int, Any, Any]] = []
+    for index, entry in enumerate(entries):
+        for config in getattr(entry, "notification_configs", None) or []:
+            if getattr(config, "active", False):
+                activating.append((index, entry, config))
+    return activating
+
+
+def _proof_error(entry: Any, config: Any, message: str, suggestion: str) -> Any:
+    """The per-account error a failed/skipped activation produces.
+
+    One builder for both the dry_run and challenge-failure paths -- they carry the
+    same code, recovery and field pointer, and only the explanation differs.
+    """
+    from adcp.types import Error
+
+    return Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+        code="VALIDATION_ERROR",
+        message=message,
+        field=f"notification_configs[{_config_index(entry, config)}].url",
+        suggestion=suggestion,
+        recovery="correctable",
+    )
+
+
+def _already_proven_tuples(activating: list[tuple[int, Any, Any]], tenant_id: str) -> dict[int, set[tuple]]:
+    """Proof tuples already persisted as active, per entry index.
+
+    Its own SHORT read-only transaction, closed before any socket is opened -- the
+    whole point of hoisting the proof out of the write transaction.
+    """
+    already_proven: dict[int, set[tuple]] = {}
+    with AccountUoW(tenant_id) as uow:
+        assert uow.accounts is not None
+        for index, entry, _ in activating:
+            existing = _lookup_existing_for_entry(entry, uow.accounts)
+            if existing is None:
+                continue
+            already_proven.setdefault(index, set()).update(
+                _proof_tuple(c) for c in (existing.notification_configs or []) if getattr(c, "active", False)
+            )
+    return already_proven
+
+
+async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_run: bool) -> dict[int, list[Any]]:
+    """Run proof-of-control for every entry activating a subscriber. Index -> errors.
+
+    Runs BEFORE the write transaction opens: an outbound call inside an open
+    Postgres transaction would hold it for the whole network round trip, which the
+    owner's carve-out for in-request proof deliberately does not cover.
+
+    Skipped entirely on ``dry_run``: a preview must not fire a request at a buyer's
+    endpoint. Such an entry is reported as failed rather than previewed as active,
+    because a preview must not claim an outcome it did not verify.
+    """
+    activating = _collect_activating_entries(entries)
+    if not activating:
+        return {}
+
+    if dry_run:
+        return {
+            index: [
+                _proof_error(
+                    entry,
+                    config,
+                    "Activating a notification subscriber requires a proof-of-control challenge, "
+                    "which dry_run does not perform; this preview cannot confirm the subscriber "
+                    "would be activated.",
+                    "Re-send without dry_run to perform the challenge.",
+                )
+            ]
+            for index, entry, config in activating
+        }
+
+    already_proven = _already_proven_tuples(activating, tenant_id)
+    prover = get_notification_proof_service()
+    failures: dict[int, list[Any]] = {}
+    budget = _PROOF_BUDGET_SECONDS
+
+    for index, entry, config in activating:
+        # Identical tuple already proven and persisted as active -- the spec permits
+        # skipping re-proof, so no challenge is sent at all.
+        if _proof_tuple(config) in already_proven.get(index, set()):
+            continue
+        proven, budget = await _prove_within_budget(prover, entry, config, budget)
+        if not proven:
+            failures.setdefault(index, []).append(
+                _proof_error(
+                    entry,
+                    config,
+                    "Proof-of-control challenge failed for the notification endpoint; the "
+                    "subscriber was not activated and the account's previous notification_configs "
+                    "are unchanged.",
+                    "Ensure the endpoint answers the challenge POST with 2xx, then re-send.",
+                )
+            )
+    return failures
+
+
+async def _prove_within_budget(prover: Any, entry: Any, config: Any, budget: float) -> tuple[bool, float]:
+    """Run one challenge if the request-level budget allows. Returns (proven, budget left).
+
+    An exhausted budget is "not proven" rather than an unbounded wait: the caller is
+    holding an HTTP request open.
+    """
+    if budget <= 0:
+        return False, budget
+    started = time.monotonic()
+    proven = await prover.prove(_entry_account_hint(entry), config)
+    return proven, budget - (time.monotonic() - started)
+
+
+def _config_index(entry: Any, config: Any) -> int:
+    """Position of *config* in *entry*'s submitted array (for error.field)."""
+    for index, candidate in enumerate(getattr(entry, "notification_configs", None) or []):
+        if candidate is config:
+            return index
+    return 0
+
+
+def _entry_account_hint(entry: Any) -> str:
+    """A human-meaningful account identifier for proof logging."""
+    ref = getattr(entry, "account", None)
+    if ref is not None and isinstance(getattr(ref, "root", None), AccountReference1):
+        return str(ref.root.account_id)
+    brand = getattr(entry, "brand", None)
+    return str(getattr(brand, "domain", None) or "unknown")
+
+
+def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
+    """Resolve the persisted account an entry targets, in either entry mode."""
+    ref = getattr(entry, "account", None)
+    if ref is not None:
+        inner = ref.root
+        if isinstance(inner, AccountReference1):
+            return repo.get_by_id(inner.account_id)
+        brand_domain = inner.brand.domain if inner.brand else None
+        brand_id = None
+        if inner.brand is not None and getattr(inner.brand, "brand_id", None) is not None:
+            brand_id = str(inner.brand.brand_id)
+        return repo.get_by_natural_key(
+            operator=inner.operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=inner.sandbox
+        )
+    brand = getattr(entry, "brand", None)
+    if brand is None:
+        return None
+    brand_id = str(brand.brand_id) if getattr(brand, "brand_id", None) is not None else None
+    return repo.get_by_natural_key(
+        operator=entry.operator, brand_domain=brand.domain, brand_id=brand_id, sandbox=entry.sandbox
     )
 
 
@@ -876,6 +1059,11 @@ async def _sync_accounts_impl(
     # Track natural keys in the payload for delete_missing
     seen_account_ids: set[str] = set()
 
+    # Activation proof runs BEFORE the write transaction opens (see
+    # _resolve_activation_proofs). Holding a Postgres transaction across an
+    # outbound HTTP call is what the owner's carve-out explicitly does not cover.
+    proof_failures = await _resolve_activation_proofs(req.accounts, tenant_id, dry_run=dry_run)
+
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
         repo = uow.accounts
@@ -898,7 +1086,7 @@ async def _sync_accounts_impl(
                 )
 
             if entry.account is not None:
-                results.append(_process_settings_update_entry(entry, repo))
+                results.append(_process_settings_update_entry(entry, repo, proof_failures.get(index)))
                 continue
 
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
@@ -950,6 +1138,11 @@ async def _sync_accounts_impl(
             # entry leaves the account's prior array byte-identical. Same shared
             # validator as the settings-update arm.
             notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
+            if notif_errors is None:
+                # Proof verdicts were computed before this transaction opened; a
+                # failure here means NOTHING is written for the entry, so the
+                # account's prior array stays byte-identical.
+                notif_errors = proof_failures.get(index)
             if notif_errors is not None:
                 results.append(
                     _build_failed_result(

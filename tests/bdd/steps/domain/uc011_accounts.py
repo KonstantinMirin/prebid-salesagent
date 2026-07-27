@@ -3315,6 +3315,34 @@ def _echoed_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
     return list(configs) if configs else []
 
 
+def _persisted_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
+    """Read the account's PERSISTED notification_configs back through list_accounts.
+
+    Used where the graded obligation is "the stored array is unchanged" rather than
+    "the response echoed X" — notably after a rejected entry, whose failed result
+    carries no notification_configs at all.
+
+    Reuses the list read-back the register-paused scenario already exercises, so
+    the credential scrub and the JSONType None-vs-[] round trip are graded on the
+    same path a buyer would actually use.
+    """
+    from src.core.tools.accounts import _list_accounts_impl
+
+    env = ctx["env"]
+    env._commit_factory_data()
+    listed = _list_accounts_impl(identity=env.identity)
+    if domain is not None:
+        acct = next((a for a in listed.accounts if a.brand and a.brand.domain == domain), None)
+        assert acct is not None, (
+            f"No persisted account for domain {domain!r}; "
+            f"domains={[a.brand.domain for a in listed.accounts if a.brand]}"
+        )
+    else:
+        acct = listed.accounts[0]
+    configs = getattr(acct, "notification_configs", None)
+    return list(configs) if configs else []
+
+
 def _find_subscriber(subs: list[Any], subscriber_id: str) -> Any:
     """Find an echoed subscriber by subscriber_id, or None."""
     return next((s for s in subs if str(_sub_attr(s, "subscriber_id")) == subscriber_id), None)
@@ -3568,12 +3596,15 @@ def when_sync_provision_duplicate_subscriber(ctx: dict, domain: str, sub: str) -
 
 @given(parsers.re(r'the webhook proof-of-control challenge for "(?P<url>[^"]+)" fails'))
 def given_proof_of_control_fails(ctx: dict, url: str) -> None:
-    """Declare that the seller's proof-of-control challenge for ``url`` will fail.
+    """Force the seller's proof-of-control challenge for ``url`` to fail.
 
-    Records the expectation that activating a subscriber pointed at ``url`` MUST NOT
-    succeed. Production performs no proof-of-control challenge (#1592), so this is a
-    pure intent marker; the scenario's honest failure is that the seller activates the
-    subscriber (action 'created') instead of rejecting it at notification_configs[0].url.
+    A REAL env seam, not a ctx intent marker: in process it overrides the
+    proof-of-control service so the challenge returns "not proven"; out of process
+    the seam is unreachable but unnecessary, because the URL sits under an RFC
+    2606/6761 reserved TLD (``.example``) and the real prover refuses those without
+    a DNS lookup. Both routes fail closed for the same reason, so the scenario
+    grades identical behaviour on every transport rather than depending on whether
+    the local resolver hijacks NXDOMAIN.
 
     Spec: core/notification-config.json top-level — "Sellers MUST verify endpoint
     control before activating a new or changed active account-level notification
@@ -3581,6 +3612,7 @@ def given_proof_of_control_fails(ctx: dict, url: str) -> None:
     connect pinning plus proof-of-control".
     """
     ctx["proof_fail_url"] = url
+    ctx["env"].set_notification_proof_result(succeeds=False, url=url)
 
 
 @when(
@@ -3619,9 +3651,14 @@ def then_account_keeps_prior_notif_set(ctx: dict) -> None:
     """
     prior = ctx.get("notif_prior")
     assert prior is not None, "No prior notification_configs state recorded by the Given"
-    subs = _echoed_subscribers(ctx, domain=ctx.get("notif_domain"))
+    # Grade PERSISTENCE, not the failed result's echo. The response-schema presence
+    # rule covers created/updated/unchanged only, so a `failed` entry legitimately
+    # carries no notification_configs — asserting on its echo would grade an
+    # unmandated field and read as "prior set lost" on a correct implementation.
+    # The buyer's observable is the next read.
+    subs = _persisted_subscribers(ctx, domain=ctx.get("notif_domain"))
     match = _find_subscriber(subs, prior["subscriber_id"])
-    assert match is not None, f"Prior subscriber {prior['subscriber_id']!r} missing from echoed set {subs!r}"
+    assert match is not None, f"Prior subscriber {prior['subscriber_id']!r} missing from persisted set {subs!r}"
     assert str(_sub_attr(match, "url")) == prior["url"], (
         f"Prior url changed: expected {prior['url']!r}, got {_sub_attr(match, 'url')!r}"
     )

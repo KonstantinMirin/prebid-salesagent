@@ -497,10 +497,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # -notif-duplicate-subscriber removed. _validate_notification_configs runs pre-persist in BOTH
     # entry handlers and emits a per-account failure inside a transport-level success, with the
     # exact error.field pointers the storyboards grade.
-    "T-UC-011-notif-activation-proof-fail": "account-level notification_configs unimplemented — no proof-of-control "
-    "challenge exists and _sync_accounts_impl ignores accounts[].notification_configs, so an active subscriber whose "
-    "url is unreachable is never challenged or rejected; the account is provisioned (action 'created') instead of "
-    "failing with VALIDATION_ERROR at notification_configs[0].url and keeping the prior set — #1592 spec-production gap",
+    # Graduated (salesagent-ck9v, #1592 T2 increment F4c): T-UC-011-notif-activation-proof-fail
+    # removed. NotificationProofService performs a bounded proof-of-control challenge BEFORE the
+    # write transaction opens (KonstantinMirin's carve-out, 2026-07-27 — see
+    # .claude/notes/async-sync-architecture.md); a failed proof rejects the entry with
+    # VALIDATION_ERROR at notification_configs[j].url and writes nothing, so the prior array is
+    # untouched.
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
