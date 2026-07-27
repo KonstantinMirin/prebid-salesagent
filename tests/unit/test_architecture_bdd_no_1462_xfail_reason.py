@@ -130,7 +130,9 @@ def test_meta_positive_catches_multiline_concatenated_reason() -> None:
 
 def test_meta_negative_allows_corrected_reason() -> None:
     """Negative: a reason naming a live, transport-specific cause is NOT flagged."""
-    src = 'import pytest\npytest.mark.xfail(reason="e2e_rest: seller attribution default not implemented", strict=True)\n'
+    src = (
+        'import pytest\npytest.mark.xfail(reason="e2e_rest: seller attribution default not implemented", strict=True)\n'
+    )
     assert not _scan_source(src), "guard must tolerate a non-#1462 reason"
 
 
