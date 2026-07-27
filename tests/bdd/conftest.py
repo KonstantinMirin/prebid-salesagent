@@ -476,25 +476,13 @@ _XFAIL_TAGS: dict[str, str] = {
     "never emits BILLING_NOT_PERMITTED_FOR_AGENT (capability-supported agent billing is provisioned), so the "
     "autonomous suggested_billing recovery flow is unreachable — #1592 spec-production gap",
     # ── UC-011 account-level notification_configs + sandbox capability gate (FIXME(#1592), salesagent-psr7) ──
-    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned v3.1.1
-    # shape; each fails on a genuine missing production surface (not a wiring stub).
-    # notification_configs: _sync_accounts_impl ignores accounts[].notification_configs
-    # and SyncResponseAccount declares no notification_configs field, so nothing is
-    # persisted or echoed — the "echo exactly N subscriber" assertion sees 0.
-    "T-UC-011-notif-register-paused": "account-level notification_configs unimplemented — _sync_accounts_impl "
-    "ignores accounts[].notification_configs and the per-account result model (SyncResponseAccount) carries no "
-    "notification_configs field, so a registered paused subscriber is never persisted or echoed on sync_accounts "
-    "or list_accounts — #1592 spec-production gap",
-    "T-UC-011-notif-replace-clear": "account-level notification_configs unimplemented — the declarative-replace "
-    "surface (re-send subscriber_id replaces in place; [] clears) does not exist; notification_configs is neither "
-    "persisted nor echoed, so the replace and clear reads both observe 0 subscribers — #1592 spec-production gap",
-    # notif-omit-preserves shares the "account … exists with notification config subscriber" Given and the
-    # echo Thens wired for notif-replace-clear (salesagent-psr7). Same total-absence gap: the omitted-field
-    # preserve semantics cannot be graded because nothing is persisted or echoed in the first place.
-    "T-UC-011-notif-omit-preserves": "account-level notification_configs unimplemented — omitting the field to "
-    "leave persisted subscribers unchanged cannot be graded because the pre-created subscriber is never persisted "
-    "or echoed (SyncResponseAccount carries no notification_configs field), so the read observes 0 subscribers — "
-    "#1592 spec-production gap",
+    # Graduated (salesagent-ck9v, #1592 T2 increment F4a): T-UC-011-notif-register-paused,
+    # -notif-replace-clear and -notif-omit-preserves removed. accounts.notification_configs now
+    # persists as a whole-array JSONType column with declarative-replace semantics (omit preserves,
+    # [] clears, re-sent subscriber_id replaces in place) and is echoed on both sync_accounts and
+    # list_accounts with authentication.credentials scrubbed. The three scenarios grade that surface
+    # on a2a/mcp/rest. The per-account REJECTION tags below stay: validation (F4b) and the
+    # proof-of-control challenge (F4c) are separate increments.
     # Graduated (salesagent-5g8e): _check_sandbox_capability gate added -- rejects
     # sandbox provisioning with UNSUPPORTED_FEATURE (accounts[i].sandbox) when the
     # tenant's account_sandbox capability is not declared. T-UC-011-sandbox-capability-not-declared removed.

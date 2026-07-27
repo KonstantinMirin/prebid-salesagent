@@ -32,7 +32,7 @@ from adcp.types.generated_poc.account.sync_accounts_request import (
 )
 from adcp.types.generated_poc.core.account_ref import AccountReference1
 from fastmcp.server.context import Context
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
@@ -74,6 +74,10 @@ def _db_account_to_schema(db_account: DBAccount) -> Account:
         account_scope=db_account.account_scope,
         governance_agents=db_account.governance_agents,
         sandbox=db_account.sandbox,
+        # Same scrub as the sync echo: list_accounts must not reflect write-only
+        # credentials either, and the read-back leg of the register scenario goes
+        # through here.
+        notification_configs=_scrub_notification_credentials(db_account.notification_configs),
         ext=db_account.ext,
     )
 
@@ -301,26 +305,90 @@ def _enum_to_str(val: Any) -> str | None:
     return enum_value(val)
 
 
-def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
-    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage.
+def _serialize_typed_list(items: Any, model: type[BaseModel]) -> list[dict[str, Any]] | None:
+    """Normalize a list of typed models (or dicts) to JSON-serializable dicts.
 
-    Both dict and model inputs are normalized through model_dump(mode="json")
-    to ensure consistent comparison (e.g., AnyUrl → str).
+    Both dict and model inputs go through ``model_dump(mode="json")`` so that
+    comparison is type-stable — without it ``AnyUrl != str`` and an unchanged
+    field reads as changed on every sync.
+
+    ``None`` and ``[]`` are preserved as distinct results: for
+    ``notification_configs`` they mean "never configured" and "explicitly
+    cleared", which the wire must tell apart.
     """
-    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
-
-    if agents is None:
+    if items is None:
         return None
     result: list[dict[str, Any]] = []
-    for g in agents:
-        if isinstance(g, dict):
-            # Validate through model to normalize types (AnyUrl → str, etc.)
-            result.append(GovernanceAgent.model_validate(g).model_dump(mode="json"))
-        elif hasattr(g, "model_dump"):
-            result.append(g.model_dump(mode="json"))
+    for item in items:
+        if isinstance(item, dict):
+            # Validate through the model to normalize types (AnyUrl -> str, etc.)
+            result.append(model.model_validate(item).model_dump(mode="json"))
+        elif hasattr(item, "model_dump"):
+            result.append(item.model_dump(mode="json"))
         else:
-            result.append(dict(g))
+            result.append(dict(item))
     return result
+
+
+def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
+    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
+    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
+
+    return _serialize_typed_list(agents, GovernanceAgent)
+
+
+def _serialize_notification_configs(configs: Any) -> list[dict[str, Any]] | None:
+    """Convert NotificationConfig models to JSON-serializable dicts for DB storage."""
+    from adcp.types import NotificationConfig
+
+    return _serialize_typed_list(configs, NotificationConfig)
+
+
+def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
+    """Strip write-only ``authentication.credentials`` from an echoed subscriber set.
+
+    ``credentials`` is ``minLength: 32`` and documented write-only: the seller
+    stores it to authenticate its own outbound calls and MUST NOT reflect it.
+    Called from ``_build_sync_result`` and ``_db_account_to_schema`` — the two
+    places a persisted config becomes a response object — rather than at each
+    call site, so a future echo path cannot forget it.
+
+    Returns ``None`` for ``None`` and ``[]`` for ``[]``: "never configured" and
+    "explicitly cleared" are different states to the buyer.
+    """
+    from adcp.types import NotificationConfig
+
+    if configs is None:
+        return None
+    scrubbed: list[Any] = []
+    for config in configs:
+        data = config.model_dump(mode="json") if hasattr(config, "model_dump") else dict(config)
+        auth = data.get("authentication")
+        if isinstance(auth, dict) and "credentials" in auth:
+            auth = {k: v for k, v in auth.items() if k != "credentials"}
+            data["authentication"] = auth
+        scrubbed.append(NotificationConfig.model_validate(data))
+    return scrubbed
+
+
+def _resolve_notification_configs(entry: Any, existing: Any) -> tuple[bool, list[dict[str, Any]] | None]:
+    """Apply declarative-replace semantics for ``notification_configs``.
+
+    Returns ``(changed, value)``:
+      - field omitted (``None``) -> ``(False, existing)``: omission is NOT clearance
+      - ``[]``                   -> ``(True, [])``: explicit clear, persisted as an
+        empty array rather than NULL so the echo can carry it
+      - non-empty                -> ``(True, <full array>)``: the submitted array
+        REPLACES the persisted set wholesale; a re-sent ``subscriber_id`` replaces
+        in place and paused entries survive only if re-included. Never merged.
+
+    Note the ``is None`` test: ``[]`` is falsy, so a truthiness check here would
+    silently turn "clear" into "leave unchanged".
+    """
+    submitted = getattr(entry, "notification_configs", None)
+    if submitted is None:
+        return False, existing
+    return True, _serialize_notification_configs(submitted) or []
 
 
 def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
@@ -353,6 +421,16 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
     if db_gov != incoming_gov:
         changes["governance_agents"] = incoming_gov
 
+    # notification_configs gets its OWN branch, not a fold into the governance_agents
+    # comparison above: its semantics differ (omission PRESERVES rather than clears,
+    # and [] is a meaningful value), so the generic "serialize both sides and compare"
+    # rule would turn an omitted field into a clear.
+    notif_changed, notif_value = _resolve_notification_configs(
+        entry, _serialize_notification_configs(db_account.notification_configs)
+    )
+    if notif_changed and notif_value != _serialize_notification_configs(db_account.notification_configs):
+        changes["notification_configs"] = notif_value
+
     return changes
 
 
@@ -369,6 +447,7 @@ def _build_sync_result(
     sandbox: bool | None = None,
     errors: list[Any] | None = None,
     setup: Any | None = None,
+    notification_configs: Any | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object.
 
@@ -376,6 +455,11 @@ def _build_sync_result(
     action (created/updated/unchanged) so the buyer can reference the account
     in subsequent calls (BR-UC-011 POST-S5). Only ``failed`` results legitimately
     omit it because no account was provisioned.
+
+    ``notification_configs`` is scrubbed of write-only credentials HERE rather
+    than at the call sites: this builder exists so a shared shape can't drift
+    across call sites, which makes it the one place a leak cannot be introduced
+    by forgetting a call.
     """
     return SyncResponseAccount(
         brand=brand,
@@ -389,6 +473,7 @@ def _build_sync_result(
         sandbox=sandbox,
         errors=errors,
         setup=setup,
+        notification_configs=_scrub_notification_credentials(notification_configs),
     )
 
 
@@ -626,6 +711,15 @@ def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount
     changes: dict[str, Any] = {}
     if payment_terms_val is not None and payment_terms_val != existing.payment_terms:
         changes["payment_terms"] = payment_terms_val
+
+    # notification_configs is "permitted in both provisioning and settings-update
+    # modes" (sync-accounts-request.json), so the same shared resolver runs here --
+    # not a second copy of the semantics.
+    persisted_notif = _serialize_notification_configs(existing.notification_configs)
+    notif_changed, notif_value = _resolve_notification_configs(entry, persisted_notif)
+    if notif_changed and notif_value != persisted_notif:
+        changes["notification_configs"] = notif_value
+
     action = "unchanged"
     if changes:
         repo.update_fields(existing.account_id, **changes)
@@ -641,6 +735,9 @@ def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount
         billing=existing.billing,
         payment_terms=existing.payment_terms,
         sandbox=existing.sandbox,
+        # Post-write state: the applied array when this entry changed it, the
+        # persisted one otherwise.
+        notification_configs=changes.get("notification_configs", existing.notification_configs),
     )
 
 
@@ -782,6 +879,10 @@ async def _sync_accounts_impl(
                             name=existing.name,
                             billing=existing.billing,
                             sandbox=existing.sandbox,
+                            # Preview the array the write WOULD apply, not the
+                            # persisted one -- a dry_run that echoed the old set
+                            # would misreport what the buyer is about to change.
+                            notification_configs=changes.get("notification_configs", existing.notification_configs),
                         )
                     )
                     continue
@@ -804,6 +905,10 @@ async def _sync_accounts_impl(
                         name=existing.name,
                         billing=existing.billing,
                         sandbox=existing.sandbox,
+                        # Post-write state: the applied array, which is the
+                        # changed value when this sync touched it and the
+                        # persisted one when it did not (omission preserves).
+                        notification_configs=changes.get("notification_configs", existing.notification_configs),
                     )
                 )
             else:
@@ -811,6 +916,9 @@ async def _sync_accounts_impl(
                 billing_val = _enum_to_str(entry.billing)
                 payment_terms_val = _enum_to_str(entry.payment_terms)
                 governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
+                # New account: there is no persisted set, so an omitted field
+                # stays None ("never configured") rather than becoming [].
+                _, notification_configs_val = _resolve_notification_configs(entry, None)
 
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)
@@ -839,6 +947,7 @@ async def _sync_accounts_impl(
                             billing=billing_val,
                             sandbox=sandbox,
                             setup=setup,
+                            notification_configs=notification_configs_val,
                         )
                     )
                     continue
@@ -854,6 +963,7 @@ async def _sync_accounts_impl(
                     payment_terms=payment_terms_val,
                     sandbox=sandbox,
                     governance_agents=governance_agents_val,
+                    notification_configs=notification_configs_val,
                     principal_id=principal_id,
                 )
                 repo.create(new_account)
@@ -873,6 +983,7 @@ async def _sync_accounts_impl(
                         billing=billing_val,
                         sandbox=sandbox,
                         setup=setup,
+                        notification_configs=notification_configs_val,
                     )
                 )
 

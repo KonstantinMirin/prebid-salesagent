@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from adcp.types import BrandReference
+from adcp.types import BrandReference, NotificationConfig
 from adcp.types.generated_poc.core.account import (
     CreditLimit,
     GovernanceAgent,
@@ -845,6 +845,17 @@ class Account(Base):
     setup: Mapped[Setup | None] = mapped_column(JSONType(model=Setup), nullable=True)
     governance_agents: Mapped[list[GovernanceAgent] | None] = mapped_column(
         JSONType(model=GovernanceAgent, is_list=True), nullable=True
+    )
+    # Account-level notification subscribers (#1592 T2). Whole-array declarative
+    # replace (maxItems 16, always read and written entire), so a column rather
+    # than a table: there is no cross-account query and no per-entry lifecycle.
+    # NULL and [] are DIFFERENT states the wire must distinguish -- NULL means
+    # "never configured" (the field is omitted from the echo) and [] means
+    # "explicitly cleared" (the echo carries an empty array). JSONType uses
+    # JSONB(none_as_null=True), so that distinction survives the round trip; do
+    # not collapse it with a falsy check.
+    notification_configs: Mapped[list[NotificationConfig] | None] = mapped_column(
+        JSONType(model=NotificationConfig, is_list=True), nullable=True
     )
     sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)

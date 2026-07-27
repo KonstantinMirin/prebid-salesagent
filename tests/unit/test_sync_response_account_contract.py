@@ -2,7 +2,7 @@
 
 SyncResponseAccount replaced an SDK-provided type after SDK 5.7 restructured
 the sync_accounts response. This contract test verifies:
-  1. All 11 expected fields exist and are constructable
+  1. All 12 expected fields exist and are constructable
   2. Fields serialize correctly via model_dump
   3. None-valued fields are excluded by default
 
@@ -15,9 +15,16 @@ from adcp.types.generated_poc.core.brand_ref import BrandReference
 
 from src.core.schemas import SyncResponseAccount
 
-# The 11 fields that production code (_build_sync_result / _build_failed_result)
+# The 12 fields that production code (_build_sync_result / _build_failed_result)
 # constructs. payment_terms added salesagent-5g8e (F1 settings-update Then needs a
-# field to read).
+# field to read). notification_configs added salesagent-ck9v (#1592 T2): the
+# sync-accounts-response schema requires the applied subscriber set to be echoed on
+# created/updated/unchanged results.
+#
+# This set is an INVENTORY pin, not a behavioral assertion: it exists so a field
+# cannot be added to the model without someone deciding it belongs on the buyer
+# wire. Extending it is correct when the field is spec-mandated; deleting an entry
+# to make a test pass is not.
 EXPECTED_FIELDS = {
     "brand",
     "operator",
@@ -30,6 +37,7 @@ EXPECTED_FIELDS = {
     "sandbox",
     "errors",
     "setup",
+    "notification_configs",
 }
 
 
@@ -37,14 +45,14 @@ class TestSyncResponseAccountFields:
     """SyncResponseAccount has all fields that production code constructs."""
 
     def test_has_all_expected_fields(self):
-        """Model declares all 10 expected fields."""
+        """Model declares all 12 expected fields."""
         actual_fields = set(SyncResponseAccount.model_fields.keys())
         assert EXPECTED_FIELDS == actual_fields, (
             f"Field mismatch. Expected: {sorted(EXPECTED_FIELDS)}, got: {sorted(actual_fields)}"
         )
 
     def test_construct_with_all_fields(self):
-        """All 11 fields can be populated without validation errors."""
+        """All 12 fields can be populated without validation errors."""
         account = SyncResponseAccount(
             brand=BrandReference(domain="acme.com"),
             operator="create",

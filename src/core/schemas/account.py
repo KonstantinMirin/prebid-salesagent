@@ -19,6 +19,7 @@ from adcp.types import ContextObject as LibraryContextObject
 from adcp.types import Error as LibraryError
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
+from adcp.types import NotificationConfig as LibraryNotificationConfig
 from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
@@ -143,6 +144,12 @@ class SyncResponseAccount(SalesAgentBaseModel):
     sandbox: bool | None = None
     errors: list[LibraryError] | None = None
     setup: LibrarySetup | None = None
+    # #1592 T2: the applied notification subscriber set, echoed on created/updated/
+    # unchanged. None omits the field ("never configured"); [] is emitted as an
+    # empty array ("cleared") -- the two are different states to the buyer.
+    # authentication.credentials is write-only and is stripped before this is built
+    # (see _scrub_notification_credentials in src/core/tools/accounts.py).
+    notification_configs: list[LibraryNotificationConfig] | None = None
 
 
 class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSuccess):  # type: ignore[misc]
