@@ -272,6 +272,14 @@ class TestNoSilentLoopFailuresInImpl:
 # products.py (which degrades but builds no advisory list) stays invisible here.
 # Widening the detector to those is salesagent-gr4z, which would surface that
 # group all at once.
+#
+# "Advisory list" means a CONTAINER this function holds and a handler can reach —
+# see `_advisory_list_names`. `_create_media_buy_impl` derives its advisories from
+# the request (`errors=property_list_unsupported_advisories(req.packages, adapter)`)
+# and holds no container, so it is out of scope and no longer allowlisted. Its
+# best-effort Slack / activity-feed / audit-log handlers were never this guard's
+# business; the per-item row in SILENT_LOOP_HANDLER_ALLOWLIST above still covers
+# the one loop-shaped swallow it does have.
 
 _ADVISORY_FIX_HINT = (
     "This _impl builds an advisory list passed to a response errors= argument, so "
@@ -290,33 +298,82 @@ _ADVISORY_FIX_HINT = (
 # all five of its sites, and that absence is what makes this guard a pin on the
 # fix rather than a description of it.
 SILENT_ADVISORY_HANDLER_ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(#1566): 4 straight-line handlers degrade the formats response
-    # (registry/template lookups) with no errors[] entry. Same disease as the
-    # loop-shaped row already allowlisted for this function above.
+    # FIXME(#1566): exactly TWO handlers, both response-degrading and both with a
+    # FIXME at the source: creative_formats.py:297 drops the adapter's formats and
+    # :487 drops the creative-agent referrals, each with nothing but a log line, so
+    # the buyer reads "this seller has none" off a failed lookup. Same disease as
+    # the loop-shaped row already allowlisted for this function above.
+    #
+    # (The other two handlers in this function — the :225 event-loop retry and the
+    # :447 cursor reset — are silent fallbacks the detector now exempts, and
+    # `_create_media_buy_impl` is gone from this list entirely: it has no advisory
+    # container at all, so it was never in scope. See the two notes below.)
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl"),
-    # FIXME(#1566): 8 straight-line handlers. MOSTLY audit-log / activity-feed
-    # side effects that do not alter the response — the sibling detector exempts
-    # that shape explicitly ("best-effort cleanup like audit-log writes"), and
-    # this one does not yet model it. Triage per-site before migrating: some are
-    # genuinely exempt, not all are debt.
-    ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
 }
+
+_LOG_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "critical"})
 
 
 def _advisory_list_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
-    """Names this function passes to a response ``errors=`` keyword argument.
+    """Local names that ARE the advisory container passed to a response ``errors=``.
 
-    Matches both the direct form (``errors=advisories``) and the normalized form
+    Matches the direct form (``errors=advisories``, ``errors=agent_errors if
+    agent_errors else None``) and the normalized form
     (``errors=normalize_advisory_errors(advisories) or None``), since the
-    normalizer is the sanctioned wrapper.
+    normalizer is the sanctioned wrapper around the container.
+
+    Two filters keep this to the CONTAINER rather than every name in the
+    expression. Harvesting every ``ast.Name`` (the first cut of this detector)
+    read ``errors=property_list_unsupported_advisories(req.packages, adapter)`` in
+    ``_create_media_buy_impl`` as three advisory lists — ``req``, ``adapter`` and
+    the callee. That function computes its advisories from the REQUEST and holds
+    no container at all, so the guard's own fix hint ("append to that list") was
+    impossible to follow there; worse, treating ``req``/``adapter`` as advisory
+    names made every handler that merely passes one of them to a call score as
+    "surfacing" — a false NEGATIVE. So:
+
+    - a name must be *bound in this function* and not a parameter, and
+    - a name reached only as a call argument counts only in the wrapper position
+      (first positional arg of the call producing the value); a helper that
+      DERIVES advisories from other inputs contributes no container.
+
+    Strictly narrower than harvesting every name, so it can only remove functions
+    from scope, never add them.
     """
-    names: set[str] = set()
+    bound = {n.id for n in ast.walk(func) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    params = {a.arg for a in (*func.args.posonlyargs, *func.args.args, *func.args.kwonlyargs)}
+    if func.args.vararg:
+        params.add(func.args.vararg.arg)
+    if func.args.kwarg:
+        params.add(func.args.kwarg.arg)
+    local_names = bound - params
+
+    candidates: set[str] = set()
     for node in iter_call_expressions(func):
         for kw in node.keywords:
             if kw.arg != "errors" or kw.value is None:
                 continue
-            names.update(n.id for n in ast.walk(kw.value) if isinstance(n, ast.Name))
-    return names
+            candidates.update(_container_candidates(kw.value))
+    return candidates & local_names
+
+
+def _container_candidates(value: ast.expr) -> set[str]:
+    """Names in an ``errors=`` value that could be the advisory container itself."""
+    disqualified: set[str] = set()
+    for call in iter_call_expressions(value):
+        # the callee is the wrapper, never the container
+        disqualified.update(_names_in(call.func))
+        for pos, arg in enumerate(call.args):
+            if pos == 0 and isinstance(arg, ast.Name):
+                continue  # normalize_advisory_errors(advisories) — the wrapper's subject
+            disqualified.update(_names_in(arg))
+        for kw in call.keywords:
+            disqualified.update(_names_in(kw.value))
+    return _names_in(value) - disqualified
+
+
+def _names_in(node: ast.AST) -> set[str]:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
 
 
 def _handler_appends_to(handler: ast.ExceptHandler, names: set[str]) -> bool:
@@ -340,6 +397,38 @@ def _handler_appends_to(handler: ast.ExceptHandler, names: set[str]) -> bool:
         if any(isinstance(a, ast.Name) and a.id in names for a in node.args):
             return True
     return False
+
+
+def _handler_is_exempt_shape(handler: ast.ExceptHandler) -> bool:
+    """True for the two non-swallowing shapes the sibling loop detector exempts.
+
+    ``_handler_is_silent`` above flags a loop handler only when its body is
+    *solely* expression/``pass`` statements, so a handler that RETURNS or that
+    ASSIGNS a fallback is already exempt there. Both shapes reach this detector
+    too and were false positives until now:
+
+    - ``return <helper>``: control leaves the function — the failure is resolved
+      or re-raised downstream, never absorbed into a degraded response
+      (``except IntegrityError: return _resolve_idempotency_race_or_raise(...)``).
+    - a SILENT fallback assignment: the handler substitutes a default and moves on
+      (the ``except RuntimeError:`` event-loop retry and the ``except ValueError:
+      start_index = 0`` cursor reset in ``creative_formats``).
+
+    The fallback exemption is deliberately NARROWER than the sibling's. A
+    fallback assignment is structurally indistinguishable from the placeholder
+    degradation salesagent-3xmz B5 fixed in ``capabilities`` (``except: channels =
+    [DEFAULT]`` leaves the buyer unable to tell "none" from "lookup failed"), so
+    exempting it wholesale would un-pin that fix. A handler that LOGS is admitting
+    something went wrong and must still surface it; only the silent, deliberate
+    default is exempt.
+    """
+    if any(isinstance(n, ast.Return) for n in ast.walk(handler)):
+        return True
+    logs = any(
+        isinstance(n.func, ast.Attribute) and n.func.attr in _LOG_METHODS for n in iter_call_expressions(handler)
+    )
+    assigns = any(isinstance(n, ast.Assign | ast.AnnAssign | ast.AugAssign) for n in ast.walk(handler))
+    return assigns and not logs
 
 
 def find_silent_advisory_handlers(tree: ast.Module, relpath: str) -> list[tuple[str, str, int]]:
@@ -368,7 +457,12 @@ def find_silent_advisory_handlers(tree: ast.Module, relpath: str) -> list[tuple[
             if isinstance(node, ast.ExceptHandler):
                 # loop handlers belong to the per-item detector above; nested
                 # handlers are best-effort cleanup, exempt by the same rule
-                if not in_loop and not in_handler and not _handler_appends_to(node, _names):
+                if (
+                    not in_loop
+                    and not in_handler
+                    and not _handler_appends_to(node, _names)
+                    and not _handler_is_exempt_shape(node)
+                ):
                     violations.append((relpath, _fname, node.lineno))
                 in_handler = True
             for child in ast.iter_child_nodes(node):
@@ -398,12 +492,16 @@ _ADVISORY_BAD = {
         "        logger.warning(e)\n"
         "    return Response(errors=advisories or None)\n"
     ),
-    "fallback_without_advisory": (
+    # The salesagent-3xmz B5 shape: log, substitute a placeholder, hand the buyer a
+    # response that cannot be told apart from "this seller genuinely has none". The
+    # log line is what separates it from the exempt silent-default shape below.
+    "log_and_fallback_without_advisory": (
         "def _thing_impl():\n"
         "    advisories = []\n"
         "    try:\n"
         "        channels = lookup()\n"
-        "    except Exception:\n"
+        "    except Exception as e:\n"
+        "        logger.warning('channel lookup failed: %s', e)\n"
         "        channels = [DEFAULT]\n"
         "    return Response(errors=normalize(advisories))\n"
     ),
@@ -446,6 +544,39 @@ _ADVISORY_GOOD = {
         "    except Exception as e:\n"
         "        raise AdCPError(str(e)) from e\n"
         "    return Response(errors=advisories or None)\n"
+    ),
+    # shape (a): control leaves the function — the helper resolves the race or raises
+    "returns_helper_that_raises": (
+        "def _thing_impl():\n"
+        "    advisories = []\n"
+        "    try:\n"
+        "        x = persist()\n"
+        "    except IntegrityError as exc:\n"
+        "        return _resolve_idempotency_race_or_raise(exc, tenant_id)\n"
+        "    return Response(errors=advisories or None)\n"
+    ),
+    # shape (b): a deliberate, SILENT default — the cursor reset / event-loop retry.
+    # Add a log line and it becomes `log_and_fallback_without_advisory` above, which
+    # stays BAD: that is what keeps the B5 placeholder fix pinned.
+    "silent_fallback_default": (
+        "def _thing_impl():\n"
+        "    advisories = []\n"
+        "    try:\n"
+        "        start_index = int(decode(cursor))\n"
+        "    except ValueError:\n"
+        "        start_index = 0\n"
+        "    return Response(errors=advisories or None)\n"
+    ),
+    # advisories DERIVED from the request, no container the handler could reach:
+    # the guard's fix hint is unfollowable here, so the function is out of scope.
+    "derived_advisories_have_no_container": (
+        "def _thing_impl(req):\n"
+        "    adapter = get_adapter(req)\n"
+        "    try:\n"
+        "        notify(req)\n"
+        "    except Exception as e:\n"
+        "        logger.warning('notify failed: %s', e)\n"
+        "    return Response(errors=unsupported_advisories(req.packages, adapter))\n"
     ),
 }
 

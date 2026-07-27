@@ -295,7 +295,10 @@ def _list_creative_formats_impl(
 
                 logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
     except Exception as e:
-        # Don't fail if adapter formats can't be retrieved
+        # FIXME(#1566): silent degradation — the adapter's formats are dropped from
+        # the response with no errors[] entry, so a failed lookup is indistinguishable
+        # from "this adapter provides none".
+        # Allowlisted in test_architecture_no_silent_loop_failures.py.
         logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
@@ -485,6 +488,10 @@ def _list_creative_formats_impl(
                     )
                 )
     except Exception:
+        # FIXME(#1566): silent degradation — creative_agents referrals are dropped
+        # from the response with no errors[] entry, so the buyer reads a referral
+        # lookup failure as "this seller federates to no creative agents".
+        # Allowlisted in test_architecture_no_silent_loop_failures.py.
         logger.warning("Failed to build agent referrals for tenant %s", tenant["tenant_id"], exc_info=True)
 
     # Log the operation
