@@ -132,6 +132,38 @@ class TestAdminAccountsE2E:
         html = response.data.decode()
         assert "Edit" in html
 
+    def test_edit_page_does_not_offer_natural_key_components(self, admin_e2e_env):
+        """T-ADMIN-ACCT-011: natural-key controls are not editable (real stack).
+
+        The in-process BDD scenario grades this against the Flask test client;
+        this is the same claim served by the real templates over real HTTP, which
+        is where a template that failed to render (or rendered from a stale
+        image) would show up.
+
+        `operator` and `sandbox` are natural-key components
+        (AccountRepository.get_by_natural_key). Editing either RE-KEYS the
+        account, so the buyer's next sync_accounts call carrying the original key
+        provisions a DUPLICATE instead of matching (salesagent-8sfr). The
+        repository refuses both; this asserts the operator is not invited to
+        attempt a change that would then be silently discarded.
+        """
+        import re
+
+        env = admin_e2e_env
+        env.authenticate()
+        account_id = env.create_account(name="E2E NaturalKey Corp", status="active")
+        response = env.get_edit_page(account_id)
+        assert response.status_code == 200
+        html = response.data.decode()
+
+        for field in ("sandbox", "operator"):
+            match = re.search(rf'<input[^>]*\bname="{field}"[^>]*>', html)
+            assert match, f'No <input name="{field}"> on the edit page'
+            tag = match.group(0)
+            assert "disabled" in tag or "readonly" in tag, (
+                f'The "{field}" control is editable on the live edit page: {tag}'
+            )
+
     def test_status_change_json(self, admin_e2e_env):
         """T-ADMIN-ACCT-005: Status change via JSON API returns success."""
         env = admin_e2e_env

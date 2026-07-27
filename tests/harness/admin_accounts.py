@@ -84,7 +84,18 @@ class AdminAccountEnv:
 
     DEFAULT_TENANT_ID = "bdd_admin_tenant"
 
-    def __init__(self, *, mode: str | None = None) -> None:
+    def __init__(self, *, mode: str | None = None, tenant_id: str | None = None) -> None:
+        """
+        Args:
+            mode: ``integration`` (Flask test_client) or ``e2e`` (Docker stack).
+                Auto-detected from ``ADCP_SALES_PORT`` when omitted.
+            tenant_id: Tenant to operate on. Defaults to ``DEFAULT_TENANT_ID``.
+                Pass an explicit id to drive the admin surface for a tenant some
+                OTHER env already seeded — e.g. pairing with ``AccountSyncEnv`` to
+                check that an admin edit does not orphan an account from the
+                buyer's sync (salesagent-8sfr). ``_ensure_tenant_for_id`` already
+                handled arbitrary ids; this just exposes it at construction.
+        """
         self._e2e_port = os.environ.get("ADCP_SALES_PORT")
         # Explicit mode overrides auto-detection
         if mode is not None:
@@ -100,7 +111,7 @@ class AdminAccountEnv:
         self._session: Any = None
         self._base_url: str = ""
 
-        self._tenant_id: str = self.DEFAULT_TENANT_ID
+        self._tenant_id: str = tenant_id or self.DEFAULT_TENANT_ID
         self._created_account_ids: list[str] = []
 
     @property

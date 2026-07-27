@@ -9,6 +9,7 @@ beads: salesagent-oj0.1.2
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from pytest_bdd import given, parsers, then, when
@@ -385,3 +386,24 @@ def then_json_status(ctx: dict, status_code: int) -> None:
     """Assert JSON response HTTP status code."""
     response = _require_response(ctx)
     assert response.status_code == status_code, f"Expected status {status_code}, got {response.status_code}"
+
+
+@then(parsers.parse('the "{field}" control is not editable'))
+def then_control_is_not_editable(ctx: dict, field: str) -> None:
+    """Assert the form control for *field* is rendered disabled or readonly.
+
+    Natural-key components must not be presented as editable: the repository
+    refuses them, so an enabled control would invite an operator to make a change
+    that is then silently dropped (salesagent-8sfr). Accepts either spelling —
+    ``disabled`` for the checkbox, ``readonly`` for the text input — because they
+    are the correct HTML for their respective control types.
+    """
+    html = _require_response(ctx).data.decode()
+    match = re.search(rf'<input[^>]*\bname="{re.escape(field)}"[^>]*>', html)
+    assert match, f'No <input name="{field}"> found on the edit page'
+    tag = match.group(0)
+    assert "disabled" in tag or "readonly" in tag, (
+        f'The "{field}" control is editable on the edit page: {tag}\n'
+        "It is a natural-key component — the repository refuses to write it, so offering it as "
+        "editable means an operator's change is silently discarded."
+    )

@@ -71,6 +71,21 @@ Feature: BR-ADMIN-ACCOUNTS Admin Account Management
     Then the admin is redirected to the account detail page
     And the database shows account "Acme Corp Updated" with billing "agent"
 
+  @T-ADMIN-ACCT-011 @edit @natural-key @edge-case
+  Scenario: The edit form does not offer to change a natural-key component
+    Given the tenant has an account "Acme Corp" with status "active"
+    When the admin navigates to the edit page for "Acme Corp"
+    Then the page returns status 200
+    And the "sandbox" control is not editable
+    And the "operator" control is not editable
+    # sandbox and operator are natural-key components (AccountRepository.get_by_natural_key).
+    # Editing either RE-KEYS the account, so the buyer's next sync_accounts call carrying the
+    # original key stops matching and provisions a DUPLICATE, stranding the account_id they
+    # hold (salesagent-8sfr). The repository refuses both outright; this scenario grades the
+    # AFFORDANCE -- that an operator is not invited to attempt it and then silently ignored.
+    # Enforcement (not affordance) is graded by
+    # tests/integration/test_account_natural_key_immutability.py.
+
   @T-ADMIN-ACCT-005 @status @main-flow
   Scenario: Change account status via AJAX API
     Given the tenant has an account "Acme Corp" with status "active"

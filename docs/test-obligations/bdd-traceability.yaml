@@ -7066,6 +7066,12 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-011"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-sandbox-response-shape"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null

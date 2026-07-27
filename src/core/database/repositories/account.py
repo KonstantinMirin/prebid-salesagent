@@ -28,7 +28,23 @@ class AccountRepository:
         tenant_id: Tenant scope for all queries.
     """
 
-    _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "account_id", "created_at"})
+    #: Fields ``update_fields`` refuses. Beyond the PK and creation stamp, this
+    #: includes the NATURAL-KEY components: ``get_by_natural_key`` resolves a
+    #: buyer's ``sync_accounts`` entry on (tenant_id, operator, brand.domain[,
+    #: brand_id], sandbox), so ``operator`` and ``sandbox`` are load-bearing
+    #: identity, not settings. Mutating either RE-KEYS the account — the buyer's
+    #: next sync carrying the original key stops matching and provisions a
+    #: DUPLICATE, stranding the account_id they hold (salesagent-8sfr; the admin
+    #: edit form wrote both). Enforced here rather than in the form so any future
+    #: caller is refused too.
+    #: ``brand`` is the third component (the lookups read ``brand_domain`` /
+    #: ``brand_id`` out of that JSON column) and is listed even though nothing
+    #: writes it today: this bug stayed latent for exactly as long as nothing
+    #: wrote ``sandbox``, so protection that rests on the absence of a caller is
+    #: not protection.
+    _IMMUTABLE_FIELDS: frozenset[str] = frozenset(
+        {"tenant_id", "account_id", "created_at", "operator", "sandbox", "brand"}
+    )
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
