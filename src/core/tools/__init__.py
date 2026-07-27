@@ -22,8 +22,21 @@ from src.core.tools.performance import update_performance_index_raw
 from src.core.tools.products import get_products_raw
 from src.core.tools.properties import list_authorized_properties_raw
 
-# get_signals exposed on the wire (owner decision 2026-07-11, salesagent-8wf2);
-# activate_signal stays unregistered until v3.1.1-conformant (salesagent-42ap).
+# get_signals is exposed on MCP/A2A/REST but is deliberately NOT declared in
+# get_adcp_capabilities' supported_protocols, so it runs UNDECLARED and UNGRADED.
+#
+# Per the pinned spec (v3.1.1 dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json),
+# supported_protocols values "both (a) declare which tools the agent implements and
+# (b) commit the agent to pass the baseline compliance storyboard at
+# /compliance/{version}/protocols/{protocol}/", and the response's signals section is
+# "Only present if signals is in supported_protocols". Declaring "signals" would therefore
+# commit us to dist/compliance/3.1.1/protocols/signals/ — which we cannot pass while
+# activate_signal is intentionally unregistered.
+#
+# So the discovery surfaces disagree ON PURPOSE: the AgentCard advertises the tool we
+# actually serve, while capabilities declines a conformance claim we cannot honor.
+# Declaring the signals protocol (and emitting the signals capabilities section) is
+# tracked with activate_signal in GH #1593.
 from src.core.tools.signals import get_signals_raw
 
 __all__ = [

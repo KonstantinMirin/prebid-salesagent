@@ -83,8 +83,12 @@ from src.core.tools import (
     get_products_raw as core_get_products_tool,
 )
 
-# get_signals exposed on the wire (owner decision 2026-07-11, salesagent-8wf2);
-# activate_signal stays unregistered until v3.1.1-conformant (salesagent-42ap).
+# get_signals is advertised on the AgentCard but deliberately NOT declared in
+# get_adcp_capabilities' supported_protocols — see the full spec-cited rationale at the
+# matching registration site in src/core/tools/__init__.py. In short: per v3.1.1
+# protocol/get-adcp-capabilities-response.json, listing a protocol commits the agent to
+# pass that protocol's baseline compliance storyboard, which we cannot do while
+# activate_signal is unregistered. Tracked in GH #1593.
 from src.core.tools import (
     get_signals_raw as core_get_signals_tool,
 )

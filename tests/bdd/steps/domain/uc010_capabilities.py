@@ -135,6 +135,18 @@ def then_major_versions(ctx: dict) -> None:
 
 @then('the response should include supported_protocols containing "media_buy"')
 def then_supported_protocols(ctx: dict) -> None:
+    """media_buy is declared; "signals" is INTENTIONALLY absent, not an oversight.
+
+    get_signals is served on MCP/A2A/REST and advertised on the A2A AgentCard, so the
+    absence of "signals" here looks like a discovery-surface contradiction. It is
+    deliberate: per the pinned v3.1.1
+    protocol/get-adcp-capabilities-response.json, a supported_protocols value commits
+    the agent to pass that protocol's baseline compliance storyboard
+    (/compliance/3.1.1/protocols/signals/), which cannot pass while activate_signal is
+    unregistered. Declaring it would be a false conformance claim. Tracked in GH #1593
+    — when that lands, "signals" joins this list and the response gains its signals
+    section. Do not "fix" this assertion by adding "signals" before then.
+    """
     assert "media_buy" in wire_path(ctx, "supported_protocols")
 
 
