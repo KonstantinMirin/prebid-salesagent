@@ -1751,7 +1751,7 @@ def then_dual_emit_media_buy_status(ctx: dict) -> None:
     ``submitted``) while the DOMAIN status survives under ``media_buy_status``. The
     earlier "both identical" oracle read the re-mirrored reconstructed payload
     (``_mirror_media_buy_status``) and so could never observe this wire reality.
-    See docs/adcp-spec-version.md "Behavior target vs SDK pin".
+    See docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
     """
     from adcp.types import GeneratedTaskStatus as ProtocolTaskStatus
     from adcp.types import MediaBuyStatus
