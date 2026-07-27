@@ -548,7 +548,7 @@ _PREFERRED_PROTOCOL_CITATION = (
     "not echoed by the response item, and the per-account errors array is 'only present when action is "
     "failed', so the protocol offers NO channel to advise on a successful account. Rejecting would fail a "
     "spec-legal request over an advisory hint. Non-support stays discoverable via get_adcp_capabilities "
-    "(offline_delivery_protocols declared unbacked, #1291). FIXME(#1291): revisit when offline delivery lands."
+    "(offline_delivery_protocols declared unbacked, #1729). FIXME(#1729): revisit when offline delivery lands."
 )
 
 #: THE record of what every ``sync_accounts`` entry field does, per entry mode.

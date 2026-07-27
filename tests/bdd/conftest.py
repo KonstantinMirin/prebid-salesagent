@@ -737,11 +737,12 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-v31-reporting-delivery-methods",
         {"webhook_only", "offline_only", "mixed_delivery"},
-        "media_buy.reporting_delivery_methods / offline_delivery_protocols are not declarable: "
-        "declaring [webhook] fires the schema must_equal_when forcing webhook_signing.supported=true, "
-        "and no offline report delivery is implemented, so under the STRICT capability policy the "
-        "store carries no field for either. Both unlock with RFC 9421 signing / real report "
-        "delivery — #1291",
+        "media_buy.reporting_delivery_methods / offline_delivery_protocols are not declarable under "
+        "the STRICT capability policy, but the three rows have DIFFERENT blockers and do not "
+        "graduate together: webhook_only needs RFC 9421 signing, because declaring [webhook] fires "
+        "the schema must_equal_when forcing webhook_signing.supported=true — #1291; offline_only "
+        "needs real bucket report delivery (no reporting_bucket provisioning exists) — #1729; "
+        "mixed_delivery declares both members and needs BOTH — #1291 and #1729",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the no-emission row passes (no
     # must_equal_when trigger fires → webhook_signing absent is schema-valid); the emission rows

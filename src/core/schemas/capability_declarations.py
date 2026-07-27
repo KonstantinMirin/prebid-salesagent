@@ -46,19 +46,28 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 # not permitted". Every entry here is a promise we would otherwise make to buyers
 # and could not keep.
 #
-# RFC 9421 message signing (#1291) gates the whole signing family: request_signing
-# and webhook_signing directly, identity because its brand_json_url/key_origins
+# RFC 9421 message signing (#1291) gates the signing family: request_signing and
+# webhook_signing directly, identity because its brand_json_url/key_origins
 # subfields exist only to anchor signing keys, and
-# content_standards.supports_webhook_delivery / reporting_delivery_methods /
-# offline_delivery_protocols because the schema's must_equal_when rule forces
-# webhook_signing.supported=true the moment any of them is declared.
+# content_standards.supports_webhook_delivery because the schema's must_equal_when
+# rule forces webhook_signing.supported=true the moment it is declared. That rule's
+# any_of lists exactly three triggers -- reporting_delivery_methods contains
+# "webhook", content_standards.supports_webhook_delivery, wholesale_feed_webhooks
+# -- so offline delivery is NOT signing-gated and is tracked separately (#1729).
+#
+# reporting_delivery_methods carries one member per gate: [webhook] fires
+# must_equal_when (#1291), [offline] promises bucket delivery we do not implement
+# (#1729). It stays unbacked until BOTH land.
 _UNBACKED_BLOCKS: dict[str, str] = {
     "request_signing": "#1291 (RFC 9421 request signing is not implemented)",
     "webhook_signing": "#1291 (RFC 9421 webhook signing is not implemented)",
     "identity": "#1291 (identity.brand_json_url/key_origins anchor signing keys we do not publish)",
     "content_standards": "#1291 (supports_webhook_delivery forces webhook_signing.supported=true)",
-    "reporting_delivery_methods": "#1291 (declaring [webhook] forces webhook_signing.supported=true)",
-    "offline_delivery_protocols": "#1291 (no offline report delivery is implemented)",
+    "reporting_delivery_methods": (
+        "#1291 for [webhook] (forces webhook_signing.supported=true) and #1729 for [offline] "
+        "(no bucket report delivery is implemented)"
+    ),
+    "offline_delivery_protocols": "#1729 (no offline report delivery is implemented; see reporting_bucket)",
 }
 
 
