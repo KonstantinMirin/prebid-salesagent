@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -2367,13 +2368,43 @@ def then_attribution_model(ctx: dict, model: str) -> None:
     assert actual_model == model, f"attribution_window.model should be '{model}', got '{actual_model}'"
 
 
+def _dispatched_post_click(ctx: dict) -> dict:
+    """Return the post_click window this scenario actually dispatched.
+
+    Derived from ``ctx["dispatched_kwargs"]`` (recorded by ``dispatch_request``),
+    never from a literal default: a ``.get(key, 7)`` style fallback silently turns
+    an echo assertion into a constant, which is what salesagent-1zy8 was.
+    """
+    dispatched = _require(
+        ctx,
+        "dispatched_kwargs",
+        hint="no request was dispatched — the When step must call dispatch_request()",
+    )
+    window = dispatched.get("attribution_window")
+    assert window is not None, (
+        "the dispatched request carried no attribution_window, so there is nothing to echo — "
+        "this step belongs only in scenarios whose When step requests one"
+    )
+    post_click = window.get("post_click")
+    assert post_click is not None, (
+        f"the dispatched attribution_window has no post_click window: {window!r} — "
+        "this step asserts the post_click echo specifically"
+    )
+    return post_click
+
+
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the buyer's requested post_click values.
+    """Assert attribution_window echoes the APPLIED post_click window (BR-RULE-092 INV-3).
 
-    The production code echoes the buyer-requested post_click window
-    (preserving unit and interval).  This step verifies the echoed values
-    match the request — not merely that they are non-None.
+    Expected values come from what the scenario dispatched, so changing the
+    scenario's requested window changes what this step demands.
+
+    ``unit=campaign`` is the one case where the echo is not the request:
+    ``_resolve_attribution_window`` (src/core/tools/media_buy_delivery.py:980-990)
+    resolves it to ``Duration(interval=max(campaign_length_days, 1), unit=days)``.
+    The applied window is asserted by shape there rather than by re-deriving the
+    flight length, which would only mirror production's own arithmetic.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = ctx.get("response")
@@ -2388,16 +2419,21 @@ def then_attribution_echo(ctx: dict) -> None:
         "attribution_window.post_click is None — buyer requested a post_click window which should be echoed"
     )
 
-    # Read the buyer-requested values from ctx (set by the When step)
-    requested = ctx.get("request_attribution", {})
-    req_interval = requested.get("post_click_interval", 7)
-    req_unit = requested.get("post_click_unit", "days")
+    requested = _dispatched_post_click(ctx)
+    req_interval = requested["interval"]
+    req_unit = requested["unit"]
+    pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
 
-    # Assert the echoed values match the request
+    if req_unit == "campaign":
+        assert pc_unit == "days", (
+            f"a requested unit=campaign window must be echoed resolved to days, got {pc_unit!r}"
+        )
+        assert pc.interval >= 1, f"resolved campaign window must span at least 1 day, got {pc.interval}"
+        return
+
     assert pc.interval == req_interval, (
         f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
     )
-    pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
     assert pc_unit == req_unit, (
         f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc_unit!r}"
     )
