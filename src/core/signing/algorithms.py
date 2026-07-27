@@ -1,0 +1,114 @@
+"""The signing value-sets, with exactly one source of truth each.
+
+Two value-sets govern every signing key we mint, and they are sourced
+differently on purpose:
+
+* ``SIGNING_ALG_VALUES`` — DERIVED from ``adcp.signing.crypto.ALLOWED_ALGS``.
+  The ``signing_keys.alg`` CHECK constraint is built from it, never from a
+  hand-copied literal: migration ``e381618812f1`` exists because a hand-written
+  CHECK froze while a spec enum grew and a spec-valid value then IntegrityError'd
+  on INSERT (#1521). ``tests/unit/test_signing_alg_parity.py`` pins the constant
+  against the AdCP 3.1.1 algorithms enum, so an SDK bump that gains or loses a
+  value fails loudly instead of drifting.
+
+* ``MINTABLE_PURPOSES`` — a deliberate NARROWING below the SDK's accepted set,
+  so it cannot be derived. See its own comment.
+
+Three ``alg`` namespaces exist and they do not agree with each other. Every
+mis-mapping is a signature every conformant verifier rejects, so the mapping
+lives here once:
+
+===============================  ====================  ===============
+Namespace                        Ed25519               ECDSA P-256
+===============================  ====================  ===============
+RFC 9421 / this DB column        ``ed25519``           ``ecdsa-p256-sha256``
+``adcp.signing.keygen``          ``ed25519``           ``es256``
+the published JWK's ``alg``      ``EdDSA``             ``ES256``
+===============================  ====================  ===============
+
+Only the first is stored, and ``public_jwk`` is published verbatim as the SDK
+emitted it — nothing here re-derives a JWK ``alg``. Anywhere a JWK must yield an
+RFC 9421 name, use ``adcp.signing.alg_for_jwk``.
+"""
+
+from __future__ import annotations
+
+from typing import Literal, cast
+
+from adcp.signing.crypto import ALG_ED25519, ALG_ES256, ALLOWED_ALGS
+from adcp.signing.provider import SigningAlgorithm
+
+from src.core.exceptions import AdCPConfigurationError
+
+# ``ALLOWED_ALGS`` is a ``frozenset[str]``, and CPython randomizes str hashes per
+# process — iterating it yields a different order on every run. This value lands
+# in DDL text (the ``ck_signing_keys_alg`` CHECK body), so the order is part of
+# the contract: unsorted, the ORM DDL and the migration DDL can disagree and
+# alembic autogenerate churns.
+SIGNING_ALG_VALUES: tuple[str, ...] = tuple(sorted(ALLOWED_ALGS))
+
+# The SDK's keygen accepts ("request-signing", "webhook-signing"); we mint the
+# first ONLY. ``webhook-signing`` is deprecated pending removal (security.mdx
+# "adcp_use" §, adcp#5555) and webhooks are signed with a request-signing key
+# (security.mdx "One JWK per adcp_use") — blast-radius isolation comes from a
+# second key under a distinct ``kid``, not from a distinct purpose. So this is a
+# hand-written literal ON PURPOSE: deriving it from ``keygen._ADCP_USE_VALUES``
+# would wrongly admit the value we are refusing to stamp into published material.
+# The direction a narrowing cannot self-check — that the SDK still accepts what
+# we DO mint — is pinned by tests/unit/test_signing_alg_parity.py.
+MINTABLE_PURPOSES: tuple[str, ...] = ("request-signing",)
+
+REQUEST_SIGNING = "request-signing"
+
+# Column value -> the name ``adcp.signing.keygen`` speaks. The single keygen call
+# site (src/core/signing/keys.py) reaches it through ``keygen_alg`` — passing a
+# column value straight to the SDK raises ValueError, and storing a keygen value
+# in the column publishes a non-schema algorithm.
+_KEYGEN_ALG: dict[str, Literal["ed25519", "es256"]] = {
+    ALG_ED25519: "ed25519",
+    ALG_ES256: "es256",
+}
+
+
+def keygen_alg(alg: str) -> Literal["ed25519", "es256"]:
+    """Translate a stored ``alg`` into the name ``adcp.signing.keygen`` accepts."""
+    try:
+        return _KEYGEN_ALG[alg]
+    except KeyError:
+        raise AdCPConfigurationError(
+            f"Signing algorithm {alg!r} is not in the AdCP profile {SIGNING_ALG_VALUES!r}"
+        ) from None
+
+
+def narrow_alg(alg: str) -> SigningAlgorithm:
+    """Validate a stored ``alg`` and return it as the SDK's ``SigningAlgorithm``.
+
+    The column is ``Mapped[str]`` while ``InMemorySigningProvider(algorithm=...)``
+    wants a ``Literal`` — so this is what keeps mypy honest at the boundary. It is
+    also the runtime guard for a row written before the CHECK existed.
+    """
+    if alg not in SIGNING_ALG_VALUES:
+        raise AdCPConfigurationError(f"Signing algorithm {alg!r} is not in the AdCP profile {SIGNING_ALG_VALUES!r}")
+    return cast(SigningAlgorithm, alg)
+
+
+def narrow_purpose(purpose: str) -> Literal["request-signing", "webhook-signing"]:
+    """Validate a stored ``purpose`` and return it as the SDK's ``Literal``.
+
+    Same boundary problem as :func:`narrow_alg` — ``pem_to_adcp_jwk(purpose=...)``
+    and ``generate_signing_keypair(purpose=...)`` are typed against the SDK's two
+    values. Membership is checked against OUR narrowed set, not the SDK's, so a
+    row carrying the deprecated purpose is refused rather than re-published.
+    """
+    if purpose not in MINTABLE_PURPOSES:
+        raise AdCPConfigurationError(f"Signing purpose {purpose!r} is not mintable by this agent {MINTABLE_PURPOSES!r}")
+    return cast(Literal["request-signing", "webhook-signing"], purpose)
+
+
+def sql_value_list(values: tuple[str, ...]) -> str:
+    """Render *values* as a SQL ``IN`` body, for a DERIVED CHECK constraint.
+
+    One home for the rendering so the ORM constraint and its migration cannot
+    render the same value-set differently.
+    """
+    return ", ".join(repr(value) for value in values)

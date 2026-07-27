@@ -23,12 +23,14 @@ from src.core.database.repositories.idempotency_attempt import IdempotencyAttemp
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.uow import (
     AccountUoW,
     MediaBuyUoW,
     ProductUoW,
     PushNotificationConfigUoW,
+    SigningKeyUoW,
     TenantConfigUoW,
     WorkflowUoW,
 )
@@ -48,6 +50,8 @@ __all__ = [
     "ProductUoW",
     "PushNotificationConfigRepository",
     "PushNotificationConfigUoW",
+    "SigningKeyRepository",
+    "SigningKeyUoW",
     "TenantConfigRepository",
     "TenantConfigUoW",
     "WorkflowRepository",

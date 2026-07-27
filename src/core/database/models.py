@@ -38,6 +38,12 @@ from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.json_type import JSONType
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
+from src.core.signing.algorithms import (
+    MINTABLE_PURPOSES,
+    REQUEST_SIGNING,
+    SIGNING_ALG_VALUES,
+    sql_value_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2303,3 +2309,88 @@ class WebhookDeliveryLog(Base):
         Index("idx_webhook_log_status", "status"),
         Index("idx_webhook_log_created_at", "created_at"),
     )
+
+
+class SigningKey(Base):
+    """An RFC 9421 signing key this tenant owns (#1291 A2, salesagent-z6nr.8).
+
+    Each tenant is a distinct seller identity with its own brand domain, so key
+    material is per-tenant. One row binds a unique ``kid`` to the public JWK we
+    publish AND to a reference the process resolves for the private half it never
+    stores — so the key we sign with, the key we publish, and the key material on
+    disk cannot silently disagree.
+
+    ``private_key_ref`` is a scheme-prefixed opaque reference (``env:NAME``,
+    ``file:/abs/path``), never key material. Which schemes resolve is an
+    agent-level posture (``SigningConfig.allowed_key_ref_schemes``), so a
+    deployment can forbid ``file:`` without touching tenant rows.
+
+    ``not_before`` / ``not_after`` are OURS, not the spec's — the published
+    ``agent-signing-key`` schema carries only ``revoked_at`` plus JWK members.
+    The window governs which key we SIGN with; PUBLICATION is governed by
+    ``revoked_at`` plus that schema's grace period. A publisher filtering the
+    JWKS by ``not_after`` would un-publish a key while signatures made under it
+    are still inside their verification window — the exact gap rotation overlap
+    exists to prevent.
+
+    ``not_after IS NULL`` means open-ended (+infinity). The current key is always
+    open-ended, so that is the common case, not an edge case.
+
+    N rows per ``(tenant, purpose)`` distinguished by ``kid`` serve BOTH rotation
+    overlap and the webhook blast-radius isolation security.mdx describes
+    ("isolation comes from the kid"). One mechanism, not two.
+    """
+
+    __tablename__ = "signing_keys"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    kid: Mapped[str] = mapped_column(String(255), nullable=False)
+    alg: Mapped[str] = mapped_column(String(50), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(50), nullable=False, default=REQUEST_SIGNING)
+    public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    private_key_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    tenant = relationship("Tenant", backref="signing_keys")
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        # security.mdx: "Unique within the JWKS. MUST NOT collide with any other
+        # entry's kid regardless of adcp_use." One JWKS is published per tenant.
+        UniqueConstraint("tenant_id", "kid", name="uq_signing_keys_tenant_kid"),
+        # Both CHECKs are DERIVED from src.core.signing.algorithms — the value-set
+        # has one source of truth and this is a copy of it, never an independent
+        # literal (#1521). Pinned by tests/unit/test_signing_alg_parity.py.
+        CheckConstraint(
+            f"alg IN ({sql_value_list(SIGNING_ALG_VALUES)})",
+            name="ck_signing_keys_alg",
+        ),
+        CheckConstraint(
+            f"purpose IN ({sql_value_list(MINTABLE_PURPOSES)})",
+            name="ck_signing_keys_purpose",
+        ),
+        Index("idx_signing_keys_tenant_purpose_active", "tenant_id", "purpose", "not_after"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SigningKey("
+            f"id='{self.id}', "
+            f"tenant_id='{self.tenant_id}', "
+            f"kid='{self.kid}', "
+            f"alg='{self.alg}', "
+            f"purpose='{self.purpose}', "
+            f"private_key_ref='***', "
+            f"not_before={self.not_before}, "
+            f"not_after={self.not_after}, "
+            f"revoked_at={self.revoked_at}"
+            f")>"
+        )

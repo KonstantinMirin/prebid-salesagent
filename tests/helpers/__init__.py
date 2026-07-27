@@ -83,6 +83,11 @@ from tests.helpers.idempotency_seeds import (
     seed_media_buy,
     seed_principal,
 )
+from tests.helpers.orm_constraints import (
+    check_constraint_sql,
+    check_constraint_values,
+    quoted_values,
+)
 
 __all__ = [
     # Auth helpers
@@ -90,6 +95,10 @@ __all__ = [
     # Envelope assertions
     "assert_envelope_shape",
     "assert_no_raw_validation_leak",
+    # ORM CHECK-constraint introspection (parity guards)
+    "check_constraint_sql",
+    "check_constraint_values",
+    "quoted_values",
     # Idempotency cache seeding
     "make_active_cached_success",
     "seed_cached_success",

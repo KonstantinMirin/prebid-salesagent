@@ -437,9 +437,18 @@ Composed in `src/core/config.py` following the existing `BaseSettings` sub-confi
 
 | Field | Why it cannot vary per tenant |
 |---|---|
-| `SigningProvider` selection + key material location | one process, one key store |
+| `SigningProvider` selection + key **store kind** | one process, one key store |
 | revocation list issuer origin + poll interval | one fetcher per process |
 | brand.json / `adagents.json` / JWKS publication origin | one deployment origin |
+
+**Amendment (A2, salesagent-z6nr.8).** This row originally read "`SigningProvider` selection + key
+material LOCATION". Taken literally that is unimplementable: each tenant is a distinct seller
+identity with its own brand domain and therefore its own key material, so there is no single
+agent-level key location. A2 splits it — the **store kind** is agent-level
+(`SigningConfig.provider`, plus `allowed_key_ref_schemes`, which is what lets a deployment forbid
+`file:` in production), while each key's **location** is per-tenant and lives on the `signing_keys`
+row's scheme-prefixed `private_key_ref` (`env:NAME` / `file:/abs/path`). A3 and C1 inherit that
+split; do not re-derive it.
 
 **Group C — counterparty key resolution** (the inbound discovery chain: checklist step 7,
 `get_adcp_capabilities → identity.brand_json_url → brand.json → agents[] → jwks_uri`). This group

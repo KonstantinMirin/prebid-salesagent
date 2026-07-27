@@ -90,6 +90,76 @@ class SuperAdminConfig(BaseSettings):
         return [domain.strip() for domain in self.domains.split(",") if domain.strip()]
 
 
+class SigningConfig(BaseSettings):
+    """Agent-level posture for OUR OWN RFC 9421 signing key material (#1291 A2).
+
+    Not to be confused with ``adcp.signing.SigningConfig``, which is the SDK's
+    auto-signing bundle — alias at any import site that touches both.
+
+    The split this class encodes: the STORE KIND is agent-level (one process, one
+    key store), while each key's LOCATION is per-tenant and lives on the
+    ``signing_keys`` row's ``private_key_ref``. Each tenant is a distinct seller
+    identity with its own brand domain and therefore its own key material, so a
+    single agent-level key location is unimplementable.
+    """
+
+    provider: Literal["in_memory", "kms"] = Field(
+        default="in_memory", description="SigningProvider implementation: in_memory (default) or kms"
+    )
+    allowed_key_ref_schemes: str = Field(
+        default="env,file",
+        description="Comma-separated private_key_ref schemes this deployment will resolve (env, file)",
+    )
+    key_passphrase_env: str | None = Field(
+        default=None,
+        description="Name of the env var holding the PEM passphrase (the passphrase itself is never a config value)",
+    )
+
+    model_config = SettingsConfigDict(env_prefix="ADCP_SIGNING_", case_sensitive=False)
+
+    @property
+    def key_ref_scheme_list(self) -> list[str]:
+        """Allowed ``private_key_ref`` schemes as a list.
+
+        A comma-joined ``str`` rather than a ``tuple[str, ...]`` deliberately:
+        pydantic-settings treats sequence fields as complex types and JSON-parses
+        the env value, so ``ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES=env,file`` would
+        raise at startup and only ``["env","file"]`` would work. This is the gate
+        that lets a deployment forbid ``file:`` in production — the one field
+        least worth making awkward to set. Same shape as ``SuperAdminConfig``.
+        """
+        return [scheme.strip() for scheme in self.allowed_key_ref_schemes.split(",") if scheme.strip()]
+
+    @property
+    def key_passphrase(self) -> bytes | None:
+        """Resolve the configured PEM passphrase, or None.
+
+        Resolved from the environment on every call rather than held as a field:
+        CPython cannot zero a ``bytes``, so the SDK's guidance is to source the
+        passphrase per use rather than pin a literal in process memory for the
+        life of the config object.
+        """
+        if not self.key_passphrase_env:
+            return None
+        value = os.getenv(self.key_passphrase_env)
+        return value.encode() if value else None
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Reject ``kms`` until a KMS provider exists.
+
+        Fires when ``AppConfig()`` is constructed, which ``validate_configuration()``
+        does at startup — so selecting an unimplemented provider kills the process
+        then, not at the first signature (note §11).
+        """
+        if v == "kms":
+            raise ValueError(
+                "ADCP_SIGNING_PROVIDER='kms' is not implemented — no KMS SigningProvider exists yet. Use 'in_memory'."
+            )
+        return v
+
+
 class AppConfig(BaseSettings):
     """Main application configuration."""
 
@@ -107,6 +177,7 @@ class AppConfig(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     google_oauth: GoogleOAuthConfig = Field(default_factory=GoogleOAuthConfig)
     superadmin: SuperAdminConfig = Field(default_factory=SuperAdminConfig)
+    signing: SigningConfig = Field(default_factory=SigningConfig)
 
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
@@ -140,6 +211,16 @@ def validate_configuration() -> None:
 
         # Note: GEMINI_API_KEY is optional - tenants configure their own AI keys
         # Note: SUPER_ADMIN_EMAILS is optional - per-tenant OIDC with Setup Mode is the default auth flow
+
+        # Signing: an unimplemented provider must kill the process HERE, not at
+        # the first signature. The field_validator on SigningConfig already
+        # raises; this names the provider explicitly rather than surfacing a raw
+        # Pydantic trace.
+        if config.signing.provider not in ("in_memory",):
+            raise ValueError(
+                f"ADCP_SIGNING_PROVIDER={config.signing.provider!r} is not implemented — "
+                "the only available SigningProvider is 'in_memory'."
+            )
 
         print("✅ Configuration validation passed")
         print(f"   GAM OAuth: {'✅ Configured' if config.gam_oauth.client_id else '❌ Not configured'}")

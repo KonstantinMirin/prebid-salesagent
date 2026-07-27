@@ -41,6 +41,7 @@ from src.core.database.repositories.idempotency_attempt import IdempotencyAttemp
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -317,3 +318,26 @@ class AdminCreativeUoW(BaseUoW):
         self.products = None
         self.workflows = None
         self.tenant_config = None
+
+
+class SigningKeyUoW(BaseUoW):
+    """Unit of Work for this agent's own signing keys (#1291 A2).
+
+    Wraps a database session and provides a tenant-scoped
+    ``SigningKeyRepository``. Auto-commits on clean exit, rolls back on
+    exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-z6nr.8
+    """
+
+    signing_keys: SigningKeyRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.signing_keys = SigningKeyRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.signing_keys = None
