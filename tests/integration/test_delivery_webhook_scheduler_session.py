@@ -44,8 +44,16 @@ async def test_send_report_does_not_open_nested_db_session(integration_db):
                 "src.services.delivery_webhook_scheduler._get_media_buy_delivery_impl",
                 return_value=make_delivery_response(media_buy.media_buy_id),
             ),
+            # Patch the USE site, not the definition site. delivery_webhook_scheduler
+            # does `from src.core.database.database_session import get_db_session` at
+            # import time, binding the name into ITS OWN module globals — so a nested
+            # `with get_db_session()` inside _send_report_for_media_buy resolves through
+            # the scheduler module and never touches a patch on the defining module.
+            # Patching the definition site made this tripwire unable to fail against the
+            # very regression it pins (verified: reintroducing the nested session left
+            # this test green).
             patch(
-                "src.core.database.database_session.get_db_session",
+                "src.services.delivery_webhook_scheduler.get_db_session",
                 side_effect=AssertionError("scheduler must reuse the caller's session, not open a nested one"),
             ),
         ):
