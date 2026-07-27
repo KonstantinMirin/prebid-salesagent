@@ -1,27 +1,33 @@
 """Guard: BDD strict-xfail markers must not attribute their failure to #1462.
 
-#1462 is the in-process ``_impl`` request-path gap (it drops
-``attribution_window.post_click`` before validation runs). BDD scenarios do
-NOT parametrize the IMPL transport — they dispatch only over a2a/mcp/rest/
-e2e_rest (the IMPL fallback was removed; see ``tests/bdd/steps/generic/
-_dispatch.py``). Therefore any BDD ``pytest.mark.xfail(reason=...)`` that blames
-#1462 is necessarily MIS-ATTRIBUTED: the real cause is something the wire
-transports actually exercise (e.g. the generic ``with {request_params}`` step
-shadowing a specific partition step and dropping the window — #1417).
+#1462 reported that the ``get_media_buy_delivery`` request path dropped
+``attribution_window.post_click`` before validation could run. Re-derived
+against main on 2026-07-27: it never reproduced, on any transport. Every
+transport builds its request through the one shared
+``_build_get_media_buy_delivery_request``, which preserves ``post_click``, and
+a direct in-process probe confirms ``_validate_attribution_window`` rejects
+``{"interval": 2, "unit": "campaign"}`` as it should.
 
-This guard exists because exactly that mis-attribution accreted across five
-marker sites in ``tests/bdd/conftest.py`` and was corrected in #1417.
-The disease's recurrence is also caught at runtime by ``strict=True`` (a stale
-marker that starts passing becomes an XPASS->FAILED in the full in-network run),
-but this static guard stops the mis-attributed *reason string* from being
-copy-pasted back in.
+The reported symptom was manufactured in the BDD step layer: the generic
+``with {request_params}`` step matched the specific attribution step's text and
+``_parse_request_params`` harvested only ``key=value`` pairs, so the space-form
+window yielded ``{}`` and the request dispatched with NO attribution_window at
+all. Production then echoed ``post_click=None, model=last_touch`` — the
+signature of "the field never arrived", not "post_click was stripped". #1545
+narrowed that step to the ``\\w+=`` form, so the cause is dead everywhere.
+
+So a ``reason=`` string blaming #1462 is always wrong, and not merely because
+BDD skips the IMPL transport: it names a request-path defect that never existed.
+Do not replace it with the step-shadowing attribution either — that cause is
+also dead. Find what the failing transport actually exercises today.
 
 Scanning approach: AST — find ``pytest.mark.xfail(...)`` calls under
 ``tests/bdd/`` and assert no ``reason=`` string contains "1462". (Clarifying
-*comments* that mention #1462 to explain it is the IMPL path are fine — only the
-marker reason strings are scanned.)
+*comments* that mention #1462 to explain the history are fine — only the marker
+reason strings are scanned.)
 
-GH: #1417 (disease), #1417 (the real partition cause)
+GH: #1462 (the disproven attribution), #1545 (the step-binding fix that made it
+unreproducible)
 """
 
 from __future__ import annotations
@@ -72,17 +78,20 @@ def _find_1462_reasons(path: Path) -> list[tuple[int, str]]:
 
 
 def test_no_bdd_xfail_reason_attributes_to_1462() -> None:
-    """No BDD strict-xfail reason may blame #1462 (an IMPL-only gap BDD never runs)."""
+    """No BDD strict-xfail reason may blame #1462 (a defect that never reproduced)."""
     violations: list[str] = []
     for path in sorted(_BDD_DIR.rglob("*.py")):
         for lineno, reason in _find_1462_reasons(path):
             rel = path.relative_to(_BDD_DIR.parents[1])
             violations.append(f"{rel}:{lineno}: xfail reason blames #1462 -> {reason!r}")
     assert not violations, (
-        "BDD xfail markers must not attribute failures to #1462 (the in-process _impl "
-        "request-path gap). BDD does not parametrize IMPL, so a #1462-attributed BDD "
-        "marker is mis-attributed — find the transport the wire path actually exercises "
-        "(e.g. step shadowing, salesagent-50hl). Violations:\n" + "\n".join(violations)
+        "BDD xfail markers must not attribute failures to #1462. It reported a request "
+        "path that drops attribution_window.post_click; re-derived 2026-07-27, that never "
+        "reproduced on any transport — all transports share "
+        "_build_get_media_buy_delivery_request, which preserves it. Do not swap in the "
+        "generic-step-shadowing attribution either: #1545 narrowed that step, so the cause "
+        "is dead too. Identify what the failing transport actually exercises today. "
+        "Violations:\n" + "\n".join(violations)
     )
 
 
@@ -120,8 +129,8 @@ def test_meta_positive_catches_multiline_concatenated_reason() -> None:
 
 
 def test_meta_negative_allows_corrected_reason() -> None:
-    """Negative: the corrected #1417 reason is NOT flagged."""
-    src = 'import pytest\npytest.mark.xfail(reason="window dropped by step shadowing (salesagent-50hl)", strict=True)\n'
+    """Negative: a reason naming a live, transport-specific cause is NOT flagged."""
+    src = 'import pytest\npytest.mark.xfail(reason="e2e_rest: seller attribution default not implemented", strict=True)\n'
     assert not _scan_source(src), "guard must tolerate a non-#1462 reason"
 
 
@@ -129,7 +138,7 @@ def test_meta_negative_ignores_1462_in_comments() -> None:
     """Negative: #1462 in a comment (not a reason string) is fine."""
     src = (
         "import pytest\n"
-        "# #1462 is the in-process _impl path; BDD does not run impl\n"
-        'pytest.mark.xfail(reason="step shadowing (salesagent-50hl)", strict=True)\n'
+        "# #1462 alleged a request-path drop; it never reproduced (see module docstring)\n"
+        'pytest.mark.xfail(reason="e2e_rest: seller attribution default not implemented", strict=True)\n'
     )
     assert not _scan_source(src), "guard must scan reason strings only, not comments"
