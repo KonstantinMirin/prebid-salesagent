@@ -710,6 +710,152 @@ Feature: BR-UC-011 Manage Accounts
     # prior notification_configs[] set unchanged, and reports VALIDATION_ERROR at the url field
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description (Activation proof paragraph)
 
+  # ══════════════════════════════════════════════════════════════════════════
+  # Entry-field disposition (salesagent-gcze step 12)
+  #
+  # Every field a sync_accounts entry can carry has ONE declared disposition per
+  # entry mode. The five scenarios below grade the dispositions that no scenario
+  # graded before, so the single field-policy table that replaces the two
+  # hand-maintained allowlists cannot be written to match the code instead of the
+  # contract. Two of them (billing-forbidden, preferred_reporting_protocol) pin
+  # behavior production ALREADY has: they are what EARNS those rows the
+  # `spec_forbidden` / `ignored_by_design` label rather than "undecided debt".
+  # ══════════════════════════════════════════════════════════════════════════
+
+  @T-UC-011-governance-omit-preserves @sync @list @governance @invariant @partition @boundary
+  Scenario: A provisioning re-sync that omits governance_agents preserves the binding
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with governance_agents
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing  | payment_terms |
+    | acme-corp.com   | acme-corp.com | operator | net_45        |
+    Then the account for brand domain "acme-corp.com" has action "updated"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" binds governance agent "https://compliance.example.com/check"
+    # LOCAL EXTENSION, not a spec surface: `governance_agents` is not a
+    # sync-accounts-request property — the entry accepts it only via
+    # additionalProperties, and the spec's designated surface is sync_governance.
+    # Storyboard: UNGRADED on sync_accounts (governance/index.yaml runs sync_accounts
+    # with no governance payload, then sync_governance separately).
+    # The obligation graded here is therefore OURS: a re-sync that never mentions
+    # governance_agents must not silently clear them. `check_governance` keys off this
+    # binding, so an omission-wipe is a governance BYPASS, not merely data loss — the
+    # buyer re-syncs payment_terms and loses the approval gate with a success response.
+    # Read back through list_accounts (not the DB) because the wire is where the buyer
+    # would observe it: _db_account_to_schema already echoes governance_agents.
+    # `action "updated"` is the only intermediate grade: it proves the re-sync really did
+    # mutate the account (payment_terms went from unset to net_45), so the governance Then
+    # below is graded on a re-sync that WROTE, not a no-op. Deliberately NOT graded here:
+    # the payment_terms ECHO on the sync result — _build_sync_result's update branch omits
+    # it, which is a separate response-shape gap and does not belong in a governance scenario.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/additionalProperties
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/governance_agents
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description (omission-preserves semantics this reuses)
+
+  @T-UC-011-settings-update-sandbox-reject @sync @list @settings-update @sandbox @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Settings-update entry carrying entry-root sandbox is rejected per account
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id carrying entry-root sandbox true
+    Then the settings-update entry has action "failed"
+    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
+    And the per-account error recovery is "correctable"
+    And the per-account error field points at "accounts[0].sandbox"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" has sandbox false
+    # Schema-LEGAL on this arm (sandbox is absent from the settings-update `not:` list) but
+    # scoped by its own description to provisioning mode, and today silently ignored.
+    # It is the ONE mode-inapplicable field that escalates from declared no-op to explicit
+    # rejection, because sandbox is part of the buyer-declared natural key: honoring it would
+    # re-key the account and orphan it from every subsequent natural-key sync.
+    # Per-account failure (action "failed"), NOT operation-level — the field is schema-legal,
+    # so an operation-level raise would kill an otherwise valid batch.
+    # UNSUPPORTED_FEATURE over UNSUPPORTED_PROVISIONING: the latter's suggestion is about entry
+    # SHAPE ("re-issue with the entry shape the seller supports"), the former's is literally
+    # "remove unsupported fields" — which is the buyer action here.
+    # Storyboard: UNGRADED (no 3.1.1 storyboard sends entry-root sandbox in settings-update).
+    # POST-F1: the account's persisted sandbox flag is unchanged, so it is still findable
+    # under its original natural key.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/sandbox/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/sandbox
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
+
+  @T-UC-011-billing-entity-roundtrip @sync @list @settings-update @billing-entity @partition @boundary
+  Scenario: billing_entity is applied in both modes and echoed with bank details stripped
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a billing_entity legal_name "Acme GmbH" and bank details
+    Then the account for brand domain "acme-corp.com" has action "created"
+    And the echoed billing_entity legal_name is "Acme GmbH"
+    And the echoed billing_entity omits "bank"
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id refining billing_entity legal_name to "Acme Holdings GmbH"
+    Then the settings-update entry has action "updated"
+    And the echoed billing_entity legal_name is "Acme Holdings GmbH"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" echoes billing_entity legal_name "Acme Holdings GmbH"
+    And the listed billing_entity omits "bank"
+    # "Permitted in BOTH modes — sellers MAY accept refinements in settings-update mode
+    # (e.g., updated bank details)", and the response account item carries it "echoed from
+    # the request ... Bank details are omitted (write-only)". Rejecting is not an option:
+    # the spec's own DACH B2B provisioning example sends billing_entity at provisioning time.
+    # Today NEITHER arm applies it and no response model carries it — accepted on the wire,
+    # then dropped, with a success response. The bank leg has teeth because the request
+    # DECLARES bank details, so an echo that returns them is a real write-only leak.
+    # Storyboard: graded only NEGATIVELY (billing_entity MUST NOT leak through error.details,
+    # billing-gate-dispatch.yaml:350); persistence + echo are UNGRADED.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing_entity/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/billing_entity
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/billing_entity
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/capability_gate (non-leak leg only)
+
+  @T-UC-011-preferred-reporting-protocol-noop @sync @partition @boundary
+  Scenario: preferred_reporting_protocol is accepted as a declared no-op, never a rejection
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with preferred_reporting_protocol "s3"
+    Then the account for brand domain "acme-corp.com" has action "created"
+    And the account has status "active"
+    And the per-account result carries no errors
+    And the response does not contain an operation-level errors field
+    # REGRESSION LOCK, not a gap: this pins the status quo so the field-policy table cannot
+    # quietly turn an advisory hint into a buyer-visible rejection.
+    # The request description is HINT language — "The seller provisions the account
+    # reporting_bucket using this protocol IF SUPPORTED ... When omitted, the seller chooses
+    # from its supported offline_delivery_protocols" — and the response account item carries
+    # neither preferred_reporting_protocol nor reporting_bucket, so there is no echo to
+    # disagree with. The per-account errors array is documented "only present when action is
+    # failed", so the protocol offers NO channel to advise on a SUCCESSFUL account: a protocol
+    # that cannot advise on an unhonored optional hint is saying such hints are simply not
+    # honored. Rejecting would fail a spec-legal provisioning request over an advisory hint.
+    # Non-support stays DISCOVERABLE via get_adcp_capabilities: offline_delivery_protocols /
+    # reporting_delivery_methods are declared unbacked (#1291), which is what discharges the
+    # no-quiet-failure rule here.
+    # Storyboard: UNGRADED (zero occurrences of preferred_reporting_protocol in dist/compliance/3.1.1).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/preferred_reporting_protocol/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/reporting_bucket
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/errors/description
+
+  @T-UC-011-settings-update-billing-forbidden @sync @list @settings-update @validation @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Settings-update entry carrying billing alone is rejected at the operation level
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id carrying billing "agent"
+    Then the request is rejected at the operation level with error code "VALIDATION_ERROR" naming field "accounts[0]"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" has billing "operator"
+    # REGRESSION LOCK, not a gap. T-UC-011-sync-mode-exclusive already grades an entry
+    # carrying `account` AND the FULL trio; this grades `account` + `billing` ALONE, which
+    # is the shape the item oneOf forbids field-by-field
+    # (SettingsUpdateMode allOf: not-required brand, not-required operator, not-required billing)
+    # and the one the field-policy table calls `spec_forbidden` for settings-update.
+    # Without it, that row would rest on an AST assertion that the mode-exclusivity `if`
+    # exists — move the dispatch above the guard and the assertion stays green while billing
+    # is silently dropped again. This scenario is what makes the row a behavioral claim.
+    # POST-F1: the pre-existing account keeps billing "operator" — an operation-level
+    # rejection writes nothing.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1/allOf/2
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
+
   @T-UC-011-ext-e-preview @sync @dry-run @post-s10 @partition @boundary
   Scenario: dry_run_true returns preview -- success_dry_run (dry_run = true)
     Given the Buyer Agent has an authenticated connection

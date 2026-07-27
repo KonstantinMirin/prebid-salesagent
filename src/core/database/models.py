@@ -11,6 +11,9 @@ from adcp.types.generated_poc.core.account import (
     GovernanceAgent,
     Setup,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.business_entity import (
+    BusinessEntity,
+)  # TODO: no stable alias in adcp.types
 from sqlalchemy import (
     DECIMAL,
     BigInteger,
@@ -857,6 +860,12 @@ class Account(Base):
     notification_configs: Mapped[list[NotificationConfig] | None] = mapped_column(
         JSONType(model=NotificationConfig, is_list=True), nullable=True
     )
+    # Legal/billing entity, permitted in BOTH sync_accounts entry modes and
+    # echoed back on the response ("echoed from the request ... Bank details are
+    # omitted (write-only)"). Whole-object declarative replace, so a column
+    # rather than a table. `bank` IS persisted (the seller needs it to bill) and
+    # stripped only on the way out -- see _scrub_business_entity.
+    billing_entity: Mapped[BusinessEntity | None] = mapped_column(JSONType(model=BusinessEntity), nullable=True)
     sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 

@@ -24,6 +24,7 @@ from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
+from adcp.types.generated_poc.core.business_entity import BusinessEntity as LibraryBusinessEntity
 from pydantic import ConfigDict
 
 from src.core.config import get_pydantic_extra_mode
@@ -150,6 +151,13 @@ class SyncResponseAccount(SalesAgentBaseModel):
     # authentication.credentials is write-only and is stripped before this is built
     # (see _scrub_notification_credentials in src/core/tools/accounts.py).
     notification_configs: list[LibraryNotificationConfig] | None = None
+    # "Echoed from the request. Sellers MAY add fields the agent omitted ... but
+    # MUST NOT return data from a different entity. Bank details are omitted
+    # (write-only)" (v3.1.1 sync-accounts-response.json, accounts.items.
+    # billing_entity). The bank strip happens in _build_sync_result via
+    # _scrub_business_entity, the single place a persisted entity becomes a
+    # response object.
+    billing_entity: LibraryBusinessEntity | None = None
 
 
 class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSuccess):  # type: ignore[misc]

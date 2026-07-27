@@ -80,6 +80,9 @@ def _db_account_to_schema(db_account: DBAccount) -> Account:
         # credentials either, and the read-back leg of the register scenario goes
         # through here.
         notification_configs=_scrub_notification_credentials(db_account.notification_configs),
+        # Same scrub rationale as notification_configs: `bank` is write-only, and
+        # list_accounts is an echo path too.
+        billing_entity=_scrub_business_entity(db_account.billing_entity),
         ext=db_account.ext,
     )
 
@@ -373,6 +376,47 @@ def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
     return scrubbed
 
 
+def _serialize_business_entity(entity: Any) -> dict[str, Any] | None:
+    """Normalize a ``billing_entity`` (model or dict) to a JSON-serializable dict."""
+    if entity is None:
+        return None
+    if hasattr(entity, "model_dump"):
+        return entity.model_dump(mode="json", exclude_none=True)
+    return dict(entity)
+
+
+def _scrub_business_entity(entity: Any) -> Any:
+    """Strip write-only ``bank`` from an echoed ``billing_entity``.
+
+    The response account item documents ``billing_entity`` as "echoed from the
+    request ... **Bank details are omitted (write-only)**" (v3.1.1
+    sync-accounts-response.json). Called from ``_build_sync_result`` and
+    ``_db_account_to_schema`` — the two places a persisted entity becomes a
+    response object — rather than at each call site, the same placement
+    rationale as :func:`_scrub_notification_credentials`, so a future echo path
+    cannot leak by forgetting a call.
+    """
+    from adcp.types.generated_poc.core.business_entity import BusinessEntity
+
+    if entity is None:
+        return None
+    data = entity.model_dump(mode="json", exclude_none=True) if hasattr(entity, "model_dump") else dict(entity)
+    data.pop("bank", None)
+    return BusinessEntity.model_validate(data)
+
+
+def _persisted_value(db_account: DBAccount, field: str) -> Any:
+    """The persisted value of ``field``, serialized to compare against a resolved one."""
+    current = getattr(db_account, field, None)
+    if field == "notification_configs":
+        return _serialize_notification_configs(current)
+    if field == "governance_agents":
+        return _serialize_governance_agents(current)
+    if field == "billing_entity":
+        return _serialize_business_entity(current)
+    return current
+
+
 def _resolve_notification_configs(entry: Any, existing: Any) -> tuple[bool, list[dict[str, Any]] | None]:
     """Apply declarative-replace semantics for ``notification_configs``.
 
@@ -393,47 +437,263 @@ def _resolve_notification_configs(entry: Any, existing: Any) -> tuple[bool, list
     return True, _serialize_notification_configs(submitted) or []
 
 
-def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
-    """Compare incoming sync entry fields against existing DB account.
+def _resolve_scalar(entry: Any, existing: Any, field: str) -> tuple[bool, Any]:
+    """Omission-preserves resolver for a scalar enum/string field.
 
-    Returns a dict of fields that changed (key → new value).
-    Only compares mutable fields that can be updated via sync.
+    ``None`` means "not submitted", not "clear it": the request schema gives the
+    buyer no way to null a scalar, so an omitted field can only mean "leave it".
+    This is the same semantic ``notification_configs`` documents, applied
+    uniformly — a re-sync that mentions only ``payment_terms`` must not wipe
+    every other field it stayed silent about.
+    """
+    incoming = _enum_to_str(getattr(entry, field, None))
+    if incoming is None:
+        return False, getattr(existing, field, None)
+    return True, incoming
+
+
+def _resolve_governance_agents(entry: Any, existing: Any) -> tuple[bool, Any]:
+    """Omission-preserves resolver for ``governance_agents``.
+
+    Deliberately the SAME semantic as ``_resolve_notification_configs`` rather
+    than a second copy of it: before salesagent-gcze this field was compared
+    ``serialize(incoming) != serialize(persisted)``, so a provisioning re-sync
+    that merely OMITTED it produced ``changes["governance_agents"] = None`` and
+    WIPED the binding. ``check_governance`` keys off that binding, which makes an
+    omission-wipe a governance BYPASS — the buyer re-syncs ``payment_terms`` and
+    silently loses the approval gate, with a success response.
+    """
+    submitted = getattr(entry, "governance_agents", None)
+    if submitted is None:
+        return False, _serialize_governance_agents(getattr(existing, "governance_agents", None))
+    return True, _serialize_governance_agents(submitted)
+
+
+def _resolve_billing_entity(entry: Any, existing: Any) -> tuple[bool, Any]:
+    """Omission-preserves resolver for ``billing_entity`` (whole-object replace).
+
+    "Permitted in both provisioning and settings-update modes — sellers MAY
+    accept refinements in settings-update mode (e.g., updated bank details)"
+    (v3.1.1 sync-accounts-request.json
+    #/properties/accounts/items/properties/billing_entity/description), and the
+    response item echoes it back with bank details stripped (write-only).
+    """
+    from adcp.types.generated_poc.core.business_entity import BusinessEntity
+
+    submitted = getattr(entry, "billing_entity", None)
+    if submitted is None:
+        return False, _serialize_business_entity(getattr(existing, "billing_entity", None))
+    if isinstance(submitted, dict):
+        submitted = BusinessEntity.model_validate(submitted)
+    return True, _serialize_business_entity(submitted)
+
+
+def _resolve_sandbox(entry: Any, existing: Any) -> tuple[bool, Any]:
+    """``sandbox`` is applied at CREATE only — it is part of the natural key.
+
+    On an existing account this resolver is inert BY COUPLING, not as a local
+    property: both provisioning call sites reach here with
+    ``existing = repo.get_by_natural_key(..., sandbox=_extract_natural_key(entry).sandbox)``,
+    and ``get_by_natural_key`` filters exactly on it (``is not None`` -> equality;
+    otherwise ``IS NULL OR = false``). All cases normalize equal under
+    ``x or False``, so a matched account can never disagree with the submitted
+    value. If that lookup ever stops filtering on sandbox (e.g. to detect
+    ambiguous matches), this becomes a LIVE re-key and must be revisited here —
+    the settings-update arm already rejects it for exactly that hazard.
+    """
+    if existing is not None:
+        return False, existing.sandbox
+    return True, getattr(entry, "sandbox", None)
+
+
+class _Disposition:
+    """What a sync_accounts entry field DOES in one entry mode.
+
+    ``applied`` is the only disposition that needs no citation: it means the
+    buyer's value reaches persistence. Every other value tells the buyer their
+    field will not take effect, which under the project's no-quiet-failure rule
+    is acceptable only as a DECLARED decision traceable to the pinned spec — so
+    the citation is required by construction, not by review discipline.
+    """
+
+    __slots__ = ("kind", "citation")
+
+    def __init__(self, kind: str, citation: str = "") -> None:
+        self.kind = kind
+        self.citation = citation
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return f"_Disposition({self.kind!r}, {self.citation!r})"
+
+
+class _FieldPolicy:
+    """One row of :data:`_FIELD_POLICY`: a disposition per mode + how to apply it."""
+
+    __slots__ = ("provisioning", "settings_update", "resolve")
+
+    def __init__(self, *, provisioning: _Disposition, settings_update: _Disposition, resolve: Any = None) -> None:
+        self.provisioning = provisioning
+        self.settings_update = settings_update
+        self.resolve = resolve
+
+
+_APPLIED = _Disposition("applied")
+
+#: Why ``preferred_reporting_protocol`` is a DECLARED no-op rather than a
+#: rejection. Named because both modes cite it identically.
+_PREFERRED_PROTOCOL_CITATION = (
+    "v3.1.1 sync-accounts-request.json"
+    "#/properties/accounts/items/properties/preferred_reporting_protocol/description — hint language "
+    "('if supported'; 'when omitted, the seller chooses from its supported offline_delivery_protocols'), "
+    "not echoed by the response item, and the per-account errors array is 'only present when action is "
+    "failed', so the protocol offers NO channel to advise on a successful account. Rejecting would fail a "
+    "spec-legal request over an advisory hint. Non-support stays discoverable via get_adcp_capabilities "
+    "(offline_delivery_protocols declared unbacked, #1291). FIXME(#1291): revisit when offline delivery lands."
+)
+
+#: THE record of what every ``sync_accounts`` entry field does, per entry mode.
+#:
+#: This table replaces two hand-maintained allowlists (``_KNOWN_ASYMMETRIC`` and
+#: ``_KNOWN_DROPPED_BY_BOTH`` in the deleted handler-symmetry guard). Those
+#: encoded "undecided", which is what let a field sit in debt indefinitely and
+#: let ``billing``/``sandbox``/``governance_agents`` be honored on one arm and
+#: silently discarded on the other. Here every in-scope field — declared on the
+#: request arms OR arriving through ``extra="allow"`` — carries an explicit
+#: disposition in BOTH modes, and ALL THREE application sites (create,
+#: provisioning re-sync, settings-update) are driven by this one walk, so
+#: divergence between them is not expressible.
+#:
+#: Guarded by tests/unit/test_architecture_sync_accounts_field_policy.py.
+#: Which disposition each field deserves is graded behaviorally by the
+#: entry-field-disposition scenarios in BR-UC-011 — a row is a claim about the
+#: wire, and only a wire scenario can hold it to that.
+_FIELD_POLICY: dict[str, _FieldPolicy] = {
+    "payment_terms": _FieldPolicy(
+        provisioning=_APPLIED,
+        settings_update=_APPLIED,
+        resolve=lambda entry, existing: _resolve_scalar(entry, existing, "payment_terms"),
+    ),
+    "notification_configs": _FieldPolicy(
+        provisioning=_APPLIED,
+        settings_update=_APPLIED,
+        resolve=lambda entry, existing: _resolve_notification_configs(
+            entry, _serialize_notification_configs(getattr(existing, "notification_configs", None))
+        ),
+    ),
+    "billing_entity": _FieldPolicy(
+        provisioning=_APPLIED,
+        settings_update=_APPLIED,
+        resolve=_resolve_billing_entity,
+    ),
+    "billing": _FieldPolicy(
+        provisioning=_APPLIED,
+        settings_update=_Disposition(
+            "spec_forbidden",
+            "v3.1.1 sync-accounts-request.json"
+            "#/properties/accounts/items/oneOf/1/allOf/2 (SettingsUpdateMode: not required billing)",
+        ),
+        resolve=lambda entry, existing: _resolve_scalar(entry, existing, "billing"),
+    ),
+    "sandbox": _FieldPolicy(
+        provisioning=_APPLIED,
+        settings_update=_Disposition(
+            "rejected",
+            "UNSUPPORTED_FEATURE, v3.1.1 core/account.json#/properties/sandbox "
+            "(natural key: honoring it would re-key the account and orphan it from later syncs)",
+        ),
+        resolve=_resolve_sandbox,
+    ),
+    "governance_agents": _FieldPolicy(
+        provisioning=_APPLIED,
+        settings_update=_Disposition(
+            "local_extension",
+            "v3.1.1 sync-accounts-request.json#/properties/accounts/items/additionalProperties — "
+            "not a sync_accounts property at all; the spec's governance surface is sync_governance "
+            "(dist/compliance/3.1.1/domains/governance/index.yaml). Accepted on the provisioning arm "
+            "only because that is how governed accounts are seeded today; retire with sync_governance.",
+        ),
+        resolve=_resolve_governance_agents,
+    ),
+    "preferred_reporting_protocol": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
+        settings_update=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
+    ),
+}
+
+
+def _disposition(field: str, mode: str) -> _Disposition:
+    """The disposition ``field`` carries in ``mode`` (``provisioning``/``settings_update``)."""
+    return getattr(_FIELD_POLICY[field], mode)
+
+
+def _resolve_entry_changes(entry: Any, existing: Any, *, mode: str) -> dict[str, Any]:
+    """The ONE field-application walk, shared by all three sites.
+
+    ``existing=None`` IS the create case — a create is "resolve against nothing",
+    which is how ``_resolve_notification_configs(entry, None)`` already worked
+    before this table existed. Returns ``{column: value}`` for every field whose
+    disposition in ``mode`` is ``applied`` and whose resolver reports a change,
+    suitable both as ``repo.update_fields(**changes)`` and as ``DBAccount``
+    kwargs.
     """
     changes: dict[str, Any] = {}
-
-    billing_val = _enum_to_str(entry.billing)
-    if db_account.billing != billing_val:
-        changes["billing"] = billing_val
-
-    payment_terms_val = _enum_to_str(entry.payment_terms)
-    if db_account.payment_terms != payment_terms_val:
-        changes["payment_terms"] = payment_terms_val
-
-    # Normalize: None and False are equivalent for sandbox (DB defaults to False)
-    sandbox_val = entry.sandbox or False
-    db_sandbox = db_account.sandbox or False
-    if db_sandbox != sandbox_val:
-        changes["sandbox"] = entry.sandbox
-
-    # Compare governance_agents (JSON field)
-    # Both sides must be serialized to dicts for comparison — db_account.governance_agents
-    # is hydrated to list[GovernanceAgent] by JSONType, while incoming is already serialized.
-    incoming_gov = _serialize_governance_agents(getattr(entry, "governance_agents", None))
-    db_gov = _serialize_governance_agents(db_account.governance_agents)
-    if db_gov != incoming_gov:
-        changes["governance_agents"] = incoming_gov
-
-    # notification_configs gets its OWN branch, not a fold into the governance_agents
-    # comparison above: its semantics differ (omission PRESERVES rather than clears,
-    # and [] is a meaningful value), so the generic "serialize both sides and compare"
-    # rule would turn an omitted field into a clear.
-    notif_changed, notif_value = _resolve_notification_configs(
-        entry, _serialize_notification_configs(db_account.notification_configs)
-    )
-    if notif_changed and notif_value != _serialize_notification_configs(db_account.notification_configs):
-        changes["notification_configs"] = notif_value
-
+    for field, policy in _FIELD_POLICY.items():
+        if _disposition(field, mode).kind != "applied":
+            continue
+        if policy.resolve is None:  # pragma: no cover - no applied row lacks a resolver
+            continue
+        changed, value = policy.resolve(entry, existing)
+        if changed:
+            changes[field] = value
     return changes
+
+
+def _rejected_field_errors(entry: Any, *, mode: str, index: int) -> list[Any] | None:
+    """Per-account errors for fields the table marks ``rejected`` in ``mode``.
+
+    A ``rejected`` field is schema-LEGAL on this arm but cannot be honored, so
+    the buyer must be TOLD rather than have it silently ignored (the project's
+    no-quiet-failure rule). ``UNSUPPORTED_FEATURE`` over
+    ``UNSUPPORTED_PROVISIONING``: the latter's enumMetadata suggestion is about
+    entry SHAPE ("re-issue with the entry shape the seller supports"), and it
+    already means "no account matches this reference" in this file; the former's
+    is literally "check get_adcp_capabilities and remove unsupported fields",
+    which is exactly the buyer action here.
+    """
+    from adcp.types import Error
+
+    errors: list[Any] = []
+    for field, policy in _FIELD_POLICY.items():
+        if getattr(policy, mode).kind != "rejected":
+            continue
+        if getattr(entry, field, None) is None:
+            continue
+        errors.append(
+            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                code="UNSUPPORTED_FEATURE",
+                message=f"'{field}' cannot be changed on a settings-update entry: it is part of the "
+                "account's natural key, so changing it would re-key the account and orphan it from "
+                "subsequent syncs.",
+                suggestion="Remove the field from the entry; provision a separate account if you need "
+                "the other sandbox value.",
+                field=f"accounts[{index}].{field}",
+                recovery="correctable",
+            )
+        )
+    return errors or None
+
+
+def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
+    """Fields a PROVISIONING re-sync changes on an existing account.
+
+    Thin wrapper over the shared table walk, kept as a named function because the
+    dry-run and write call sites both read better with it.
+    """
+    changes = _resolve_entry_changes(entry, db_account, mode="provisioning")
+    # Only report fields whose resolved value actually differs from what is
+    # persisted -- the resolvers answer "did the buyer submit this", and
+    # "submitted the same value again" is not a change.
+    return {field: value for field, value in changes.items() if _persisted_value(db_account, field) != value}
 
 
 def _build_sync_result(
@@ -450,6 +710,7 @@ def _build_sync_result(
     errors: list[Any] | None = None,
     setup: Any | None = None,
     notification_configs: Any | None = None,
+    billing_entity: Any | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object.
 
@@ -461,7 +722,8 @@ def _build_sync_result(
     ``notification_configs`` is scrubbed of write-only credentials HERE rather
     than at the call sites: this builder exists so a shared shape can't drift
     across call sites, which makes it the one place a leak cannot be introduced
-    by forgetting a call.
+    by forgetting a call. ``billing_entity`` is scrubbed of write-only ``bank``
+    for the same reason and in the same place.
     """
     return SyncResponseAccount(
         brand=brand,
@@ -476,6 +738,7 @@ def _build_sync_result(
         errors=errors,
         setup=setup,
         notification_configs=_scrub_notification_credentials(notification_configs),
+        billing_entity=_scrub_business_entity(billing_entity),
     )
 
 
@@ -734,7 +997,9 @@ def _validate_notification_configs(configs: Any) -> list[Any] | None:
     return None
 
 
-def _process_settings_update_entry(entry: Any, repo: Any, proof_errors: list[Any] | None = None) -> SyncResponseAccount:
+def _process_settings_update_entry(
+    entry: Any, repo: Any, proof_errors: list[Any] | None = None, index: int = 0
+) -> SyncResponseAccount:
     """Handle a settings-update entry (keyed by AccountReference) -- update an
     EXISTING account's settable fields, NEVER provision (F1b/F1c).
 
@@ -806,18 +1071,23 @@ def _process_settings_update_entry(entry: Any, repo: Any, proof_errors: list[Any
             errors=notif_errors,
         )
 
-    payment_terms_val = _enum_to_str(entry.payment_terms)
-    changes: dict[str, Any] = {}
-    if payment_terms_val is not None and payment_terms_val != existing.payment_terms:
-        changes["payment_terms"] = payment_terms_val
+    # A schema-LEGAL field the table marks `rejected` on this arm. Per-account
+    # (action "failed"), never operation-level: the field parses, so an
+    # operation-level raise would kill an otherwise valid batch.
+    reject_errors = _rejected_field_errors(entry, mode="settings_update", index=index)
+    if reject_errors is not None:
+        return _build_failed_result(
+            brand=existing.brand,
+            operator=existing.operator or "",
+            billing=existing.billing,
+            sandbox=existing.sandbox,
+            errors=reject_errors,
+        )
 
-    # notification_configs is "permitted in both provisioning and settings-update
-    # modes" (sync-accounts-request.json), so the same shared resolver runs here --
-    # not a second copy of the semantics.
-    persisted_notif = _serialize_notification_configs(existing.notification_configs)
-    notif_changed, notif_value = _resolve_notification_configs(entry, persisted_notif)
-    if notif_changed and notif_value != persisted_notif:
-        changes["notification_configs"] = notif_value
+    # The SAME table walk the provisioning arm runs -- the two arms cannot
+    # disagree about which fields they apply, because neither names a field.
+    resolved = _resolve_entry_changes(entry, existing, mode="settings_update")
+    changes = {field: value for field, value in resolved.items() if _persisted_value(existing, field) != value}
 
     action = "unchanged"
     if changes:
@@ -834,9 +1104,10 @@ def _process_settings_update_entry(entry: Any, repo: Any, proof_errors: list[Any
         billing=existing.billing,
         payment_terms=existing.payment_terms,
         sandbox=existing.sandbox,
-        # Post-write state: the applied array when this entry changed it, the
+        # Post-write state: the applied value when this entry changed it, the
         # persisted one otherwise.
         notification_configs=changes.get("notification_configs", existing.notification_configs),
+        billing_entity=changes.get("billing_entity", existing.billing_entity),
     )
 
 
@@ -1086,7 +1357,7 @@ async def _sync_accounts_impl(
                 )
 
             if entry.account is not None:
-                results.append(_process_settings_update_entry(entry, repo, proof_failures.get(index)))
+                results.append(_process_settings_update_entry(entry, repo, proof_failures.get(index), index))
                 continue
 
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
@@ -1184,6 +1455,7 @@ async def _sync_accounts_impl(
                             # persisted one -- a dry_run that echoed the old set
                             # would misreport what the buyer is about to change.
                             notification_configs=changes.get("notification_configs", existing.notification_configs),
+                            billing_entity=changes.get("billing_entity", existing.billing_entity),
                         )
                     )
                     continue
@@ -1210,16 +1482,19 @@ async def _sync_accounts_impl(
                         # changed value when this sync touched it and the
                         # persisted one when it did not (omission preserves).
                         notification_configs=changes.get("notification_configs", existing.notification_configs),
+                        billing_entity=changes.get("billing_entity", existing.billing_entity),
                     )
                 )
             else:
-                # Create new account
-                billing_val = _enum_to_str(entry.billing)
-                payment_terms_val = _enum_to_str(entry.payment_terms)
-                governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
-                # New account: there is no persisted set, so an omitted field
-                # stays None ("never configured") rather than becoming [].
-                _, notification_configs_val = _resolve_notification_configs(entry, None)
+                # Create new account. A create IS "resolve against nothing": the
+                # SAME table walk both update sites run, with existing=None, so a
+                # field cannot be applied on re-sync but dropped at create (the
+                # aperture bug that hid billing_entity). An omitted field simply
+                # produces no kwarg and the column keeps its default.
+                created_fields = _resolve_entry_changes(entry, None, mode="provisioning")
+                billing_val = created_fields.get("billing")
+                notification_configs_val = created_fields.get("notification_configs")
+                billing_entity_val = created_fields.get("billing_entity")
 
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)
@@ -1249,6 +1524,7 @@ async def _sync_accounts_impl(
                             sandbox=sandbox,
                             setup=setup,
                             notification_configs=notification_configs_val,
+                            billing_entity=billing_entity_val,
                         )
                     )
                     continue
@@ -1260,12 +1536,11 @@ async def _sync_accounts_impl(
                     status=initial_status,
                     brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
                     operator=operator,
-                    billing=billing_val,
-                    payment_terms=payment_terms_val,
-                    sandbox=sandbox,
-                    governance_agents=governance_agents_val,
-                    notification_configs=notification_configs_val,
                     principal_id=principal_id,
+                    # Every settable field comes from the one walk above -- naming
+                    # them here is what let a field be added to the re-sync arm and
+                    # forgotten at create.
+                    **created_fields,
                 )
                 repo.create(new_account)
                 seen_account_ids.add(account_id)
@@ -1285,6 +1560,7 @@ async def _sync_accounts_impl(
                         sandbox=sandbox,
                         setup=setup,
                         notification_configs=notification_configs_val,
+                        billing_entity=billing_entity_val,
                     )
                 )
 

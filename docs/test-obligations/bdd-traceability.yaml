@@ -7109,7 +7109,19 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-billing-entity-roundtrip"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-billing-gate-recover"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-governance-omit-preserves"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: []
@@ -7176,6 +7188,24 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-011-notif-replace-clear"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-preferred-reporting-protocol-noop"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-settings-update-billing-forbidden"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-settings-update-sandbox-reject"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: []
