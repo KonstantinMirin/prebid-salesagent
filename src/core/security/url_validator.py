@@ -35,20 +35,31 @@ BLOCKED_HOSTNAMES = {
 }
 
 
-def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]:
-    """Check a URL for SSRF safety.
+def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, str]:
+    """Check a URL's SHAPE without resolving DNS.
 
-    Validates that the URL does not target private/internal networks
-    or cloud metadata services.
+    The DNS-free half of :func:`check_url_ssrf`: scheme, hostname presence, the
+    blocked-hostname list, and — crucially — the blocked/private/loopback ranges
+    for URLs whose host is already an IP LITERAL.
+
+    That last part is why this is not simply "everything before the resolve":
+    in ``check_url_ssrf`` the ``BLOCKED_NETWORKS`` test runs only AFTER
+    ``gethostbyname``, so a naive split would happily accept
+    ``https://10.0.0.1/hook``, ``https://127.0.0.1/hook`` and ``https://[::1]/hook``.
+
+    Use this at WRITE time, when a URL is being stored and must be well-formed but
+    the host is not expected to resolve yet (a buyer may register a webhook before
+    standing it up). Use :func:`check_url_ssrf` at FIRE time, when we are about to
+    send a request and must know where it actually lands.
 
     Args:
         url: The URL to validate.
-        require_https: If True, reject non-HTTPS schemes. If False,
-            allow both HTTP and HTTPS.
+        require_https: If True, reject non-HTTPS schemes. Defaults to False to
+            match :func:`check_url_ssrf` -- sibling functions with opposite
+            defaults are a footgun; callers that need HTTPS pass it explicitly.
 
     Returns:
-        (is_safe, error_message) -- is_safe is True if the URL is safe,
-        error_message describes the problem if not.
+        (is_safe, error_message).
     """
     try:
         parsed = urlparse(url)
@@ -65,6 +76,54 @@ def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]
 
         if hostname.lower() in BLOCKED_HOSTNAMES:
             return False, f"URL hostname '{hostname}' is blocked (internal/private)"
+
+        # IP-literal hosts need no DNS to be judged -- and must not escape the
+        # range checks just because resolution is skipped.
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            return True, ""
+
+        for network in BLOCKED_NETWORKS:
+            if literal_ip in network:
+                return False, f"URL targets blocked IP range {network} (private/internal network)"
+        if literal_ip.is_loopback or literal_ip.is_link_local or literal_ip.is_private:
+            return False, f"URL targets private/internal IP address: {literal_ip}"
+
+        return True, ""
+
+    except Exception as e:
+        return False, f"Invalid URL: {e}"
+
+
+def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]:
+    """Check a URL for SSRF safety.
+
+    Validates that the URL does not target private/internal networks
+    or cloud metadata services.
+
+    Args:
+        url: The URL to validate.
+        require_https: If True, reject non-HTTPS schemes. If False,
+            allow both HTTP and HTTPS.
+
+    Returns:
+        (is_safe, error_message) -- is_safe is True if the URL is safe,
+        error_message describes the problem if not.
+    """
+    # Shape first (scheme / hostname / blocklist / IP-literal ranges), then the
+    # resolve-dependent checks. Error ordering is preserved: every message the
+    # syntax half can produce is the message this function produced before the
+    # extraction.
+    ok, err = check_url_syntax(url, require_https=require_https)
+    if not ok:
+        return ok, err
+
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False, "URL must have a valid hostname"
 
         try:
             ip_str = socket.gethostbyname(hostname)

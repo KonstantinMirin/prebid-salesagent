@@ -2011,7 +2011,7 @@ def then_no_operation_level_errors(ctx: dict) -> None:
     assert errors is None or len(errors) == 0, f"Unexpected operation-level errors: {errors}"
 
 
-@then(parsers.parse('the per-account errors array contains an error with code "{code}"'))
+@then(parsers.re(r'the per-account errors array contains an error with code "(?P<code>[^"]+)"$'))
 def then_per_account_error_code(ctx: dict, code: str) -> None:
     """Assert the failed account's errors contain a specific error code.
 
@@ -2019,6 +2019,14 @@ def then_per_account_error_code(ctx: dict, code: str) -> None:
     Then set it, else from the first response account — so an error-code Then
     placed first in a scenario grades the real response (e.g. a provisioned
     account with an empty errors[]) rather than erroring on step ordering.
+
+    ``parsers.re`` with ``[^"]+`` and an end anchor, NOT ``parsers.parse`` with
+    ``{code}``: parse's capture is greedy and spans quotes, so on the disjunction
+    text ``code "INVALID_REQUEST" or "VALIDATION_ERROR"`` it matched FIRST and
+    bound the literal ``INVALID_REQUEST" or "VALIDATION_ERROR`` as a single code —
+    shadowing the dedicated or-variant below and failing against a correct
+    production response. A capture that cannot cross a quote makes the specific
+    step win by construction rather than by registration order.
     """
     acct = ctx.get("last_account")
     if acct is None:

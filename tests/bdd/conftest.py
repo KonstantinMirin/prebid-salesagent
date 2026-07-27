@@ -493,14 +493,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # rejects neither media-buy-anchored event_types nor duplicate subscriber_ids, and no
     # proof-of-control challenge exists). The account is provisioned (action 'created')
     # instead of failing, so each fails at the "has action failed" assertion.
-    "T-UC-011-notif-event-scope-reject": "account-level notification_configs unimplemented — _sync_accounts_impl "
-    "ignores accounts[].notification_configs, so a media-buy-anchored event_type ('scheduled') on the account "
-    "surface is never validated; the account is provisioned (action 'created') instead of failing with "
-    "INVALID_REQUEST/VALIDATION_ERROR at notification_configs[0].event_types[0] — #1592 spec-production gap",
-    "T-UC-011-notif-duplicate-subscriber": "account-level notification_configs unimplemented — _sync_accounts_impl "
-    "ignores accounts[].notification_configs, so duplicate subscriber_id entries in one submitted array are never "
-    "detected; the account is provisioned (action 'created') instead of failing with INVALID_REQUEST/VALIDATION_ERROR "
-    "at notification_configs[1].subscriber_id — #1592 spec-production gap",
+    # Graduated (salesagent-ck9v, #1592 T2 increment F4b): T-UC-011-notif-event-scope-reject and
+    # -notif-duplicate-subscriber removed. _validate_notification_configs runs pre-persist in BOTH
+    # entry handlers and emits a per-account failure inside a transport-level success, with the
+    # exact error.field pointers the storyboards grade.
     "T-UC-011-notif-activation-proof-fail": "account-level notification_configs unimplemented — no proof-of-control "
     "challenge exists and _sync_accounts_impl ignores accounts[].notification_configs, so an active subscriber whose "
     "url is unreachable is never challenged or rejected; the account is provisioned (action 'created') instead of "

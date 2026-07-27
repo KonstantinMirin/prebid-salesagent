@@ -651,6 +651,86 @@ def _check_sandbox_capability(entry_sandbox: bool | None, tenant: Any, index: in
     ]
 
 
+# Media-buy-anchored notification event types. These describe the lifecycle of a
+# media buy's delivery reporting, not an account, so they do not belong on the
+# account surface. There is deliberately no account-lifecycle event type either
+# (no account.status_changed) -- poll list_accounts or use push_notification_config.
+_MEDIA_BUY_ANCHORED_EVENT_TYPES = frozenset({"scheduled", "final", "delayed", "adjusted", "impairment"})
+
+
+def _validate_notification_configs(configs: Any) -> list[Any] | None:
+    """Validate a submitted notification_configs array; None when it is acceptable.
+
+    Same per-entry gate shape as ``_check_domain_validity`` / ``_check_billing_policy``
+    / ``_check_sandbox_capability``, and called from BOTH entry handlers so the two
+    arms cannot drift.
+
+    Check ORDER is load-bearing: the first failure decides the reported
+    ``error.field``, and the scenarios pin exact pointers. Duplicates are detected
+    before event scope so a duplicated entry reports its own
+    ``[j].subscriber_id`` rather than some unrelated later field.
+
+    These are per-account failures INSIDE a transport-level success -- the caller
+    turns them into ``_build_failed_result``, never a transport error.
+    """
+    from adcp.types import Error
+
+    from src.core.security.url_validator import check_url_syntax
+
+    if not configs:
+        return None
+
+    seen_subscribers: set[str] = set()
+    for index, config in enumerate(configs):
+        subscriber_id = getattr(config, "subscriber_id", None)
+        if subscriber_id in seen_subscribers:
+            return [
+                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                    code="INVALID_REQUEST",
+                    message=f"Duplicate subscriber_id '{subscriber_id}' in the submitted "
+                    "notification_configs array; each subscriber_id may appear at most once.",
+                    field=f"notification_configs[{index}].subscriber_id",
+                    suggestion="Send one entry per subscriber_id -- the array declares the full "
+                    "desired set, so a repeated id is ambiguous rather than an update.",
+                    recovery="correctable",
+                )
+            ]
+        if subscriber_id is not None:
+            seen_subscribers.add(subscriber_id)
+
+        for event_index, event_type in enumerate(getattr(config, "event_types", None) or []):
+            if enum_value(event_type) in _MEDIA_BUY_ANCHORED_EVENT_TYPES:
+                return [
+                    Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                        code="INVALID_REQUEST",
+                        message=f"Event type '{enum_value(event_type)}' is media-buy-anchored and "
+                        "cannot be subscribed to on the account surface.",
+                        field=f"notification_configs[{index}].event_types[{event_index}]",
+                        suggestion="Subscribe to media-buy delivery events on the media buy itself; "
+                        "account-level subscriptions carry creative and account-scoped events only.",
+                        recovery="correctable",
+                    )
+                ]
+
+        url = getattr(config, "url", None)
+        # Syntax only -- NOT the DNS-resolving check_url_ssrf. A buyer may register
+        # a webhook before standing the endpoint up, so requiring resolution at
+        # write time would reject legitimate registrations. Reachability is the
+        # activation proof's job (F4c), at fire time.
+        url_ok, url_error = check_url_syntax(str(url), require_https=True)
+        if not url_ok:
+            return [
+                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                    code="INVALID_REQUEST",
+                    message=f"notification_configs url is not acceptable: {url_error}",
+                    field=f"notification_configs[{index}].url",
+                    suggestion="Provide an absolute https:// URL on a publicly routable host.",
+                    recovery="correctable",
+                )
+            ]
+    return None
+
+
 def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount:
     """Handle a settings-update entry (keyed by AccountReference) -- update an
     EXISTING account's settable fields, NEVER provision (F1b/F1c).
@@ -705,6 +785,18 @@ def _process_settings_update_entry(entry: Any, repo: Any) -> SyncResponseAccount
                     recovery="correctable",
                 )
             ],
+        )
+
+    # Same shared validator as the provisioning arm, and BEFORE any write so a
+    # rejected entry leaves the persisted array byte-identical.
+    notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
+    if notif_errors is not None:
+        return _build_failed_result(
+            brand=existing.brand,
+            operator=existing.operator or "",
+            billing=existing.billing,
+            sandbox=existing.sandbox,
+            errors=notif_errors,
         )
 
     payment_terms_val = _enum_to_str(entry.payment_terms)
@@ -850,6 +942,22 @@ async def _sync_accounts_impl(
                         billing=billing_val,
                         sandbox=sandbox,
                         errors=sandbox_errors,
+                    )
+                )
+                continue
+
+            # notification_configs validation runs BEFORE any write, so a rejected
+            # entry leaves the account's prior array byte-identical. Same shared
+            # validator as the settings-update arm.
+            notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
+            if notif_errors is not None:
+                results.append(
+                    _build_failed_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        billing=billing_val,
+                        sandbox=sandbox,
+                        errors=notif_errors,
                     )
                 )
                 continue
