@@ -1771,42 +1771,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # attribution_window REFERENCE (clean scenario->step->harness path): the Examples
-        # name the exact error code (error "VALIDATION_ERROR" — the schema-canonical code
-        # for value/enum/range/business-rule violations; reconciled from the earlier
-        # INVALID_REQUEST mis-pin per the AdCP graded error-compliance storyboard), the
-        # step asserts it on the harness wire envelope. interval=0 / unit=weeks /
-        # model=last_click PASS on a2a/mcp/rest (VALIDATION_ERROR).
-        # GRADUATED (salesagent-x18x, #1545): the partition "campaign with interval=2"
-        # (campaign_interval_not_one) now passes on a2a — the only transport parametrized
-        # for that row — because the attribution_window.post_click reaches production and
-        # INV-5 fires (VALIDATION_ERROR "interval must be 1 when unit is 'campaign'"), which
-        # the Examples now name and the step asserts on the wire. So the former strict=True
-        # _aw_partition_campaign leg is dropped; the row passes unmasked. (The old #1462
-        # "request path drops post_click" framing was wrong for the wire transports; #1462 is
-        # the in-process _impl path, which BDD does not parametrize.)
-        # The partition shape's error "INVALID_REQUEST" rows STILL fail on e2e_rest: the
-        # generic "with {request_params}" step shadows the specific "with attribution_window
-        # {value}" step and _parse_request_params drops the space-form window, so the window
-        # never reaches the live server (#1417). Marker kept for e2e_rest until the step-
-        # binding bug is fixed.
-        _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
-        # #1545/x18x: the campaign partition row GRADUATED on a2a (the only transport
-        # parametrized for it) — INV-5 fires VALIDATION_ERROR with suggestion — so the
-        # former strict=True _aw_partition_campaign leg is dropped (no _aw_partition_campaign
-        # var remains). Only the error "INVALID_REQUEST" rows still fail on e2e_rest, where
-        # the generic "with {request_params}" step still shadows the specific partition step.
-        _partition_window_dropped = _aw_partition_error and is_e2e_rest
-        if _partition_window_dropped:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="attribution_window partition: the generic 'with {request_params}' step "
-                    "shadows the specific partition step and drops the window (salesagent-50hl); "
-                    "validation never fires so the rejection assertion can't pass",
-                    strict=True,
-                )
-            )
-
         # Graduated: T-UC-004-boundary-account — transport-aware.
         # "account_id present"/"brand + operator" (valid): fail on mcp/rest only.
         # "both account_id"/"empty object" (invalid): fail on a2a only.
@@ -1957,22 +1921,31 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "reporting_dimensions validation not implemented — production accepts invalid configs",
             ),
-            # attribution_window: validation IS implemented (SDK model enum/range +
-            # _validate_attribution_window for campaign INV-5, emitting VALIDATION_ERROR),
-            # but the partition-shape error rows never reach it: the generic
-            # "with {request_params}" step shadows the specific "with attribution_window
-            # {value}" step and _parse_request_params drops the space-form window
-            # (#1417) — a TEST step-binding bug, not the #1462 in-process gap.
-            # campaign_interval_not_one removed (salesagent-x18x, #1545): the only
-            # transport parametrized for it (a2a) now emits VALIDATION_ERROR+suggestion
-            # for the named Example and passes unmasked. interval_zero/negative/unit/model
-            # remain: those rows XPASS on a2a/rest but genuinely XFAIL on mcp under the
-            # salesagent-50hl generic-step-shadowing debt (out of scope for x18x).
+            # attribution_window REFERENCE (clean scenario->step->harness path): the
+            # Examples name the exact error code (error "VALIDATION_ERROR" — the
+            # schema-canonical code for value/enum/range/business-rule violations,
+            # reconciled from the earlier INVALID_REQUEST mis-pin per the AdCP graded
+            # error-compliance storyboard) and the step asserts it on the wire envelope.
+            # Validation IS implemented: SDK model enum/range plus
+            # _validate_attribution_window for the campaign INV-5 cross-field rule.
+            #
+            # GRADUATED (salesagent-x18x, #1545): campaign_interval_not_one now passes
+            # unmasked — the window reaches production and INV-5 fires
+            # (VALIDATION_ERROR "interval must be 1 when unit is 'campaign'").
+            #
+            # The generic "with {request_params}" step that used to shadow the specific
+            # attribution step was narrowed to the `\w+=` key=value form in #1545, so it
+            # can no longer match the space-form window. That cause is DEAD on every
+            # transport — do not re-cite it. (#1462 alleged a production request path that
+            # dropped post_click; re-derived 2026-07-27, it never reproduced on any
+            # transport. The symptom was this step-shadowing, which made the field never
+            # arrive at all.) The rows below are retained on their observed status only,
+            # pending per-row graduation.
             (
                 "T-UC-004-partition-attribution",
                 {"interval_zero", "interval_negative", "invalid_unit", "invalid_model"},
-                "attribution_window partition rows never reach validation — generic with-{request_params} "
-                "step shadows the specific partition step and drops the window (salesagent-50hl)",
+                "attribution_window partition rows: retained on observed status pending per-row "
+                "graduation (#1545 removed the step-shadowing that was the original cause)",
             ),
             # daily breakdown: production doesn't validate non-boolean values
             (
