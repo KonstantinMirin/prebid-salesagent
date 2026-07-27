@@ -2088,7 +2088,7 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
         from src.core.schemas import GetSignalsRequest
 
-        with adcp_validation_boundary():
+        with adcp_validation_boundary(context="get_signals request"):
             req = GetSignalsRequest.model_validate(parameters)
 
         response = await core_get_signals_tool(req=req, identity=identity)

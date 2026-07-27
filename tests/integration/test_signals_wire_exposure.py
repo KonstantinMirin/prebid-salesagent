@@ -156,3 +156,47 @@ class TestGetSignalsBodyDeclaresAllSpecFields:
                 f"spec-valid request with declared optional fields rejected: {response.status_code}: {response.text}"
             )
             _assert_sports_signal_response(GetSignalsResponse(**response.json()))
+
+
+class TestGetSignalsValidationLabelParity:
+    """Every transport labels a get_signals rejection with the same operation.
+
+    ``adcp_validation_boundary(context=...)`` renders the label into the
+    buyer-facing message via ``format_validation_error(e, context=context)``,
+    so the label is wire-observable — not an internal nicety. A bare
+    ``adcp_validation_boundary()`` on one transport emits "Invalid parameters"
+    while its siblings emit "Invalid get_signals request": the same rejection
+    reads differently depending on which wire the buyer used, which is exactly
+    the cross-transport divergence this PR's boundary work exists to remove.
+
+    Pinned on A2A — the surface this PR added and the one that carried a bare
+    ``adcp_validation_boundary()``. The MCP wrapper (signals.py) and the REST
+    route (api_v1.py) already pass ``context="get_signals request"``.
+
+    REST is deliberately NOT parametrized here: ``SignalsEnv.build_rest_body``
+    serializes only a typed ``req=`` and returns ``{}`` for raw kwargs, so a
+    malformed-field REST leg would send an EMPTY body and pass vacuously with
+    200 OK. Driving REST with a raw invalid payload needs a harness change —
+    tracked separately rather than pinned with a test that cannot fail.
+    """
+
+    # SignalRef is a discriminated OBJECT (scope + signal_id per v3.1.1
+    # core/signal-ref.json); a bare string cannot satisfy it, so this is
+    # rejected by GetSignalsRequest validation inside the boundary.
+    INVALID_PARAMS = {"signal_refs": ["not-a-signal-ref-object"]}
+
+    def test_a2a_rejection_carries_operation_label(self, integration_db):
+        from tests.helpers import assert_envelope_shape
+
+        with SignalsEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(Transport.A2A, **self.INVALID_PARAMS)
+
+            assert result.is_error, "invalid signal_refs unexpectedly accepted on A2A"
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                message_substr="get_signals request",
+            )
