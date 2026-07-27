@@ -531,6 +531,7 @@ class CreativeAgentRegistry:
         last_exc: Exception | None = None
         for attempt in range(max_retries):
             try:
+                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
                 async with httpx.AsyncClient(timeout=agent.timeout) as http:
                     response = await http.post(
                         mcp_url,

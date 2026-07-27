@@ -235,6 +235,7 @@ class TritonDigital(AdServerAdapter):
                 "active": True,
             }
 
+            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
             response = requests.post(f"{self.base_url}/campaigns", headers=self.headers, json=campaign_payload)
             response.raise_for_status()
             campaign_data = response.json()

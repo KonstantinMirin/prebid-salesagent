@@ -133,6 +133,7 @@ class ProtocolWebhookService:
     """
 
     def __init__(self):
+        # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
         self._session = requests.Session()
 
     async def send_notification(

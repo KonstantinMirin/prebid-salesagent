@@ -399,6 +399,7 @@ def _send_approval_webhook(
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
                 with httpx.Client(timeout=10.0) as client:
                     response = client.post(webhook_url, json=payload, headers=headers)
 

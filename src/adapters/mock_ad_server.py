@@ -505,6 +505,7 @@ class MockAdServer(AdServerAdapter):
         }
 
         try:
+            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
             response = requests.post(
                 self.async_webhook_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10
             )

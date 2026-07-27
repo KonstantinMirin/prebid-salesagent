@@ -523,6 +523,7 @@ def test_slack(tenant_id):
             # Send test message
             import requests
 
+            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
             response = requests.post(
                 tenant.slack_webhook_url,
                 json={

@@ -1005,6 +1005,7 @@ def gam_callback():
         logger.info(f"Exchanging authorization code for tokens - tenant: {tenant_id}, callback_uri: {callback_uri}")
         logger.debug(f"Token exchange request - client_id: {gam_config.client_id[:20]}...")
 
+        # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
         token_response = requests.post(
             "https://oauth2.googleapis.com/token",
             data={

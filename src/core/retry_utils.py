@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TypeVar
 
+# FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
 import aiohttp
 
 logger = logging.getLogger(__name__)

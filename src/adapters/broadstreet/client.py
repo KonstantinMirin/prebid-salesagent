@@ -148,6 +148,7 @@ class BroadstreetClient:
         url = self._build_url(path, query_params)
 
         try:
+            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
             response = requests.request(
                 method=method,
                 url=url,

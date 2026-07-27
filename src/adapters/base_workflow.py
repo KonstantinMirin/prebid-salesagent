@@ -215,6 +215,7 @@ class BaseWorkflowManager:
             }
 
             # Send notification
+            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
             response = requests.post(
                 slack_webhook_url,
                 json=slack_payload,

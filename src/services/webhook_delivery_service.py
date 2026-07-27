@@ -480,6 +480,7 @@ class WebhookDeliveryService:
                     time.sleep(delay)
 
                 # Send webhook
+                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
                 with httpx.Client(timeout=10.0) as client:
                     response = client.post(
                         config.url,

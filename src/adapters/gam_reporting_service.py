@@ -360,6 +360,7 @@ class GAMReportingService:
 
             # Download the report using requests with proper timeout and error handling
             try:
+                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
                 response = requests.get(
                     download_url,
                     timeout=(ReportingConfig.HTTP_CONNECT_TIMEOUT, ReportingConfig.HTTP_READ_TIMEOUT),

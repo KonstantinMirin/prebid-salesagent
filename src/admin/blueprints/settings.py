@@ -1264,6 +1264,7 @@ def check_approximated_domain_status(tenant_id):
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
         # Check domain registration status using correct Approximated API endpoint
+        # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
         response = requests.get(
             f"https://cloud.approximated.app/api/vhosts/by/incoming/{domain}",
             headers={

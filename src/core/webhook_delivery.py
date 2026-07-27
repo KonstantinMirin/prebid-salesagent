@@ -133,6 +133,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
                 f"[Webhook Delivery] Attempt {attempt + 1}/{delivery.max_retries} for {delivery_id} to {delivery.webhook_url}"
             )
 
+            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
             response = requests.post(
                 delivery.webhook_url, json=delivery.payload, headers=headers, timeout=delivery.timeout
             )

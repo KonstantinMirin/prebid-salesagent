@@ -79,6 +79,7 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
 
     # Fetch
     try:
+        # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
         async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()

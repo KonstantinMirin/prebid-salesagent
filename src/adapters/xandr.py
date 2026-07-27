@@ -242,6 +242,7 @@ class XandrAdapter(AdServerAdapter):
         auth_data = {"auth": {"username": self.username, "password": self.password}}
 
         try:
+            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
             response = requests.post(auth_url, json=auth_data)
             response.raise_for_status()
 
