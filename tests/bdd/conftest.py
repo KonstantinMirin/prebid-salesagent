@@ -1124,7 +1124,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         _UC004_XFAIL_TAGS: dict[str, tuple[str, bool]] = {
             # Empty array validation. The old reason ("not rejected by schema") was FALSE and has
             # been retired: production DOES reject media_buy_ids=[] and the boundary emits
-            # VALIDATION_ERROR. Re-derived 2026-07-28 (salesagent-c5o9) by running the scenario
+            # VALIDATION_ERROR. Re-derived 2026-07-28 by running the scenario
             # un-xfailed after correcting its error-code casing: it now gets PAST the code
             # assertion and dies one step later, on the message text. The scenario demands the
             # message contain the raw JSON-Schema keyword "minItems"; production emits the
@@ -1148,7 +1148,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # The previous reason ("fails on CASE alone") was ALSO wrong, and is retired here:
             # casing was only the FIRST of two failures, and it masked the second. The lowercase
             # 'validation_error' literal was corrected to canonical VALIDATION_ERROR in
-            # salesagent-c5o9; re-running un-xfailed on 2026-07-28 shows the row now clears the
+            # a repo-wide casing fix; re-running un-xfailed on 2026-07-28 shows the row now clears the
             # code assertion and dies on the SUGGESTION instead. The scenario demands a suggestion
             # containing "valid status values" (i.e. enumerate the accepted enum members);
             # production emits the generic "Correct the 'status_filter.str-enum[MediaBuyStatus]'
@@ -1294,7 +1294,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            # NEWLY ROUTED (salesagent-oz4j, 2026-07-28) — only the explicit-true rows.
+            # NEWLY ROUTED (GH #1751, 2026-07-28) — only the explicit-true rows.
             # These rows were passing vacuously: `_assert_valid_content` read
             # `getattr(pkg, "daily") or getattr(pkg, "by_day")`, and NEITHER attribute exists on
             # adcp.types.ByPackageItem (the field is `daily_breakdown`), so its `if daily is not

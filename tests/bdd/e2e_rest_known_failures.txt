@@ -137,7 +137,7 @@ tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprinci
 tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]
 tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]
 
-# --- newly VISIBLE production gap (2) — owner-approved addition 2026-07-28 (salesagent-oz4j) ---
+# --- newly VISIBLE production gap (2) — owner-approved addition 2026-07-28 (GH #1751) ---
 # These rows are NOT newly broken. They were passing VACUOUSLY: the oracle read
 # getattr(pkg,'daily') or getattr(pkg,'by_day'), and neither attribute exists on
 # adcp.types.ByPackageItem (the field is daily_breakdown), so its guard was unconditionally

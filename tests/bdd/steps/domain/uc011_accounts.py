@@ -398,7 +398,7 @@ def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     from src.core.schemas.account import ListAccountsRequest
 
     # Record the page size so the cursor-continuation step pages with the SAME size the
-    # scenario set up, instead of guessing a default (salesagent-1krl).
+    # scenario set up, instead of guessing a default (GH #1749).
     ctx["last_max_results"] = value
     try:
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=value))
@@ -418,7 +418,7 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
     cursor = prev_response.pagination.cursor
     # Page with the SAME size the scenario requested. A literal default here silently
     # re-pages at 50 regardless of what the scenario set up, so the continuation would
-    # not be testing continuity at all (salesagent-1krl).
+    # not be testing continuity at all (GH #1749).
     max_results = _require(
         ctx,
         "last_max_results",
@@ -837,7 +837,7 @@ def _snapshot_accounts(ctx: dict) -> None:
     ``then_no_accounts_modified`` grades a state-isolation obligation (POST-F1): a failed
     request must leave the account set untouched. That needs a real pre-request baseline —
     defaulting to ``set()`` turns the oracle into "the seller has zero accounts", which is
-    a different (and, behind a guard, unreachable) claim. See salesagent-1krl.
+    a different (and, behind a guard, unreachable) claim. See GH #1749.
 
     The tenant is resolved from ``ctx["env"]``, which the harness guarantees, rather than
     from ``ctx["tenant"]``/``ctx["principal"]`` — those are never set for the unauthenticated
@@ -1116,7 +1116,7 @@ def then_no_accounts_modified(ctx: dict) -> None:
     assertion never executed — proven by injecting ``assert False`` and still seeing the
     scenario pass on all three transports. The tenant now comes from ``ctx["env"]`` (which
     the harness guarantees) and the baseline is required, so absence fails loudly.
-    See salesagent-1krl.
+    See GH #1749.
     """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository

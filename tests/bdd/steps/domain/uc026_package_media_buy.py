@@ -2304,7 +2304,7 @@ def then_no_duplicate(ctx: dict) -> None:
 # nowhere but its own definition, and BR-UC-026 has no obligation doc in docs/test-obligations/,
 # so no documented obligation is lost by deleting it. It was carrying an orphan-key read
 # (`ctx.get("named_media_buy_ids", {})`) whose lookup branch was permanently dead. Deleted rather
-# than "fixed", because repairing an oracle nothing runs is not a fix. See salesagent-1krl.
+# than "fixed", because repairing an oracle nothing runs is not a fix. See GH #1749.
 
 
 @then("a new package should be created with a seller-assigned package_id")

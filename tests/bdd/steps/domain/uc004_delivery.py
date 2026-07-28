@@ -341,7 +341,7 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
         "active": True,
     }
     # Record the URL actually configured so `then_webhook_post` can assert against it
-    # rather than against a hardcoded literal (salesagent-1krl). Set here, at the single
+    # rather than against a hardcoded literal (GH #1749). Set here, at the single
     # choke point all three "active reporting_webhook" Givens funnel through.
     ctx["webhook_url"] = _WEBHOOK_URL
     env = ctx["env"]
@@ -657,7 +657,7 @@ def given_seller_no_capability(ctx: dict, capability: str) -> None:
 # a flag no production code reads, so it produced state byte-identical to its "supports" sibling
 # and the two scenarios were the same test. Its scenario (T-UC-004-attr-unsupported) has been
 # reconciled away: this seller always honours the requested window, which AdCP 3.1.1 permits.
-# 39 sibling dead Given flags are tracked in salesagent-ki3b.
+# 39 sibling dead Given flags are tracked in GH #1752.
 
 
 @given("the seller supports configurable attribution windows")
@@ -1563,7 +1563,7 @@ def then_webhook_post(ctx: dict) -> None:
     match the harness constant ``_WEBHOOK_URL`` — so the first run of this step would have
     compared the real POST target against a URL appearing nowhere in the setup. The step is
     masked today only because its scenario is xfailed on an unrelated production gap, which
-    made it a landmine for whoever implements webhook delivery. See salesagent-1krl.
+    made it a landmine for whoever implements webhook delivery. See GH #1749.
     """
     env = ctx["env"]
     assert env.mock["post"].called, "Expected webhook POST but none was made"
@@ -1849,7 +1849,7 @@ def then_single_probe(ctx: dict) -> None:
     ``assert False`` into that branch and still seeing all three transports pass (a control
     mutation at the function entry did fail, so this was not a sync artifact). Removed as dead
     code rather than repaired — fixing an oracle that cannot execute changes nothing.
-    See salesagent-1krl.
+    See GH #1749.
 
     The remaining ``pytest.xfail`` below is an INLINE xfail in a step body: invisible to the
     conftest xfail sweep and to the xpass audit, so it can never graduate on its own. That is
@@ -2753,7 +2753,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             for d in deliveries:
                 # No `if actual_status:` guard — a delivery that comes back with no status is
                 # itself a filter violation (the filter cannot have been applied to it), and
-                # guarding on it let exactly that case pass silently. See salesagent-oz4j.
+                # guarding on it let exactly that case pass silently. See GH #1751.
                 actual_status = getattr(d, "status", None)
                 assert actual_status in requested_filter, (
                     f"Status filter violation: got status {actual_status!r} but filter requested {requested_filter}"
@@ -2796,7 +2796,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         # adcp.types.ByPackageItem (the field is `daily_breakdown`), so the guard was
         # unconditionally false and the assertion was dead by construction — no production change
         # of any kind could reach it. Proven by mutation: `assert False` inside that guard left
-        # all 18 daily-breakdown rows passing. See salesagent-oz4j (twin of salesagent-ymvg).
+        # all 18 daily-breakdown rows passing. See GH #1751 (twin of salesagent-ymvg).
         dispatched = _require(
             ctx,
             "dispatched_kwargs",

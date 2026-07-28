@@ -53,8 +53,9 @@ LOWER_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Verdicts. These are deliberately distinct: a lowercase spelling of a canonical
 # member is a CASING defect with a mechanical fix, while a non-canonical code needs
-# a code decision (salesagent-44c8). Collapsing them lets a casing defect hide inside
-# a several-hundred-item reconciliation backlog, which is how salesagent-c5o9 survived.
+# a code decision (GH #1753). Collapsing them lets a casing defect hide inside
+# a several-hundred-item reconciliation backlog — which is exactly how 13 lowercase
+# case-variants survived unnoticed in BR-UC-001/004/014 until 2026-07-28.
 LOWERCASE_VARIANT = "LOWERCASE_VARIANT"
 NON_CANONICAL = "NON_CANONICAL"
 
@@ -222,7 +223,7 @@ def main() -> int:
         help=(
             "Grade ONLY lowercase spellings of canonical enum members. This verdict is at zero "
             "repo-wide, so it can be gated everywhere immediately — unlike the non-canonical "
-            "backlog, which is still being reconciled per-UC under salesagent-44c8."
+            "backlog, which is still being reconciled per-UC under GH #1753."
         ),
     )
     args = parser.parse_args()

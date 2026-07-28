@@ -66,7 +66,7 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # honours the requested window, so INV-2 never applied to it. The nodeid no longer exists,
         # so this is a scenario retirement, not a graduation.
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
-        # Added 2026-07-28 (owner-approved, salesagent-oz4j): NOT newly broken — these two rows
+        # Added 2026-07-28 (owner-approved, GH #1751): NOT newly broken — these two rows
         # were passing vacuously against a guard that could never be entered (the oracle read
         # pkg.daily / pkg.by_day, neither of which exists on ByPackageItem). Repairing it made a
         # pre-existing production gap observable: include_package_daily_breakdown=true is accepted
