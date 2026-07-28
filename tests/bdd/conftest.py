@@ -1523,10 +1523,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             # sampling (salesagent-03q): sampling_method is NOT a
             # GetMediaBuyDeliveryRequest field — the artifact-sampling feature
-            # is entirely unimplemented. Only (omitted)/not_provided genuinely
-            # pass; rest silently drops the unknown param so its named-method
-            # rows accidentally "pass" (must NOT be marked). impl/a2a/mcp
-            # named-method + every unknown_value/systematic row fails.
+            # is entirely unimplemented, and the field appears nowhere in the
+            # pinned adcp v3.1.1 tree (verified: `git grep sampling_method v3.1.1`
+            # in the adcp repo returns nothing). Only (omitted)/not_provided
+            # genuinely pass; every named-method row fails on every transport.
+            # UPDATED(salesagent-bhhz): the rest named-method rows used to be
+            # excluded here because SignalsEnv/DeliveryPollEnv-style
+            # build_rest_body DROPPED the unknown param, so REST answered 200 to
+            # a request that never carried it and the rows accidentally "passed".
+            # That drop is gone — REST now puts the field on the wire and the body
+            # model rejects it — so those rows are listed below like every other
+            # transport. Nothing regressed; a mask was removed.
             (
                 "T-UC-004-partition-sampling",
                 {
@@ -1546,6 +1553,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-failures_only",
                     "mcp-unknown_value-systematic",
                     "[rest-unknown_value-systematic",
+                    # Unmasked by salesagent-bhhz (see comment above).
+                    "[rest-random-random",
+                    "[rest-stratified",
+                    "[rest-recent",
+                    "[rest-failures_only",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
                 "field); ValidationError not AdCPError (rest silently drops it). "
@@ -1564,6 +1576,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-failures_only (last enum value)",
                     "mcp-Unknown string not in enum",
                     "[rest-Unknown string not in enum",
+                    # Unmasked by salesagent-bhhz: REST no longer drops the unknown
+                    # sampling_method, so these fail like every other transport.
+                    "[rest-random (first enum value)",
+                    "[rest-failures_only (last enum value)",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
                 "field); ValidationError not AdCPError (rest silently drops it). "
@@ -1604,6 +1620,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # mcp/rest still return 200+empty (C3 gap remains).
                     "mcp-principal differs from owner",
                     "[rest-principal differs from owner",
+                    # Unmasked by salesagent-bhhz: the step dispatches `ownership` as a
+                    # request field, which is not in GetMediaBuyDeliveryRequest either.
+                    # REST used to drop it (accidental pass); it is now rejected on the wire.
+                    "[rest-principal matches owner",
                 },
                 "cross-principal access returns 200+empty instead of "
                 "AdCPError(MEDIA_BUY_NOT_FOUND). impl genuinely passes. "

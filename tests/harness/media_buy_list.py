@@ -59,16 +59,6 @@ class MediaBuyListEnv(IntegrationEnv):
 
         return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
 
-    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to GetMediaBuysBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        for key in ("media_buy_ids", "status_filter", "account_id", "context"):
-            if key in kwargs and kwargs[key] is not None:
-                body[key] = kwargs[key]
-        if kwargs.get("include_snapshot"):
-            body["include_snapshot"] = True
-        return body
-
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
         """Parse REST response JSON."""
         return GetMediaBuysResponse(**data)

@@ -81,11 +81,6 @@ class PerformanceEnv(IntegrationEnv):
         """Call update_performance_index via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("update_performance_index", UpdatePerformanceIndexResponse, **kwargs)
 
-    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to UpdatePerformanceIndexBody shape for REST POST."""
-        _BODY_FIELDS = ("media_buy_id", "performance_data", "context")
-        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
-
     def parse_rest_response(self, data: dict[str, Any]) -> UpdatePerformanceIndexResponse:
         """Parse REST JSON response into UpdatePerformanceIndexResponse."""
         return UpdatePerformanceIndexResponse(**data)

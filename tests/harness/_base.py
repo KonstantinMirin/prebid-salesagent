@@ -302,6 +302,35 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     return exc
 
 
+def _json_safe(value: Any) -> Any:
+    """Coerce a raw kwarg to something ``json=`` can serialize, without validating it.
+
+    Deliberately structure-preserving rather than schema-aware: a REST leg must be able to put a
+    MALFORMED value on the wire (that is the whole point of testing an error path through the real
+    route), so anything this cannot recognize is passed through untouched for httpx/the route to
+    reject — never dropped, never coerced into something valid.
+    """
+    from datetime import date, datetime
+    from decimal import Decimal
+    from enum import Enum
+
+    from pydantic import BaseModel as PydanticBaseModel
+
+    if isinstance(value, PydanticBaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple | set):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 class _TestClock:
     """Minimal clock for BDD relative date-token resolution.
 
@@ -977,28 +1006,44 @@ class BaseTestEnv:
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert call_impl kwargs to the REST endpoint body shape.
 
-        Default: if ``req`` is a Pydantic model, delegates serialization to it
-        via ``model_dump(mode="json", exclude_none=True)``.  Enums, nested
-        models, and optional fields are handled by Pydantic — no manual
-        field-by-field extraction needed.
+        Two accepted shapes, both of which put every field the caller supplied on the wire:
 
-        If no ``req`` is present, returns empty dict (valid for endpoints
-        where all parameters are optional).
+        - a typed ``req=`` model — serialized via ``model_dump(mode="json", exclude_none=True)``,
+          so enums, nested models and optionals are Pydantic's problem, not ours;
+        - RAW FIELD KWARGS — the shape ``call_via`` / ``_run_a2a_handler`` accept and forward as
+          skill parameters — serialized field by field.
 
-        Subclasses that receive flat kwargs (not a ``req`` object) must
-        override to build the body dict themselves.
+        **A supplied kwarg is never silently dropped.** It used to be: no ``req`` meant an empty
+        body, so ``call_via(Transport.REST, signal_refs=[<malformed>])`` sent ``{}``, the route
+        returned 200 because every field of the request schema is optional, and the test asserted
+        against a response to a payload it never sent. A REST leg written that way grades nothing
+        while looking like cross-transport coverage — and it made malformed-payload tests
+        impossible to write at all on REST, since the typed ``req=`` path rejects them client-side
+        before they can be sent (salesagent-bhhz, and the reason salesagent-0ggp's parity test is
+        A2A-only).
+
+        ``identity`` is popped by ``_prepare_rest_request`` before this runs, so everything arriving
+        here is a field the caller meant to send. Subclasses that need special serialization for
+        particular fields should handle those and delegate the rest here — not re-implement the
+        pass-through, and never return ``{}`` for kwargs they do not recognize.
         """
         from pydantic import BaseModel as PydanticBaseModel
 
-        req = kwargs.get("req")
-        if req is not None and isinstance(req, PydanticBaseModel):
-            return req.model_dump(mode="json", exclude_none=True)
-        if req is None:
-            return {}
-        raise NotImplementedError(
-            f"{type(self).__name__}.build_rest_body() received non-Pydantic 'req': {type(req)}. "
-            "Override build_rest_body() to handle this type."
-        )
+        req = kwargs.pop("req", None)
+        if req is not None and not isinstance(req, PydanticBaseModel):
+            raise NotImplementedError(
+                f"{type(self).__name__}.build_rest_body() received non-Pydantic 'req': {type(req)}. "
+                "Override build_rest_body() to handle this type."
+            )
+
+        body: dict[str, Any] = req.model_dump(mode="json", exclude_none=True) if req is not None else {}
+
+        # Raw field kwargs go on the wire as-is (JSON-coerced). Merged after the typed req so an
+        # explicit kwarg wins, which is what a caller passing both would mean.
+        for key, value in kwargs.items():
+            if value is not None:
+                body[key] = _json_safe(value)
+        return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> BaseModel:
         """Parse REST JSON response dict into the expected Pydantic model.

@@ -83,20 +83,6 @@ class CreativeListEnv(IntegrationEnv):
         """Call list_creatives via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("list_creatives", ListCreativesResponse, **kwargs)
 
-    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to ListCreativesBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        for key in ("media_buy_id", "media_buy_ids", "status", "format"):
-            if key in kwargs and kwargs[key] is not None:
-                body[key] = kwargs[key]
-        # The structured filters travel over REST as a JSON dict — the body field is
-        # typed dict and coerced to CreativeFilters server-side. Callers pass an
-        # already-serialized dict (see the UC-018 concept_ids When step).
-        filters = kwargs.get("filters")
-        if filters is not None:
-            body["filters"] = filters
-        return body
-
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativesResponse:
         """Parse REST JSON into ListCreativesResponse."""
         return ListCreativesResponse(**data)

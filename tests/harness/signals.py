@@ -76,11 +76,17 @@ class SignalsEnv(IntegrationEnv):
         ``exclude_unset`` keeps library-schema defaults (e.g. ``discovery_mode``)
         off the wire so the test pins only the fields it sends — the REST Body
         model's exact field inventory is the implementation's concern.
+
+        Raw field kwargs delegate to the base implementation, which puts them on the wire as sent.
+        This override used to return ``{}`` for them, so every one of the 17 fields
+        ``GetSignalsBody`` accepts was unreachable except through a typed ``req=`` — and a typed
+        model cannot express a malformed payload, so REST error-path tests could not be written at
+        all (salesagent-bhhz).
         """
-        req = kwargs.get("req")
-        if req is not None:
-            return req.model_dump(mode="json", exclude_unset=True, exclude_none=True)
-        return {}
+        req = kwargs.pop("req", None)
+        body = req.model_dump(mode="json", exclude_unset=True, exclude_none=True) if req is not None else {}
+        body.update(super().build_rest_body(**kwargs))
+        return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetSignalsResponse:
         """Parse REST JSON response into GetSignalsResponse."""

@@ -77,7 +77,18 @@ class CapabilitiesEnv(IntegrationEnv):
         return self._run_mcp_client("get_adcp_capabilities", GetAdcpCapabilitiesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """GET route — no body."""
+        """GET route — there is no body, so a caller passing fields is a test bug, not a no-op.
+
+        ``_run_rest_request`` never calls this for REST_METHOD="get"; reaching it means a caller
+        expects fields to travel that this transport cannot carry. Returning {} would silently drop
+        them and let the test grade a request it did not make (salesagent-bhhz).
+        """
+        if kwargs:
+            raise AssertionError(
+                f"{type(self).__name__} dispatches GET {self.REST_ENDPOINT}, which has no request "
+                f"body, but was handed fields to send: {sorted(kwargs)}. Express them as query "
+                f"parameters or use a transport that carries a body — they cannot go on this wire."
+            )
         return {}
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetAdcpCapabilitiesResponse:
