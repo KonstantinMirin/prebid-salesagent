@@ -36,6 +36,15 @@ shortens the base for test speed and nothing else — it cannot change the shape
 remove the jitter, it is deliberately not passed through ``tox.ini`` or either
 compose file, and it must never be set in a deployment.
 
+``send`` and ``asend`` take an optional ``field``: the request-payload path the
+URL arrived on, carried onto a refusal so the buyer learns which input to fix.
+It is a PASSTHROUGH, not a fourth decision — the seam sees a URL string, never a
+request document, so it cannot compute the path, and the path's namespace differs
+per call site. Callers pass it only for a URL that came from the caller's own
+request; an operator-configured endpoint has no such path. ``validate_url`` takes
+no ``field`` for exactly that reason: its callers are ingest handlers that build
+no AdCP envelope.
+
 There is one more entry point, :func:`validate_url`, for URLs that are STORED
 rather than sent — a webhook URL accepted at ingest and fetched later. It runs
 the identical pre-connection policy and connects to nothing, so those call sites
@@ -216,7 +225,7 @@ def _env_float(name: str, default: float) -> float:
     return value
 
 
-def _require_tls(url: str) -> None:
+def _require_tls(url: str, field: str | None = None) -> None:
     """Reject anything but https:// unless the insecure hatch is open.
 
     The one address-adjacent rule the seam owns: the SDK validator deliberately
@@ -228,20 +237,42 @@ def _require_tls(url: str) -> None:
     if _env_flag(_ALLOW_INSECURE_ENV):
         return
     logger.warning("Outbound request refused: scheme is not https")
-    raise OutboundRequestBlocked(_BLOCKED_MESSAGE)
+    raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
 
 
-def _blocked(exc: SSRFValidationError) -> OutboundRequestBlocked:
+def _blocked(exc: SSRFValidationError, field: str | None) -> OutboundRequestBlocked:
     """Translate an SDK refusal into an opaque typed refusal.
 
     The SDK detail is logged and never returned: ``str(exc)`` names the resolved
     IP and distinguishes "unresolvable" from "reserved".
     """
     logger.warning("Outbound request refused by address policy: %s", exc)
-    return OutboundRequestBlocked(_BLOCKED_MESSAGE)
+    return OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
 
 
-def _prepare[Validated](url: str, validator: Callable[..., Validated]) -> Validated:
+def _checked_field(field: str | None, url: str) -> str | None:
+    """Refuse a ``field`` that would leak the URL, instead of trusting the caller.
+
+    ``field`` is buyer-visible, and the whole point of the opaque refusal message
+    is that a refusal discloses nothing about our network (spec point 6). A call
+    site that passed the URL — or anything containing a scheme — would route
+    around that in a field the message never touches. Documentation cannot stop
+    that; this can.
+
+    Refusing loudly rather than silently dropping the value: a call site that
+    means to name a field and instead names a URL has a bug, and swallowing it
+    would ship the bug with a quietly fieldless envelope.
+    """
+    if field is None:
+        return None
+    if "://" in field or field in url:
+        raise ValueError(
+            f"field must be a JSONPath-lite path into the request payload, not a URL or part of one: {field!r}"
+        )
+    return field
+
+
+def _prepare[Validated](url: str, validator: Callable[..., Validated], field: str | None = None) -> Validated:
     """Run every pre-connection egress decision, once, and hand back what the caller asked for.
 
     Scheme policy, the escape-hatch read, the SDK's address validation and the
@@ -256,13 +287,17 @@ def _prepare[Validated](url: str, validator: Callable[..., Validated]) -> Valida
     code rather than a claim a test has to keep re-proving.
 
     Raises :class:`OutboundRequestBlocked` — never lets ``SSRFValidationError``
-    out, because its message names the resolved IP (spec point 6).
+    out, because its message names the resolved IP (spec point 6). ``field``, when
+    the caller supplied one, rides that refusal onto both envelope layers so the
+    buyer learns which input to fix; both refusal causes carry it identically, so
+    it cannot become a scheme-versus-address discriminator.
     """
-    _require_tls(url)
+    field = _checked_field(field, url)
+    _require_tls(url, field)
     try:
         return validator(url, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
     except SSRFValidationError as exc:
-        raise _blocked(exc) from exc
+        raise _blocked(exc, field) from exc
 
 
 def _should_retry_status(status: int) -> bool:
@@ -372,6 +407,7 @@ def send(
     content: Any = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
+    field: str | None = None,
 ) -> OutboundResult:
     """Send one outbound HTTP request through the seam.
 
@@ -379,13 +415,20 @@ def send(
     ``max_attempts=1`` is how a non-idempotent or vendor call opts out of retry.
     ``duration_seconds`` on the result is total wall time across all attempts.
 
+    ``field`` names the request-payload path this URL arrived on, in AdCP
+    JSONPath-lite (e.g. ``"property_list.agent_url"``), and rides a refusal onto
+    both envelope layers so the buyer knows what to fix. Pass it ONLY when the
+    URL came from the caller's request document: an operator-configured endpoint
+    has no such path, and neither does a URL read back out of storage. See the
+    module docstring — this is carried, not decided.
+
     Raises :class:`OutboundRequestBlocked` if the scheme or the address is
     refused (before any connection is attempted), or
     :class:`OutboundDeliveryFailed` if the destination was reached but the
     request was not delivered. Both are ``OutboundError`` subclasses, so a call
     site that only logs can catch that one type.
     """
-    transport = _prepare(url, build_ip_pinned_transport)
+    transport = _prepare(url, build_ip_pinned_transport, field)
 
     started = time.monotonic()
     last_status: int | None = None
@@ -442,14 +485,15 @@ async def asend(
     content: Any = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
+    field: str | None = None,
 ) -> OutboundResult:
     """Async twin of :func:`send` — same policy, same failure modes.
 
-    See :func:`send` for the contract. The two differ only in
+    See :func:`send` for the contract, ``field`` included. The two differ only in
     ``Client``/``AsyncClient`` and ``time.sleep``/``asyncio.sleep``; every
     policy decision is a shared helper so neither path can drift from the other.
     """
-    transport = _prepare(url, build_async_ip_pinned_transport)
+    transport = _prepare(url, build_async_ip_pinned_transport, field)
 
     started = time.monotonic()
     last_status: int | None = None

@@ -39,6 +39,12 @@ SEAM_CALLS = ["send", "asend"]
 # A cloud-metadata address: refused unconditionally, escape hatches or not.
 METADATA_URL = "https://169.254.169.254/"
 
+# A JSONPath-lite path a CALLER supplies for a refused URL that came out of its
+# own request payload. The seam only carries it — the value belongs to the call
+# site's namespace (this one is the property-list resolver's), which is why the
+# seam cannot derive it and why this file grades the carrying, not the path.
+_CALLER_FIELD_PATH = "property_list.agent_url"
+
 # The test-speed knob for the retry backoff base. Written as a literal here for
 # the same reason `set_flags` writes the escape-hatch names as literals: the
 # tests drive the seam's env surface from outside, not through its privates.
@@ -687,6 +693,102 @@ def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, m
 
     for term in ("reserved", "resolve", "metadata", "private"):
         assert term not in reserved_message.lower(), f"refusal reason {term!r} leaked into {reserved_message!r}"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkeypatch):
+    """A carried ``field`` names the caller's input on both layers — and nothing else.
+
+    ``field`` is a PASSTHROUGH: the seam sees a URL string, not a request
+    document, so it cannot compute a JSONPath-lite path and does not try. It
+    carries the one the caller supplies, because the caller is the only party
+    that knows whether the refused URL came off the wire and under which name
+    (``core/error.json`` @3.1.1: ``field`` is a path into the REQUEST PAYLOAD).
+
+    The grading is EQUALITY of the two whole envelopes, not a per-cause field
+    assertion, and that is the point of putting this beside
+    ``test_blocked_envelope_hides_the_resolved_address_and_the_reason``: once
+    ``field`` rides the refusal it becomes a candidate scheme-vs-address
+    discriminator, exactly the spec point 6 side channel that test exists to
+    close. Two per-cause assertions would both pass while the two envelopes
+    disagreed. Whole-envelope equality is also strictly stronger than the
+    neighbour's ``errors[0]["message"]`` comparison — it covers ``details``,
+    ``suggestion``, ``recovery`` and ``field`` on both layers at once.
+
+    The second half pins the default: a caller that supplies no ``field`` gets
+    no ``field`` KEY, not a null. Every one of the 15 unmigrated
+    ``# FIXME(#1589)`` call sites and both existing callers fetch stored
+    operator config, where there is no request-payload path to name; emitting
+    one would invent a path the buyer never sent, which Level 2 makes worse
+    than silence (``error-handling.mdx:16`` — ``field`` exists so an agent can
+    SELF-CORRECT, and it cannot correct a path absent from its own document).
+    """
+    set_flags(monkeypatch)
+
+    reserved = assert_blocked(seam_call, "https://127.0.0.1/webhook", field=_CALLER_FIELD_PATH)
+    unresolvable = assert_blocked(seam_call, "https://no-such-host.invalid/webhook", field=_CALLER_FIELD_PATH)
+
+    reserved_envelope = build_two_layer_error_envelope(reserved)
+    unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
+
+    assert_envelope_shape(reserved_envelope, "INVALID_REQUEST", recovery="correctable", field=_CALLER_FIELD_PATH)
+    assert reserved_envelope == unresolvable_envelope, (
+        "the refusal envelope distinguishes an unresolvable host from a reserved address: "
+        f"{unresolvable_envelope} vs {reserved_envelope}"
+    )
+
+    for envelope, forbidden in (
+        (reserved_envelope, "127.0.0.1"),
+        (unresolvable_envelope, "no-such-host.invalid"),
+    ):
+        assert forbidden not in json.dumps(envelope), f"{forbidden!r} leaked into {envelope}"
+
+    fieldless = build_two_layer_error_envelope(assert_blocked(seam_call, "https://127.0.0.1/webhook"))
+
+    assert "field" not in fieldless["adcp_error"], f"adcp_error carries a field key with no caller field: {fieldless}"
+    assert "field" not in fieldless["errors"][0], f"errors[0] carries a field key with no caller field: {fieldless}"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+@pytest.mark.parametrize(
+    ("label", "field"),
+    [
+        ("the url itself", "https://127.0.0.1/webhook"),
+        ("a url with other text", "agent_url=https://127.0.0.1/webhook"),
+        ("a bare scheme", "ftp://"),
+    ],
+)
+def test_a_field_carrying_a_url_is_refused_outright(seam_call, label, field, monkeypatch):
+    """The seam refuses to carry a ``field`` that would leak the destination.
+
+    ``field`` reaches the buyer, and the refusal message deliberately says
+    nothing about the cause (spec point 6). A call site that passed the URL as
+    the field would route straight around that silence, in a value the message
+    never touches — so the rule cannot be documentation only.
+
+    It raises rather than dropping the value: naming a URL where a request path
+    belongs is a call-site bug, and swallowing it would ship that bug as a
+    quietly fieldless envelope nobody notices.
+    """
+    set_flags(monkeypatch)
+
+    with pytest.raises(ValueError, match="not a URL"):
+        call_seam(seam_call, "https://127.0.0.1/webhook", field=field)
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_jsonpath_lite_field_is_carried(seam_call, monkeypatch):
+    """The legitimate form is not caught by the URL check — the guard has to let real paths through."""
+    set_flags(monkeypatch)
+
+    error = assert_blocked(seam_call, "https://127.0.0.1/webhook", field=_CALLER_FIELD_PATH)
+
+    assert_envelope_shape(
+        build_two_layer_error_envelope(error),
+        "INVALID_REQUEST",
+        recovery="correctable",
+        field=_CALLER_FIELD_PATH,
+    )
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)

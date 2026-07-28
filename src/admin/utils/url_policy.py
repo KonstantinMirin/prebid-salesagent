@@ -16,6 +16,13 @@ over one refusal decision. There were previously nine copies of that decision
 spread across five modules, which is how a call site ends up with a policy the
 others do not have.
 
+``label`` is deliberately NOT passed to the seam as ``error.field``. The two look
+alike and are not: ``label`` is an HTML form label an operator reads ("Webhook
+URL"), while ``error.field`` is an AdCP JSONPath-lite path into a buyer's request
+payload. Nothing on this surface builds an AdCP envelope, so there is no payload
+for a path to point into, and handing a form label to that field would put a
+non-AdCP namespace in it.
+
 The message handed to the operator never interpolates the reason. The reason
 names the resolved IP and distinguishes "cannot resolve" from "reserved range";
 handed back to whoever supplied the URL, the pair is an internal host and port

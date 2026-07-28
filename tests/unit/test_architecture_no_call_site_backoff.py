@@ -46,6 +46,7 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
     assert_violations_match_allowlist,
+    iter_call_expressions,
     parse_module,
     rel,
     repo_root,
@@ -57,8 +58,9 @@ SEAM_FILE = "src/core/security/outbound_http.py"
 EXEMPT_FILES = frozenset({SEAM_FILE})
 
 # Sleep callables, however they are spelled: time.sleep, asyncio.sleep, a bare
-# imported sleep, or an awaited one.
-SLEEP_NAMES = frozenset({"sleep"})
+# imported sleep, or an awaited one. iter_call_expressions matches both the bare
+# name and the attribute form.
+SLEEP_NAME = "sleep"
 
 # Pre-existing violations: (module_path, geometric_sleep_count).
 # Seeded at the maximum when salesagent-4fya.6 centralised the schedule. It only
@@ -92,13 +94,6 @@ FIX_HINT = (
     "(BR-RULE-029: 1s/2s/4s + jitter). Route the call through send/asend and let the "
     "seam schedule the retries instead of computing a delay here."
 )
-
-
-def _is_sleep_call(node: ast.Call) -> bool:
-    func = node.func
-    if isinstance(func, ast.Name):
-        return func.id in SLEEP_NAMES
-    return isinstance(func, ast.Attribute) and func.attr in SLEEP_NAMES
 
 
 def _contains_power(node: ast.AST) -> bool:
@@ -160,9 +155,7 @@ def find_call_site_backoff_violations(tree: ast.Module) -> list[int]:
     power_functions = _functions_returning_a_power(tree)
 
     violations: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_sleep_call(node):
-            continue
+    for node in iter_call_expressions(tree, name=SLEEP_NAME):
         duration = node.args[0] if node.args else None
         if duration is None:
             continue

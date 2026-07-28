@@ -102,6 +102,14 @@ _REFUSED_AGENT_URLS = [
     pytest.param("https://169.254.169.254", id="cloud-metadata-address"),
 ]
 
+# The JSONPath-lite path the buyer has to edit to fix the refusal. ``property_list``
+# is a TOP-LEVEL property of ``dist/schemas/3.1.1/media-buy/get-products-request.json``
+# ``$ref``-ing ``core/property-list-ref.json`` (required ``["agent_url","list_id"]``),
+# so the path is ``property_list.agent_url`` — not a ``packages[i]`` path. Written as
+# a literal, not derived: ``error.field`` is a fact about the buyer's document, and a
+# path computed from the URL would be the same guess in test form.
+_REFUSED_FIELD_PATH = "property_list.agent_url"
+
 
 @pytest.fixture(autouse=True)
 def _clear_resolver_cache():
@@ -298,13 +306,32 @@ class TestRefusedBuyerUrlOnTheWire:
     SERVICE_UNAVAILABLE / transient — which tells the buyer to retry a request
     that will be refused identically every time. The refusal is a property of
     the URL the buyer sent, so INVALID_REQUEST / correctable is the honest
-    grading and is what this pins, on the wire, per transport.
+    grading and is what this pins, on the wire, per transport — together with
+    the ``error.field`` path that says WHICH URL, since the message itself may
+    say nothing (L1 point 6).
     """
 
     @pytest.mark.requires_db
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     @pytest.mark.parametrize("agent_url", _REFUSED_AGENT_URLS)
     def test_refused_agent_url_is_a_correctable_buyer_error(self, integration_db, transport, agent_url, monkeypatch):
+        """The refusal is INVALID_REQUEST / correctable AND names the field to fix.
+
+        ``correctable`` without ``error.field`` tells the buyer "your request is
+        fixable" and not what to fix — and ``get_products`` carries several URLs
+        and several other correctable failure modes, so "which one" is not
+        recoverable from the code alone. The refusal message deliberately says
+        nothing (L1 point 6, graded by the sibling test below), which leaves
+        ``field`` as the only channel that can point at the offending input
+        without disclosing anything about our network: it is a path into the
+        document the buyer sent us, not a fact about the destination.
+
+        Level 2 of ``error-handling.mdx:16`` is the grounding — ``recovery``,
+        ``retry_after``, ``field`` and ``suggestion`` exist so an agent can
+        self-correct correctable errors. Both refusal causes carry it (scheme
+        and address are the same buyer input either way), on both envelope
+        layers.
+        """
         enforce_egress_policy(monkeypatch)
 
         with _products_env("proplist-egress") as env:
@@ -322,6 +349,7 @@ class TestRefusedBuyerUrlOnTheWire:
             result.wire_error_envelope,
             "INVALID_REQUEST",
             recovery="correctable",
+            field=_REFUSED_FIELD_PATH,
         )
 
     @pytest.mark.requires_db

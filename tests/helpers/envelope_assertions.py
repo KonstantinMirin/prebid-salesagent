@@ -31,6 +31,7 @@ def assert_envelope_shape(
     *,
     recovery: str,
     message_substr: str | None = None,
+    field: str | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
@@ -52,6 +53,19 @@ def assert_envelope_shape(
         message_substr: If provided, must appear in ``errors[0].message``.
                 ``adcp_error.message`` is allowed to differ (it carries the
                 envelope-level summary).
+        field: If provided, both ``adcp_error.field`` and ``errors[0].field``
+                must equal this JSONPath-lite path into the buyer's request
+                payload (``core/error.json`` @3.1.1 — e.g.
+                ``property_list.agent_url``). Checked on BOTH layers for the
+                same reason ``recovery`` is: the pinned storyboards read both
+                in the wild — ``proposal_finalize.yaml:207/352/397`` grade
+                ``adcp_error.field`` while the other scenarios grade
+                ``errors[0].field`` — and ``error-handling.mdx:88`` calls
+                populating only one layer "the source-of-truth for most
+                interop bugs". ``None`` (the default) does not assert absence:
+                ``field`` is optional in the schema, so most envelopes legally
+                carry none. A call site that needs "no ``field`` key at all"
+                asserts that itself.
         check_mcp_tool_error: If ``True``, additionally assert that ``target``
                 is an ``AdCPToolError`` instance before reading its envelope.
                 MCP-boundary call sites use this to pin the exception type as
@@ -80,6 +94,14 @@ def assert_envelope_shape(
     assert body["errors"][0].get("recovery") == recovery, (
         f"errors[0].recovery={body['errors'][0].get('recovery')!r}, expected {recovery!r}"
     )
+
+    if field is not None:
+        assert body["adcp_error"].get("field") == field, (
+            f"adcp_error.field={body['adcp_error'].get('field')!r}, expected {field!r}"
+        )
+        assert body["errors"][0].get("field") == field, (
+            f"errors[0].field={body['errors'][0].get('field')!r}, expected {field!r}"
+        )
 
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
