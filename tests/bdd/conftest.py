@@ -1748,6 +1748,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     (not is_rest and not is_e2e_rest and "differs from owner" in nodeid)
                     or (is_rest and "matches owner" in nodeid)
                     or (is_e2e_rest and "matches owner" in nodeid)
+                    # e2e_rest "differs from owner" now PASSES (salesagent-bhhz, in-network
+                    # innet_280726_1918): the step dispatches `ownership` as a request field, which
+                    # build_rest_body used to drop, so the live server got a request that could not
+                    # fail. With the drop removed it is rejected. Leaving this out kept a
+                    # non-strict xfail on a passing row — a silent XPASS, which is how an escape
+                    # hatch outlives the gap it was for.
+                    or (is_e2e_rest and "differs from owner" in nodeid)
                 )
             ) or (
                 # a2a now raises AdCPError(MEDIA_BUY_NOT_FOUND) on cross-principal access
