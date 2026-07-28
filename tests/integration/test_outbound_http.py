@@ -24,12 +24,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 import pytest
 
 from src.core.exceptions import build_two_layer_error_envelope
-from tests.helpers import assert_envelope_shape
+from tests.helpers import assert_backoff_schedule, assert_envelope_shape
 
 # Both entry points get every case. Parametrising instead of duplicating the
 # module keeps the two paths literally the same test.
@@ -37,6 +38,14 @@ SEAM_CALLS = ["send", "asend"]
 
 # A cloud-metadata address: refused unconditionally, escape hatches or not.
 METADATA_URL = "https://169.254.169.254/"
+
+# The test-speed knob for the retry backoff base. Written as a literal here for
+# the same reason `set_flags` writes the escape-hatch names as literals: the
+# tests drive the seam's env surface from outside, not through its privates.
+BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
+
+# The seam's logger, for grading the fallback warning on a malformed knob value.
+SEAM_LOGGER = "src.core.security.outbound_http"
 
 
 def _seam():
@@ -69,6 +78,81 @@ def set_flags(monkeypatch, *, private: bool = False, insecure: bool = False) -> 
     """
     monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true" if private else "false")
     monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true" if insecure else "false")
+
+
+def pin_jitter(monkeypatch, value: float) -> list[tuple]:
+    """Freeze the seam's jitter draw and record how it was called.
+
+    BR-RULE-029's jitter is a real ``random.uniform(0, 1)`` draw, so any test
+    that asserts a delay's magnitude has to pin it — otherwise the assertion is
+    graded against a number the test does not know.
+
+    The patch target is the module attribute ``outbound_http.random``, which is
+    also the string target the UC-004 circuit-breaker harness patches
+    (``tests/harness/delivery_circuit_breaker.py``). Pinning it here for the same
+    obligation keeps the seam suite and the BDD suite grading one implementation:
+    a ``from random import uniform`` in the seam would break both at once, which
+    is the point.
+
+    Returns the list of ``(args)`` tuples the seam passed to ``uniform``, so a
+    caller can grade the draw itself — one draw per sleep, with the literal
+    ``(0, 1)`` bounds the rule names.
+    """
+    calls: list[tuple] = []
+
+    def _pinned(*args):
+        calls.append(args)
+        return value
+
+    monkeypatch.setattr(_seam().random, "uniform", _pinned)
+    return calls
+
+
+def record_sleeps(monkeypatch, seam_call: str) -> list[float]:
+    """Capture the durations the seam actually sleeps, without waiting them out.
+
+    Magnitudes of 1s/2s/4s cannot be graded by wall-clock measurement in a test
+    suite, so the sleep itself is the observation point. This is the ONLY place
+    the two seam paths differ in this file: ``send`` blocks on ``time.sleep`` and
+    ``asend`` awaits ``asyncio.sleep``, so a test that patched only one would
+    grade half the module.
+
+    The async replacement must be an ``async def`` (or an ``AsyncMock``): a plain
+    ``MagicMock`` returns a non-awaitable and the seam would ``TypeError`` on the
+    await instead of failing on the schedule.
+    """
+    seam = _seam()
+    durations: list[float] = []
+
+    if seam_call == "send":
+        monkeypatch.setattr(seam.time, "sleep", durations.append)
+        return durations
+
+    async def _record(seconds: float) -> None:
+        durations.append(seconds)
+
+    monkeypatch.setattr(seam.asyncio, "sleep", _record)
+    return durations
+
+
+def fast_backoff(monkeypatch) -> None:
+    """Make a retry test's real sleeps negligible without weakening what it grades.
+
+    For the retry tests that grade attempt COUNTS: they have to sleep between
+    attempts, but what they sleep is not their obligation — BR-RULE-029's
+    magnitudes are graded once, by the schedule section below.
+
+    BOTH halves are required. The base override alone does not make these tests
+    fast, because the jitter is an additive ``uniform(0, 1)`` draw independent of
+    the base: at a 1ms base each sleep would still average half a second.
+
+    The base is written EXPLICITLY, exactly as ``set_flags`` writes the literal
+    ``"false"``, so an ambient value in the shell cannot change what these tests
+    wait — the variable is deliberately absent from ``tox.ini``'s ``pass_env``,
+    but a bare host ``pytest`` inherits the whole environ.
+    """
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    pin_jitter(monkeypatch, 0.0)
 
 
 def assert_blocked(seam_call: str, url: str, **kwargs: Any):
@@ -246,6 +330,7 @@ def test_redirect_to_metadata_address_is_not_followed(seam_call, monkeypatch, lo
 def test_server_error_is_retried_to_max_attempts(seam_call, monkeypatch, local_origin):
     """A 5xx is retried up to max_attempts, then reported as a delivery failure."""
     set_flags(monkeypatch, private=True, insecure=True)
+    fast_backoff(monkeypatch)
     local_origin.respond_with(503, body=b'{"error": "unavailable"}')
 
     error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
@@ -292,6 +377,7 @@ def test_retry_recovers_when_the_origin_recovers(seam_call, monkeypatch, local_o
     wire rather than staged by a mock's ``side_effect`` list.
     """
     set_flags(monkeypatch, private=True, insecure=True)
+    fast_backoff(monkeypatch)
     local_origin.respond_in_sequence(
         [
             (503, b'{"error": "unavailable"}'),
@@ -319,6 +405,7 @@ def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkey
     error.
     """
     set_flags(monkeypatch, private=True, insecure=True)
+    fast_backoff(monkeypatch)
     local_origin.respond_in_sequence([(429, b'{"error": "slow down"}'), (503, b'{"error": "unavailable"}')])
 
     error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
@@ -329,7 +416,154 @@ def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkey
 
 
 # ---------------------------------------------------------------------------
-# 6. Retry classification by exception — httpx signals these as exceptions,
+# 6. Retry BACKOFF schedule — BR-RULE-029, graded at the seam
+#
+# The section above grades HOW MANY times the seam tries. This one grades how
+# long it waits between those tries, which is a separate invariant with a
+# separate history: production honoured 1s/2s/4s + jitter before the seam
+# existed (src/core/webhook_delivery.py), so a seam that waits 0.1s/0.2s/0.4s
+# would REGRESS it on both magnitude and randomisation the moment a call site
+# migrated across.
+#
+# The schedule is graded through tests/helpers/backoff_assertions.py, the same
+# grader the UC-004 BDD steps and the webhook integration tests use. Encoding
+# 1/2/4 a second time here is exactly the drift that grader exists to prevent —
+# one copy ends up checking a ratio while the other checks magnitudes, and a
+# ratio check passes for 0.1/0.2/0.4.
+#
+# Both cases run on a plain 503 origin at max_attempts=4: three sleeps, which is
+# the only attempt count that reaches the rule's third (4s) step. No
+# ``local_origin.delay()`` here — nothing in these tests may reach a real sleep
+# through the module a second time.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_backoff_schedule_is_br_rule_029_by_default(seam_call, monkeypatch, local_origin):
+    """With no knob set, the seam waits BR-RULE-029's 1s, 2s, 4s — each randomised.
+
+    ``jitter=None`` is the grader's live-jitter mode: every delay must land in
+    ``[base, base + 1)`` AND at least one must differ from its base. So this one
+    case grades the magnitudes and proves randomisation is actually applied,
+    without the test knowing what was drawn.
+
+    The knob is ``delenv``'d rather than assumed absent — the explicit form of
+    "unset", matching how ``set_flags`` writes the literal ``"false"``. A bare
+    host ``pytest`` inherits the whole environ, and an ambient value here would
+    turn a passing default into a silently unrelated assertion.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    durations = record_sleeps(monkeypatch, seam_call)
+
+    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+
+    assert_backoff_schedule(durations, jitter=None)
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_backoff_draws_one_uniform_0_1_jitter_per_sleep(seam_call, monkeypatch, local_origin):
+    """Each delay is its base PLUS one ``uniform(0, 1)`` draw — additive, once per sleep.
+
+    Pinning the draw turns the window check above into an exact one, so a
+    magnitude regression cannot hide inside the jitter slack. The draw itself is
+    graded too, and it is the shape of the draw that matters, not just that some
+    randomness happened:
+
+    * ``(0, 1)`` as two positional numbers — the same call signature the UC-004
+      step asserts (``call.args == (0, 1)``), so the seam and the BDD suite pin
+      one implementation rather than two compatible-looking ones.
+    * exactly one draw per sleep — which is what putting the draw inside the ONE
+      shared ``_backoff_seconds`` helper buys. A draw per attempt, or a copy in
+      each of ``send``/``asend``, shows up here as the wrong count.
+    * additive, not multiplicative — ``base + pinned``, which is what the UC-004
+      step's ``_pinned_jitter`` grading requires of production.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    durations = record_sleeps(monkeypatch, seam_call)
+    draws = pin_jitter(monkeypatch, 0.25)
+
+    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+
+    assert_backoff_schedule(durations, jitter=0.25)
+    assert draws == [(0, 1), (0, 1), (0, 1)], (
+        f"expected one uniform(0, 1) draw per backoff sleep, got {draws} for {len(durations)} sleeps"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_backoff_base_env_knob_moves_the_base_and_nothing_else(seam_call, monkeypatch, local_origin):
+    """The knob scales the base; the doubling and the jitter term are untouched.
+
+    This case grades the KNOB, not the rule — the rule is graded two cases above,
+    by ``assert_backoff_schedule``. That is why the expected delays are spelled
+    out here rather than taken from the grader: the grader encodes 1/2/4, which
+    is precisely what an overridden base is not.
+
+    The jitter is pinned as well as the base, because the two are independent: an
+    unpinned ``uniform(0, 1)`` dwarfs a 10ms base, and asserting on the sum would
+    then be an assertion about the draw, not about the knob.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.01")
+    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.005)
+
+    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+
+    assert durations == pytest.approx([0.015, 0.025, 0.045]), (
+        f"expected base 0.01 doubled per attempt plus a pinned 0.005 jitter, got {durations}"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+@pytest.mark.parametrize("bad_value", ["abc", "-1", "0"])
+def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
+    seam_call, bad_value, monkeypatch, local_origin, caplog
+):
+    """A knob value that is not a strictly positive number is ignored, loudly.
+
+    The failure mode this closes is silent disarmament: the knob exists only for
+    test speed, so a value the seam cannot use must never quietly become "no
+    backoff" or "some other backoff" — it falls back to BR-RULE-029 and says so.
+
+    Zero is rejected with the malformed values on purpose. Read literally it asks
+    for "jitter only, no base delay", and honouring that would delete the
+    invariant this ticket restores; falling back silently would instead hand the
+    caller a 1s base it did not ask for. Refusing it out loud is the only reading
+    that surprises nobody.
+
+    The warning must name the variable — an operator who cannot see which knob
+    was ignored cannot fix it.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, bad_value)
+    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.25)
+
+    with caplog.at_level(logging.WARNING, logger=SEAM_LOGGER):
+        assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+
+    assert_backoff_schedule(durations, jitter=0.25)
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == SEAM_LOGGER and record.levelno >= logging.WARNING and BACKOFF_BASE_ENV in record.getMessage()
+    ]
+    assert warnings, (
+        f"{bad_value!r} was ignored silently: no WARNING from {SEAM_LOGGER} naming {BACKOFF_BASE_ENV}. "
+        f"Records seen: {[(r.name, r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Retry classification by exception — httpx signals these as exceptions,
 #    never as a status, and they must not escape the seam
 # ---------------------------------------------------------------------------
 
@@ -344,6 +578,7 @@ def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypa
     duplication the seam exists to delete.
     """
     set_flags(monkeypatch, private=True, insecure=True)
+    fast_backoff(monkeypatch)
     local_origin.delay(2.0)
 
     error = assert_delivery_failed(
@@ -374,6 +609,7 @@ def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call
     or every migrated call site keeps its own ``except httpx...``.
     """
     set_flags(monkeypatch, private=True, insecure=True)
+    fast_backoff(monkeypatch)
     local_origin.close_without_responding()
 
     error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
@@ -384,7 +620,7 @@ def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call
 
 
 # ---------------------------------------------------------------------------
-# 7. Response-size cap — spec point 5's other half
+# 8. Response-size cap — spec point 5's other half
 # ---------------------------------------------------------------------------
 
 
@@ -408,7 +644,7 @@ def test_oversized_response_body_is_refused_and_not_retried(seam_call, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# 8. Error opacity, asserted on the wire envelope (spec point 6)
+# 9. Error opacity, asserted on the wire envelope (spec point 6)
 #
 # The repo's error-verification policy makes the envelope the authority, not
 # `.message` — `details` rides to the buyer too, via
@@ -523,7 +759,7 @@ def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_c
 
 
 # ---------------------------------------------------------------------------
-# 9. validate_url — the same policy, for URLs that are STORED rather than sent
+# 10. validate_url — the same policy, for URLs that are STORED rather than sent
 #
 # A webhook URL accepted at ingest is persisted now and fetched later, possibly
 # by a background worker, so the refusal a buyer can act on has to be issued at

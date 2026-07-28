@@ -31,6 +31,11 @@ The public surface is a *send function*, deliberately not a client factory. A
 factory would leave the four existing retry/backoff/classification copies in
 place and add a fifth thing to get wrong per call site.
 
+Retries wait BR-RULE-029's 1s/2s/4s plus jitter. ``ADCP_OUTBOUND_BACKOFF_BASE_SECONDS``
+shortens the base for test speed and nothing else — it cannot change the shape or
+remove the jitter, it is deliberately not passed through ``tox.ini`` or either
+compose file, and it must never be set in a deployment.
+
 There is one more entry point, :func:`validate_url`, for URLs that are STORED
 rather than sent — a webhook URL accepted at ingest and fetched later. It runs
 the identical pre-connection policy and connects to nothing, so those call sites
@@ -43,6 +48,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -69,9 +75,17 @@ _ALLOW_INSECURE_ENV = "ADCP_OUTBOUND_ALLOW_INSECURE"
 # memory-exhaustion vector. httpx applies no default limit (spec point 5).
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
-# Retry backoff, as a module constant so tests stay honest without patching
-# ``time.sleep``: attempt N waits _BACKOFF_BASE_SECONDS * 2**N.
-_BACKOFF_BASE_SECONDS = 0.1
+# Retry backoff. BR-RULE-029 INV-3: a retried delivery waits 1s, 2s, 4s, each
+# plus jitter, so a fleet of clients retrying the same failed endpoint does not
+# thunder back in lockstep. That is production's schedule, and it is decided here
+# rather than at any call site.
+_BACKOFF_BASE_SECONDS = 1.0
+
+# Test-speed override for the base only — the shape (x2 per attempt) and the
+# jitter are not negotiable. Deliberately absent from tox.ini pass_env and from
+# both compose files: no deployed or CI environment has any business shortening
+# production backoff.
+_BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
 
 # Statuses worth trying again. Everything else — including every 4xx and every
 # 3xx — is terminal: retrying a rejected or redirected request only doubles the
@@ -176,6 +190,32 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").lower() == "true"
 
 
+def _env_float(name: str, default: float) -> float:
+    """Read a positive float env knob, falling back loudly.
+
+    Read at CALL time for the same reason as :func:`_env_flag`.
+
+    The value must be STRICTLY positive. Zero is rejected rather than honoured
+    because "no base delay, jitter only" is not a schedule this module offers,
+    and silently substituting the 1s production default for it would surprise in
+    exactly the direction this seam exists to close. Every rejection is logged at
+    WARNING naming the variable — an operator who cannot see which knob was
+    ignored cannot fix it.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("%s=%r is not a number — using %ss", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("%s=%r is not strictly positive — using %ss", name, raw, default)
+        return default
+    return value
+
+
 def _require_tls(url: str) -> None:
     """Reject anything but https:// unless the insecure hatch is open.
 
@@ -230,8 +270,16 @@ def _should_retry_status(status: int) -> bool:
 
 
 def _backoff_seconds(attempt: int) -> float:
-    """Seconds to wait before the attempt after ``attempt`` (1-based)."""
-    return _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+    """Seconds to wait before the attempt after ``attempt`` (1-based).
+
+    BR-RULE-029 INV-3, in the one place both ``send`` and ``asend`` reach: the
+    base doubles per attempt (1s, 2s, 4s) and each wait carries its own
+    ``uniform(0, 1)`` draw. Because the schedule is computed here and nowhere
+    else, no call site can migrate onto this seam and quietly keep a different
+    one.
+    """
+    base = _env_float(_BACKOFF_BASE_ENV, _BACKOFF_BASE_SECONDS)
+    return base * (2 ** (attempt - 1)) + random.uniform(0, 1)
 
 
 def _build_request(
