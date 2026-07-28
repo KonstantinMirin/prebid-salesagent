@@ -85,6 +85,23 @@ def assert_delivery_failed(seam_call: str, url: str, **kwargs: Any):
     return excinfo.value
 
 
+def was_refused_before_connecting(call) -> bool:
+    """Whether ``call`` was refused by pre-connection policy, rather than after reaching the wire.
+
+    ``OutboundDeliveryFailed`` and a plain return are both *not* refusals: they
+    mean the URL got past scheme and address policy and the outcome was decided
+    on the network. Collapsing every outcome to this one boolean is what lets
+    the send path and the validate-only path be compared case by case.
+    """
+    try:
+        call()
+    except _seam().OutboundRequestBlocked:
+        return True
+    except _seam().OutboundDeliveryFailed:
+        return False
+    return False
+
+
 # ---------------------------------------------------------------------------
 # 1. Scheme policy — the one address-adjacent rule the seam owns itself
 # ---------------------------------------------------------------------------
@@ -503,3 +520,123 @@ def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_c
     assert str(local_origin.port) not in serialized
     for term in ("disconnect", "remoteprotocolerror", "protocol", "without sending"):
         assert term not in serialized.lower(), f"httpx internals {term!r} leaked into {envelope}"
+
+
+# ---------------------------------------------------------------------------
+# 9. validate_url — the same policy, for URLs that are STORED rather than sent
+#
+# A webhook URL accepted at ingest is persisted now and fetched later, possibly
+# by a background worker, so the refusal a buyer can act on has to be issued at
+# ingest — before there is a request to attach it to. The obligation is not
+# "validate_url refuses bad URLs" (a second hand-written copy of address policy
+# would also do that, and that copy is the recurrence this seam exists to make
+# impossible). It is that validate_url's verdict is IDENTICAL to send's, case
+# for case, and that it reaches nothing while producing it.
+# ---------------------------------------------------------------------------
+
+# Every pre-connection decision the seam makes, as (url factory, escape hatches).
+# The factory takes the live local origin so a case can target a real address.
+# Nothing here leaves the machine: every case is refused, loopback, or both.
+PRE_CONNECTION_CASES = {
+    "plain-http-public": (lambda origin: "http://example.com/webhook", {}),
+    "ftp-scheme": (lambda origin: "ftp://example.com/webhook", {}),
+    "file-scheme": (lambda origin: "file:///etc/passwd", {}),
+    "no-scheme": (lambda origin: "/no/scheme", {}),
+    "https-unresolvable-host": (lambda origin: "https://no-such-host.invalid/webhook", {}),
+    "https-loopback": (lambda origin: f"https://127.0.0.1:{origin.port}/", {}),
+    "cloud-metadata": (lambda origin: METADATA_URL, {}),
+    "cloud-metadata-both-hatches": (lambda origin: METADATA_URL, {"private": True, "insecure": True}),
+    "http-loopback-insecure-hatch-only": (lambda origin: f"{origin.base_url}/webhook", {"insecure": True}),
+    "http-loopback-private-hatch-only": (lambda origin: f"{origin.base_url}/webhook", {"private": True}),
+    "http-loopback-both-hatches": (
+        lambda origin: f"{origin.base_url}/webhook",
+        {"private": True, "insecure": True},
+    ),
+}
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+@pytest.mark.parametrize("case_id", sorted(PRE_CONNECTION_CASES))
+def test_validate_url_reaches_the_same_verdict_as_the_send_path(seam_call, case_id, monkeypatch, local_origin):
+    """For every pre-connection case, validate_url refuses iff the send path refuses.
+
+    Asserting the two verdicts AGAINST EACH OTHER rather than against a
+    hardcoded expectation is the point: a re-implementation that happened to
+    agree on the cases someone thought to list would pass a hardcoded test and
+    diverge on the next one. This can only pass while both paths make the
+    decision in the same place — the escape hatches included, since a validator
+    that read the flags differently would surface here as a disagreement rather
+    than as a silent ingest-time refusal of URLs the fetcher would accept.
+
+    The accepted case is graded too: a validator that refused everything would
+    satisfy "refuses what send refuses" and quietly break every ingest path.
+    """
+    make_url, flags = PRE_CONNECTION_CASES[case_id]
+    url = make_url(local_origin)
+
+    # Validate first, on a still-untouched origin, so hits made by the send call
+    # below can never be mistaken for hits made by the validator.
+    set_flags(monkeypatch, **flags)
+    validate_refused = was_refused_before_connecting(lambda: _seam().validate_url(url))
+
+    assert local_origin.hits == 0, f"validate_url opened a connection: {local_origin.requests}"
+
+    set_flags(monkeypatch, **flags)
+    send_refused = was_refused_before_connecting(lambda: call_seam(seam_call, url, max_attempts=1))
+
+    assert validate_refused == send_refused, (
+        f"validate_url and {seam_call} disagree on {case_id} ({url!r}): "
+        f"validate_url {'refused' if validate_refused else 'accepted'}, "
+        f"{seam_call} {'refused' if send_refused else 'accepted'}"
+    )
+
+
+def test_validate_url_accepts_a_reachable_destination_without_reaching_it(monkeypatch, local_origin):
+    """An acceptable URL passes validation, returns nothing, and the origin never hears about it.
+
+    Returning None rather than the resolved address is deliberate. Handing a
+    call site an IP invites it to store or log the resolution and to connect by
+    it later, and a resolution reused across the ingest/fetch gap is exactly the
+    DNS-rebinding window the SDK's resolve-once-then-pin closes *within* one
+    request. The later fetch has to resolve again through its own send call.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+
+    assert _seam().validate_url(f"{local_origin.base_url}/webhook") is None
+
+    assert local_origin.hits == 0, f"validate_url opened a connection: {local_origin.requests}"
+
+
+def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason(monkeypatch):
+    """Ingest-time refusals are as opaque as send-time ones — same message, same envelope.
+
+    An ingest-time validator is the easier place to leak, because its whole job
+    is to explain to the caller why the URL is unacceptable. Spec point 6 does
+    not relax there: distinguishing "reserved range" from "does not resolve"
+    turns URL submission into an internal host and port scanner.
+    """
+    set_flags(monkeypatch)
+    seam = _seam()
+
+    with pytest.raises(seam.OutboundRequestBlocked) as reserved_info:
+        seam.validate_url("https://127.0.0.1/webhook")
+    with pytest.raises(seam.OutboundRequestBlocked) as unresolvable_info:
+        seam.validate_url("https://no-such-host.invalid/webhook")
+
+    reserved_envelope = build_two_layer_error_envelope(reserved_info.value)
+    unresolvable_envelope = build_two_layer_error_envelope(unresolvable_info.value)
+
+    assert_envelope_shape(reserved_envelope, "INVALID_REQUEST", recovery="correctable")
+    assert_envelope_shape(unresolvable_envelope, "INVALID_REQUEST", recovery="correctable")
+
+    reserved_message = reserved_envelope["errors"][0]["message"]
+    assert reserved_message == unresolvable_envelope["errors"][0]["message"]
+
+    for envelope, forbidden in (
+        (reserved_envelope, "127.0.0.1"),
+        (unresolvable_envelope, "no-such-host.invalid"),
+    ):
+        assert forbidden not in json.dumps(envelope), f"{forbidden!r} leaked into {envelope}"
+
+    for term in ("reserved", "resolve", "metadata", "private"):
+        assert term not in reserved_message.lower(), f"refusal reason {term!r} leaked into {reserved_message!r}"

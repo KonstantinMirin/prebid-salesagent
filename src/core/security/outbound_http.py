@@ -30,6 +30,11 @@ module sets it; 1, 5 and 6 are implemented here.
 The public surface is a *send function*, deliberately not a client factory. A
 factory would leave the four existing retry/backoff/classification copies in
 place and add a fifth thing to get wrong per call site.
+
+There is one more entry point, :func:`validate_url`, for URLs that are STORED
+rather than sent — a webhook URL accepted at ingest and fetched later. It runs
+the identical pre-connection policy and connects to nothing, so those call sites
+have no reason to grow a second copy of address policy either.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -47,6 +53,7 @@ from adcp.signing import (
     SSRFValidationError,
     build_async_ip_pinned_transport,
     build_ip_pinned_transport,
+    resolve_and_validate_host,
 )
 
 from src.core.exceptions import AdCPInvalidRequestError, AdCPServiceUnavailableError
@@ -194,6 +201,30 @@ def _blocked(exc: SSRFValidationError) -> OutboundRequestBlocked:
     return OutboundRequestBlocked(_BLOCKED_MESSAGE)
 
 
+def _prepare[Validated](url: str, validator: Callable[..., Validated]) -> Validated:
+    """Run every pre-connection egress decision, once, and hand back what the caller asked for.
+
+    Scheme policy, the escape-hatch read, the SDK's address validation and the
+    translation of its refusal are ONE decision, not three implementations of
+    one. ``Validated`` — what the caller gets out of the validated URL: a sync
+    transport, an async transport, or the resolved triple a validate-only caller
+    discards — is the ONLY thing that varies between the three, and each of
+    those is a call into ``adcp.signing`` that runs the identical
+    resolve-and-validate step (``build_ip_pinned_transport`` is literally
+    ``resolve_and_validate_host`` plus a transport constructor). That is what
+    makes "validate-only refuses exactly what send refuses" a property of the
+    code rather than a claim a test has to keep re-proving.
+
+    Raises :class:`OutboundRequestBlocked` — never lets ``SSRFValidationError``
+    out, because its message names the resolved IP (spec point 6).
+    """
+    _require_tls(url)
+    try:
+        return validator(url, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
+    except SSRFValidationError as exc:
+        raise _blocked(exc) from exc
+
+
 def _should_retry_status(status: int) -> bool:
     return status in _RETRYABLE_STATUSES
 
@@ -255,6 +286,34 @@ def _fail(attempts: int, last_status: int | None) -> OutboundDeliveryFailed:
     return OutboundDeliveryFailed(attempts=attempts, last_status=last_status)
 
 
+def validate_url(url: str) -> None:
+    """Apply the seam's egress policy to a URL WITHOUT sending anything.
+
+    For URLs that are *stored* rather than sent: a webhook or brand-manifest URL
+    supplied at ingest time is persisted now and fetched later, possibly by a
+    background worker, so the refusal a buyer can act on has to happen at ingest
+    — long before there is a request to attach it to. A send-only seam cannot
+    serve those call sites, and the alternative they reach for otherwise is a
+    second, hand-written copy of address policy, which is the recurrence this
+    module exists to make impossible.
+
+    It refuses EXACTLY what :func:`send` and :func:`asend` refuse, because all
+    three go through :func:`_prepare` and differ only in what they ask the SDK
+    to return; here that is the resolved ``(hostname, ip, port)``, which is
+    discarded. No transport is built, no socket is opened, no DNS answer is
+    reused: validation at ingest is a policy verdict, and a *later* fetch must
+    resolve again through its own :func:`send` call, because a resolution
+    cached across that gap is precisely the DNS-rebinding window the SDK's
+    resolve-once-then-pin closes within a single request.
+
+    Returns nothing and raises :class:`OutboundRequestBlocked` on refusal, with
+    the same opaque message :func:`send` uses — a validator that handed back the
+    resolved address would leak it to whatever logs or stores the result (spec
+    point 6).
+    """
+    _prepare(url, resolve_and_validate_host)
+
+
 def send(
     url: str,
     *,
@@ -278,11 +337,7 @@ def send(
     request was not delivered. Both are ``OutboundError`` subclasses, so a call
     site that only logs can catch that one type.
     """
-    _require_tls(url)
-    try:
-        transport = build_ip_pinned_transport(url, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
-    except SSRFValidationError as exc:
-        raise _blocked(exc) from exc
+    transport = _prepare(url, build_ip_pinned_transport)
 
     started = time.monotonic()
     last_status: int | None = None
@@ -346,11 +401,7 @@ async def asend(
     ``Client``/``AsyncClient`` and ``time.sleep``/``asyncio.sleep``; every
     policy decision is a shared helper so neither path can drift from the other.
     """
-    _require_tls(url)
-    try:
-        transport = build_async_ip_pinned_transport(url, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
-    except SSRFValidationError as exc:
-        raise _blocked(exc) from exc
+    transport = _prepare(url, build_async_ip_pinned_transport)
 
     started = time.monotonic()
     last_status: int | None = None
