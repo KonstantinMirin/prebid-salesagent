@@ -76,6 +76,7 @@ from tests.helpers.adcp_factories import (
     create_test_property,
     create_test_property_dict,
 )
+from tests.helpers.backoff_assertions import assert_backoff_schedule
 from tests.helpers.envelope_assertions import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.idempotency_seeds import (
     make_active_cached_success,
@@ -87,6 +88,8 @@ from tests.helpers.idempotency_seeds import (
 __all__ = [
     # Auth helpers
     "assert_resolve_auth_dep_passes_token",
+    # Backoff schedule assertions
+    "assert_backoff_schedule",
     # Envelope assertions
     "assert_envelope_shape",
     "assert_no_raw_validation_leak",

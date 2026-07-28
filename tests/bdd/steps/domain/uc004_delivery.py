@@ -22,6 +22,7 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
 from tests.harness._mixins import LocalOriginMixin
+from tests.helpers.backoff_assertions import assert_backoff_schedule
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1675,14 +1676,27 @@ def then_retry_3_times(ctx: dict) -> None:
     assert call_count <= 4, f"Expected at most 4 calls (1+3 retries), got {call_count}"
 
 
-def _assert_exponential_backoff(ctx: dict, *, expected_sleeps: int = 2) -> list[float]:
-    """Assert the mocked sleep calls follow an exponential backoff schedule.
+def _pinned_jitter(ctx: dict) -> float:
+    """The jitter offset this env pins production's ``random.uniform`` draw to.
 
-    Production WebhookDeliveryService sleeps between retries. This reads the
-    recorded sleep durations, asserts there were exactly ``expected_sleeps`` of
-    them (= ``expected_sleeps + 1`` total attempts), and that each duration is
-    at least 1.5x the previous one (exponential growth). Returns the durations
-    for any further per-step assertions.
+    CircuitBreakerEnv patches ``random.uniform`` to a constant so the schedule is
+    deterministic. That constant is part of the expected delay, not something to
+    tolerate: grading ``base + pinned`` exactly is what keeps a magnitude
+    regression from hiding inside a jitter window.
+    """
+    return float(ctx["env"].mock["random"].return_value)
+
+
+def _assert_exponential_backoff(ctx: dict, *, expected_sleeps: int = 2) -> list[float]:
+    """Assert the mocked sleep calls match BR-RULE-029's 1s/2s/4s schedule.
+
+    Production sleeps between retries. This reads the recorded sleep durations,
+    asserts there were exactly ``expected_sleeps`` of them (= ``expected_sleeps + 1``
+    total attempts), and grades the durations against the rule's actual magnitudes
+    via the shared grader. Returns them for any further per-step assertions.
+
+    Magnitudes, not ratios: a ratio check passes for any geometric schedule, so
+    0.1/0.2/0.4 would satisfy it while breaking the invariant the scenario names.
 
     ``sleep`` is the one thing these scenarios still mock. It is not a transport:
     the delivery attempts themselves reach a real endpoint and are counted there.
@@ -1696,30 +1710,40 @@ def _assert_exponential_backoff(ctx: dict, *, expected_sleeps: int = 2) -> list[
     assert len(durations) == expected_sleeps, (
         f"Expected {expected_sleeps} backoff sleeps (for {expected_sleeps + 1} total attempts), got {len(durations)}"
     )
-    for prev, nxt in zip(durations, durations[1:], strict=False):
-        assert nxt >= prev * 1.5, (
-            f"Backoff duration {nxt:.2f}s is not exponentially larger than prior {prev:.2f}s "
-            f"(expected at least {prev * 1.5:.2f}s). Full schedule: {[f'{d:.2f}' for d in durations]}"
-        )
+    assert_backoff_schedule(durations, jitter=_pinned_jitter(ctx))
     return durations
 
 
 @then("retries should use exponential backoff (1s, 2s, 4s + jitter)")
 def then_exponential_backoff(ctx: dict) -> None:
-    """Assert sleep durations follow exponential backoff schedule.
+    """Assert sleep durations are 1s/2s/4s and that jitter is actually drawn.
 
-    Production WebhookDeliveryService does 3 total attempts (1 original + 2 retries),
-    sleeping between each retry. So we expect exactly 2 sleep calls with
-    exponentially growing durations.
+    Production does 3 total attempts (1 original + 2 retries), sleeping between
+    each retry, so we expect exactly 2 sleeps graded against the [1s, 2s] prefix.
+
+    The env pins ``random.uniform`` for determinism, so the jitter half of this
+    step is graded by the draw itself: production must ask for a jitter value in
+    [0, 1) per retry. Deleting ``+ random.uniform(0, 1)`` from the delay makes
+    this step red, which is the whole point of grading the step text.
     """
-    _assert_exponential_backoff(ctx)
+    durations = _assert_exponential_backoff(ctx)
+
+    jitter_draws = ctx["env"].mock["random"].call_args_list
+    assert len(jitter_draws) == len(durations), (
+        f"Expected one jitter draw per backoff sleep ({len(durations)}), got {len(jitter_draws)} — "
+        "BR-RULE-029 requires randomisation so retries do not thunder"
+    )
+    for i, call in enumerate(jitter_draws):
+        assert call.args == (0, 1), f"Jitter draw {i + 1} was random.uniform{call.args}, expected random.uniform(0, 1)"
 
 
 @then("the system should retry up to 3 times with exponential backoff")
 def then_retry_with_backoff(ctx: dict) -> None:
-    """Assert at most 4 POST calls (1 original + 3 retries) with exponential sleep growth.
+    """Assert at most 4 POST calls (1 original + 3 retries) on the 1s/2s/4s schedule.
 
-    Production WebhookDeliveryService does 3 total attempts with 2 sleeps between them.
+    Production does 3 total attempts with 2 sleeps between them. This step text
+    claims no jitter, so jitter is not graded here — the sibling 5xx scenario
+    that does claim it grades it.
     """
     env = ctx["env"]
     assert env.delivery_attempts <= 4, f"Expected at most 4 calls (1 + 3 retries), got {env.delivery_attempts}"

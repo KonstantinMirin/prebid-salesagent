@@ -281,9 +281,10 @@ class TestWebhook503RetryBackoff:
             env.mock["sleep"].assert_called_once_with(1)
 
     @pytest.mark.xfail(
-        reason="Production code does not add jitter to exponential backoff. "
-        "BR-RULE-029 specifies '1s, 2s, 4s + jitter' but deliver_webhook_with_retry "
-        "uses exact 2**attempt with no randomization.",
+        reason="deliver_webhook_with_retry adds no randomization to its backoff. "
+        "BR-RULE-029 specifies '1s, 2s, 4s + jitter'; the magnitudes are right and "
+        "the jitter is missing. Graduates when the module moves onto the jittered "
+        "egress seam (salesagent-4fya.6 + salesagent-4fya.11).",
         strict=True,
     )
     def test_backoff_includes_jitter(self, integration_db):
@@ -292,17 +293,18 @@ class TestWebhook503RetryBackoff:
         Covers: UC-004-EXT-G-01
         """
         from tests.harness import WebhookEnv
+        from tests.helpers.backoff_assertions import assert_backoff_schedule
 
         with WebhookEnv() as env:
             env.set_http_status(503, "Service Unavailable")
 
             env.call_deliver(max_retries=4)
 
-            sleep_values = [c.args[0] for c in env.mock["sleep"].call_args_list]
-            exact_powers = [1, 2, 4]
+            sleep_values = [float(c.args[0]) for c in env.mock["sleep"].call_args_list]
 
-            has_jitter = any(actual != expected for actual, expected in zip(sleep_values, exact_powers, strict=True))
-            assert has_jitter, f"Sleep values {sleep_values} are exact powers of 2 — no jitter detected"
+            # jitter=None: WebhookEnv patches no randomness source, so a jittered
+            # delay would show up as a value inside the window rather than on the base.
+            assert_backoff_schedule(sleep_values, jitter=None)
 
 
 # ---------------------------------------------------------------------------
