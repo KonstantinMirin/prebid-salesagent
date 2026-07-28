@@ -6,8 +6,8 @@ Two test suites need a throwaway HTTP server on an ephemeral port:
   back. It binds ``0.0.0.0`` and advertises a *different* callback host, because
   the server runs in a container and must reach the receiver by network alias.
 * ``tests/integration/`` drives the outbound egress seam against a real origin
-  and needs to program the response (status, redirect, delay, chunked body) and
-  count exact hits.
+  and needs to program the response (status, redirect, delay, chunked body,
+  a per-attempt response sequence, or no response at all) and count exact hits.
 
 Both are the same bootstrap — bind a free port, serve on a daemon thread, hand
 back a URL, tear the socket down — so the bootstrap lives here once and the
@@ -19,11 +19,11 @@ from __future__ import annotations
 
 import contextlib
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-from typing import Any
+from typing import Any, ClassVar
 
 # Default body for a programmable origin that a test never configures.
 _DEFAULT_BODY = b'{"ok": true}'
@@ -90,6 +90,7 @@ class LocalOrigin:
     delay_seconds: float = 0.0
     total_bytes: int = 0
     chunk_size: int = 64 * 1024
+    sequence: list[tuple[int, bytes]] = field(default_factory=list)
 
     @property
     def base_url(self) -> str:
@@ -117,6 +118,54 @@ class LocalOrigin:
         self.status = status
         self.body = body
         self.content_type = content_type
+
+    def respond_in_sequence(
+        self,
+        responses: Sequence[tuple[int, bytes]],
+        *,
+        content_type: str = "application/json",
+    ) -> None:
+        """Answer each subsequent request with the next ``(status, body)``; the last entry repeats.
+
+        This is what a real origin needs in order to express *recovery*: ``503,
+        503, 200`` is a transient failure that clears on the third attempt, and
+        only a queue can say that — a fixed status can say "always fails" or
+        "always succeeds" and nothing in between.
+
+        The last entry repeating rather than the queue running dry means a test
+        never has to know how many attempts the caller will actually make. It
+        programs the recovery point and then asserts on :attr:`hits`, which is
+        the number that grades the retry policy.
+        """
+        if not responses:
+            raise ValueError("respond_in_sequence needs at least one response")
+        self.mode = "sequence"
+        self.sequence = list(responses)
+        self.content_type = content_type
+
+    def take_from_sequence(self) -> tuple[int, bytes]:
+        """Consume the next programmed response; the final entry repeats forever.
+
+        Consuming the queue rather than indexing it by hit count keeps "the last
+        entry repeats" as a single expression and keeps :meth:`reset` honest —
+        there is no separate counter that a reset could forget to clear.
+        """
+        if len(self.sequence) > 1:
+            return self.sequence.pop(0)
+        return self.sequence[0]
+
+    def close_without_responding(self) -> None:
+        """Accept the request, record the hit, then close the connection with no response.
+
+        The hit is recorded first, so the request provably arrived; nothing is
+        written after it, so the client sees the socket close before a status
+        line and raises a *genuine* transport error of its own making. That is
+        the one behaviour a real origin could not express before, and the reason
+        ``WebhookMixin.set_http_error`` has to fake it by assigning an exception
+        to a mock's ``side_effect`` — a mock can only restate which exception the
+        test already chose, never prove the client raises it.
+        """
+        self.mode = "error"
 
     def redirect_to(self, location: str, *, status: int = 302) -> None:
         """Answer with a redirect to ``location`` (an arbitrary URL, including a blocked one)."""
@@ -156,6 +205,7 @@ class LocalOrigin:
         self.location = ""
         self.delay_seconds = 0.0
         self.total_bytes = 0
+        self.sequence.clear()
 
 
 class ProgrammableOriginHandler(BaseHTTPRequestHandler):
@@ -180,12 +230,7 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
             time.sleep(origin.delay_seconds)
 
         try:
-            if origin.mode == "redirect":
-                self._send_redirect(origin)
-            elif origin.mode == "chunked":
-                self._send_chunked(origin)
-            else:
-                self._send_fixed(origin)
+            self._SENDERS[origin.mode](self, origin)
         except (BrokenPipeError, ConnectionResetError):
             # The caller aborted — a timeout or a size cap tripping is exactly
             # the behaviour under test, so this is expected, not a failure.
@@ -198,13 +243,32 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
-    def _send_fixed(self, origin: LocalOrigin) -> None:
-        self.send_response(origin.status)
-        self.send_header("Content-Type", origin.content_type)
-        self.send_header("Content-Length", str(len(origin.body)))
+    def _send_body(self, status: int, body: bytes, content_type: str) -> None:
+        """Write one complete, length-declared response — the shape both fixed and sequence need."""
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(origin.body)
+        self.wfile.write(body)
+
+    def _send_fixed(self, origin: LocalOrigin) -> None:
+        self._send_body(origin.status, origin.body, origin.content_type)
+
+    def _send_sequence(self, origin: LocalOrigin) -> None:
+        status, body = origin.take_from_sequence()
+        self._send_body(status, body, origin.content_type)
+
+    def _send_nothing(self, origin: LocalOrigin) -> None:
+        """Write no bytes at all and close the connection.
+
+        ``close_connection`` ends ``BaseHTTPRequestHandler``'s keep-alive loop,
+        after which ``socketserver`` closes the socket. The client has already
+        sent a complete request and gets a close instead of a status line, which
+        is a real protocol violation on the wire — so the transport error it
+        raises is its own, not one a test handed it.
+        """
+        self.close_connection = True
 
     def _send_chunked(self, origin: LocalOrigin) -> None:
         self.send_response(origin.status)
@@ -220,6 +284,18 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
             remaining -= len(chunk)
         self.wfile.write(b"0\r\n\r\n")
+
+    # Mode -> sender. A table rather than an if/elif ladder: adding a mode is
+    # one entry, and an unrecognised mode is a KeyError raised at the origin
+    # rather than a silent fall-through to "fixed" that would quietly grade the
+    # wrong behaviour.
+    _SENDERS: ClassVar[dict[str, Callable[[Any, LocalOrigin], None]]] = {
+        "fixed": _send_fixed,
+        "redirect": _send_redirect,
+        "chunked": _send_chunked,
+        "sequence": _send_sequence,
+        "error": _send_nothing,
+    }
 
     do_GET = _serve
     do_POST = _serve

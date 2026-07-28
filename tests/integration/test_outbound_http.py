@@ -263,6 +263,54 @@ def test_max_attempts_one_sends_exactly_once(seam_call, monkeypatch, local_origi
     assert local_origin.hits == 1
 
 
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_retry_recovers_when_the_origin_recovers(seam_call, monkeypatch, local_origin):
+    """503, 503, 200 succeeds on the third attempt — a retry that actually recovers.
+
+    Every other retry case here programs a failure that never clears, so all of
+    them would still pass if the seam gave up early and reported the failure.
+    Only a per-attempt response sequence grades the other half of the contract:
+    that attempt N+1 is really sent and its response is really the one returned.
+    The origin serves the sequence itself, so the recovery is observed on the
+    wire rather than staged by a mock's ``side_effect`` list.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_in_sequence(
+        [
+            (503, b'{"error": "unavailable"}'),
+            (503, b'{"error": "still unavailable"}'),
+            (200, b'{"ok": true}'),
+        ]
+    )
+
+    result = call_seam(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert result.status_code == 200
+    assert result.json() == {"ok": True}
+    assert result.attempts == 3
+    assert local_origin.hits == 3
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkeypatch, local_origin):
+    """A queue shorter than the attempt count keeps answering with its final entry.
+
+    This pins the origin's own contract, which the recovery case above depends
+    on: a test programs the recovery point without having to know how many
+    attempts the caller will make. Four attempts against a two-entry queue must
+    report the SECOND entry's status, not the first and not a queue-exhausted
+    error.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_in_sequence([(429, b'{"error": "slow down"}'), (503, b'{"error": "unavailable"}')])
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+
+    assert error.attempts == 4
+    assert error.last_status == 503
+    assert local_origin.hits == 4
+
+
 # ---------------------------------------------------------------------------
 # 6. Retry classification by exception — httpx signals these as exceptions,
 #    never as a status, and they must not escape the seam
@@ -287,6 +335,31 @@ def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypa
         timeout=0.5,
         max_attempts=2,
     )
+
+    assert error.attempts == 2
+    assert error.last_status is None
+    assert local_origin.hits == 2
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call, monkeypatch, local_origin):
+    """An origin that hangs up mid-exchange is a retryable transport failure, not a leak.
+
+    The origin accepts the request, records the hit, and closes the socket
+    before writing a status line, so httpx raises ``RemoteProtocolError``
+    ("Server disconnected without sending a response") of its own accord. That
+    is the distinction from the timeout case above: a different httpx exception
+    class reaching the same classification, from a real protocol violation on
+    the wire rather than a stalled read.
+
+    ``last_status`` is None for the same reason as a timeout — there was never a
+    response to read a status from — and the raw httpx error must not escape,
+    or every migrated call site keeps its own ``except httpx...``.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.close_without_responding()
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
 
     assert error.attempts == 2
     assert error.last_status is None
@@ -402,4 +475,31 @@ def test_transport_failure_envelope_hides_the_httpx_error(seam_call, monkeypatch
     assert local_origin.host not in serialized
     assert str(local_origin.port) not in serialized
     for term in ("timeout", "timed out", "readtimeout", "connecterror"):
+        assert term not in serialized.lower(), f"httpx internals {term!r} leaked into {envelope}"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_call, monkeypatch, local_origin):
+    """A hang-up and a timeout produce the same envelope — which failure mode it was stays inside.
+
+    Both are ``last_status: None`` after the same attempt count. Telling the two
+    apart would tell whoever supplied the URL whether the destination accepted
+    the connection and then hung up, or never answered at all — a liveness probe
+    for internal hosts (spec point 6). httpx's own wording for this one is
+    "Server disconnected without sending a response", which names the failure
+    mode outright and must not reach the wire.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.close_without_responding()
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=1)
+    envelope = build_two_layer_error_envelope(error)
+
+    assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
+    assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
+
+    serialized = json.dumps(envelope)
+    assert local_origin.host not in serialized
+    assert str(local_origin.port) not in serialized
+    for term in ("disconnect", "remoteprotocolerror", "protocol", "without sending"):
         assert term not in serialized.lower(), f"httpx internals {term!r} leaked into {envelope}"
