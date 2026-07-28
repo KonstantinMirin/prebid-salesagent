@@ -17,7 +17,15 @@ Two layers of guarantee:
 
 Spec: ``core/creative-filters.json`` (concept_ids ``minItems: 1``) + the BR-UC-018
 ext-c contract (validation failure → VALIDATION_ERROR + suggestion).
+
+This module also hosts the list_creatives untyped-``data``-blob coercion guards: a
+malformed ``concept_id``/``concept_name`` (``TestNumericConceptCoercion`` /
+``TestNonScalarConceptValueDropped``, #1407) or ``tags`` (``TestMalformedTagsBlobCoerced``,
+#1508) value in the blob must be coerced or dropped-and-logged, never crash the whole
+listing on one bad row.
 """
+
+from typing import Any
 
 import pytest
 
@@ -40,6 +48,42 @@ def _seed_authenticated_principal(env: CreativeListEnv):
     tenant = TenantFactory(tenant_id=env._tenant_id)
     principal = PrincipalFactory(tenant=tenant, principal_id=env._principal_id)
     return tenant, principal
+
+
+def _list_single_creative_with_data(data: dict) -> tuple[Any, str]:
+    """Seed one approved creative carrying *data* in its blob, list via REST, assert the
+    listing did not error, and return ``(result, warnings_text)``.
+
+    Collapses the seed-one-creative-and-list scaffold shared by the untyped-blob coercion
+    guards (CLAUDE.md DRY): across those tests only the ``data`` literal and the per-test
+    wire/log assertions vary. The module logger is patched (rather than captured via
+    ``caplog``) so the drop-warning assertion is immune to the tox/integration logging
+    config — levels/handlers/propagation/``logging.disable`` — that suppressed
+    capture-based approaches. ``warnings_text`` is the ``logger.warning`` calls rendered
+    to their final messages (``fmt % args``) so callers assert on the substituted text
+    (the coercers pass the field label as a ``%s`` arg, not baked into the format string).
+    REST-only, matching the sibling concept guards: the coercion runs in the shared reader
+    (transport-independent) and ``exclude_none`` omission is asserted on one wire.
+    """
+    from unittest.mock import patch
+
+    from tests.factories import CreativeFactory
+
+    with CreativeListEnv() as env:
+        tenant, principal = _seed_authenticated_principal(env)
+        CreativeFactory(
+            tenant=tenant,
+            principal=principal,
+            format="display_300x250",
+            status="approved",
+            data=data,
+        )
+        with patch("src.core.tools.creatives.listing.logger") as mock_logger:
+            result = env.call_via(Transport.REST)
+        warnings_text = " ".join(c.args[0] % c.args[1:] for c in mock_logger.warning.call_args_list)
+
+    assert not result.is_error, f"listing errored on data={data!r}: {result.error!r}"
+    return result, warnings_text
 
 
 class TestConceptIdsFilterValidation:
@@ -82,22 +126,10 @@ class TestNumericConceptCoercion:
     fix: reverting the str()-coercion reddens this (the listing raises mid-build)."""
 
     def test_numeric_concept_id_is_coerced_to_string(self, integration_db):
-        from tests.factories import CreativeFactory
-
-        with CreativeListEnv() as env:
-            tenant, principal = _seed_authenticated_principal(env)
-            CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                format="display_300x250",
-                status="approved",
-                data={"assets": {}, "concept_id": 12345, "concept_name": 678},
-            )
-            result = env.call_via(Transport.REST)
-            assert not result.is_error, f"listing errored on a numeric concept_id: {result.error!r}"
-            creative = result.wire_response["creatives"][0]
-            assert creative["concept_id"] == "12345"
-            assert creative["concept_name"] == "678"
+        result, _ = _list_single_creative_with_data({"assets": {}, "concept_id": 12345, "concept_name": 678})
+        creative = result.wire_response["creatives"][0]
+        assert creative["concept_id"] == "12345"
+        assert creative["concept_name"] == "678"
 
 
 class TestNonScalarConceptValueDropped:
@@ -107,36 +139,16 @@ class TestNonScalarConceptValueDropped:
     numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
 
     def test_non_scalar_concept_value_is_dropped(self, integration_db):
-        from unittest.mock import patch
-
-        from tests.factories import CreativeFactory
-
-        with CreativeListEnv() as env:
-            tenant, principal = _seed_authenticated_principal(env)
-            CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                format="display_300x250",
-                status="approved",
-                data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
-            )
-            # Assert the code EMITS the warning by patching the module logger, not by
-            # capturing log records: the REST path runs in-process, so the patch applies,
-            # and this is immune to the tox/integration logging config (levels, handlers,
-            # propagation, logging.disable) that suppressed capture-based approaches.
-            with patch("src.core.tools.creatives.listing.logger") as mock_logger:
-                result = env.call_via(Transport.REST)
-
-            assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
-            creative = result.wire_response["creatives"][0]
-            # Dropped to None → exclude_none omits the keys from the wire entirely.
-            assert "concept_id" not in creative
-            assert "concept_name" not in creative
-            # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-            warnings_logged = " ".join(str(c) for c in mock_logger.warning.call_args_list)
-            assert "Dropping non-scalar concept value" in warnings_logged, (
-                f"expected the non-scalar drop warning; logger.warning calls: {mock_logger.warning.call_args_list}"
-            )
+        result, warnings = _list_single_creative_with_data(
+            {"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}}
+        )
+        creative = result.wire_response["creatives"][0]
+        # Dropped to None → exclude_none omits the keys from the wire entirely.
+        assert "concept_id" not in creative
+        assert "concept_name" not in creative
+        # Observability (No Quiet Failures): the drop is surfaced via the patched module
+        # logger (see _list_single_creative_with_data on why not caplog).
+        assert "Dropping non-scalar concept value" in warnings
 
 
 class TestSellerConceptEnrichmentIsFilterable:
@@ -196,3 +208,45 @@ class TestSellerConceptEnrichmentIsFilterable:
             # (the reader projects explicit kwargs + the subclass extra="ignore" policy),
             # but nothing else pins it — a future schema change that echoed data must redden.
             assert "concept_source" not in creatives[0]
+
+
+class TestMalformedTagsBlobCoerced:
+    """A malformed ``tags`` value in the untyped ``data`` blob is coerced to a valid
+    ``list[str]`` (or dropped to absent) and logged, never crashing the whole listing —
+    #1508, the list-field sibling of the concept coercion guards above.
+
+    ``Creative.tags`` is typed ``list[str] | None`` but read straight from the blob, so
+    a bare string or a list carrying numeric/object elements would 500 the entire
+    listing (``VALIDATION_ERROR``) during response construction. Reverting the
+    ``_coerce_blob_str_list`` call at the ``tags=`` site back to the raw
+    ``data.get("tags")`` reddens these tests (the listing raises mid-build)."""
+
+    def test_non_list_tags_value_is_dropped(self, integration_db):
+        """A non-list tags blob (a bare string) is dropped to absent, not crashed on."""
+        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": "premium"})
+        creative = result.wire_response["creatives"][0]
+        # Dropped to None → exclude_none omits the key from the wire entirely.
+        assert "tags" not in creative
+        # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
+        assert "Dropping non-list tags value" in warnings
+
+    def test_non_string_tags_elements_are_coerced_or_dropped(self, integration_db):
+        """Scalar elements are stringified (bool included: ``str(True) == "True"``),
+        non-scalar elements dropped+logged, order preserved."""
+        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": [1, "keep", {"k": "v"}, True]})
+        creative = result.wire_response["creatives"][0]
+        # 1 -> "1", "keep" kept, {"k": "v"} dropped, True -> "True" (bool is an int
+        # subclass); order preserved.
+        assert creative["tags"] == ["1", "keep", "True"]
+        assert "Dropping non-scalar tags value" in warnings
+
+    def test_empty_tags_list_collapses_to_absent(self, integration_db):
+        """A stored empty tags list collapses to absent on the wire (the ``coerced or None``
+        collapse): ``exclude_none`` omits the key rather than emitting ``"tags": []``.
+
+        The pinned list-creatives-response schema permits both ``[]`` and omission; this
+        pins the omission choice production made so it cannot silently drift back to ``[]``
+        (mutating ``return coerced or None`` to ``return coerced`` reddens this test)."""
+        result, _ = _list_single_creative_with_data({"assets": {}, "tags": []})
+        creative = result.wire_response["creatives"][0]
+        assert "tags" not in creative
