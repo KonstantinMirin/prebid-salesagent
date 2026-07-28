@@ -3699,11 +3699,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # routes an UpdateMediaBuyRequest through IMPL/A2A/MCP/REST. Seed the full create
             # dependency chain plus a standalone MediaBuy with the literal id the
             # Background references ("mb_existing") so the update path has a target.
-            request.getfixturevalue("integration_db")
             from tests.factories import MediaBuyFactory
             from tests.harness.media_buy_dual import MediaBuyDualEnv
 
-            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyDualEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 existing_media_buy = MediaBuyFactory(
                     tenant=tenant,
@@ -3876,10 +3875,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         if not (marker_names & _UC010_WIRED_TAGS):
             pytest.xfail("UC-010 wiring batch 2/3 pending (#1592, salesagent-4sn7)")
 
-        request.getfixturevalue("integration_db")
         from tests.harness.capabilities import CapabilitiesEnv
 
-        with CapabilitiesEnv(principal_id="buyer-001", e2e_config=ctx.get("e2e_config")) as env:
+        with (
+            _db_scope_for(request, e2e_config),
+            CapabilitiesEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
+        ):
             tenant, principal = env.setup_default_data()
             ctx["env"] = env
             ctx["tenant"] = tenant
