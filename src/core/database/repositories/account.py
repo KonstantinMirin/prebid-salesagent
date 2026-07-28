@@ -9,10 +9,34 @@ beads: salesagent-m44
 from __future__ import annotations
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from src.core.database.integrity import is_constraint_violation
 from src.core.database.models import Account, AgentAccountAccess
 from src.core.helpers.brand_key import brand_key_parts
+
+#: The index that IS the natural-key invariant. ``_require_natural_key_free`` is
+#: only the fast path in front of it.
+NATURAL_KEY_INDEX = "uq_accounts_natural_key"
+
+
+class NaturalKeyConflict(ValueError):
+    """The account natural key is already occupied.
+
+    A ``ValueError`` subclass on purpose: the admin blueprint's existing
+    ``except ValueError`` keeps working unchanged, while ``sync_accounts`` — whose
+    semantic is upsert-by-natural-key — can catch this specific type and resolve
+    to ``existing_account_id`` instead of failing the entry.
+
+    Raised for BOTH ways the key can be occupied (the pre-check finding a
+    committed row, and losing the index race to a concurrent create), because to
+    every caller they are the same condition; only the timing differs.
+    """
+
+    def __init__(self, message: str, *, existing_account_id: str | None = None) -> None:
+        super().__init__(message)
+        self.existing_account_id = existing_account_id
 
 
 class AccountRepository:
@@ -224,8 +248,18 @@ class AccountRepository:
     def create(self, account: Account) -> Account:
         """Add a new account to the session.
 
-        Raises ValueError if the account's tenant_id doesn't match, or if its
-        natural key is already occupied (salesagent-0njj).
+        Raises ValueError if the account's tenant_id doesn't match, and
+        :class:`NaturalKeyConflict` if its natural key is already occupied —
+        whether the pre-check saw the occupant (the common case) or this create
+        LOST the race to the unique index (#1721).
+
+        The insert runs inside a SAVEPOINT so losing that race stays recoverable.
+        Without it the failed statement aborts the enclosing transaction, and
+        ``sync_accounts`` — which processes its whole batch in one ``AccountUoW``
+        — could not continue to the next entry: every later statement would raise
+        ``PendingRollbackError``. The savepoint rolls back this insert alone and
+        leaves the surrounding transaction healthy enough to both re-resolve the
+        winner and finish the batch.
         """
         if account.tenant_id != self._tenant_id:
             raise ValueError(
@@ -233,8 +267,22 @@ class AccountRepository:
                 f"but account has tenant_id='{account.tenant_id}'"
             )
         self._require_natural_key_free(account)
-        self._session.add(account)
-        self._session.flush()
+        try:
+            with self._session.begin_nested():
+                self._session.add(account)
+                self._session.flush()
+        except IntegrityError as exc:
+            if not is_constraint_violation(exc, NATURAL_KEY_INDEX):
+                raise
+            # The winner committed between our pre-check and our insert. Re-running
+            # the pre-check now finds it and raises the SAME conflict the caller
+            # would have got a microsecond earlier — one message, one query, defined
+            # in one place.
+            self._require_natural_key_free(account)
+            # Unreachable in practice: the only way the key is free again is the
+            # winner rolling back after beating us. Re-raise rather than invent a
+            # cause we cannot attribute — a retry of the create will now succeed.
+            raise
         return account
 
     def _require_natural_key_free(self, account: Account) -> None:
@@ -285,12 +333,13 @@ class AccountRepository:
         ).first()
 
         if existing is not None:
-            raise ValueError(
+            raise NaturalKeyConflict(
                 f"Natural key already in use: account '{existing.account_id}' already exists for "
                 f"operator={account.operator!r}, brand.domain={brand_domain!r}, "
                 f"brand.brand_id={brand_id!r}, sandbox={bool(account.sandbox)!r}. "
                 "Edit that account instead — a second account on one natural key makes the "
-                "buyer's sync_accounts entry unresolvable, and they cannot repair it."
+                "buyer's sync_accounts entry unresolvable, and they cannot repair it.",
+                existing_account_id=existing.account_id,
             )
 
     def update_status(self, account_id: str, status: str) -> Account | None:

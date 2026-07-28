@@ -249,7 +249,7 @@ def provision_tenant():
                 try:
                     db_session.flush()  # Flush to detect constraint violations before full commit
                     logger.info(f"Created new user {user_email} for tenant {tenant_id}")
-                except IntegrityError:
+                except IntegrityError:  # structural-guard: integrity-narrowing - FIXME(#1721): unnarrowed, and rolls back a session carrying other pending work
                     # Race condition: another request created the user simultaneously
                     db_session.rollback()
                     logger.warning(

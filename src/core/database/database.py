@@ -89,7 +89,7 @@ def init_db(exit_on_error=False):
 
             try:
                 db_session.flush()  # Try to write tenant first to catch duplicates
-            except IntegrityError:
+            except IntegrityError:  # structural-guard: integrity-narrowing - startup bootstrap of ONE known row; returns immediately, nothing else pending
                 # Tenant was created by another process/thread - rollback and continue
                 db_session.rollback()
                 print("ℹ️  Default tenant already exists (created by concurrent process)")

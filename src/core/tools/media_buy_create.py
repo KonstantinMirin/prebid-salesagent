@@ -38,6 +38,7 @@ from fastmcp.server.context import Context
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
@@ -1889,7 +1890,9 @@ def _cache_and_return(
                 protocol_status=result.status,
                 payload_hash=request_hash,
             )
-    except IntegrityError:
+    except (
+        IntegrityError
+    ):  # structural-guard: integrity-narrowing - best-effort cache write; logs and continues, claims no cause
         logger.info(
             "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",
             req.idempotency_key,
@@ -1954,17 +1957,14 @@ _IDEMPOTENCY_BACKSTOP_INDEX = "idx_media_buys_idempotency_key"
 def _is_idempotency_backstop_violation(exc: IntegrityError) -> bool:
     """True iff ``exc`` is the media_buys idempotency-key unique-index collision.
 
-    The single home for the "is this the idempotency race?" decision. Prefers the
-    driver's structured constraint name (``exc.orig.diag.constraint_name``), matched
-    by PREFIX against the backstop index — so a build-time rename suffix (the
-    CONCURRENTLY swap variants ``…_acct`` / ``…_noacct``) still matches, while an
-    unrelated constraint that merely contains the column token does not. Falls back
-    to a message substring scan only when the structured diagnostic is unavailable.
+    The single home for the "is this the idempotency race?" decision. The
+    prefix-match-then-message-fallback mechanism is shared with every other
+    constraint-narrowed recovery (``is_constraint_violation``); only the index and
+    the fallback token are specific to this one. The token stays the bare column
+    name rather than the index name so the fallback keeps matching drivers whose
+    message names the column.
     """
-    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-    if constraint:
-        return constraint.startswith(_IDEMPOTENCY_BACKSTOP_INDEX)
-    return "idempotency_key" in str(getattr(exc, "orig", exc))
+    return is_constraint_violation(exc, _IDEMPOTENCY_BACKSTOP_INDEX, message_token="idempotency_key")
 
 
 def _resolve_idempotency_race_or_raise(
@@ -2879,7 +2879,7 @@ async def _create_media_buy_impl(
                         payload_hash=request_hash,
                     )
                     logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
-            except IntegrityError as exc:
+            except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
                 return _resolve_idempotency_race_or_raise(
                     exc,
                     tenant["tenant_id"],
@@ -3657,7 +3657,7 @@ async def _create_media_buy_impl(
                     payload_hash=request_hash,
                 )
                 # UoW auto-commits on clean exit
-        except IntegrityError as exc:
+        except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
             return _resolve_idempotency_race_or_raise(
                 exc,
                 tenant["tenant_id"],

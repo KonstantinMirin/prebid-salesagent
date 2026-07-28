@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
+from src.core.database.repositories.account import NaturalKeyConflict
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -1259,6 +1260,38 @@ def _entry_account_hint(entry: Any) -> str:
     return str(getattr(brand, "domain", None) or "unknown")
 
 
+def _apply_to_existing_account(entry: Any, existing: Any, repo: Any, operator: str) -> SyncResponseAccount:
+    """Apply a provisioning entry to the account that already holds its natural key.
+
+    Shared by the two ways an entry can turn out to be an update rather than a
+    create: the lookup found the account, or the create LOST the unique-index race
+    to a concurrent writer (#1721). Both must produce the same result — the race
+    outcome is only "what this entry would have returned had it arrived a
+    microsecond later" — so they cannot be allowed to drift apart.
+    """
+    changes = _account_fields_changed(existing, entry)
+    if changes:
+        repo.update_fields(existing.account_id, **changes)
+        action = "updated"
+    else:
+        action = "unchanged"
+
+    return _build_sync_result(
+        brand=entry.brand,
+        operator=operator,
+        action=action,
+        status=existing.status,
+        account_id=existing.account_id,
+        name=existing.name,
+        billing=existing.billing,
+        sandbox=existing.sandbox,
+        # Post-write state: the applied array, which is the changed value when this
+        # sync touched it and the persisted one when it did not (omission preserves).
+        notification_configs=changes.get("notification_configs", existing.notification_configs),
+        billing_entity=changes.get("billing_entity", existing.billing_entity),
+    )
+
+
 def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
     """Resolve the persisted account an entry targets, in either entry mode."""
     ref = getattr(entry, "account", None)
@@ -1452,31 +1485,7 @@ async def _sync_accounts_impl(
                     )
                     continue
 
-                # Check for field changes and update if needed
-                changes = _account_fields_changed(existing, entry)
-                if changes:
-                    repo.update_fields(existing.account_id, **changes)
-                    action = "updated"
-                else:
-                    action = "unchanged"
-
-                results.append(
-                    _build_sync_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        action=action,
-                        status=existing.status,
-                        account_id=existing.account_id,
-                        name=existing.name,
-                        billing=existing.billing,
-                        sandbox=existing.sandbox,
-                        # Post-write state: the applied array, which is the
-                        # changed value when this sync touched it and the
-                        # persisted one when it did not (omission preserves).
-                        notification_configs=changes.get("notification_configs", existing.notification_configs),
-                        billing_entity=changes.get("billing_entity", existing.billing_entity),
-                    )
-                )
+                results.append(_apply_to_existing_account(entry, existing, repo, operator))
             else:
                 # Create new account. A create IS "resolve against nothing": the
                 # SAME table walk both update sites run, with existing=None, so a
@@ -1534,7 +1543,26 @@ async def _sync_accounts_impl(
                     # forgotten at create.
                     **created_fields,
                 )
-                repo.create(new_account)
+                try:
+                    repo.create(new_account)
+                except NaturalKeyConflict as exc:
+                    # Lost the unique-index race: a concurrent writer committed this
+                    # natural key between our lookup above and our insert. The buyer's
+                    # semantic here is upsert-by-natural-key, so resolve to the winner
+                    # rather than failing the entry — the only difference between this
+                    # entry and one that arrived a microsecond later is timing, and
+                    # timing must not change the answer. repo.create rolled its insert
+                    # back through a SAVEPOINT, so this transaction is healthy and the
+                    # rest of the batch still runs.
+                    winner = repo.get_by_id(exc.existing_account_id) if exc.existing_account_id else None
+                    if winner is None:
+                        # The conflict named a row; if it is gone the key is free again
+                        # and we cannot explain the failure. Do not invent a cause.
+                        raise
+                    seen_account_ids.add(winner.account_id)
+                    results.append(_apply_to_existing_account(entry, winner, repo, operator))
+                    continue
+
                 seen_account_ids.add(account_id)
 
                 # Grant agent access to the new account
