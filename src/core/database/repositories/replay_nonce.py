@@ -148,6 +148,29 @@ class ReplayNonceRepository:
         )
         return self._session.execute(stmt).first() is not None
 
+    def forget(self, keyid: str, nonce: str) -> None:
+        """Delete EXACTLY the ``(keyid, nonce)`` row, if it is there.
+
+        Scoped to one primary-key pair, never to a keyid and never to the table. This
+        table has no tenant dimension (see the module docstring), so "clear the cache
+        for this keyid" is a DEPLOYMENT-WIDE wipe: on a shared database it erases the
+        live claims of every other suite and every sibling worker, and a signer sitting
+        at its per-keyid cap would suddenly be under it. A conformance harness needs to
+        drop the exact pairs it created and nothing else, and raw SQL in a fixture is
+        not an option (``tests/unit/test_architecture_repository_pattern.py``), so the
+        narrow delete lives here rather than being widened at the call site.
+
+        Deleting an absent pair is a no-op, which is what makes it safe to call both
+        BEFORE and AFTER a case.
+
+        Like every other write here it COMMITS — for the same reason: no UoW spans a
+        signature check, and a claim that is not visible to sibling workers is not a
+        claim.
+        """
+        stmt = delete(ReplayNonce).where(ReplayNonce.keyid == keyid, ReplayNonce.nonce == nonce)
+        self._session.execute(stmt.execution_options(synchronize_session=False))
+        self._session.commit()
+
     def reap(self, limit: int) -> int:
         """Delete up to ``limit`` expired rows; return how many went. Best-effort.
 

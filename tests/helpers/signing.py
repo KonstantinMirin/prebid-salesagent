@@ -1,9 +1,17 @@
-"""Shared helpers for the A2 signing-key integration tests (salesagent-z6nr.8).
+"""Shared helpers for the signing test modules (#1291).
 
-One home for the three things both signing test modules do — build the
-tenant-scoped repository off the harness session, provision a key through
-production, and resolve a provider through production — so a signature change in
-``src.core.signing`` lands in one place instead of once per test module.
+Two groups:
+
+* **A2 key provisioning** (``salesagent-z6nr.8``) — build the tenant-scoped
+  repository off the harness session, provision a key through production, and
+  resolve a provider through production.
+* **The B1 verifier seams** (``salesagent-z6nr.14`` step 2, review finding LOW-1)
+  — the DECLARATION substitute, the counterparty-key seed, the verifier spy, the
+  wire rejection-code reader and the Prometheus counter readers. These were
+  defined inside ``tests/integration/test_request_signature_middleware.py`` and
+  imported ACROSS test modules by two siblings (and now a third, the B3
+  conformance run) — the duplication class the DRY invariant and
+  ``check_code_duplication.py`` exist to stop. One definition, here.
 
 Deliberately thin: these forward to production entry points and add nothing.
 Anything that decides or asserts belongs in the test, not here.
@@ -11,9 +19,13 @@ Anything that decides or asserts belongs in the test, not here.
 
 from __future__ import annotations
 
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 # An RFC 9421 signature base: the canonicalized component list joined by LF with
 # ``"@signature-params"`` last. A SigningProvider signs this as a RAW MESSAGE —
@@ -26,6 +38,65 @@ SIGNATURE_BASE = (
 )
 
 REQUEST_SIGNING = "request-signing"
+
+# ---------------------------------------------------------------------------
+# The counterparty, the tenant and the surfaces the signing suites share
+# (promoted from tests/integration/test_request_signature_middleware.py —
+# salesagent-z6nr.14 step 2)
+# ---------------------------------------------------------------------------
+#
+# These were module constants of the B1 middleware suite that the B4 operations,
+# A5 revocation and B3 conformance suites then imported ACROSS test modules (or
+# re-declared verbatim). Both shapes are the same defect: a name whose home is a
+# ``test_*.py`` module has no importable home at all. One definition, here.
+
+#: The counterparty as the Principal row carries it. ``agent_url`` is the ONLY
+#: legitimate source for a counterparty's identity (security.mdx forbids taking
+#: it from a header, a body field or any other self-assertion), and the
+#: middleware keys :data:`AGENT_RESOLUTION_CACHE` on exactly this value.
+COUNTERPARTY_AGENT_URL = "https://buyer.example.com/a2a"
+
+#: The origin the counterparty's ``brand.json`` is served from — what
+#: ``expected_key_origins`` is checked against at verifier step 7.
+COUNTERPARTY_KEY_ORIGIN = "https://buyer.example.com"
+
+#: Where that brand.json points for request-signing keys.
+COUNTERPARTY_JWKS_URI = "https://buyer.example.com/.well-known/jwks.json"
+
+#: The ``keyid`` the counterparty signs under.
+COUNTERPARTY_KID = "buyer-request-signing-1"
+
+#: The seller tenant and the buyer's principal within it. Shared so the three
+#: in-process suites address the same rows and one ``seed_principal`` serves all.
+SIGNING_TENANT_ID = "sig_tenant"
+SIGNING_PRINCIPAL_ID = "sig_principal"
+
+#: An AdCP surface path with no request body — the cheapest place to grade the
+#: header-presence branches. Auth-optional, so any 401 seen on it came from the
+#: verifier and not from the route's own auth dependency.
+BODYLESS_ADCP_PATH = "/api/v1/capabilities"
+
+#: The body-rewriter collision site (R-H2). ``account_id`` is a DEPRECATED field
+#: name: ``normalize_request_params`` translates ``account_id`` → ``account``
+#: (``src/core/request_compat.py``), which sets ``translations_applied`` and makes
+#: ``RestCompatMiddleware`` rewrite the body.
+REWRITTEN_ADCP_PATH = "/api/v1/media-buys"
+
+#: Metric names from B1 plan step 6. ``code`` collapses to ``"other"`` outside the
+#: 27 spec strings; ``keyid`` is the real value only after step-7 resolution.
+VERIFIED_METRIC = "adcp_request_signature_verified_total"
+FAILED_METRIC = "adcp_request_signature_failed_total"
+
+#: The AdCP operations the B1 shadow-mode ladder invokes, and which the A5
+#: revocation suite declares alongside it so both bucket the same two names.
+#:
+#: Two names rather than one, because the ladder runs on two routes:
+#: ``/api/v1/capabilities`` (both verbs) is ``get_adcp_capabilities`` and POST
+#: ``/api/v1/media-buys`` is ``create_media_buy``. Each test exercises exactly one
+#: of them and :func:`bucketed_declaration` puts BOTH in the bucket under test, so
+#: every assertion grades the same thing against real operation names rather than
+#: the empty string the pre-B2 resolver returned.
+LADDER_OPERATIONS = ("get_adcp_capabilities", "create_media_buy")
 
 
 def signing_key_repo(env: Any, tenant_id: str) -> Any:
@@ -69,6 +140,262 @@ def resolve_provider(
     from src.core.signing.provider import resolve_signing_provider
 
     return resolve_signing_provider(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid)
+
+
+# ---------------------------------------------------------------------------
+# B1 verifier seams (promoted from tests/integration/test_request_signature_middleware.py)
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def declared_posture(**declaration: Any) -> Iterator[None]:
+    """Substitute the tenant's ``request_signing`` DECLARATION, not the decision.
+
+    Takes the schema's own property names (``supported``,
+    ``covers_content_digest``, ``required_for``, ``warn_for``, ``supported_for``,
+    ``protocol_methods_*``) and builds a real ``RequestSigningPosture`` from them,
+    so production's ``bucket_for`` precedence and ``to_verifier_capability()``
+    projection run for real. Only the READER (``posture_for_tenant``) is replaced.
+
+    ``request_signing_is_declarable`` is substituted TRUE alongside it: that flag
+    gates the body BUFFER and the operation RESOLVE, and it is False in production
+    today (``request_signing`` is still in ``_UNBACKED_BLOCKS``), so without this
+    line every bucket is ``none``, the middleware verifies nothing, and everything
+    downstream passes vacuously. Declaring a posture and not making it declarable
+    is not a state any tenant can be in.
+
+    White-box in EXACTLY one respect, stated rather than glossed: the DB path that
+    would carry the declaration does not exist yet. D1 (``salesagent-z6nr.20``)
+    owns re-running these suites through the real ``CapabilityDeclarations
+    .from_tenant`` path once the block is backed.
+    """
+    from src.core.signing import request_verifier_middleware as mw
+    from src.core.signing.posture import RequestSigningPosture
+
+    posture = RequestSigningPosture(**declaration)
+    with (
+        patch.object(mw, "posture_for_tenant", lambda _tenant: posture),
+        patch.object(mw, "request_signing_is_declarable", lambda: True),
+    ):
+        yield
+
+
+@contextmanager
+def counterparty_key(
+    jwks: dict[str, Any],
+    *,
+    agent_url: str = COUNTERPARTY_AGENT_URL,
+    jwks_uri: str = COUNTERPARTY_JWKS_URI,
+    key_origin: str = COUNTERPARTY_KEY_ORIGIN,
+) -> Iterator[None]:
+    """Seed the whole ``AgentResolution`` for *agent_url* into the middleware cache.
+
+    The three keyword arguments default to the shared counterparty
+    (:data:`COUNTERPARTY_AGENT_URL` and friends) that every signing suite signs
+    as; pass them only when a test needs a SECOND counterparty, which is the
+    thing the defaults make visible at the call site.
+
+    The middleware keys its resolver registry on the counterparty's ``agent_url``
+    (read from the Principal row — security.mdx forbids taking it from a header, a
+    body field or any self-assertion), and the cached object must carry ``jwks``
+    AND ``jwks_uri`` AND ``key_origins`` so ``expected_key_origins`` reaches
+    ``VerifyOptions`` and the step-7 key-origin check stays ON. Seeding the
+    resolution is what lets these tests run the REAL verifier against real keys
+    without a live counterparty — nothing about the outcome is faked.
+    """
+    from adcp.signing.agent_resolver import AgentResolution
+
+    from src.core.signing import request_verifier_middleware as mw
+
+    resolution = AgentResolution(
+        agent_url=agent_url,
+        brand_json_url=f"{key_origin}/.well-known/brand.json",
+        agent_entry={"type": "sales", "url": agent_url, "jwks_uri": jwks_uri},
+        jwks_uri=jwks_uri,
+        jwks=jwks,
+        fetched_at=time.time(),
+        key_origins={"request_signing": key_origin},
+    )
+    mw.AGENT_RESOLUTION_CACHE[agent_url] = resolution
+    try:
+        yield
+    finally:
+        mw.AGENT_RESOLUTION_CACHE.pop(agent_url, None)
+
+
+#: Reserved key under which :func:`verifier_spy` records what the real verifier
+#: RETURNED. Not a kwarg name — chosen so it cannot collide with one.
+VERIFIER_RESULT = "__verifier_result__"
+
+
+@contextmanager
+def verifier_spy() -> Iterator[list[dict[str, Any]]]:
+    """Record every ``verify_request_signature`` call, delegating to the real one.
+
+    Pure observation: the SDK verifier still runs and still decides. Recording the
+    kwargs is what proves WHICH bytes were verified — and what makes a positive
+    conformance vector non-vacuous, since "non-4xx" is equally true of a middleware
+    that skipped the path entirely.
+
+    The patched attribute is called inside a worker thread (``asyncio.to_thread``);
+    ``list.append`` is atomic under the GIL, so the recording list is safe as-is.
+    """
+    from src.core.signing import request_verifier_middleware as mw
+
+    calls: list[dict[str, Any]] = []
+    real = mw.verify_request_signature
+
+    def _recording(**kwargs: Any) -> Any:
+        record = dict(kwargs)
+        calls.append(record)
+        result = real(**kwargs)
+        # The RESULT under a reserved key, so a caller can assert the returned
+        # ``VerifiedSigner.key_id`` — the only positive-path observable that
+        # distinguishes "the verifier accepted this signature" from "the middleware
+        # never looked". Absent when the verifier raised, which is itself the signal.
+        record[VERIFIER_RESULT] = result
+        return result
+
+    with patch.object(mw, "verify_request_signature", _recording):
+        yield calls
+
+
+def rejection_code(response: Any) -> str | None:
+    """The verifier's error code OFF THE WIRE, or None if it did not reject.
+
+    The 401 carries ``WWW-Authenticate: Signature error="<code>"`` — the SDK's
+    ``unauthorized_response_headers`` and the only wire signal that distinguishes a
+    verifier rejection from a route-level 401. Asserting ``status_code == 401``
+    alone is satisfied by auth middleware rejecting first, which is why every
+    negative case reads this instead.
+
+    Accepts anything with ``.status_code`` and ``.headers`` — an httpx response or
+    a :class:`tests.helpers.asgi_wire.WireResponse`.
+    """
+    if response.status_code != 401:
+        return None
+    challenge = response.headers.get("WWW-Authenticate") or response.headers.get("www-authenticate") or ""
+    if not challenge.startswith("Signature "):
+        return None
+    _, _, remainder = challenge.partition('error="')
+    return remainder.rstrip('"') or None
+
+
+def counter_samples(sample_name: str) -> dict[tuple[tuple[str, str], ...], float]:
+    """All Prometheus samples named *sample_name*, keyed by their label set."""
+    from prometheus_client import REGISTRY
+
+    out: dict[tuple[tuple[str, str], ...], float] = {}
+    for family in REGISTRY.collect():
+        for sample in family.samples:
+            if sample.name == sample_name:
+                out[tuple(sorted(sample.labels.items()))] = sample.value
+    return out
+
+
+def counter_total(sample_name: str) -> float:
+    return sum(counter_samples(sample_name).values())
+
+
+def samples_with(sample_name: str, **labels: str) -> dict[tuple[tuple[str, str], ...], float]:
+    """Samples of *sample_name* whose labels are a superset of *labels*."""
+    wanted = labels.items()
+    return {key: value for key, value in counter_samples(sample_name).items() if wanted <= dict(key).items()}
+
+
+# ---------------------------------------------------------------------------
+# Declaration and request construction (promoted alongside the constants above)
+# ---------------------------------------------------------------------------
+
+
+def bucketed_declaration(bucket: str, *operations: str) -> dict[str, Any]:
+    """A ``request_signing`` declaration putting *operations* in exactly one bucket.
+
+    ``required_for`` entries must also appear in ``supported_for``
+    (``get-adcp-capabilities-response.json`` x-adcp-validation: "an operation
+    can't be required without being supported"), so the required declaration lists
+    both — which is also what makes the precedence rule
+    ``required_for > warn_for > supported_for`` load-bearing rather than
+    decorative.
+
+    Naming the operations EXPLICITLY (rather than leaving a bucket unnarrowed) is
+    what puts every other operation in the ``none`` bucket, and so what keeps the
+    controls in the suites that use this meaningful.
+    """
+    declaration: dict[str, Any] = {"supported": True, "supported_for": list(operations)}
+    if bucket == "required":
+        declaration["required_for"] = list(operations)
+    elif bucket == "warn":
+        declaration["warn_for"] = list(operations)
+    elif bucket != "supported":
+        raise ValueError(f"unknown bucket {bucket!r}")
+    return declaration
+
+
+def keypair_for(kid: str) -> tuple[Any, dict[str, Any]]:
+    """Fresh Ed25519 request-signing material for *kid*: (private_key, public JWKS)."""
+    from adcp.signing import generate_signing_keypair, load_private_key_pem
+
+    pem, public_jwk = generate_signing_keypair(alg="ed25519", kid=kid, purpose=REQUEST_SIGNING)
+    return load_private_key_pem(pem), {"keys": [public_jwk]}
+
+
+def seed_principal(env: Any, *, agent_url: str | None = COUNTERPARTY_AGENT_URL) -> str:
+    """Create the shared tenant + a Principal carrying *agent_url*; return its token.
+
+    ``Principal.agent_url`` (nullable ``String(500)``) is the onboarding record,
+    and the only legitimate source for the counterparty's agent URL. Pass
+    ``agent_url=None`` to grade what the verifier does when onboarding never
+    recorded one.
+
+    *env* is the live :class:`~tests.harness._base.BareIntegrationEnv`: it is not
+    read here, but the factories below write through the session that entering the
+    env bound to them, so taking it as an argument is what pins the ordering.
+    """
+    from tests.factories import PrincipalFactory, TenantFactory
+
+    tenant = TenantFactory(tenant_id=SIGNING_TENANT_ID)
+    principal = PrincipalFactory(
+        tenant=tenant,
+        principal_id=SIGNING_PRINCIPAL_ID,
+        agent_url=agent_url,
+    )
+    return principal.access_token
+
+
+def request_headers(token: str | None, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Wire headers: tenant hint + optional bearer + whatever the test adds."""
+    headers = {"x-adcp-tenant": SIGNING_TENANT_ID}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def sign_wire_request(
+    private_key: Any,
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes,
+    key_id: str = COUNTERPARTY_KID,
+) -> dict[str, str]:
+    """Sign *body* over the WIRE bytes, covering ``content-digest``."""
+    from adcp.signing import sign_request
+
+    signed = sign_request(
+        method=method,
+        url=url,
+        headers=headers,
+        body=body,
+        private_key=private_key,
+        key_id=key_id,
+        alg="ed25519",
+        cover_content_digest=True,
+    )
+    return signed.as_dict()
 
 
 def just_after_provisioning() -> datetime:

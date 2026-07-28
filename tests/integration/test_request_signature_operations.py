@@ -79,8 +79,8 @@ the ``authentication`` block, the same request under ``supported: false``. A
 resolver that blanket-promoted everything to ``required`` would pass the first
 half of this file and fail the second.
 
-The seam is ``_declared_posture`` (``test_request_signature_middleware.py``),
-reused rather than reimplemented: it substitutes the tenant DECLARATION and
+The seam is ``declared_posture`` (``tests/helpers/signing.py``), reused rather
+than reimplemented: it substitutes the tenant DECLARATION and
 lets production's ``bucket_for`` precedence run for real, and (R-H1) it
 substitutes ``request_signing_is_declarable`` to True so the resolver is
 actually asked to name anything at all.
@@ -101,15 +101,24 @@ import pytest
 from adcp.signing import REQUEST_SIGNATURE_REQUIRED
 
 from tests.harness._base import BareIntegrationEnv
-from tests.integration.test_request_signature_middleware import (
-    _BODYLESS_ADCP_PATH,
-    _PRINCIPAL_ID,
-    _REWRITTEN_ADCP_PATH,
-    _TENANT_ID,
-    _declared_posture,
-    _headers,
-    _rejection_code,
-    _seed,
+
+# The seams, the shared tenant/surface constants and the shared request builders
+# all come from their single home (salesagent-z6nr.14 step 2). What stays below is
+# only what this suite alone uses — the per-transport paths and envelopes.
+from tests.helpers.signing import (
+    BODYLESS_ADCP_PATH,
+    REWRITTEN_ADCP_PATH,
+    SIGNING_PRINCIPAL_ID,
+    SIGNING_TENANT_ID,
+    bucketed_declaration,
+    request_headers,
+    seed_principal,
+)
+from tests.helpers.signing import (
+    declared_posture as _declared_posture,
+)
+from tests.helpers.signing import (
+    rejection_code as _rejection_code,
 )
 
 #: Module-wide, and load-bearing rather than defensive: the reorder's failure
@@ -149,18 +158,6 @@ _WEBHOOK_AUTHENTICATION = {"scheme": "Bearer", "credentials": "webhook-secret-to
 # --------------------------------------------------------------------------
 # Declarations
 # --------------------------------------------------------------------------
-
-
-def _requires(*operations: str) -> dict[str, Any]:
-    """A posture requiring signatures for *operations* and nothing else.
-
-    ``required_for`` entries must also appear in ``supported_for``
-    (``get-adcp-capabilities-response.json`` x-adcp-validation: an operation
-    can't be required without being supported), and the explicit list is what
-    makes "some other operation" fall in the ``none`` bucket — which is how
-    the controls in this file stay meaningful.
-    """
-    return {"supported": True, "supported_for": list(operations), "required_for": list(operations)}
 
 
 def _requires_protocol_methods(*methods: str) -> dict[str, Any]:
@@ -243,7 +240,7 @@ def _a2a_explicit_skill(skill: str) -> bytes:
 
 
 def _json_headers(token: str | None) -> dict[str, str]:
-    return _headers(token, {"Content-Type": "application/json"})
+    return request_headers(token, {"Content-Type": "application/json"})
 
 
 # --------------------------------------------------------------------------
@@ -341,11 +338,11 @@ class TestOperationNamePerTransport:
         table, which is the whole point of deriving it rather than parsing the
         path for a name.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**_requires("create_media_buy")):
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
                 response = client.post(
                     _CREATE_MEDIA_BUY_PATH,
                     content=json.dumps({"packages": [], "start_time": "2026-08-01T00:00:00Z"}).encode(),
@@ -362,11 +359,11 @@ class TestOperationNamePerTransport:
         """MCP's wire tool name IS the AdCP operation name for our registrations
         (``src/core/main.py:351-378`` — ``fn.__name__``).
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**_requires("create_media_buy")):
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
                 response = client.post(
                     _MCP_PATH,
                     content=_mcp_tool_call("create_media_buy"),
@@ -384,11 +381,11 @@ class TestOperationNamePerTransport:
         comes from ``parts[].data.skill`` — never from the JSON-RPC ``method``,
         which is ``message/send`` for every skill.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**_requires("create_media_buy")):
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
                 response = client.post(
                     _A2A_PATH,
                     content=_a2a_explicit_skill("create_media_buy"),
@@ -409,11 +406,11 @@ class TestOperationNamePerTransport:
         A resolver that keyed on the path alone — or that promoted anything it
         could not name — answers 401 here.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**_requires("create_media_buy")):
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
                 response = client.put(
                     _UPDATE_MEDIA_BUY_PATH,
                     content=json.dumps({"packages": []}).encode(),
@@ -428,11 +425,11 @@ class TestOperationNamePerTransport:
 
     def test_an_unrequired_mcp_tool_is_not_promoted(self, integration_db):
         """The MCP-side control: a different tool name on the same envelope."""
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**_requires("create_media_buy")):
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
                 response = client.post(
                     _MCP_PATH,
                     content=_mcp_tool_call("get_products"),
@@ -476,8 +473,8 @@ class TestProtocolMethodNamespace:
         frozenset contains ``"root='tasks/cancel'"``. Supplying the right name
         is necessary and not sufficient.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
             with _declared_posture(**_requires_protocol_methods("tasks/cancel")):
@@ -502,8 +499,8 @@ class TestProtocolMethodNamespace:
 
         With both AdCP buckets empty it therefore falls in ``none`` and passes.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
             with _declared_posture(**_requires_protocol_methods("tasks/cancel")):
@@ -530,11 +527,11 @@ class TestProtocolMethodNamespace:
         looking more informative. Here that resolver answers 200 and this test
         fails; the mutually-exclusive one answers 401.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            declaration = _requires("create_media_buy")
+            declaration = bucketed_declaration("required", "create_media_buy")
             declaration["protocol_methods_supported_for"] = ["tools/call"]
 
             with _declared_posture(**declaration):
@@ -572,12 +569,12 @@ class TestSessionFramesAreNotUnresolvable:
         ``required_for``, which is the outage plan step 5 exists to avoid. The
         rule that prevents it has to sit AHEAD of the unresolvable test.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**_requires("create_media_buy")):
-                response = client.get(_MCP_PATH, headers=_headers(None))
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
+                response = client.get(_MCP_PATH, headers=request_headers(None))
 
             _assert_not_rejected(
                 response,
@@ -591,11 +588,11 @@ class TestSessionFramesAreNotUnresolvable:
         genuinely unresolvable and is promoted to the strictest bucket the
         posture declares.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**_requires("create_media_buy")):
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
                 response = client.post(
                     _MCP_PATH,
                     content=b"<<< this is not JSON and names no operation >>>",
@@ -647,8 +644,8 @@ class TestWebhookAuthenticationForcesASignature:
         ``authentication`` block, so exempting authenticated callers would
         defeat the entire rule.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            token = _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
             client = _client(env)
 
             with _declared_posture(**_supported_only()):
@@ -688,8 +685,8 @@ class TestWebhookAuthenticationForcesASignature:
             }
         ).encode()
 
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            token = _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
             client = _client(env)
 
             with _declared_posture(**_supported_only()):
@@ -708,8 +705,8 @@ class TestWebhookAuthenticationForcesASignature:
         fire, and an unsigned bearer-authed webhook registration is ordinary
         traffic.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            token = _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
             client = _client(env)
 
             with _declared_posture(**_supported_only()):
@@ -731,8 +728,8 @@ class TestWebhookAuthenticationForcesASignature:
         bucket, ``posture.py:95-96``), and an agent that does not verify
         signatures cannot demand one.
         """
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            token = _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
             client = _client(env)
 
             with _declared_posture(supported=False):
@@ -793,12 +790,12 @@ class TestUnsignedBodyReachesTheHandlerIntact:
         whole string.
         """
         body = {"context": {"request_id": _PADDING}}
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            token = _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
             client = _client(env)
 
             with _declared_posture(**_supported_only()), _body_cap(cap) if cap else nullcontext():
-                response = client.post(_BODYLESS_ADCP_PATH, json=body, headers=_headers(token))
+                response = client.post(BODYLESS_ADCP_PATH, json=body, headers=request_headers(token))
 
             assert response.status_code == 200, (
                 "an UNSIGNED request must never be answered by the signature verifier's "
@@ -829,8 +826,8 @@ class TestUnsignedBodyReachesTheHandlerIntact:
             "start_time": "2026-08-01T00:00:00Z",
             "buyer_ref": _PADDING,
         }
-        with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-            token = _seed(env)
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
             client = _client(env)
 
             with (
@@ -838,7 +835,7 @@ class TestUnsignedBodyReachesTheHandlerIntact:
                 _body_cap(cap) if cap else nullcontext(),
                 _rest_compat_spy() as parsed,
             ):
-                response = client.post(_REWRITTEN_ADCP_PATH, json=body, headers=_headers(token))
+                response = client.post(REWRITTEN_ADCP_PATH, json=body, headers=request_headers(token))
 
             assert response.status_code != 413, (
                 "an UNSIGNED request must never be answered with the signed-body 413; "

@@ -65,11 +65,24 @@ normalizes to release-precision on the wire.
    command above).
 3. `uv lock --upgrade-package adcp`.
 4. Update `EXPECTED_SPEC_VERSION` in `tests/unit/test_adcp_spec_version.py`.
-5. Update this document.
-6. Run `make quality` and address Pydantic field/type changes.
-7. Re-verify integration and BDD coverage.
+5. Re-vendor the request-signing conformance vectors and their `MANIFEST.json`:
+
+   ```bash
+   uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
+   ```
+
+   Update `VECTORS_REV` / `VECTORS_SPEC_VERSION` / `VECTORS_SRC` in that script
+   first. `tests/unit/test_adcp_conformance_vectors_pin.py` ties the vendored
+   snapshot to `adcp.get_adcp_spec_version()`, so skipping this step fails CI
+   rather than silently grading the verifier against the previous version's
+   conformance data.
+6. Update this document.
+7. Run `make quality` and address Pydantic field/type changes.
+8. Re-verify integration and BDD coverage.
 
 ## Related files
 
 - `pyproject.toml` — SDK pin
 - `tests/unit/test_adcp_spec_version.py` — CI guard
+- `tests/unit/test_adcp_conformance_vectors_pin.py` — conformance-vector pin guard
+- `tests/fixtures/adcp_conformance_vectors/` — the vendored, sha256-pinned vectors

@@ -157,44 +157,52 @@ from adcp.signing import (
     REQUEST_SIGNATURE_KEY_REVOKED,
     REQUEST_SIGNATURE_REVOCATION_STALE,
     StaticJwksResolver,
-    generate_signing_keypair,
-    load_private_key_pem,
 )
 from adcp.signing.revocation_fetcher import (
     CachingRevocationChecker,
     FetchResult,
     RevocationListFetchError,
 )
+
+from src.core.config import SigningConfig, get_config
+from src.core.signing import request_verifier_middleware as mw
 from src.core.signing.revocation import (
     REVOCATION_CHECKER_CACHE,
     CounterpartyRevocationChecker,
     checker_for,
 )
-
-from src.core.config import SigningConfig, get_config
-from src.core.signing import request_verifier_middleware as mw
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.log_capture import LogCaptureHandler
 
-# The B1 module owns the wire plumbing for signed requests (declaration seam,
-# counterparty resolution seam, signing, rejection-code extraction, counter
-# reads). Importing it is what keeps step 9's tests from re-deriving B1's
-# harness — a second copy would be the duplication class CLAUDE.md's DRY
-# invariant exists to prevent, and it would drift the moment the wire changed.
-from tests.integration.test_request_signature_middleware import (
-    _AGENT_URL,
-    _BODYLESS_ADCP_PATH,
-    _KID,
-    _PRINCIPAL_ID,
-    _TENANT_ID,
-    _bucketed,
-    _counter_total,
-    _counterparty_key,
-    _declared_posture,
-    _headers,
-    _rejection_code,
-    _seed,
-    _sign,
+# tests/helpers/signing.py owns the wire plumbing for signed requests
+# (declaration seam, counterparty resolution seam, signing, rejection-code
+# extraction, counter reads) — salesagent-z6nr.14 step 2. Reusing it is what
+# keeps step 9's tests from re-deriving B1's harness: a second copy would be the
+# duplication class CLAUDE.md's DRY invariant exists to prevent, and it would
+# drift the moment the wire changed. What stays below is only this suite's own —
+# the operator origins, the ageing checkers, the revocation JWS.
+from tests.helpers.signing import (
+    BODYLESS_ADCP_PATH,
+    COUNTERPARTY_AGENT_URL,
+    COUNTERPARTY_KID,
+    LADDER_OPERATIONS,
+    SIGNING_PRINCIPAL_ID,
+    SIGNING_TENANT_ID,
+    bucketed_declaration,
+    counterparty_key,
+    keypair_for,
+    request_headers,
+    seed_principal,
+    sign_wire_request,
+)
+from tests.helpers.signing import (
+    counter_total as _counter_total,
+)
+from tests.helpers.signing import (
+    declared_posture as _declared_posture,
+)
+from tests.helpers.signing import (
+    rejection_code as _rejection_code,
 )
 
 #: Metric for the R1 fail-open path (plan step 4). Family total only — see the
@@ -253,17 +261,17 @@ def _signing_config(**overrides: Any) -> Iterator[SigningConfig]:
 
 @contextmanager
 def _counterparty_at(origin: str, jwks: dict[str, Any]) -> Iterator[None]:
-    """Seed :data:`_AGENT_URL`'s resolution with its operator origin set.
+    """Seed :data:`COUNTERPARTY_AGENT_URL`'s resolution with its operator origin set.
 
-    Layered on B1's ``_counterparty_key`` (which owns the whole
+    Layered on the shared ``counterparty_key`` (which owns the whole
     :class:`AgentResolution` shape) because A5 needs exactly one field of it to
     vary: ``brand_json_url`` is where the revocation issuer origin comes from
     (F5, security.mdx :1328 — the combined list is served at the brand.json
     origin, so the issuer is per-counterparty and not one per process).
     """
-    with _counterparty_key(jwks):
-        cached = mw.AGENT_RESOLUTION_CACHE[_AGENT_URL]
-        mw.AGENT_RESOLUTION_CACHE[_AGENT_URL] = cached.model_copy(
+    with counterparty_key(jwks):
+        cached = mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL]
+        mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL] = cached.model_copy(
             update={"brand_json_url": f"{origin}/.well-known/brand.json"}
         )
         yield
@@ -285,27 +293,21 @@ def _revocation_warned(handler: LogCaptureHandler) -> bool:
     return any("revocation" in record.lower() for record in handler.records)
 
 
-def _keypair(kid: str) -> tuple[Any, dict[str, Any]]:
-    """Fresh Ed25519 request-signing material for *kid*: (private_key, public JWKS)."""
-    pem, public_jwk = generate_signing_keypair(alg="ed25519", kid=kid, purpose="request-signing")
-    return load_private_key_pem(pem), {"keys": [public_jwk]}
-
-
 def _jwks_for(kid: str) -> dict[str, Any]:
     """A one-key JWK set for *kid*, when the private half is not needed."""
-    return _keypair(kid)[1]
+    return keypair_for(kid)[1]
 
 
 @pytest.fixture(scope="module")
 def counterparty_keypair() -> tuple[Any, dict[str, Any]]:
-    """The counterparty's request-signing keypair, under :data:`_KID`.
+    """The counterparty's request-signing keypair, under :data:`COUNTERPARTY_KID`.
 
-    Same shape as B1's fixture of this name, redeclared rather than imported:
-    a fixture imported into a module is then shadowed by every test parameter
-    that requests it (ruff F811), which is noise that would have to be silenced
-    once per test.
+    The MATERIAL comes from the shared ``keypair_for``; only the fixture is
+    redeclared rather than imported, because a fixture imported into a module is
+    then shadowed by every test parameter that requests it (ruff F811), which is
+    noise that would have to be silenced once per test.
     """
-    return _keypair(_KID)
+    return keypair_for(COUNTERPARTY_KID)
 
 
 # --------------------------------------------------------------------------
@@ -333,7 +335,7 @@ class _SignedCaller:
 
     def __init__(self, env: BareIntegrationEnv, keypair: tuple[Any, dict[str, Any]]) -> None:
         self.private_key, self.jwks = keypair
-        self._token = _seed(env)
+        self._token = seed_principal(env)
         self._client = env.get_rest_client()
 
     def send(self, *, corrupt_signature: bool = False) -> Any:
@@ -344,26 +346,26 @@ class _SignedCaller:
         store.
         """
         body = json.dumps({"context": {"request_id": "revocation-probe"}}).encode()
-        base = _headers(self._token, {"Content-Type": "application/json"})
+        base = request_headers(self._token, {"Content-Type": "application/json"})
         headers = {
             **base,
-            **_sign(
+            **sign_wire_request(
                 self.private_key,
                 method="POST",
-                url=f"http://testserver{_BODYLESS_ADCP_PATH}",
+                url=f"http://testserver{BODYLESS_ADCP_PATH}",
                 headers=base,
                 body=body,
             ),
         }
         if corrupt_signature:
             headers = _with_corrupt_signature(headers)
-        return self._client.post(_BODYLESS_ADCP_PATH, content=body, headers=headers)
+        return self._client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
 
 
 @contextmanager
 def _caller(keypair: tuple[Any, dict[str, Any]]) -> Iterator[_SignedCaller]:
     """A tenant, its principal and a signing counterparty, ready to send."""
-    with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
+    with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
         yield _SignedCaller(env, keypair)
 
 
@@ -377,7 +379,7 @@ def _step_nine(*, origin: str, jwks: dict[str, Any], **config: Any) -> Iterator[
     into the warn bucket would grade nothing at all (R8).
     """
     with (
-        _declared_posture(**_bucketed("supported")),
+        _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
         _counterparty_at(origin, jwks),
         _signing_config(**config),
     ):
@@ -402,7 +404,7 @@ def _revocation_jws(private_key: Any, *, issuer: str, updated: datetime, next_up
     def _segment(obj: dict[str, Any]) -> str:
         return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
 
-    header = _segment({"alg": "EdDSA", "typ": "adcp-gov-revocation+jws", "kid": _KID})
+    header = _segment({"alg": "EdDSA", "typ": "adcp-gov-revocation+jws", "kid": COUNTERPARTY_KID})
     payload = _segment(
         {
             "version": 1,
@@ -508,7 +510,7 @@ class TestRevokedKeyidRejects:
         "the spec doesn't permit un-revocation").
         """
         with _caller(counterparty_keypair) as caller:
-            with _step_nine(origin=_BLOCKED_ORIGIN, jwks=caller.jwks, revoked_keyids=_KID):
+            with _step_nine(origin=_BLOCKED_ORIGIN, jwks=caller.jwks, revoked_keyids=COUNTERPARTY_KID):
                 response = caller.send()
 
             assert _rejection_code(response) == REQUEST_SIGNATURE_KEY_REVOKED, (
@@ -528,7 +530,7 @@ class TestRevokedKeyidRejects:
         before step 10 (:311), and nothing in salesagent may reorder it.
         """
         with _caller(counterparty_keypair) as caller:
-            with _step_nine(origin=_BLOCKED_ORIGIN, jwks=caller.jwks, revoked_keyids=_KID):
+            with _step_nine(origin=_BLOCKED_ORIGIN, jwks=caller.jwks, revoked_keyids=COUNTERPARTY_KID):
                 response = caller.send(corrupt_signature=True)
 
             code = _rejection_code(response)
@@ -571,7 +573,7 @@ class TestStaticSetIsConsultedFirst:
             with _step_nine(
                 origin=_UNRESOLVABLE_ORIGIN,
                 jwks=caller.jwks,
-                revoked_keyids=_KID,
+                revoked_keyids=COUNTERPARTY_KID,
                 require_revocation_list=True,
             ):
                 response = caller.send()
@@ -808,7 +810,7 @@ class TestResolverReadsThroughTheResolutionCache:
         expected to read it per call, so every assertion on it belongs inside a
         :func:`_counterparty_at` block.
         """
-        checker_for(mw.AGENT_RESOLUTION_CACHE[_AGENT_URL], SigningConfig())
+        checker_for(mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL], SigningConfig())
         return REVOCATION_CHECKER_CACHE[self._ORIGIN]._jwks_resolver
 
     def test_a_rotated_list_signing_key_heals_without_a_restart(self):
@@ -847,7 +849,7 @@ class TestResolverReadsThroughTheResolutionCache:
 
         with _counterparty_at(self._ORIGIN, first):
             resolver = self._build_resolver()
-            neighbour = mw.AGENT_RESOLUTION_CACHE[_AGENT_URL].model_copy(
+            neighbour = mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL].model_copy(
                 update={"agent_url": _OTHER_AGENT_URL, "jwks": second}
             )
             mw.AGENT_RESOLUTION_CACHE[_OTHER_AGENT_URL] = neighbour
@@ -949,7 +951,7 @@ class TestCheckerForBuildsTheSpecCompliantChecker:
         """
         origin = "https://operator-grace.example.com"
         with _counterparty_at(origin, _jwks_for("operator-list-signing-1")):
-            checker_for(mw.AGENT_RESOLUTION_CACHE[_AGENT_URL], SigningConfig())
+            checker_for(mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL], SigningConfig())
 
         built = REVOCATION_CHECKER_CACHE[origin]
         assert built._grace_multiplier == 4.0, (
@@ -967,7 +969,7 @@ class TestCheckerForBuildsTheSpecCompliantChecker:
         jwks = _jwks_for("operator-list-signing-1")
 
         with _counterparty_at(origin, jwks):
-            resolution = mw.AGENT_RESOLUTION_CACHE[_AGENT_URL]
+            resolution = mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL]
             checker_for(resolution, SigningConfig())
             first = REVOCATION_CHECKER_CACHE[origin]
             checker_for(resolution, SigningConfig())

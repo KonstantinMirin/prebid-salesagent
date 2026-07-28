@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Refresh the pinned AdCP JSON-schema fixtures used by test_pydantic_schema_alignment.
 
+Also vendors the request-signing CONFORMANCE VECTORS (#1291 B3, salesagent-z6nr.14)
+into ``tests/fixtures/adcp_conformance_vectors/`` — see :func:`vendor_signing_vectors`.
+Deliberately the SAME mechanism (local clone -> GitHub raw, committed snapshot, offline
+reads) rather than a submodule or a fetch step; ``tests/`` runs offline by construction.
+
 Source of truth: adcontextprotocol/adcp @ commit
     04f59d2d56d3d77033162c310e99a1188e4eb419  (tag v3.1-04f59d2d5, 2026-05-13)
 
@@ -22,6 +27,7 @@ It reads from a local clone at ~/projects/adcp if present (faster), else GitHub 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -58,6 +64,21 @@ V311_ROOTS = [
     "/schemas/3.1.1/adagents.json",
     "/schemas/3.1.1/core/agent-signing-key.json",
 ]
+
+# ---------------------------------------------------------------------------
+# Request-signing conformance vectors (#1291 B3, salesagent-z6nr.14)
+# ---------------------------------------------------------------------------
+#
+# These are NOT schemas — they are the graded conformance data for the RFC 9421
+# request-signing profile: 12 positive + 28 negative request vectors, the runner
+# keypairs, and 31 URL-canonicalization cases. They live in their own fixture
+# tree because they are loaded by a different loader and pinned by a different
+# guard, but they are vendored by THIS script so there is one refresh command.
+VECTORS_REV = "v3.1.1"
+VECTORS_SPEC_VERSION = "3.1.1"
+VECTORS_SRC = "dist/compliance/3.1.1/test-vectors/request-signing"
+VECTORS_DIR = Path(__file__).parent.parent / "adcp_conformance_vectors" / "3.1.1" / "request-signing"
+
 
 # Request schemas the alignment test maps to Pydantic models, plus response schemas
 # whose contract individual tests assert against (the BFS roots).
@@ -132,9 +153,88 @@ def vendor(roots: list[str], *, rev: str, src_prefix: str) -> int:
     return written
 
 
+def _list_local(rev: str, path: str) -> list[str] | None:
+    r = subprocess.run(
+        ["git", "-C", str(LOCAL_CLONE), "ls-tree", "-r", "--name-only", rev, "--", path],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return None
+    return [line for line in r.stdout.splitlines() if line.strip()]
+
+
+def _read_local_path(rev: str, path: str) -> str | None:
+    r = subprocess.run(
+        ["git", "-C", str(LOCAL_CLONE), "show", f"{rev}:{path}"],
+        capture_output=True,
+        text=True,
+    )
+    return r.stdout if r.returncode == 0 else None
+
+
+def _read_github_path(rev: str, path: str) -> str:
+    url = f"https://raw.githubusercontent.com/{REPO}/{rev}/{path}"
+    with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310 (pinned host)
+        return resp.read().decode()
+
+
+def vendor_signing_vectors() -> int:
+    """Vendor the request-signing conformance vectors + a sha256 MANIFEST.
+
+    The vector tree is upstream-owned and byte-pinned: the drift guard
+    (``tests/unit/test_adcp_conformance_vectors_pin.py``) re-hashes every file
+    against ``MANIFEST.json`` and ties ``spec_version`` to
+    ``adcp.get_adcp_spec_version()``, so a local edit to a vector — or an
+    ``adcp`` pin bump without a re-vendor — is a loud failure.
+
+    Files are written BYTE-VERBATIM (no JSON re-indent): the vectors grade
+    byte-level canonicalization, so reformatting them would be editing the
+    evidence.
+    """
+    # GitHub raw cannot list a directory. With no local clone we re-fetch exactly
+    # the file set the committed MANIFEST already records — enough to re-verify a
+    # snapshot offline-first, while a NEW upstream file needs a clone. The drift
+    # guard's explicit counts (12 positive / 28 negative / 31 canonicalization)
+    # are what stop that from silently shrinking the graded set.
+    paths = _list_local(VECTORS_REV, VECTORS_SRC)
+    if paths is None:
+        prior = VECTORS_DIR / "MANIFEST.json"
+        if not prior.exists():
+            raise SystemExit(
+                f"No local adcp clone at {LOCAL_CLONE} and no committed "
+                f"{prior} to enumerate from — clone adcontextprotocol/adcp first."
+            )
+        paths = [f"{VECTORS_SRC}/{rel}" for rel in json.loads(prior.read_text())["files"]]
+    manifest: dict[str, str] = {}
+    for path in sorted(paths):
+        rel = path[len(VECTORS_SRC) + 1 :]
+        body = _read_local_path(VECTORS_REV, path) or _read_github_path(VECTORS_REV, path)
+        out = VECTORS_DIR / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(body)
+        manifest[rel] = hashlib.sha256(body.encode()).hexdigest()
+    (VECTORS_DIR / "MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "spec_version": VECTORS_SPEC_VERSION,
+                "source_tag": VECTORS_REV,
+                "source_path": VECTORS_SRC,
+                "files": manifest,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    print(f"vendored {len(manifest)} conformance-vector files from {REPO}@{VECTORS_REV} into {VECTORS_DIR}")
+    return len(manifest)
+
+
 def main() -> None:
     vendor(ROOTS, rev=PINNED_SHA, src_prefix=SRC_PREFIX)
     vendor(V311_ROOTS, rev=V311_REV, src_prefix=V311_SRC_PREFIX)
+    vendor_signing_vectors()
 
 
 if __name__ == "__main__":

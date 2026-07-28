@@ -132,10 +132,15 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, BrandAgentType, async_resolve_agent
-from adcp.signing.errors import REQUEST_SIGNATURE_REQUIRED, SignatureVerificationError
+from adcp.signing.canonical import split_structured_field
+from adcp.signing.errors import (
+    REQUEST_SIGNATURE_HEADER_MALFORMED,
+    REQUEST_SIGNATURE_REQUIRED,
+    SignatureVerificationError,
+)
 from adcp.signing.jwks import StaticJwksResolver
 from adcp.signing.middleware import unauthorized_response_headers
 from adcp.signing.verifier import VerifiedSigner, VerifierCapability, VerifyOptions, verify_request_signature
@@ -155,6 +160,7 @@ from src.core.metrics import record_request_unsigned, record_signature_failed, r
 # it validates the credential and raises, which at this layer would turn an auth
 # failure into a signature rejection.
 from src.core.resolved_identity import _detect_tenant, _extract_auth_token
+from src.core.signing.canonical import malformed_authority_reason
 from src.core.signing.operations import (
     UNNAMED_OPERATION,
     OperationResolver,
@@ -421,9 +427,14 @@ class RequestSignatureMiddleware:
             await self.app(scope, buffered.receive, send)
             return
 
-        resolution = await _resolution_for(context.agent_url, config)
-
         try:
+            # Step 1 first, and over the RAW header list: the shapes it refuses are
+            # invisible once the headers collapse into a dict, and refusing them here
+            # also spares an unresolved counterparty a three-hop outbound walk on a
+            # request that cannot be accepted. ``_resolution_for`` never raises this
+            # exception — it is inside the block so there is ONE handler, not two.
+            _strict_header_precheck(scope)
+            resolution = await _resolution_for(context.agent_url, config)
             signer = await asyncio.to_thread(
                 _run_verifier,
                 method=scope.get("method", "GET"),
@@ -800,7 +811,193 @@ def _verify_url(scope: Mapping[str, Any], headers: Mapping[str, str]) -> str:
         authority = f"{server[0]}:{server[1]}" if server[1] else str(server[0])
 
     query = scope.get("query_string", b"").decode("latin-1")
-    return f"{scheme}://{authority}{scope.get('path', '')}" + (f"?{query}" if query else "")
+    return f"{scheme}://{authority}{_signed_path(scope)}" + (f"?{query}" if query else "")
+
+
+def _signed_path(scope: Mapping[str, Any]) -> str:
+    """The path AS SENT — percent-encoding intact, mount prefix intact.
+
+    ``scope["path"]`` is percent-DECODED by every real server (uvicorn sets
+    ``path = unquote(raw_path)``), so reading it turns ``%2F`` into a real separator and
+    every encoded byte into its decoded form. The signature covers the bytes the client
+    sent, so a decoded path yields a signature base the client never signed and rejects
+    a legitimate request as ``request_signature_invalid`` — reachable in production on
+    any ``/api/v1/...`` route with a path parameter, and pinned by conformance vectors
+    ``positive/008``/``009``/``010``.
+
+    **This is deliberately the OPPOSITE of** :func:`~src.core.http_utils.path_from_asgi_scope`,
+    and a blanket "always use ``raw_path``" rule would be a defect. That helper reads the
+    DECODED path and STRIPS ``root_path`` because it feeds a ROUTE TABLE, and it must
+    agree with the Starlette router that actually dispatches — as must the four other
+    decoded-path readers in the tree (``src/app.py``'s ``/a2a`` predicate and telemetry
+    label, and ``rest_compat_middleware``'s two route lookups). This function feeds
+    ``@target-uri``, whose only authority is the wire, so:
+
+    * ``raw_path`` is BYTES and ALREADY carries ``root_path`` (uvicorn builds
+      ``full_raw_path`` that way in both its h11 and httptools implementations). The
+      client signed the URL it dialed, mount prefix included, so it is NOT stripped.
+    * The decode is STRICT ASCII. A non-ASCII raw path is unrepresentable in a signed
+      ``@target-uri`` — percent-encoding is mandatory on the wire — so it is a malformed
+      request, not an encoding puzzle: ``latin-1`` would mojibake it into a base that
+      could still VERIFY, and UTF-8 would mask it. Both are silent-acceptance bugs.
+    * Anything from the first ``?`` is dropped: some ASGI servers and test clients put
+      the query INSIDE ``raw_path``, and the query has exactly one source
+      (``scope["query_string"]``, raw bytes decoded latin-1 — which is why
+      ``positive/007``'s byte-preserved query already passes).
+    * ``raw_path`` absent -> the decoded path, with the degradation known and accepted:
+      on such a server the encoded bytes are gone before we are called, so 008/009/010
+      are not gradeable there. Failing every signed request instead would be worse.
+    """
+    raw = scope.get("raw_path")
+    if not isinstance(raw, bytes | bytearray):
+        return str(scope.get("path", ""))
+    try:
+        decoded = bytes(raw).decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise SignatureVerificationError(
+            REQUEST_SIGNATURE_HEADER_MALFORMED,
+            step=1,
+            message="the request path carries raw non-ASCII bytes; a signed @target-uri must be percent-encoded",
+        ) from exc
+    return decoded.split("?", 1)[0]
+
+
+def _reject_headers(message: str) -> NoReturn:
+    """The one rejection the pre-parse gate raises — the SDK's own type and constant."""
+    raise SignatureVerificationError(REQUEST_SIGNATURE_HEADER_MALFORMED, step=1, message=message)
+
+
+def _duplicate_signature_input_label(value: str) -> str | None:
+    """Why one ``Signature-Input`` value is ambiguous, or ``None``.
+
+    Multiple DISTINCT labels are legal and must stay legal —
+    ``positive/004-multiple-signature-labels`` ships ``sig1`` and ``sig2`` and is a
+    vector we must ACCEPT. Only a REPEATED key is the ambiguity: RFC 8941 §3.2 permits
+    "rejecting the input" or "retaining only the last value", and the second option
+    would let a proxy smuggle a weaker covered-component set past a verifier that read
+    the first.
+
+    An entry this cannot parse yields ``None`` on purpose: an unparseable header is the
+    SDK's to code (``negative/011``, ``negative/024``), and pre-empting it here would
+    change a graded artifact that is already correct.
+    """
+    seen: set[str] = set()
+    for entry in split_structured_field(value, ","):
+        marker = entry.find("=(")
+        if marker < 0:
+            return None
+        label = entry[:marker].strip()
+        if label in seen:
+            return f"the dictionary key {label!r} appears twice, which RFC 8941 §3.2 leaves ambiguous"
+        seen.add(label)
+    return None
+
+
+def _multi_valued_content_type(value: str) -> str | None:
+    """Why one ``Content-Type`` value is ambiguous, or ``None``.
+
+    ``Content-Type`` is not a List-Structured-Field — it has one canonical value with
+    optional parameters — so a second value (from a buggy client, or a proxy appending
+    one) leaves the field's meaning relative to the signature base undefined.
+    """
+    if "," in value:
+        return "the field is multi-valued, and it is not a List-Structured-Field"
+    return None
+
+
+def _duplicate_digest_algorithm(value: str) -> str | None:
+    """Why one ``Content-Digest`` value is ambiguous, or ``None``.
+
+    RFC 9530 §2 makes the field a Dictionary keyed by digest algorithm; two members of
+    the SAME algorithm are a parser-differential, because signer and verifier may
+    disagree about which value entered the base — true even if the two digests match.
+    Distinct algorithms (``sha-256`` plus ``sha-512``) are legal.
+
+    Splitting on ``,`` is sound for this field specifically: members are
+    ``<alg>=:<base64>:`` and the base64 alphabet contains no comma, so no member can
+    hide a separator.
+    """
+    seen: set[str] = set()
+    for member in value.split(","):
+        algorithm = member.split("=", 1)[0].strip().lower()
+        if not algorithm:
+            continue
+        if algorithm in seen:
+            return f"the digest algorithm {algorithm!r} appears twice (RFC 9530 §2)"
+        seen.add(algorithm)
+    return None
+
+
+#: ``header -> what makes ONE of its values malformed``. A table rather than four
+#: near-identical blocks: each rule is the same shape (read a value, name a reason or
+#: pass), and four copies is four chances for one of them to stop rejecting.
+#:
+#: ``host`` shares :func:`~src.core.signing.canonical.malformed_authority_reason` with
+#: the canonicalization seam so the authority rule has exactly ONE definition. Only the
+#: CODE differs by caller — checklist step 1 here, ``request_target_uri_malformed``
+#: there — and that difference is deliberate (``negative/026`` grades the former).
+_MALFORMED_VALUE_RULES: tuple[tuple[str, Callable[[str], str | None]], ...] = (
+    ("signature-input", _duplicate_signature_input_label),
+    ("content-type", _multi_valued_content_type),
+    ("content-digest", _duplicate_digest_algorithm),
+    ("host", malformed_authority_reason),
+)
+
+#: Headers that MUST arrive on exactly one line when a signature covers the request.
+#: Not a style rule: :func:`~src.core.http_utils.headers_from_asgi_scope` — like every
+#: dict view of ASGI headers — LAST-WINS on a repeated tuple rather than joining it, so
+#: a proxy-inserted second line rewrites a covered value with nothing anywhere to notice.
+_SINGLE_LINE_SIGNED_HEADERS: tuple[str, ...] = tuple(name for name, _rule in _MALFORMED_VALUE_RULES)
+
+
+def _strict_header_precheck(scope: Mapping[str, Any]) -> None:
+    """Checklist step 1 over the RAW header list, before the SDK sees anything.
+
+    Runs against ``scope["headers"]`` — the ``list[tuple[bytes, bytes]]`` — and NOT
+    against the collapsed dict, because the collapse is the attack. The conformance
+    vectors express "multi-valued" as one comma-joined value, so a gate written over
+    the dict would pass all four of them while missing the threat their ``$comment``s
+    actually describe: a SECOND header LINE, which last-wins before any check runs.
+    ``tests/unit/test_signing_raw_wire_gaps.py`` grades both forms of each shape.
+
+    Why OURS and not the SDK's: measured against ``adcp==6.6.0``, the SDK answers these
+    four vectors with the wrong graded artifact — ``request_signature_components_incomplete``
+    for ``negative/021`` (its RFC 8941 parser last-wins on the duplicate dictionary key)
+    and ``request_signature_invalid`` for ``022``/``023``/``026`` (no single-value check on
+    a covered non-list field, no RFC 9530 duplicate-algorithm check, no A-label
+    enforcement anywhere on the authority path). Filed upstream as SDK divergence #6.
+
+    Spec grounding, stated honestly rather than implied:
+
+    * the non-ASCII authority and the malformed-authority family are well grounded —
+      ``url-canonicalization.mdx`` steps 2-3, MUST-reject, shared with
+      :mod:`src.core.signing.canonical` so the rule has ONE definition (the CODE
+      differs: a wire-header rejection is checklist step 1, a canonicalization
+      rejection is ``request_target_uri_malformed``);
+    * ``negative/023`` rests on RFC 9530 §2's Dictionary semantics;
+    * ``negative/021`` (duplicate ``Signature-Input`` dictionary key) and ``negative/022``
+      (multi-valued covered non-list field) are grounded ONLY in the vectors' own
+      ``$comment`` plus checklist step 1's bare "Reject if malformed" — no prose
+      enumerates them. Do not cite prose support that is not there.
+
+    Deliberately NARROW. A gate that rejected traffic the spec requires us to ACCEPT
+    would be worse than the bug it closes, so anything it cannot prove malformed is
+    handed to the SDK unchanged — including a ``Signature-Input`` it cannot parse
+    (``negative/011``, ``negative/024``), whose codes the SDK already gets right.
+    """
+    lines: dict[str, list[str]] = {}
+    for raw_name, raw_value in scope.get("headers", []):
+        lines.setdefault(raw_name.decode("latin-1").lower(), []).append(raw_value.decode("latin-1"))
+
+    for name in _SINGLE_LINE_SIGNED_HEADERS:
+        if len(lines.get(name, ())) > 1:
+            _reject_headers(f"{name!r} arrived on {len(lines[name])} header lines; a covered field must have one")
+
+    for name, reason_for in _MALFORMED_VALUE_RULES:
+        for value in lines.get(name, ()):
+            reason = reason_for(value)
+            if reason is not None:
+                _reject_headers(f"{name!r} is malformed: {reason} — received {value!r}")
 
 
 async def _reject(

@@ -47,10 +47,11 @@ already produced wrong conclusions on this codebase.
 - **The vector count is 40, not 28** — see §6.
 - **The verifier checklist is 15 checks, not 14** — see §8.
 
-### The five SDK divergences already found
+### The seven SDK divergences already found
 
 Concrete instances, not a boilerplate disclaimer. All get filed upstream; all get implemented per
-the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`.)
+the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`; #6 and #7 by B3,
+`salesagent-z6nr.14`, by RUNNING the shipped conformance data against `adcp==6.6.0`.)
 
 | # | Divergence | Consequence |
 |---|---|---|
@@ -59,6 +60,16 @@ the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`.)
 | 3 | `verify_starlette_request`'s docstring (middleware.py:38-44) claims Starlette caches the body so downstream handlers re-reading it get the same bytes. The cache lives on the `Request` **instance** the middleware constructs, not on the one the downstream app builds from the same scope — the receive channel **is** drained. | The `_receive` replay shim already in `src/app.py:455-462` is required. The docstring is wrong. |
 | 4 | `adcp.signing.agent_resolver._fetch_capabilities` (agent_resolver.py:179-305) performs a raw `GET <agent_url>` and requires a JSON **object** body. security.mdx:1142 says the opposite verbatim: "This is a **protocol-level** call — invoke `get_adcp_capabilities` via the agent's declared transport (MCP `tools/call` or A2A skill invocation), **not a raw HTTP `GET`** against `A`. The agent URL is the protocol endpoint, not a JSON capabilities document." | `resolve_agent(<our agent url>)` cannot reach hop 2 against us no matter what we publish: `/mcp` answers GET with a redirect to an SSE stream and `/a2a` is JSON-RPC POST. Any test driving the resolver must seed hop 1 through `_capabilities_client_factory` (`tests/e2e/test_trust_root_e2e.py` does, and leaves hops 2 and 3 live). |
 | 5 | `adcp.signing.brand_jwks._pick_agent` (brand_jwks.py:824-869) selects the `agents[]` entry by `type` plus an optional `agent_id` and **never compares `url` to the agent URL `A`** — so it raises `agent_ambiguous` for the shape the schema explicitly blesses (`#/definitions/agents`: "Multiple entries with the same type are permitted when they have distinct url values, such as one endpoint URL per tenant or property scope"), while security.mdx:1104 step 5 defines the match as byte-equality on `url`. | We publish one `agents[]` entry PER ENDPOINT we serve (`/mcp/`, `/a2a`) with distinct `id`s, per the schema — an origin-only `url` would byte-equal nothing any counterparty ever invoked. Our own resolver calls must pass `agent_id`. Do not "resolve" this by collapsing to one entry. |
+| 6 | **Canonicalization.** `adcp.signing.canonical._canon_authority` (canonical.py:128-150) never calls the SDK's OWN `adcp.signing._idna_canonicalize.canonicalize_host` (four sibling SDK modules do), performs **no** malformed-authority rejection, and `canonicalize_target_uri` drops a trailing empty query. MEASURED: **8 of the 31 shipped `canonicalization.json` cases fail** against `adcp==6.6.0` — the 2 IDN cases, `trailing-empty-query-preserved`, and all 6 `reject: true` cases (5 accepted outright, `malformed-ipv6-missing-closing-bracket` refused with a bare `ValueError` carrying no code). The same root cause makes the SDK answer request vector `negative/026` with `request_signature_invalid` instead of `request_signature_header_malformed`. | `src/core/signing/canonical.py` is the thin seam: it DELEGATES every canonical form to the SDK and adds ONLY the spec's rejection set (url-canonicalization.mdx steps 2-3), so we never carry a second canonicalizer. 28 of 31 cases run as conformance through it; the 2 IDN mapping cases and `trailing-empty-query-preserved` are **not implementable at a verifier boundary** (the first are signer-side — a comparer MUST reject, not re-normalize; the third is destroyed by ASGI, which hands `query_string=b""` for both `/p` and `/p?`) and run as named our-obligation tests. **0 skipped, 0 xfailed.** |
+| 7 | **`request_target_uri_malformed` is now GRADED, and the constant still does not exist.** Cross-reference #2, which flagged the constant's absence but recorded that no vector graded it. That is no longer true: `canonicalization.json`'s 6 `reject: true` cases expect exactly this string, grounded at url-canonicalization.mdx ("Malformed authorities are rejected with `request_target_uri_malformed` on the signing path"). NOTE the vector README's worked example is **stale** and shows `request_signature_header_malformed`; the shipped DATA wins. | Defined in our layer as `src.core.signing.canonical.REQUEST_TARGET_URI_MALFORMED`, per #2's own instruction. **Keep it apart from `request_signature_header_malformed`**: request vector `negative/026` legitimately expects the latter (a checklist step-1 wire rejection), the canonicalization reject set expects the former. Collapsing the two loses a graded artifact in each direction. |
+
+**Upstream filing status (B3, `salesagent-z6nr.14`).** #6 and #7 are ONE upstream issue against
+`adcontextprotocol/adcp` — they share a root cause (`_canon_authority` implements steps 4-6 of
+url-canonicalization.mdx and none of steps 2-3's MUST-rejects) and one of them is the missing
+constant that rejection needs. The issue body is the divergence rows above plus the three cases
+that are not implementable at a verifier boundary. **Not yet filed — opening an issue on the
+upstream public repo is the owner's call, not an agent's.** Nothing in this repo waits on it: the
+seam implements the spec locally and 31 of 31 cases are accounted for.
 
 ---
 
