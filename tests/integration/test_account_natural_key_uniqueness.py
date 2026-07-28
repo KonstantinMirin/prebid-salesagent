@@ -400,3 +400,44 @@ class TestTheDatabaseHoldsTheInvariant:
             assert len(repo.list_all()) == 2, (
                 "brand-less accounts carry no natural key, so uniqueness must not apply to them"
             )
+
+
+class TestHarnessSeedingObeysTheSameInvariant:
+    """The BDD harness seeds through the repository, not around it."""
+
+    def test_admin_harness_cannot_seed_a_duplicate_natural_key(self, integration_db):
+        """``AdminAccountEnv.create_account`` refuses what production refuses.
+
+        The helper used to build an ``Account`` and ``session.add`` it, which made
+        it the one seam capable of establishing a state the production write path
+        forbids: two accounts on one natural key. A scenario seeded that way would
+        assert against a database no buyer could ever produce — green, and proving
+        nothing. Routing it through ``AccountUoW`` -> ``AccountRepository.create``
+        closes the seam, and this pins that it stays closed.
+        """
+        from src.core.database.repositories.account import NaturalKeyConflict
+
+        with AdminAccountEnv(mode="integration", tenant_id="nku_t12") as admin:
+            first = admin.create_account(name="Seeded First", brand_domain=_DOMAIN, operator=_OPERATOR)
+
+            with pytest.raises(NaturalKeyConflict) as excinfo:
+                admin.create_account(name="Seeded Duplicate", brand_domain=_DOMAIN, operator=_OPERATOR)
+
+            assert first, "the first seed must succeed — only the duplicate is refused"
+            assert excinfo.value.existing_account_id == first, (
+                f"the conflict must name the account already holding the key ({first!r}), "
+                f"got {excinfo.value.existing_account_id!r}"
+            )
+
+    def test_admin_harness_still_seeds_distinct_keys_freely(self, integration_db):
+        """The refusal is scoped to a genuine collision, not to seeding in general.
+
+        Without this, the test above would pass just as well if ``create_account``
+        raised unconditionally.
+        """
+        with AdminAccountEnv(mode="integration", tenant_id="nku_t13") as admin:
+            one = admin.create_account(name="Distinct A", brand_domain=_DOMAIN, operator=_OPERATOR)
+            two = admin.create_account(name="Distinct B", brand_domain=_DOMAIN, operator="other-operator")
+            three = admin.create_account(name="Keyless")
+
+            assert len({one, two, three}) == 3, "three distinct-key seeds must all succeed"

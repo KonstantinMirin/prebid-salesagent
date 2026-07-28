@@ -342,25 +342,40 @@ class AdminAccountEnv:
         billing: str | None = None,
         payment_terms: str | None = None,
     ) -> str:
-        """Create a test account directly in DB. Returns account_id."""
+        """Seed a test account through the production write path. Returns account_id.
+
+        Goes through ``AccountUoW`` -> ``AccountRepository.create()`` rather than a
+        raw ``session.add``, so a harness-seeded row obeys the same invariants a
+        production-created one does — above all the natural-key collision refusal in
+        ``_require_natural_key_free``. Seeding straight into the table would leave
+        this helper as the one seam through which a test could establish a state
+        production forbids (two accounts on one natural key), and a test that asserts
+        on an impossible state proves nothing.
+
+        Propagates ``NaturalKeyConflict`` deliberately: a scenario that seeds a
+        duplicate key should fail loudly here rather than quietly produce a database
+        the buyer's ``sync_accounts`` could never have created.
+        """
         import uuid
 
-        account_id = f"acc_{uuid.uuid4().hex[:12]}"
-        brand = {"domain": brand_domain} if brand_domain else None
+        from src.core.database.repositories.uow import AccountUoW
+        from tests.factories.account import AccountFactory
 
-        with get_db_session() as session:
-            account = Account(
+        account_id = f"acc_{uuid.uuid4().hex[:12]}"
+
+        with AccountUoW(self._tenant_id) as uow:
+            assert uow.accounts is not None
+            account = AccountFactory.build(
                 tenant_id=self._tenant_id,
                 account_id=account_id,
                 name=name,
                 status=status,
-                brand=brand,
+                brand={"domain": brand_domain} if brand_domain else None,
                 operator=operator,
                 billing=billing,
                 payment_terms=payment_terms,
             )
-            session.add(account)
-            session.commit()
+            uow.accounts.create(account)
 
         self._created_account_ids.append(account_id)
         return account_id
