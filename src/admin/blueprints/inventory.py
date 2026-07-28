@@ -11,6 +11,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
+from src.core.helpers.creative_helpers import parse_size_token
 
 logger = logging.getLogger(__name__)
 
@@ -1396,13 +1397,10 @@ def get_inventory_sizes(tenant_id):
                         elif isinstance(size, str) and "x" in size:
                             sizes.add(size)
 
-            # Sort sizes by width, then height
+            # Sort sizes by width, then height. Legacy rows may hold strings that
+            # are not WxH pairs at all; those sort first (#1600).
             def size_sort_key(s):
-                try:
-                    w, h = s.split("x")
-                    return (int(w), int(h))
-                except (ValueError, AttributeError):
-                    return (0, 0)
+                return parse_size_token(s) or (0, 0)
 
             sorted_sizes = sorted(sizes, key=size_sort_key)
 

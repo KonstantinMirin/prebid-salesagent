@@ -14,6 +14,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import FormatPerformanceMetrics
+from src.core.helpers.creative_helpers import format_id_creative_size
 from src.core.schemas import PriceGuidance, PricingModel, PricingOption, Product
 
 logger = logging.getLogger(__name__)
@@ -86,20 +87,14 @@ class DynamicPricingService:
         cutoff_date,
     ) -> dict:
         """Calculate pricing for a single product based on its formats."""
-        # Extract creative sizes from product format IDs
-        # Format IDs like "display_300x250" -> "300x250"
-        creative_sizes = []
-        for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-            # format_ids are typed FormatId models end-to-end (Pydantic-coerced
-            # schema field + typed DB column, #1172) — no string/dict shapes.
-            # Extract size from format_id (e.g., "display_300x250" -> "300x250")
-            parts = format_id.id.split("_")
-            if len(parts) >= 2:
-                # Look for dimensions pattern (NxM)
-                for part in parts:
-                    if "x" in part.lower():
-                        creative_sizes.append(part)
-                        break
+        # Extract creative sizes from product format IDs — typed width/height first,
+        # id-encoded "WxH" token second (format_id_creative_size, #1600).
+        # format_ids are typed FormatId models end-to-end (Pydantic-coerced schema
+        # field + typed DB column, #1172) — no string/dict shapes.
+        # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
+        creative_sizes = [
+            size for size in (format_id_creative_size(format_id) for format_id in product.format_ids or []) if size
+        ]
 
         if not creative_sizes:
             logger.warning(
@@ -107,10 +102,10 @@ class DynamicPricingService:
             )
             return self._default_pricing()
 
-        # Query format metrics for these sizes
-        # GAM returns sizes with spaces (e.g., "728 x 90") but product formats use no spaces ("728x90")
-        # Create normalized versions of both for matching
-        normalized_sizes = [size.replace(" ", "").lower() for size in creative_sizes]
+        # Query format metrics for these sizes. The derived sizes are already canonical;
+        # GAM returns them with spaces (e.g. "728 x 90"), so only the metric side needs
+        # normalizing for the comparison below.
+        normalized_sizes = {f"{width}x{height}" for width, height in creative_sizes}
 
         # Query all metrics and filter with normalized comparison
         stmt = select(FormatPerformanceMetrics).where(
@@ -132,7 +127,7 @@ class DynamicPricingService:
         if not metrics:
             logger.debug(
                 f"No cached metrics found for product {product.product_id} "
-                f"(sizes={creative_sizes}, country={country_code})"
+                f"(sizes={sorted(normalized_sizes)}, country={country_code})"
             )
             return self._default_pricing()
 

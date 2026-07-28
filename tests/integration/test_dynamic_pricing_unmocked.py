@@ -9,6 +9,7 @@ When metrics exist, CPM pricing options get floor_price and price_guidance.
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 
 import pytest
@@ -120,3 +121,102 @@ class TestDynamicPricingUnmocked:
             # Product should still be returned, just without enrichment
             product = response.products[0]
             assert len(product.pricing_options) >= 1
+
+    @pytest.mark.asyncio
+    async def test_parameterized_format_id_matches_metrics(self, integration_db):
+        """A FormatId carrying typed width/height matches metrics even when its id encodes no size.
+
+        The size of a FormatId comes from ``format_id_creative_size`` (#1600): typed
+        ``width``/``height`` first, the id-encoded ``WxH`` token only as a fallback. Before
+        that consolidation, dynamic pricing string-parsed the id and NOTHING else, so a
+        parameterized FormatId (AdCP 2.5) with ``width=300, height=250`` and the catalog id
+        ``display_image`` fell through to ``_default_pricing()`` — while gam_inventory_service,
+        deriving the same size from the same FormatId, saw 300x250. Same input, two answers.
+        """
+        with ProductEnv(tenant_id="pricing-typed", principal_id="pricing-typed-p") as env:
+            tenant = TenantFactory(tenant_id="pricing-typed", subdomain="pricing-typed")
+            PrincipalFactory(tenant=tenant, principal_id="pricing-typed-p")
+
+            p = ProductFactory(
+                tenant=tenant,
+                product_id="typed_dims_product",
+                name="Typed Dims Product",
+                # No "300x250" token anywhere in the id — the size is carried by the
+                # parameterized width/height fields alone.
+                format_ids=[
+                    {
+                        "agent_url": "https://creative.adcontextprotocol.org",
+                        "id": "display_image",
+                        "width": 300,
+                        "height": 250,
+                    }
+                ],
+            )
+            PricingOptionFactory(
+                product=p,
+                pricing_model="cpm",
+                rate=Decimal("10.0"),
+                is_fixed=False,
+                price_guidance={"floor": 5.0, "p25": 4.0, "p50": 6.0, "p75": 8.0, "p90": 11.0},
+            )
+
+            FormatPerformanceMetricsFactory(
+                tenant=tenant,
+                creative_size="300x250",
+                median_cpm=Decimal("5.50"),
+                p75_cpm=Decimal("8.25"),
+                p90_cpm=Decimal("12.00"),
+            )
+
+            response = await env.call_impl(brief="display ads")
+
+            assert len(response.products) == 1
+            cpm_options = [
+                po.root for po in response.products[0].pricing_options if po.root.pricing_model.upper() == "CPM"
+            ]
+            assert len(cpm_options) >= 1
+            assert getattr(cpm_options[0], "floor_price", None) == 5.50, (
+                "Expected floor_price=5.50 (median_cpm for 300x250). The product's FormatId "
+                "carries typed width=300/height=250; deriving its size from the id string alone "
+                "misses that and falls back to default pricing."
+            )
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_id_token_reports_no_recognizable_sizes(self, integration_db, caplog):
+        """An id token that merely contains an 'x' is not a size, and says so.
+
+        ``parse_size_token`` requires BOTH sides of the ``x`` to be numeric (#1600). The
+        pre-consolidation dynamic-pricing parser accepted any token containing an ``x``, so
+        ``display_boxad`` produced the pseudo-size ``"boxad"``: it matched no metric row and
+        the product landed on ``_default_pricing()`` down the silent ``logger.debug``
+        no-metrics path, suppressing the "no recognizable creative sizes" warning that is the
+        actual diagnosis. The price is the same either way — the diagnostic is the behavior
+        under test.
+        """
+        with ProductEnv(tenant_id="pricing-token", principal_id="pricing-token-p") as env:
+            tenant = TenantFactory(tenant_id="pricing-token", subdomain="pricing-token")
+            PrincipalFactory(tenant=tenant, principal_id="pricing-token-p")
+
+            p = ProductFactory(
+                tenant=tenant,
+                product_id="boxad_product",
+                name="Boxad Product",
+                format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_boxad"}],
+            )
+            PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
+
+            FormatPerformanceMetricsFactory(tenant=tenant, creative_size="300x250")
+
+            with caplog.at_level(logging.WARNING, logger="src.services.dynamic_pricing_service"):
+                response = await env.call_impl(brief="display ads")
+
+            assert len(response.products) == 1
+            warnings = [
+                r.getMessage()
+                for r in caplog.records
+                if r.name == "src.services.dynamic_pricing_service" and r.levelno == logging.WARNING
+            ]
+            assert any("boxad_product" in m and "no recognizable creative sizes" in m for m in warnings), (
+                "Expected the explicit 'no recognizable creative sizes' warning for "
+                f"format id 'display_boxad' ('boxad' is not a WxH size), got: {warnings}"
+            )

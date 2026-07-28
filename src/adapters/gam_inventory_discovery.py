@@ -1073,15 +1073,20 @@ def create_inventory_sync_tool(app, get_gam_client_func):
         """Suggest ad units for a product."""
         from flask import request  # Import here - only used in Flask route context
 
+        # Import here - src.core.helpers.__init__ imports the adapter registry,
+        # so a module-level import from an adapter is circular.
+        from src.core.helpers.creative_helpers import parse_size_token
+
         creative_sizes = request.args.getlist("sizes")
         keywords = request.args.getlist("keywords")
 
-        # Parse sizes
+        # Parse sizes. Query args are buyer-supplied: parse_size_token rejects
+        # anything that isn't a WxH pair rather than raising on int() (#1600).
         parsed_sizes = []
         for size in creative_sizes:
-            if "x" in size:
-                width, height = size.split("x")
-                parsed_sizes.append({"width": int(width), "height": int(height)})
+            parsed = parse_size_token(size)
+            if parsed is not None:
+                parsed_sizes.append({"width": parsed[0], "height": parsed[1]})
 
         if not parsed_sizes:
             return {"error": "No creative sizes specified"}, 400

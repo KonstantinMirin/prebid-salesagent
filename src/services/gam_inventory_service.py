@@ -20,6 +20,7 @@ from src.adapters.gam_inventory_discovery import (
 )
 from src.core.database.db_config import DatabaseConfig
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
+from src.core.helpers.creative_helpers import format_id_creative_size
 
 # Create database session factory
 engine = create_engine(DatabaseConfig.get_connection_string())
@@ -1241,14 +1242,7 @@ class GAMInventoryService:
         # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
         creative_sizes: list[dict[str, int]] = []
         for fmt in product.format_ids or []:
-            dimensions = fmt.get_dimensions()
-            if dimensions is None and "display" in fmt.id:
-                # Fall back to sizes encoded in the id, e.g. "display_300x250"
-                parts = fmt.id.split("_")
-                if len(parts) > 1 and "x" in parts[1]:
-                    width_str, _, height_str = parts[1].partition("x")
-                    if width_str.isdigit() and height_str.isdigit():
-                        dimensions = (int(width_str), int(height_str))
+            dimensions = format_id_creative_size(fmt)
             if dimensions is not None:
                 creative_sizes.append({"width": dimensions[0], "height": dimensions[1]})
 

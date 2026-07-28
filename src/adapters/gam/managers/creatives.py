@@ -752,15 +752,15 @@ class GAMCreativesManager:
         # Try to parse from format string
         format_str = asset.get("format", "")
         if format_str:
-            # Extract dimensions from format like "display_300x250"
-            parts = format_str.lower().split("_")
-            for part in parts:
-                if "x" in part:
-                    try:
-                        width_str, height_str = part.split("x")
-                        return int(width_str), int(height_str)
-                    except (ValueError, IndexError):
-                        continue
+            # Import here — src.core.helpers.__init__ imports the adapter registry,
+            # so a module-level import from an adapter is circular.
+            from src.core.helpers.creative_helpers import parse_size_token
+
+            # Extract dimensions from format like "display_300x250" (#1600)
+            for part in format_str.split("_"):
+                size = parse_size_token(part)
+                if size is not None:
+                    return size
 
         # Default fallback
         logger.warning(

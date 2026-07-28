@@ -453,6 +453,47 @@ def supported_formats_display(keys: set[tuple[str, str]]) -> str:
     return ", ".join(format_key_display(k) for k in sorted(keys, key=lambda p: (p[1], p[0])))
 
 
+def parse_size_token(token: str) -> tuple[int, int] | None:
+    """Parse one ``WxH`` token into ``(width, height)``, or None if it isn't a size.
+
+    The ONE parser for a bare creative-size token (#1600). Both sides must be
+    numeric — an ``x`` alone does not make a size, so ``"boxad"`` and ``"flex"``
+    are correctly rejected rather than carried around as a pseudo-size. The
+    match is case-tolerant: publishers write ``300X250`` as readily as
+    ``300x250``, and every consumer gets that tolerance from here.
+    """
+    width_str, _, height_str = token.lower().partition("x")
+    if width_str.isdigit() and height_str.isdigit():
+        return (int(width_str), int(height_str))
+    return None
+
+
+def format_id_creative_size(format_id: "FormatId | LibraryFormatId") -> tuple[int, int] | None:
+    """Derive a FormatId's creative size, or None when it carries no size.
+
+    The ONE derivation of ``(width, height)`` from a FormatId (#1600), in this order:
+
+    1. The typed ``width``/``height`` of a parameterized FormatId (AdCP 2.5), read
+       by DIRECT attribute access rather than ``FormatId.get_dimensions()`` — the
+       method exists only on our subclass, and creative-agent responses deserialize
+       into the library ``FormatId`` (bug #1067). Same reason
+       ``Format.get_primary_dimensions`` reads the fields directly.
+    2. A ``WxH`` token encoded in the id, e.g. ``display_300x250_image`` — a
+       publisher naming habit, not an AdCP contract, which is why this heuristic
+       lives here and not on the schema class.
+    """
+    width = getattr(format_id, "width", None)
+    height = getattr(format_id, "height", None)
+    if width is not None and height is not None:
+        return (int(width), int(height))
+
+    for part in format_id.id.split("_"):
+        size = parse_size_token(part)
+        if size is not None:
+            return size
+    return None
+
+
 def validate_creative_format_against_product(
     creative_format_id: "FormatId",
     product: "Product | DBProduct",
