@@ -17,6 +17,7 @@ Usage:
 
 from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.adapter_config import AdapterConfigRepository, TenantNotConfiguredError
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.delivery_simulation import DeliverySimulationConfigRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -33,6 +34,7 @@ from src.core.database.repositories.uow import (
     PushNotificationConfigUoW,
     SigningKeyUoW,
     TenantConfigUoW,
+    TrustRootUoW,
     WorkflowUoW,
 )
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -40,6 +42,7 @@ from src.core.database.repositories.workflow import WorkflowRepository
 __all__ = [
     "AccountRepository",
     "AccountUoW",
+    "AuthorizedPropertyRepository",
     "AdapterConfigRepository",
     "TenantNotConfiguredError",
     "CurrencyLimitRepository",
@@ -56,6 +59,7 @@ __all__ = [
     "SigningKeyUoW",
     "TenantConfigRepository",
     "TenantConfigUoW",
+    "TrustRootUoW",
     "WorkflowRepository",
     "WorkflowUoW",
 ]

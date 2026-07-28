@@ -117,7 +117,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "logout"),
     ("src/admin/blueprints/auth.py", "tenant_login"),
     ("src/admin/blueprints/auth.py", "test_auth"),
-    ("src/admin/blueprints/authorized_properties.py", "_construct_agent_url"),
+    # _construct_agent_url removed — delegates to canonical_agent_url via TrustRootUoW (salesagent-z6nr.9)
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),

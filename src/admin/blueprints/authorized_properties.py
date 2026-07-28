@@ -213,59 +213,27 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
 
 
 def _construct_agent_url(tenant_id: str, request: Any) -> str:
-    """Construct the agent URL using existing tenant resolution logic."""
-    import os
+    """This tenant's canonical agent URL — the SAME string every document publishes.
 
-    from src.core.database.models import Tenant
+    These URLs are compared against the ``url`` values in publishers'
+    adagents.json files (``publisher_partners.py``, the property-sync service),
+    so a derivation of its own here would make us check authorization against a
+    string we never publish. It delegates to :func:`canonical_agent_url`
+    (#1291 A3, salesagent-z6nr.9) instead of the PRODUCTION-flag /
+    localhost-port ladder it used to carry.
 
-    logger.info(f"🏗️ Constructing agent URL for tenant: {tenant_id}")
+    *request* is retained for call-site compatibility and is unused: the agent
+    URL is stored tenant state, never request state.
+    """
+    from src.core.agent_identity import canonical_agent_url
+    from src.core.database.repositories.uow import TrustRootUoW
 
-    # Check if we have an explicit override for testing
-    override_url = os.environ.get("ADCP_AGENT_URL")
-    if override_url:
-        logger.info(f"🔧 Using ADCP_AGENT_URL override: {override_url}")
-        return override_url
-
-    # Get tenant information directly from database using tenant_id parameter
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
-            tenant_obj = db_session.scalars(stmt).first()
-            if not tenant_obj:
-                raise ValueError(f"Tenant {tenant_id} not found")
-
-            subdomain = tenant_obj.subdomain or tenant_id
-            virtual_host = tenant_obj.virtual_host
-
-        logger.info(f"🏢 Tenant info - subdomain: '{subdomain}', virtual_host: '{virtual_host}'")
-
-        # In production, use the existing virtual host system
-        if os.environ.get("PRODUCTION") == "true":
-            if virtual_host:
-                url = f"https://{virtual_host}"
-                logger.info(f"🌐 Production: using virtual_host -> {url}")
-                return url
-            else:
-                # Fallback to subdomain pattern
-                tenant_url = get_tenant_url(subdomain)
-                if tenant_url:
-                    logger.info(f"🌐 Production: using subdomain pattern -> {tenant_url}")
-                    return tenant_url
-                # If SALES_AGENT_DOMAIN not configured, fall through to development mode
-
-        # For development, use MCP server port
-        mcp_port = os.environ.get("ADCP_SALES_PORT", "8080")
-        url = f"http://localhost:{mcp_port}"
-        logger.info(f"🛠️ Development: using localhost -> {url}")
-        return url
-
-    except Exception as e:
-        # Fallback if tenant context unavailable
-        logger.warning(f"⚠️ Failed to get tenant context: {e}")
-        mcp_port = os.environ.get("ADCP_SALES_PORT", "8080")
-        url = f"http://localhost:{mcp_port}"
-        logger.info(f"🆘 Fallback: using localhost -> {url}")
-        return url
+    with TrustRootUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.get_tenant()
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+        return canonical_agent_url(tenant)
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")

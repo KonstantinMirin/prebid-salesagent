@@ -8,17 +8,14 @@ Two selectors, and the difference matters:
 
 * :meth:`active_at` — which key we SIGN with at an instant. Governed by the
   ``[not_before, not_after)`` window plus ``revoked_at``.
-* PUBLICATION (A3, salesagent-z6nr.9) is governed by ``revoked_at`` plus the
-  ``agent-signing-key`` schema's grace period, NEVER by ``not_after``. Filtering
-  the published JWKS by ``not_after`` un-publishes a key while signatures made
-  under it are still inside their verification window — the exact gap rotation
-  overlap exists to prevent. That selector belongs to A3, with the test that
-  grades the grace rule.
+* :meth:`publishable_at` — which keys we PUBLISH at an instant. Governed by
+  ``revoked_at`` plus the ``agent-signing-key`` schema's grace period, and by
+  NEITHER window bound. Publication is window-blind by design.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -93,6 +90,51 @@ class SigningKeyRepository:
             .limit(1)
         )
         return self._session.scalars(stmt).first()
+
+    def publishable_at(
+        self, *, now: datetime, grace_seconds: float, purpose: str = REQUEST_SIGNING
+    ) -> list[SigningKey]:
+        """Return every key to PUBLISH for *purpose* at *now*.
+
+        Mirrors :meth:`active_at`'s scope and ordering, minus the window — and
+        the omission is the whole point:
+
+        * **Never ``not_after``.** Un-publishing a key whose window has closed
+          strands every signature it made that is still inside its verification
+          window — the exact gap rotation overlap exists to prevent.
+        * **Never ``not_before``.** Rotation must publish the incoming key
+          BEFORE it signs, so that every verifier's cache already holds it when
+          the first signature arrives.
+
+        Consequence, and it is a REQUIREMENT on callers rather than a caveat:
+        **retirement MUST set ``revoked_at``** (:meth:`revoke`). Closing the
+        window retires a SIGNER; it never retires a PUBLICATION, so a key
+        retired only by ``not_after`` would be published forever.
+
+        ``revoked_at`` is the sole exit, and it is delayed by *grace_seconds*:
+        ``core/agent-signing-key.json`` says a revoked key "MAY continue to
+        appear in the trust anchor during a grace period so caches that have not
+        yet refreshed still find the key and can evaluate the revocation
+        marker", and may be removed "once the cache TTL ... has elapsed across
+        all verifiers". The published documents carry the marker for exactly
+        that reason.
+
+        *purpose* is filtered because ``security.mdx``:1079 forbids co-tenanting
+        purposes in one JWKS ("governance signing keys MUST be served from a
+        separate origin"). Latent today — ``MINTABLE_PURPOSES`` holds one value
+        — and a latent violation of a MUST is still one.
+        """
+        cutoff = now - timedelta(seconds=grace_seconds)
+        stmt = (
+            select(SigningKey)
+            .where(
+                *self._scope_prefix(),
+                SigningKey.purpose == purpose,
+                or_(SigningKey.revoked_at.is_(None), SigningKey.revoked_at > cutoff),
+            )
+            .order_by(SigningKey.created_at.desc(), SigningKey.kid.asc())
+        )
+        return list(self._session.scalars(stmt).all())
 
     def create_from_keypair(
         self,

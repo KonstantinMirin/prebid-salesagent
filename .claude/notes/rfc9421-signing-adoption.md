@@ -47,16 +47,18 @@ already produced wrong conclusions on this codebase.
 - **The vector count is 40, not 28** — see §6.
 - **The verifier checklist is 15 checks, not 14** — see §8.
 
-### The three SDK divergences already found
+### The five SDK divergences already found
 
-Concrete instances, not a boilerplate disclaimer. All three get filed upstream; all three get
-implemented per the schema on our side.
+Concrete instances, not a boilerplate disclaimer. All get filed upstream; all get implemented per
+the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`.)
 
 | # | Divergence | Consequence |
 |---|---|---|
 | 1 | `adcp.signing.verifier.VerifierCapability` (verifier.py:88) carries **4 of `request_signing`'s 8 properties** — i.e. **2 of its 6 operation buckets** (`supported_for`, `required_for`). Missing: `warn_for`, `protocol_methods_supported_for`, `protocol_methods_warn_for`, `protocol_methods_required_for`. | Shadow mode (§10) and the JSON-RPC method namespace are **ours to implement**. Passing `warn_for` into `VerifierCapability` silently drops it. |
 | 2 | `request_target_uri_malformed` (security.mdx step 10) and `request_body_malformed` (step 14) exist in the prose and in **no** SDK constant and **no** vector. | We emit both from our own layer. Do not "resolve" the divergence by dropping the codes. |
 | 3 | `verify_starlette_request`'s docstring (middleware.py:38-44) claims Starlette caches the body so downstream handlers re-reading it get the same bytes. The cache lives on the `Request` **instance** the middleware constructs, not on the one the downstream app builds from the same scope — the receive channel **is** drained. | The `_receive` replay shim already in `src/app.py:455-462` is required. The docstring is wrong. |
+| 4 | `adcp.signing.agent_resolver._fetch_capabilities` (agent_resolver.py:179-305) performs a raw `GET <agent_url>` and requires a JSON **object** body. security.mdx:1142 says the opposite verbatim: "This is a **protocol-level** call — invoke `get_adcp_capabilities` via the agent's declared transport (MCP `tools/call` or A2A skill invocation), **not a raw HTTP `GET`** against `A`. The agent URL is the protocol endpoint, not a JSON capabilities document." | `resolve_agent(<our agent url>)` cannot reach hop 2 against us no matter what we publish: `/mcp` answers GET with a redirect to an SSE stream and `/a2a` is JSON-RPC POST. Any test driving the resolver must seed hop 1 through `_capabilities_client_factory` (`tests/e2e/test_trust_root_e2e.py` does, and leaves hops 2 and 3 live). |
+| 5 | `adcp.signing.brand_jwks._pick_agent` (brand_jwks.py:824-869) selects the `agents[]` entry by `type` plus an optional `agent_id` and **never compares `url` to the agent URL `A`** — so it raises `agent_ambiguous` for the shape the schema explicitly blesses (`#/definitions/agents`: "Multiple entries with the same type are permitted when they have distinct url values, such as one endpoint URL per tenant or property scope"), while security.mdx:1104 step 5 defines the match as byte-equality on `url`. | We publish one `agents[]` entry PER ENDPOINT we serve (`/mcp/`, `/a2a`) with distinct `id`s, per the schema — an origin-only `url` would byte-equal nothing any counterparty ever invoked. Our own resolver calls must pass `agent_id`. Do not "resolve" this by collapsing to one entry. |
 
 ---
 
@@ -629,6 +631,30 @@ second source of truth.
 the same tenant.*
 
 Flagged for the owner because it changes existing agent-card behavior. It does not block A1.
+
+### Corrections from A3 (`salesagent-z6nr.9`), which implemented this
+
+1. **The field is `agents[].url`, not `agents[].agent_url`.** `dist/schemas/3.1.1/brand.json`
+   `#/definitions/brand_agent_entry` has `required: [type, url, id]` and no `agent_url` anywhere.
+   Grep for the wrong name and you find nothing to match against.
+2. **It is one entry PER ENDPOINT, not one origin.** security.mdx:1104 step 5 byte-equals the URL
+   whose `get_adcp_capabilities` the counterparty invoked, and that is an endpoint — the schema
+   calls `url` "Agent endpoint URL (MCP or A2A)" and :1104's own worked failure example is
+   `https://x.com/mcp` vs `https://x.com/mcp/`. A bare origin byte-equals nothing anybody ever
+   called. We publish `{origin}/mcp/` and `{origin}/a2a` (paths verified against the running app:
+   `GET /mcp` 307s to `/mcp/`; `GET /a2a` does not redirect), each with a distinct `id`. The
+   schema blesses this explicitly under `#/definitions/agents`. See SDK divergence #5 for why
+   the SDK's `_pick_agent` is not evidence against it.
+3. **The origin binding is eTLD+1 EQUALITY** (security.mdx:1102 step 3), not same-host. We serve
+   brand.json on the tenant's own host, which is sufficient and strictly stricter — but nobody
+   should later read "same host" as the normative rule.
+4. **`ADCP_AGENT_URL` is ranked BELOW the tenant's own host**, not above it. As a top-priority
+   override it would collapse every tenant onto one URL, which is the defect this section exists
+   to remove. It is the base for deployments that have no per-tenant host at all.
+5. Implemented in `src/core/agent_identity.py`. Two call sites migrated
+   (`_create_dynamic_agent_card`, `_construct_agent_url`); `create_agent_card`
+   (`adcp_a2a_server.py:2214`) is a static default that is always overridden per request and was
+   deliberately left alone.
 
 ---
 

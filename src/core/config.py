@@ -10,6 +10,8 @@ from typing import Literal
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.core.signing.trust_root import CACHE_MAX_AGE_SECONDS
+
 # AdCP 3.1.1 `security.mdx` §per-keyid cap, restated by the signed-requests test-kit
 # as `production_min_per_keyid_cap_requests: 1000000`.
 _PRODUCTION_MIN_PER_KEYID_CAP = 1_000_000
@@ -143,6 +145,15 @@ class SigningConfig(BaseSettings):
         description="Lifetime written by the atomic claim before remember() raises it to the signature's own TTL",
     )
 
+    # -- Trust-root publication (#1291 A3) ---------------------------------
+    grace_seconds: int = Field(
+        default=2 * CACHE_MAX_AGE_SECONDS,
+        description=(
+            "How long a revoked key keeps appearing (with its revoked_at marker) in the published "
+            "trust root. Derived from the published Cache-Control max-age, not configured beside it"
+        ),
+    )
+
     model_config = SettingsConfigDict(env_prefix="ADCP_SIGNING_", case_sensitive=False)
 
     @property
@@ -230,6 +241,24 @@ class SigningConfig(BaseSettings):
                 )
             if value <= 0:
                 raise ValueError(f"{info.field_name}: override for keyid {key!r} must be positive, got {value}")
+        return v
+
+    @field_validator("grace_seconds")
+    @classmethod
+    def validate_grace_seconds(cls, v: int) -> int:
+        """The grace window must EXCEED the cache TTL we publish, not merely equal it.
+
+        ``core/agent-signing-key.json`` allows removal once the TTL has elapsed
+        "across all verifiers" — equal values leave zero margin for an
+        intermediary that adds its own delay, so a verifier could still be
+        serving a cached document from which the key has already vanished
+        WITHOUT its revocation marker.
+        """
+        if v <= CACHE_MAX_AGE_SECONDS:
+            raise ValueError(
+                f"ADCP_SIGNING_GRACE_SECONDS must exceed the published cache max-age "
+                f"({CACHE_MAX_AGE_SECONDS}s), got {v}"
+            )
         return v
 
     @field_validator("replay_claim_ttl_seconds")

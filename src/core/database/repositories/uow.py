@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -341,3 +342,34 @@ class SigningKeyUoW(BaseUoW):
 
     def _clear_repos(self) -> None:
         self.signing_keys = None
+
+
+class TrustRootUoW(BaseUoW):
+    """Unit of Work for the trust-root documents this agent publishes (#1291 A3).
+
+    One session for all three reads a trust-root request performs — the tenant
+    (whose stored host IS the agent identity), the publishable key set, and the
+    authorized-property records that back an adagents claim. One session because
+    the JWKS and the adagents pin must describe the same key set: two sessions
+    could observe a rotation from either side of it.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-z6nr.9
+    """
+
+    tenant_config: TenantConfigRepository | None
+    signing_keys: SigningKeyRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
+        self.signing_keys = SigningKeyRepository(self._session, self._tenant_id)
+        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.tenant_config = None
+        self.signing_keys = None
+        self.authorized_properties = None
