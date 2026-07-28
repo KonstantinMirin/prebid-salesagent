@@ -35,11 +35,11 @@ from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPRateLimitError,
-    AdCPServiceUnavailableError,
 )
 from src.core.format_cache import load_reference_formats
+from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import Format, FormatId, canonical_agent_url
+from src.core.security.outbound_http import OutboundError, asend
 
 
 def _known_asset_types() -> frozenset[str]:
@@ -510,8 +510,6 @@ class CreativeAgentRegistry:
         import json
         import logging
 
-        import httpx
-
         logger = logging.getLogger(__name__)
         agent_url = str(agent.agent_url).rstrip("/")
         # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
@@ -525,65 +523,26 @@ class CreativeAgentRegistry:
             if auth_token:
                 headers[auth_header] = auth_token
 
-        import asyncio
+        # One call, no retry loop: the seam owns attempts, backoff (BR-RULE-029
+        # plus any Retry-After the agent asks for), address and TLS policy, and
+        # what counts as retryable. No ``field=`` — this endpoint is the
+        # operator's registered configuration, not something a buyer supplied.
+        try:
+            result = await asend(
+                mcp_url,
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"name": "list_creative_formats", "arguments": {}},
+                    "id": 1,
+                },
+                headers=headers,
+                timeout=agent.timeout,
+            )
+        except OutboundError as exc:
+            raise_mapped_outbound_error(exc, agent_label=f"Creative agent {agent.name}", logger=logger)
 
-        max_retries = 3
-        last_exc: Exception | None = None
-        for attempt in range(max_retries):
-            try:
-                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-                async with httpx.AsyncClient(timeout=agent.timeout) as http:
-                    response = await http.post(
-                        mcp_url,
-                        json={
-                            "jsonrpc": "2.0",
-                            "method": "tools/call",
-                            "params": {"name": "list_creative_formats", "arguments": {}},
-                            "id": 1,
-                        },
-                        headers=headers,
-                    )
-                    if response.status_code == 429 and attempt < max_retries - 1:
-                        retry_after = int(response.headers.get("Retry-After", 2**attempt))
-                        logger.warning(f"Creative agent 429, retrying in {retry_after}s (attempt {attempt + 1})")
-                        await asyncio.sleep(retry_after)
-                        continue
-                    response.raise_for_status()
-                    break  # success
-            except httpx.HTTPStatusError as exc:
-                last_exc = exc
-                logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
-                if exc.response.status_code == 429:
-                    raise AdCPRateLimitError(
-                        f"Creative agent rate-limited: {mcp_url}",
-                        details={"retry_after": exc.response.headers.get("Retry-After")},
-                    ) from exc
-                if exc.response.status_code >= 500:
-                    raise AdCPServiceUnavailableError(
-                        f"Creative agent unavailable (HTTP {exc.response.status_code}): {mcp_url}"
-                    ) from exc
-                # 4xx non-429 from an external agent is a buyer-side error
-                # (bad request, unauthorized, not found, etc.); retrying the
-                # same request won't help, so override the class default
-                # ``transient`` with ``terminal``.
-                raise AdCPAdapterError(
-                    f"Creative agent HTTP error: {exc.response.status_code}",
-                    recovery="terminal",
-                ) from exc
-            except httpx.TimeoutException as exc:
-                last_exc = exc
-                if attempt < max_retries - 1:
-                    logger.warning(f"Creative agent fallback timed out, retrying (attempt {attempt + 1})")
-                    await asyncio.sleep(2**attempt)
-                    continue
-                logger.error(f"Creative agent fallback timed out: {mcp_url}")
-                raise AdCPServiceUnavailableError(f"Request timed out: {mcp_url}") from exc
-            except httpx.RequestError as exc:
-                last_exc = exc
-                logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
-                raise AdCPServiceUnavailableError(f"Connection failed: {mcp_url} — {exc}") from exc
-        else:
-            raise AdCPServiceUnavailableError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
+        response = result.response
 
         # Parse SSE or JSON response
         content_type = response.headers.get("content-type", "")

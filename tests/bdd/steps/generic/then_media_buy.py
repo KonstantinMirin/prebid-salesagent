@@ -732,6 +732,63 @@ def then_each_error_has_suggestion(ctx: dict) -> None:
         assert suggestion, f"Error[{i}] missing 'suggestion' field: {err}"
 
 
+def _retry_after_from_error_object(error_object: dict) -> tuple[object, str] | None:
+    """Read ``retry_after`` off one wire error object, spec slot first.
+
+    ``core/error.json`` @3.1.1 declares ``retry_after`` as a TOP-LEVEL member of
+    the error object (``"type": "number"``, ``minimum: 1``, ``maximum: 3600``),
+    and ``error-details/rate-limited.json`` enumerates limit / remaining /
+    window_seconds / scope with NO ``retry_after`` member — so ``details`` is not
+    the modelled home for the value.
+
+    The ``details`` read is kept as a LEGACY fallback rather than deleted: at
+    least one pinned test-kit (``dist/compliance/3.1.1/test-kits/
+    rate-limit-trip-runner.yaml``) still reads ``error.details.retry_after``, and
+    call sites that have not yet moved to the spec slot must fail this step on
+    the VALUE, not on where they happened to put it.
+    """
+    if error_object.get("retry_after") is not None:
+        return error_object["retry_after"], "top-level (core/error.json)"
+    details = error_object.get("details") or {}
+    if details.get("retry_after") is not None:
+        return details["retry_after"], "details (legacy slot)"
+    return None
+
+
+def _retry_after_from_envelope(envelope: dict) -> tuple[object, str] | None:
+    """Read ``retry_after`` off the two-layer wire envelope.
+
+    ``errors[0]`` is the per-error layer and ``adcp_error`` the envelope-level
+    mirror; pinned storyboards read each of them in the wild, so either carrying
+    the value satisfies the step.
+    """
+    for layer, error_object in (
+        ("errors[0]", (envelope.get("errors") or [{}])[0]),
+        ("adcp_error", envelope.get("adcp_error") or {}),
+    ):
+        found = _retry_after_from_error_object(error_object or {})
+        if found is not None:
+            value, slot = found
+            return value, f"{layer} {slot}"
+    return None
+
+
+def _retry_after_from_exception(error: object) -> tuple[object, str] | None:
+    """Read ``retry_after`` off a reconstructed exception — the IMPL / no-wire path.
+
+    ``AdCPError`` has a first-class ``retry_after`` attribute that serializes to
+    the envelope's top level, so that attribute is read first here for the same
+    reason the wire top level is read first above.
+    """
+    value = getattr(error, "retry_after", None)
+    if value is not None:
+        return value, "error.retry_after attribute"
+    details = getattr(error, "details", None) or {}
+    if isinstance(details, dict) and details.get("retry_after") is not None:
+        return details["retry_after"], "error.details (legacy slot)"
+    return None
+
+
 @then('the error should include "retry_after" field')
 def then_error_has_retry_after(ctx: dict) -> None:
     """Assert the error includes a retry_after hint (transient error recovery).
@@ -739,34 +796,40 @@ def then_error_has_retry_after(ctx: dict) -> None:
     Step claims the field should be 'included' — verify it exists and contains
     a positive numeric value (retry delay in seconds).
 
-    Checks both ctx["error"] (AdCPError from dispatch) and ctx["error_response"]
-    (structured error response) to match the dispatch contract.
+    **Authority: the WIRE envelope's top-level ``retry_after``.** Per
+    ``tests/CLAUDE.md`` § "Error Verification Policy" the buyer-facing contract is
+    the envelope, not a reconstructed exception, and per ``core/error.json``
+    @3.1.1 the field's home in that envelope is the error object's TOP LEVEL —
+    ``retry_after`` is a member of the Error object itself, bounded [1, 3600].
+    A read of ``details["retry_after"]`` is kept only as a legacy fallback for
+    call sites that still emit into the slot the spec does not model, and the
+    reconstructed exception is the last resort for IMPL / no-wire scenarios
+    (which have no envelope by definition).
     """
-    # Check both error keys to match the dispatch contract used by other error steps
-    error = ctx.get("error") or ctx.get("error_response")
-    assert error is not None, (
-        "No error recorded in ctx (checked both 'error' and 'error_response') — "
-        "step claims error should include retry_after but no error was captured"
-    )
-    # AdCPError stores retry_after in details dict
-    from src.core.exceptions import AdCPError
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    found = _retry_after_from_envelope(envelope) if envelope else None
 
-    retry_after = None
-    if isinstance(error, AdCPError):
-        assert error.details is not None, "Expected error details with retry_after"
-        assert "retry_after" in error.details, f"Expected 'retry_after' in error details, got: {error.details}"
-        retry_after = error.details["retry_after"]
-    else:
-        # adcp.types.Error model — check for retry_after attribute
-        retry_after = getattr(error, "retry_after", None)
-        if retry_after is None and hasattr(error, "details"):
-            retry_after = (error.details or {}).get("retry_after")
-    assert retry_after is not None, f"Expected retry_after field on error, but it is absent: {error}"
+    if found is None:
+        # Check both error keys to match the dispatch contract used by other error steps
+        error = ctx.get("error") or ctx.get("error_response")
+        assert error is not None or envelope is not None, (
+            "No error recorded in ctx (checked 'wire_error_envelope', "
+            "'synthesized_error_envelope', 'error' and 'error_response') — "
+            "step claims error should include retry_after but no error was captured"
+        )
+        found = _retry_after_from_exception(error) if error is not None else None
+        assert found is not None, (
+            f"Expected retry_after on the error, but it is absent from every slot. "
+            f"Wire envelope: {envelope}. Reconstructed error: {error!r}"
+        )
+
+    retry_after, slot = found
     # retry_after should be a positive number (seconds to wait before retrying)
-    assert isinstance(retry_after, (int, float)), (
-        f"Expected retry_after to be a number (seconds), got {type(retry_after).__name__}: {retry_after!r}"
+    assert isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool), (
+        f"Expected retry_after to be a number (seconds), got {type(retry_after).__name__}: "
+        f"{retry_after!r} (read from {slot})"
     )
-    assert retry_after > 0, f"Expected positive retry_after value, got {retry_after}"
+    assert retry_after > 0, f"Expected positive retry_after value, got {retry_after} (read from {slot})"
 
 
 # ═══════════════════════════════════════════════════════════════════════

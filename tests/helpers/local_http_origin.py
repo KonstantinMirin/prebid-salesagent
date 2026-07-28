@@ -6,8 +6,9 @@ Two test suites need a throwaway HTTP server on an ephemeral port:
   back. It binds ``0.0.0.0`` and advertises a *different* callback host, because
   the server runs in a container and must reach the receiver by network alias.
 * ``tests/integration/`` drives the outbound egress seam against a real origin
-  and needs to program the response (status, redirect, delay, chunked body,
-  a per-attempt response sequence, or no response at all) and count exact hits.
+  and needs to program the response (status, headers, redirect, delay, chunked
+  body, a per-attempt response sequence, or no response at all) and count exact
+  hits.
 
 Both are the same bootstrap — bind a free port, serve on a daemon thread, hand
 back a URL, tear the socket down — so the bootstrap lives here once and the
@@ -19,7 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -28,6 +29,15 @@ from typing import Any, ClassVar
 
 # Default body for a programmable origin that a test never configures.
 _DEFAULT_BODY = b'{"ok": true}'
+
+# Headers the origin writes for itself, from fields that already exist on
+# :class:`OriginResponse`. Programming one of these through the extra-header
+# passthrough would emit it TWICE — and a duplicate ``Content-Length`` is a
+# framing bug the client reports as a protocol error, i.e. a test failure with
+# nothing to do with what the test meant to grade. Refused loudly at
+# programming time rather than silently dropped: a test that means to set
+# ``Content-Type`` has a field for it.
+_ORIGIN_OWNED_HEADERS = frozenset({"content-type", "content-length", "connection", "transfer-encoding", "location"})
 
 # ``_sleep`` is bound at import, on purpose. A caller under test may be patching
 # ``<its module>.time.sleep`` to make its own retry backoff instant — and because
@@ -113,16 +123,52 @@ class OriginResponse:
     total_bytes: int = 0
     chunk_size: int = 64 * 1024
     delay_seconds: float = 0.0
+    # Extra response headers, as an ordered pair tuple rather than a dict so the
+    # dataclass stays frozen-and-copyable through ``replace()``. A real origin
+    # answers with more than a status: ``Retry-After`` on a 429 is a *protocol*
+    # instruction to the caller, and a retry policy that claims to honour it can
+    # only be graded against a server that actually sent it.
+    headers: tuple[tuple[str, str], ...] = ()
 
 
-def responds(status: int = 200, *, body: bytes = _DEFAULT_BODY, delay_seconds: float = 0.0) -> OriginResponse:
+def _checked_headers(headers: Mapping[str, str] | None) -> tuple[tuple[str, str], ...]:
+    """Normalise extra headers to pairs, refusing the ones the origin owns."""
+    if not headers:
+        return ()
+    for name in headers:
+        if name.lower() in _ORIGIN_OWNED_HEADERS:
+            raise ValueError(
+                f"{name!r} is written by the origin from its own fields — "
+                f"set the matching OriginResponse field instead of passing it as an extra header"
+            )
+    return tuple((str(name), str(value)) for name, value in headers.items())
+
+
+def responds(
+    status: int = 200,
+    *,
+    body: bytes = _DEFAULT_BODY,
+    delay_seconds: float = 0.0,
+    headers: Mapping[str, str] | None = None,
+) -> OriginResponse:
     """A complete, well-formed response — optionally after stalling ``delay_seconds``.
 
     A stall longer than the caller's timeout is how a *real* timeout is
     produced: the request provably arrived (it is counted in :attr:`LocalOrigin.hits`)
     and the caller's own clock is what gives up.
+
+    ``headers`` are extra response headers, e.g. ``{"Retry-After": "5"}``. They
+    go through the factory rather than only through
+    :meth:`LocalOrigin.respond_with` because a *sequence* entry is built here —
+    "429 with Retry-After, then 200" is a per-answer fact, not a per-origin one.
     """
-    return OriginResponse(mode="fixed", status=status, body=body, delay_seconds=delay_seconds)
+    return OriginResponse(
+        mode="fixed",
+        status=status,
+        body=body,
+        delay_seconds=delay_seconds,
+        headers=_checked_headers(headers),
+    )
 
 
 def hangs_up() -> OriginResponse:
@@ -165,6 +211,7 @@ class LocalOrigin:
     delay_seconds: float = 0.0
     total_bytes: int = 0
     chunk_size: int = 64 * 1024
+    headers: tuple[tuple[str, str], ...] = ()
     sequence: list[OriginResponse] = field(default_factory=list)
 
     @property
@@ -187,12 +234,20 @@ class LocalOrigin:
         *,
         body: bytes = _DEFAULT_BODY,
         content_type: str = "application/json",
+        headers: Mapping[str, str] | None = None,
     ) -> None:
-        """Answer every subsequent request with a fixed status and body."""
+        """Answer every subsequent request with a fixed status, body and extra headers.
+
+        ``headers`` is how a fixed-mode origin says something the status alone
+        cannot — ``{"Retry-After": "5"}`` on a 429 is the origin instructing the
+        caller how long to wait, and a policy that claims to honour it is only
+        graded honestly against a server that really sent the header.
+        """
         self.mode = "fixed"
         self.status = status
         self.body = body
         self.content_type = content_type
+        self.headers = _checked_headers(headers)
 
     def respond_in_sequence(
         self,
@@ -245,8 +300,9 @@ class LocalOrigin:
         handler has exactly one dispatch table and a mode cannot be reachable
         from a fixed response but not from a sequenced one.
 
-        A sequence entry that carries no stall of its own inherits the origin's
-        :meth:`delay` — programming a stall once still stalls every answer.
+        A sequence entry that carries no stall — or no extra headers — of its own
+        inherits the origin's :meth:`delay` and :meth:`respond_with` headers, so
+        programming either once still applies it to every answer.
         """
         if self.mode != "sequence":
             return OriginResponse(
@@ -258,10 +314,13 @@ class LocalOrigin:
                 total_bytes=self.total_bytes,
                 chunk_size=self.chunk_size,
                 delay_seconds=self.delay_seconds,
+                headers=self.headers,
             )
         answer = self.take_from_sequence()
         if not answer.delay_seconds and self.delay_seconds:
             answer = replace(answer, delay_seconds=self.delay_seconds)
+        if not answer.headers and self.headers:
+            answer = replace(answer, headers=self.headers)
         if answer.content_type == "application/json" and self.content_type != "application/json":
             answer = replace(answer, content_type=self.content_type)
         return answer
@@ -327,6 +386,7 @@ class LocalOrigin:
         self.location = ""
         self.delay_seconds = 0.0
         self.total_bytes = 0
+        self.headers = ()
         self.sequence.clear()
 
 
@@ -366,11 +426,18 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _send_fixed(self, answer: OriginResponse) -> None:
-        """Write one complete, length-declared response."""
+        """Write one complete, length-declared response, plus any extra headers.
+
+        The extra headers are written alongside the framing ones the origin owns;
+        ``_checked_headers`` has already refused any name that would duplicate
+        one of those, so no header is ever emitted twice.
+        """
         self.send_response(answer.status)
         self.send_header("Content-Type", answer.content_type)
         self.send_header("Content-Length", str(len(answer.body)))
         self.send_header("Connection", "close")
+        for name, value in answer.headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(answer.body)
 

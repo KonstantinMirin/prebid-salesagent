@@ -67,11 +67,11 @@ SLEEP_NAME = "sleep"
 # shrinks — the named ticket for each entry is what removes it.
 ALLOWLIST = {
     # Counterparty-supplied URLs — these migrate onto the seam and inherit its
-    # schedule. Tickets: salesagent-4fya.11, .10, .9, salesagent-cnkq
-    # (salesagent-4fya.8 migrated order_approval_service and removed its entry).
+    # schedule. Tickets: salesagent-4fya.11, .10, salesagent-cnkq
+    # (salesagent-4fya.8 and .9 migrated order_approval_service and
+    # creative_agent_registry, removing their entries.)
     ("src/core/webhook_delivery.py", 1),
     ("src/services/webhook_delivery_service.py", 1),
-    ("src/core/creative_agent_registry.py", 2),  # the 429 Retry-After fallback and the plain retry
     ("src/services/protocol_webhook_service.py", 2),
     # Egress retry schedules that no migration ticket covered — found by the
     # salesagent-4fya.6 disease scan, filed as salesagent-zlwz and salesagent-fwid.
@@ -134,19 +134,32 @@ def _names_bound_to_a_power(tree: ast.AST) -> set[str]:
 
 
 def _functions_returning_a_power(tree: ast.AST) -> set[str]:
-    """Names of functions in this module whose body computes an exponentiation.
+    """Names of functions in this module that compute an exponentiation, directly or via each other.
 
-    One hop, deliberately. ``time.sleep(_backoff_seconds(attempt))`` — the seam's
-    own form — hides the schedule behind a local helper; without this the seam
-    itself would read as clean and the guard's exemption would prove nothing.
-    Chasing further than one hop would need real call-graph analysis, which is
-    not what a structural guard should grow into.
+    ``time.sleep(_backoff_seconds(attempt))`` — the seam's original form — hides
+    the schedule behind one helper; without resolving that, the seam itself would
+    read as clean and the guard's own exemption would prove nothing.
+
+    One hop is not enough, and the seam proved it: adding Retry-After support made
+    the chain ``sleep -> _wait_seconds -> _backoff_seconds``, two hops, and a
+    one-hop detector went quietly blind to the module it exists to watch. So this
+    closes over same-module calls to a fixpoint. Still bounded — names in THIS
+    module only, no imports followed, no aliasing — because a guard that needed a
+    real call graph would be a program analyser, not a test.
     """
-    return {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _contains_power(node)
-    }
+    functions = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)}
+    powered = {name for name, node in functions.items() if _contains_power(node)}
+
+    while True:
+        grown = {
+            name
+            for name, node in functions.items()
+            if name not in powered
+            and any(isinstance(call.func, ast.Name) and call.func.id in powered for call in iter_call_expressions(node))
+        }
+        if not grown:
+            return powered
+        powered |= grown
 
 
 def find_call_site_backoff_violations(tree: ast.Module) -> list[int]:
@@ -205,7 +218,7 @@ class TestNoCallSiteBackoff:
         call site grew its own schedule, which is the thing the guard exists to
         prevent.
         """
-        assert len(ALLOWLIST) <= 9, (
+        assert len(ALLOWLIST) <= 8, (
             f"allowlist grew to {len(ALLOWLIST)} entries — a new call-site backoff was admitted. {FIX_HINT}"
         )
 
@@ -270,6 +283,21 @@ class TestGuardDetector:
         assert find_call_site_backoff_violations(ast.parse("import time\ntime.sleep(2 * 3 ** (attempt - 1))\n")), (
             "spacing variant missed"
         )
+
+    @pytest.mark.arch_guard
+    def test_a_power_two_helpers_deep_is_still_found(self):
+        """The chain the seam actually grew: sleep -> wrapper -> geometric helper.
+
+        A one-hop detector passes this, which is how it would have gone blind to
+        the seam when salesagent-4fya.9 added Retry-After support.
+        """
+        source = (
+            "import time\n\n\n"
+            "def _backoff(n):\n    return 2**n\n\n\n"
+            "def _wait(n, ra):\n    return max(_backoff(n), ra or 0)\n\n\n"
+            "def go(n):\n    time.sleep(_wait(n, None))\n"
+        )
+        assert find_call_site_backoff_violations(ast.parse(source)), "two-hop power missed"
 
     @pytest.mark.arch_guard
     def test_seam_module_would_otherwise_be_flagged(self):

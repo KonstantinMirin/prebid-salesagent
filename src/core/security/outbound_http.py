@@ -31,7 +31,11 @@ The public surface is a *send function*, deliberately not a client factory. A
 factory would leave the four existing retry/backoff/classification copies in
 place and add a fifth thing to get wrong per call site.
 
-Retries wait BR-RULE-029's 1s/2s/4s plus jitter. ``ADCP_OUTBOUND_BACKOFF_BASE_SECONDS``
+Retries wait BR-RULE-029's 1s/2s/4s plus jitter. An origin's ``Retry-After`` can
+LENGTHEN that wait, never shorten it, and only up to a bounded amount — a header
+is a request, not an instruction, and an unbounded one would let any counterparty
+pin a worker. The value the buyer sees rides out in ``AdCPError``'s own top-level
+``retry_after`` slot (clamped to the spec's [1, 3600]), not in ``details``. ``ADCP_OUTBOUND_BACKOFF_BASE_SECONDS``
 shortens the base for test speed and nothing else — it cannot change the shape or
 remove the jitter, it is deliberately not passed through ``tox.ini`` or either
 compose file, and it must never be set in a deployment.
@@ -71,7 +75,7 @@ from adcp.signing import (
     resolve_and_validate_host,
 )
 
-from src.core.exceptions import AdCPInvalidRequestError, AdCPServiceUnavailableError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPServiceUnavailableError, clamp_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,12 @@ _BACKOFF_BASE_SECONDS = 1.0
 # both compose files: no deployed or CI environment has any business shortening
 # production backoff.
 _BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
+
+# The most of a counterparty's Retry-After this seam will actually wait. The
+# header is a request, not an instruction: honouring an unbounded value lets any
+# origin pin a worker for an hour with one response header. Retry-After can only
+# ever LENGTHEN a wait beyond BR-RULE-029 — never shorten it — and only this far.
+_MAX_HONOURED_RETRY_AFTER_SECONDS = 60.0
 
 # Statuses worth trying again. Everything else — including every 4xx and every
 # 3xx — is terminal: retrying a rejected or redirected request only doubles the
@@ -158,13 +168,15 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
     # error string may be added here (spec point 6).
     _DETAIL_KEYS: ClassVar[tuple[str, str]] = ("attempts", "last_status")
 
-    def __init__(self, *, attempts: int, last_status: int | None) -> None:
+    def __init__(self, *, attempts: int, last_status: int | None, retry_after: int | None = None) -> None:
         super().__init__(
             _DELIVERY_FAILED_MESSAGE,
             details={"attempts": attempts, "last_status": last_status},
+            retry_after=retry_after,
         )
         self.attempts = attempts
         self.last_status = last_status
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
@@ -317,6 +329,47 @@ def _backoff_seconds(attempt: int) -> float:
     return base * (2 ** (attempt - 1)) + random.uniform(0, 1)
 
 
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """The origin's Retry-After in seconds, or ``None`` if it did not usably say.
+
+    Delta-seconds only. RFC 9110 also permits an HTTP-date, but honouring one
+    means trusting a counterparty's clock against ours; it is logged and treated
+    as absent, which costs only the BR-RULE-029 wait we would have taken anyway.
+
+    Deliberately UNCLAMPED. The raw value decides the WAIT (bounded separately by
+    :data:`_MAX_HONOURED_RETRY_AFTER_SECONDS`); the value that rides out to the
+    buyer is clamped to the spec's [1, 3600] at the point of emission. Fusing the
+    two would floor every wait at one second, so an origin could not answer
+    ``Retry-After: 0`` — and a test suite could not avoid sleeping for real.
+    """
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return float(raw.strip())
+    except ValueError:
+        logger.debug("Ignoring non-delta-seconds Retry-After: %r", raw)
+        return None
+
+
+def _wait_seconds(attempt: int, retry_after: float | None) -> float:
+    """How long to wait before the attempt after ``attempt``.
+
+    BR-RULE-029 is a FLOOR: this returns the geometric wait, raised to the
+    origin's Retry-After when that asks for longer, and the ceiling clamps the
+    RETRY-AFTER CONTRIBUTION only.
+
+    The order matters and the obvious spelling is wrong. ``min(max(backoff,
+    retry_after), CEILING)`` applies the ceiling to the whole wait, so any time
+    the geometric wait exceeds the ceiling the seam would sleep LESS than the
+    rule — silently, in the one module that owns that rule, and reachable through
+    the public ``max_attempts`` parameter (the schedule is 1, 2, 4, 8, 16, 32,
+    64s, so it crosses a 60s ceiling at seven attempts).
+    """
+    honoured = min(retry_after or 0.0, _MAX_HONOURED_RETRY_AFTER_SECONDS)
+    return max(_backoff_seconds(attempt), honoured)
+
+
 def _build_request(
     client: httpx.Client | httpx.AsyncClient,
     *,
@@ -365,8 +418,12 @@ def _result(response: httpx.Response, body: bytes, attempt: int, started: float)
     )
 
 
-def _fail(attempts: int, last_status: int | None) -> OutboundDeliveryFailed:
-    return OutboundDeliveryFailed(attempts=attempts, last_status=last_status)
+def _fail(attempts: int, last_status: int | None, retry_after: float | None = None) -> OutboundDeliveryFailed:
+    return OutboundDeliveryFailed(
+        attempts=attempts,
+        last_status=last_status,
+        retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
+    )
 
 
 def validate_url(url: str) -> None:
@@ -432,6 +489,7 @@ def send(
 
     started = time.monotonic()
     last_status: int | None = None
+    last_retry_after: float | None = None
 
     # One transport per call, never cached: the pin is per-destination and fails
     # closed when reused for another host.
@@ -462,17 +520,19 @@ def send(
             except _RETRYABLE_EXCEPTIONS as exc:
                 logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
                 last_status = None
+                last_retry_after = None
             else:
                 last_status = response.status_code
+                last_retry_after = _retry_after_seconds(response)
                 if not _should_retry_status(last_status):
                     if response.is_success:
                         return _result(response, bytes(body), attempt, started)
-                    raise _fail(attempt, last_status)
+                    raise _fail(attempt, last_status, last_retry_after)
 
             if attempt < max_attempts:
-                time.sleep(_backoff_seconds(attempt))
+                time.sleep(_wait_seconds(attempt, last_retry_after))
 
-    raise _fail(max_attempts, last_status)
+    raise _fail(max_attempts, last_status, last_retry_after)
 
 
 async def asend(
@@ -497,6 +557,7 @@ async def asend(
 
     started = time.monotonic()
     last_status: int | None = None
+    last_retry_after: float | None = None
 
     async with httpx.AsyncClient(transport=transport, timeout=timeout) as client:
         for attempt in range(1, max_attempts + 1):
@@ -523,14 +584,16 @@ async def asend(
             except _RETRYABLE_EXCEPTIONS as exc:
                 logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
                 last_status = None
+                last_retry_after = None
             else:
                 last_status = response.status_code
+                last_retry_after = _retry_after_seconds(response)
                 if not _should_retry_status(last_status):
                     if response.is_success:
                         return _result(response, bytes(body), attempt, started)
-                    raise _fail(attempt, last_status)
+                    raise _fail(attempt, last_status, last_retry_after)
 
             if attempt < max_attempts:
-                await asyncio.sleep(_backoff_seconds(attempt))
+                await asyncio.sleep(_wait_seconds(attempt, last_retry_after))
 
-    raise _fail(max_attempts, last_status)
+    raise _fail(max_attempts, last_status, last_retry_after)

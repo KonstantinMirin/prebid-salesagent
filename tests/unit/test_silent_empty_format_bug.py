@@ -19,6 +19,7 @@ import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import AdCPAdapterError
+from src.core.security.outbound_http import OutboundDeliveryFailed
 
 
 @pytest.fixture
@@ -34,24 +35,6 @@ def agent():
         auth={"type": "token", "credentials": "test-token"},
         auth_header="x-test-auth",
     )
-
-
-def _mock_http_json_response(json_data: dict) -> tuple[AsyncMock, MagicMock]:
-    """Build a mock httpx.AsyncClient that returns the given JSON response."""
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.headers = {"content-type": "application/json"}
-    mock_response.json.return_value = json_data
-
-    mock_http = AsyncMock()
-    mock_http.post.return_value = mock_response
-    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-    mock_http.__aexit__ = AsyncMock(return_value=False)
-    return mock_http, mock_response
-
-
-JSONRPC_ERROR = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600}}
-JSONRPC_EMPTY_CONTENT = {"jsonrpc": "2.0", "id": 1, "result": {"content": []}}
 
 
 class TestFetchFormatsAnomalousStatusesMustRaise:
@@ -106,31 +89,6 @@ class TestFetchFormatsAnomalousStatusesMustRaise:
             await registry._fetch_formats_from_agent(mock_client, agent)
 
 
-class TestRawMcpFallbackMustRaise:
-    """_fetch_formats_raw_mcp must raise (not return []) on unparseable responses.
-
-    These paths silently return [] which poisons the cache and masks failures.
-    """
-
-    @pytest.mark.asyncio
-    async def test_no_result_key_raises(self, registry, agent):
-        """Response JSON has no 'result' key — must raise, not return []."""
-        mock_http, _ = _mock_http_json_response(JSONRPC_ERROR)
-
-        with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(AdCPAdapterError):
-                await registry._fetch_formats_raw_mcp(agent)
-
-    @pytest.mark.asyncio
-    async def test_empty_content_raises(self, registry, agent):
-        """Response has result but empty content array — must raise, not return []."""
-        mock_http, _ = _mock_http_json_response(JSONRPC_EMPTY_CONTENT)
-
-        with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(AdCPAdapterError):
-                await registry._fetch_formats_raw_mcp(agent)
-
-
 class TestListAllFormatsErrorPropagation:
     """End-to-end: anomalous responses must produce errors in FormatFetchResult.
 
@@ -155,12 +113,19 @@ class TestListAllFormatsErrorPropagation:
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
 
-        mock_http, _ = _mock_http_json_response(JSONRPC_ERROR)
         monkeypatch.setattr(registry, "_get_tenant_agents", lambda tenant_id=None: [agent])
+
+        # The raw fallback goes through the egress seam now, so the failure is
+        # injected there rather than at a transport this code no longer touches.
+        # What is graded is unchanged and is not the seam's business: a failed
+        # fetch must arrive in FormatFetchResult.errors rather than as an empty
+        # format list, because products.py keys graceful degradation off it.
+        async def _seam_fails(*args, **kwargs):
+            raise OutboundDeliveryFailed(attempts=3, last_status=503)
 
         with (
             patch.object(registry, "_build_adcp_client", return_value=mock_client),
-            patch("httpx.AsyncClient", return_value=mock_http),
+            patch("src.core.creative_agent_registry.asend", _seam_fails),
         ):
             result = await registry.list_all_formats_with_errors(tenant_id="test")
 

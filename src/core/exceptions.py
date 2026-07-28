@@ -11,6 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
@@ -202,6 +203,26 @@ def _serialize_context(
         )
         return None
     return context.model_dump(mode="json", exclude_none=True)
+
+
+# The spec Error model bounds retry_after to [1, 3600] seconds (clients clamp
+# anyway); never emit more even when the underlying wait is longer. A spec
+# constant, not an operational knob — deliberately not env-tunable.
+RETRY_AFTER_MAX = 3600
+
+
+def clamp_retry_after(seconds: float) -> int:
+    """Clamp a raw retry_after to the spec Error model's [1, RETRY_AFTER_MAX] bound.
+
+    The single home for the floor/ceiling every emitter shares — the idempotency
+    policy's rejection branches and the egress seam's Retry-After passthrough.
+    Callers layer any context-specific cap (e.g. an insert-rate window) on top.
+
+    It lives here rather than beside either caller because this module already
+    owns ``AdCPError.retry_after`` and the spec Error shape, so neither emitter
+    ends up importing the other.
+    """
+    return min(max(1, math.ceil(seconds)), RETRY_AFTER_MAX)
 
 
 class AdCPError(Exception):

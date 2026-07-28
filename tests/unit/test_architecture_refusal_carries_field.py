@@ -1,13 +1,21 @@
 """Guard: every egress refusal raised by the seam carries ``field``.
 
-``OutboundRequestBlocked`` reaches the buyer as INVALID_REQUEST / correctable,
-and its message says nothing about the cause on purpose (AdCP 3.1.1,
-``building/by-layer/L1/security.mdx`` point 6: do not echo fetch errors back to
-the party that supplied the URL). ``error.field`` is therefore the ONLY channel
-that can tell a buyer which of their inputs to fix. A refusal path that forgets
-to pass the caller's ``field=`` hands them a correctable error they cannot act
-on — and it fails silently, because the envelope is still well-formed and every
-existing test still passes.
+``OutboundRequestBlocked`` carries a message that says nothing about the cause,
+on purpose (AdCP 3.1.1, ``building/by-layer/L1/security.mdx`` point 6: do not
+echo fetch errors back to the party that supplied the URL). Where the refused URL
+came from the BUYER's request, ``error.field`` is therefore the only channel that
+can name which of their inputs to fix, and a refusal path that forgets to pass
+the caller's ``field=`` hands them a correctable error they cannot act on — which
+fails silently, because the envelope is still well-formed and every existing test
+still passes.
+
+Not every call site surfaces the refusal that way. A site whose URL is OPERATOR
+configuration — a registered agent endpoint, a vendor host — re-maps it to
+CONFIGURATION_ERROR / terminal instead (see
+``src/core/helpers/outbound_error_mapping.py``), because the buyer did not choose
+that address and cannot correct it. That is a call-site decision about whose URL
+it is; this guard is about the seam always CARRYING the field, so either
+disposition remains possible.
 
 The seam has two refusal paths today (scheme in ``_require_tls``, address in
 ``_blocked``) and both carry it. This guard is about the third one somebody adds

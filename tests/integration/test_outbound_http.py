@@ -31,6 +31,7 @@ import pytest
 
 from src.core.exceptions import build_two_layer_error_envelope
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
+from tests.helpers.local_http_origin import hangs_up, responds
 
 # Both entry points get every case. Parametrising instead of duplicating the
 # module keeps the two paths literally the same test.
@@ -52,6 +53,19 @@ BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
 
 # The seam's logger, for grading the fallback warning on a malformed knob value.
 SEAM_LOGGER = "src.core.security.outbound_http"
+
+# A rate-limited answer, as the origin sends it. The body is asserted against in
+# the opacity cases, so it carries a marker rather than a plausible payload.
+_RATE_LIMITED_BODY = b'{"error": "slow down"}'
+
+# The spec bound on the value CARRIED to the buyer: ``core/error.json`` @3.1.1
+# declares ``retry_after`` top-level, ``"type": "number"``, ``minimum: 1``,
+# ``maximum: 3600`` — "Sellers MUST return values between 1 and 3600. Clients
+# MUST clamp values outside this range." Written here as the two literals the
+# spec states, because that is what the assertions are about; the seam is free
+# to source them from wherever it keeps the constant.
+_SPEC_RETRY_AFTER_MIN = 1
+_SPEC_RETRY_AFTER_MAX = 3600
 
 
 def _seam():
@@ -159,6 +173,30 @@ def fast_backoff(monkeypatch) -> None:
     """
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
     pin_jitter(monkeypatch, 0.0)
+
+
+def rate_limited(local_origin, retry_after: str | None = None) -> None:
+    """Program the origin to answer 429, optionally with a ``Retry-After`` header.
+
+    The header is sent by a server that really wrote it, not injected into a
+    mocked response object: "the seam honoured Retry-After" is a claim about
+    what it does with bytes off the wire, and a stubbed ``response.headers``
+    could only restate the number the test already chose.
+    """
+    headers = {"Retry-After": retry_after} if retry_after is not None else None
+    local_origin.respond_with(429, body=_RATE_LIMITED_BODY, headers=headers)
+
+
+def honoured_ceiling() -> float:
+    """The seam's cap on how much of a ``Retry-After`` it will actually wait.
+
+    Read off the module rather than restated, for the same reason
+    ``_MAX_RESPONSE_BYTES`` is: the cases below grade the FORM of the wait
+    computation — that the ceiling clamps the Retry-After CONTRIBUTION and never
+    the geometric floor — and a hardcoded 60 would turn a form regression into a
+    passing test the day someone lowers the constant.
+    """
+    return _seam()._MAX_HONOURED_RETRY_AFTER_SECONDS
 
 
 def assert_blocked(seam_call: str, url: str, **kwargs: Any):
@@ -716,12 +754,15 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
     ``suggestion``, ``recovery`` and ``field`` on both layers at once.
 
     The second half pins the default: a caller that supplies no ``field`` gets
-    no ``field`` KEY, not a null. Every one of the 14 unmigrated
-    ``# FIXME(#1589)`` call sites and both existing callers fetch stored
-    operator config, where there is no request-payload path to name; emitting
-    one would invent a path the buyer never sent, which Level 2 makes worse
-    than silence (``error-handling.mdx:16`` — ``field`` exists so an agent can
-    SELF-CORRECT, and it cannot correct a path absent from its own document).
+    no ``field`` KEY, not a null. That default is what almost every call site
+    wants — the 13 unmigrated ``# FIXME(#1589)`` sites, and the migrated ones
+    that fetch stored operator config, have no request-payload path to name at
+    all. Only a caller whose URL arrived in the caller's own request document
+    passes one (``src/core/property_list_resolver.py`` is the first). Emitting
+    a path for the others would invent one the buyer never sent, which Level 2
+    makes worse than silence (``error-handling.mdx:16`` — ``field`` exists so an
+    agent can SELF-CORRECT, and it cannot correct a path absent from its own
+    document).
     """
     set_flags(monkeypatch)
 
@@ -978,3 +1019,322 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
 
     for term in ("reserved", "resolve", "metadata", "private"):
         assert term not in reserved_message.lower(), f"refusal reason {term!r} leaked into {reserved_message!r}"
+
+
+# ---------------------------------------------------------------------------
+# 11. Retry-After — the origin's own instruction, honoured in ONE direction
+#
+# Section 6 grades the schedule the seam picks for itself. This section grades
+# what an origin is allowed to do to that schedule, and it is deliberately
+# asymmetric:
+#
+#   * Retry-After can only ever make the seam wait LONGER. BR-RULE-029 is a
+#     FLOOR, so an origin answering "Retry-After: 0" cannot talk the seam out of
+#     the 1s/2s/4s it owes every other client of that endpoint.
+#   * The honoured contribution is capped, because an unbounded Retry-After is a
+#     DoS lever: a counterparty answering "Retry-After: 3600" would otherwise
+#     pin the calling task for an hour.
+#   * That cap clamps the CONTRIBUTION, never the whole wait. The rejected form
+#     ``min(max(backoff, retry_after), CEILING)`` sleeps LESS than BR-RULE-029
+#     whenever the geometric wait exceeds the ceiling — silently, in the one
+#     module that owns the invariant, and reachable through the PUBLIC
+#     ``max_attempts`` parameter.
+#
+# The value the BUYER receives is a separate decision from the wait: it is
+# clamped to the spec's [1, 3600] (``core/error.json`` @3.1.1) and rides the
+# envelope's TOP LEVEL, not ``details``. Fusing the two would floor every wait
+# at one second and make an origin unable to say "come straight back".
+#
+# Every case records sleeps instead of serving them, exactly as section 6 does:
+# these grade magnitudes, and a suite that really waited them out would take
+# minutes.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_retry_after_zero_does_not_shorten_the_br_rule_029_floor(seam_call, monkeypatch, local_origin):
+    """An origin asking for no wait at all still gets BR-RULE-029's 1s/2s/4s.
+
+    This is the floor half of the asymmetry, and it is the half an origin can
+    attack: a busy endpoint that answers ``Retry-After: 0`` to every 429 would,
+    under a "the origin decides" reading, get the whole fleet hammering it in
+    lockstep — precisely the thundering herd the rule exists to prevent.
+
+    Graded through ``assert_backoff_schedule``, the same grader section 6 and the
+    UC-004 steps use. Re-encoding 1/2/4 here would be the drift that grader
+    exists to prevent.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+    rate_limited(local_origin, retry_after="0")
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.25)
+
+    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+
+    assert_backoff_schedule(durations, jitter=0.25)
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_retry_after_lengthens_a_wait_the_geometric_base_would_have_cut_short(seam_call, monkeypatch, local_origin):
+    """A Retry-After above the geometric wait is what the seam actually waits.
+
+    The other half of the asymmetry: when the origin asks for longer than the
+    schedule would have waited, the seam obeys. Without this the header is
+    decoration — the seam would be parsing a value it never acts on.
+
+    The base knob is turned right down so the geometric term cannot be what
+    produces the observed delays: at a 0.001s base every wait below is three
+    orders of magnitude above anything the schedule would have chosen.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    rate_limited(local_origin, retry_after="5")
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert durations == pytest.approx([5.0, 5.0]), (
+        f"expected both waits to be the origin's 5s Retry-After, got {durations} "
+        "(the 0.001s geometric base cannot produce these)"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_an_enormous_retry_after_cannot_pin_the_caller(seam_call, monkeypatch, local_origin):
+    """``Retry-After: 3600`` is honoured only up to the seam's ceiling.
+
+    Honouring a counterparty's number without a cap hands it a lever to hold a
+    worker for as long as it likes, which is a DoS with a polite header on it.
+    The cap is the seam's, not the spec's: the spec's [1, 3600] bounds what a
+    seller may SEND, and 3600 seconds of a held task is exactly the outcome this
+    refuses.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    rate_limited(local_origin, retry_after=str(_SPEC_RETRY_AFTER_MAX))
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+
+    assert durations == pytest.approx([honoured_ceiling()]), (
+        f"expected the wait to stop at the seam's honoured ceiling {honoured_ceiling()}s, got {durations}"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_the_retry_after_ceiling_never_cuts_the_geometric_wait(seam_call, monkeypatch, local_origin):
+    """At ``max_attempts=5`` every geometric wait survives the ceiling intact.
+
+    This is the case that grades the FORM of the wait computation rather than
+    its arithmetic at today's constants:
+
+    * correct — ``max(backoff, min(retry_after, CEILING))``: the ceiling clamps
+      the Retry-After CONTRIBUTION, so the geometric floor is untouched.
+    * rejected — ``min(max(backoff, retry_after), CEILING)``: the ceiling clamps
+      the WHOLE wait, so every wait above it collapses to the ceiling and the
+      seam sleeps LESS than BR-RULE-029.
+
+    The two forms agree until ``backoff > CEILING``, which is why the base knob
+    is raised until that is true on the very first sleep instead of waiting for
+    an attempt count nobody uses. ``max_attempts`` is public, so this is
+    reachable from any call site — and the collision arrives sooner the moment
+    anyone lowers the ceiling or raises the attempts. The form has to be right;
+    the arithmetic at today's numbers is not the invariant.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    base = honoured_ceiling() * 2
+    monkeypatch.setenv(BACKOFF_BASE_ENV, str(base))
+    rate_limited(local_origin, retry_after=str(int(honoured_ceiling()) + 1))
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=5)
+
+    expected = [base * (2**step) for step in range(4)]
+    assert durations == pytest.approx(expected), (
+        f"expected the geometric schedule {expected} to survive the "
+        f"{honoured_ceiling()}s Retry-After ceiling, got {durations}"
+    )
+    assert all(duration > honoured_ceiling() for duration in durations), (
+        f"a wait was cut down to the Retry-After ceiling {honoured_ceiling()}s: {durations}. "
+        "The ceiling must clamp the Retry-After contribution, never the BR-RULE-029 floor."
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+@pytest.mark.parametrize(
+    ("sent", "carried"),
+    [
+        ("0", _SPEC_RETRY_AFTER_MIN),
+        ("30", 30),
+        ("99999", _SPEC_RETRY_AFTER_MAX),
+    ],
+)
+def test_the_carried_retry_after_is_clamped_to_the_spec_bound(seam_call, sent, carried, monkeypatch, local_origin):
+    """What the buyer receives is clamped to [1, 3600]; what the seam waits is not.
+
+    ``core/error.json`` @3.1.1: ``retry_after`` is ``"type": "number"``,
+    ``minimum: 1``, ``maximum: 3600`` — "Clients MUST clamp values outside this
+    range." So the value on the envelope is bounded whatever the origin sent.
+
+    Splitting the two uses is what makes ``Retry-After: 0`` expressible at all.
+    Clamping before the wait would floor every wait at one second, so an origin
+    could not answer "come straight back" and every case in this section would
+    burn a second of real time it cannot get back.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    rate_limited(local_origin, retry_after=sent)
+    record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+
+    assert error.retry_after == carried, (
+        f"origin sent Retry-After: {sent}, buyer should receive {carried} "
+        f"(spec bound [{_SPEC_RETRY_AFTER_MIN}, {_SPEC_RETRY_AFTER_MAX}]), got {error.retry_after!r}"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeypatch, local_origin):
+    """The value reaches the buyer in the spec's own slot, on both envelope layers.
+
+    ``core/error.json`` @3.1.1 puts ``retry_after`` at the TOP LEVEL of the error
+    object, and ``error-details/rate-limited.json`` enumerates
+    limit / remaining / window_seconds / scope with no ``retry_after`` member —
+    so ``details["retry_after"]`` is not the modelled home, it is a slot a call
+    site invented. Both layers are asserted for the same reason
+    ``assert_envelope_shape`` checks ``field`` on both: pinned storyboards read
+    each of them in the wild.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    rate_limited(local_origin, retry_after="30")
+    record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    envelope = build_two_layer_error_envelope(error)
+
+    assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
+    assert envelope["adcp_error"].get("retry_after") == 30, f"adcp_error carries no top-level retry_after: {envelope}"
+    assert envelope["errors"][0].get("retry_after") == 30, f"errors[0] carries no top-level retry_after: {envelope}"
+    assert "retry_after" not in (envelope["errors"][0].get("details") or {}), (
+        f"retry_after was duplicated into details, which models no such member: {envelope}"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch, local_origin):
+    """``_DETAIL_KEYS`` is a promise about the buyer-visible payload — asserted, not commented.
+
+    ``details`` rides to the buyer through ``build_two_layer_error_envelope``, so
+    the seam's rule is that nothing derived from the origin's response or from an
+    httpx error string may be added to it (spec point 6). That rule is a comment
+    on a ClassVar referenced nowhere else, and the call sites migrating onto the
+    seam lean on it — including this ticket's, which carries ``retry_after`` in
+    ``AdCPError``'s own slot precisely so ``details`` does not grow.
+
+    Graded on a 429 WITH a Retry-After, which is the answer most likely to leak a
+    fourth key.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    rate_limited(local_origin, retry_after="30")
+    record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    envelope = build_two_layer_error_envelope(error)
+
+    declared = _seam().OutboundDeliveryFailed._DETAIL_KEYS
+    assert declared == ("attempts", "last_status"), (
+        f"the declared buyer-visible detail keys changed to {declared} — "
+        "every migrated call site's envelope shifts with them"
+    )
+    assert tuple(error.details) == declared, f"details keys {tuple(error.details)} do not match {declared}"
+    assert tuple(envelope["errors"][0]["details"]) == declared, (
+        f"wire details keys {tuple(envelope['errors'][0]['details'])} do not match {declared}: {envelope}"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after(seam_call, monkeypatch, local_origin):
+    """A hang-up on the last attempt reports no retry_after, not the previous answer's.
+
+    ``last_status`` is already reset to None when an attempt dies at the
+    transport level — there was no response to read a status from — and the
+    Retry-After tracked beside it has to be reset in the same branch. Carrying
+    the previous attempt's value would tell the buyer to wait 30 seconds because
+    of a 429 that is no longer the failure being reported.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    local_origin.respond_in_sequence(
+        [
+            responds(429, body=_RATE_LIMITED_BODY, headers={"Retry-After": "30"}),
+            hangs_up(),
+        ]
+    )
+    record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+
+    assert error.last_status is None
+    assert error.retry_after is None, (
+        f"the 429's Retry-After survived into a transport-level failure: {error.retry_after!r}"
+    )
+    assert local_origin.hits == 2
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_rate_limit_without_the_header_carries_no_retry_after(seam_call, monkeypatch, local_origin):
+    """No header means no value — the seam does not invent one from its own schedule.
+
+    The code this ticket deletes fell back to ``2 ** attempt`` when the header
+    was absent, which handed the buyer a number the origin never said. An absent
+    ``retry_after`` is honest: ``core/error.json`` makes it optional.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    rate_limited(local_origin)
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    envelope = build_two_layer_error_envelope(error)
+
+    assert error.retry_after is None, f"a retry_after appeared with no Retry-After header: {error.retry_after!r}"
+    assert "retry_after" not in envelope["errors"][0], f"errors[0] carries an invented retry_after: {envelope}"
+    assert durations == pytest.approx([0.001]), (
+        f"expected the plain geometric wait when no header was sent, got {durations}"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+@pytest.mark.parametrize("header", ["Wed, 21 Oct 2026 07:28:00 GMT", "soon", ""])
+def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monkeypatch, local_origin):
+    """A date form, or junk, leaves the schedule alone instead of crashing the fetch.
+
+    RFC 9110 allows delta-seconds OR an HTTP-date. The seam parses delta-seconds
+    only — an HTTP-date drags clock-skew policy into the one module that must not
+    grow policy — and the limitation is stated rather than half-implemented. The
+    code this ticket deletes called ``int()`` on the raw header, so a spec-legal
+    date form raised ``ValueError`` out of an ``except httpx`` arm and crashed the
+    fetch: this is a latent bug fix, not only a migration.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
+    rate_limited(local_origin, retry_after=header)
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+
+    assert error.retry_after is None, f"{header!r} was parsed into a retry_after: {error.retry_after!r}"
+    assert durations == pytest.approx([0.001]), f"expected the plain geometric wait for {header!r}, got {durations}"
