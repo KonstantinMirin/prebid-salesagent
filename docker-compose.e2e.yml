@@ -58,6 +58,28 @@ services:
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      # ─── Outbound egress escape hatches — TEST STACK ONLY ──────────────────
+      # The seam (src/core/security/outbound_http.py) refuses non-https schemes
+      # and reserved/private addresses. EVERY outbound URL this server uses in
+      # this stack violates both at once: it calls back to the runner at
+      # http://tests:<port>/webhook (tests/e2e/_webhook_capture.py) and resolves
+      # format specs against http://creative-agent:8080 — plain http, on Docker
+      # network addresses that are private by definition. Without these two, the
+      # entire e2e/bdd_e2e surface fails at the seam rather than at its assertions.
+      #
+      # Deliberately NOT set in docker-compose.yml: that is the developer stack
+      # (CLAUDE.md: `docker compose up -d` -> localhost:8000) and is what gets
+      # copied into deployment templates. Opening the hatches there would disable
+      # egress policy for every developer and leak it into production configs.
+      #
+      # CONSTRAINT this places on refusal testing: with both hatches open, NO
+      # e2e or bdd_e2e scenario running in this stack can grade a refusal — the
+      # seam will accept exactly the URLs it is supposed to reject. Refusal
+      # grading stays in-process (integration + BDD), where set_flags() in
+      # tests/integration/test_outbound_http.py monkeypatches both variables to
+      # the literal "false" per case and is therefore immune to this ambient env.
+      ADCP_OUTBOUND_ALLOW_PRIVATE: "true"
+      ADCP_OUTBOUND_ALLOW_INSECURE: "true"
       # The SERVER must know about the pinned in-network creative agent: sync/
       # create flows resolve format specs server-side, and references carry the
       # PUBLIC canonical agent_url — without this, the registry's connection
@@ -192,6 +214,18 @@ services:
       PYTEST_XDIST_AUTO_NUM_WORKERS: "${PYTEST_XDIST_AUTO_NUM_WORKERS:-1}"
       ADCP_TESTING: "true"
       ADCP_AUTH_TEST_MODE: "true"
+      # ─── Outbound egress escape hatches — TEST STACK ONLY ──────────────────
+      # Same reason as the adcp-server entry above, for the calls the RUNNER
+      # makes itself: http://proxy:8000 (E2E_BASE_URL, the e2e_rest transport)
+      # and http://creative-agent:8080 (CREATIVE_AGENT_URL, the live-agent
+      # integration tests). Plain http on private Docker-network addresses —
+      # refused on both counts by src/core/security/outbound_http.py otherwise.
+      # tox only forwards these to pytest because they are listed in tox.ini
+      # pass_env. See the adcp-server entry for why docker-compose.yml is left
+      # alone, and for the constraint this places on refusal grading (it cannot
+      # happen in this stack; it stays in-process via the set_flags monkeypatch).
+      ADCP_OUTBOUND_ALLOW_PRIVATE: "true"
+      ADCP_OUTBOUND_ALLOW_INSECURE: "true"
       CREATE_SAMPLE_DATA: "true"
       DELIVERY_WEBHOOK_INTERVAL: "5"
       # The source is bind-mounted, so the host's in-tree __pycache__ comes with
