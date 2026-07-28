@@ -1466,6 +1466,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "production lax-coerces non-boolean strings to bool (no strict-bool "
                 "validation). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
+            # daily-breakdown CONTENT (salesagent-76vn): a SECOND, distinct gap at the same tag.
+            # media_buy_delivery.py:549 sets daily_breakdown=None ("not calculated in this
+            # implementation"), so include_package_daily_breakdown=true returns 200 with no
+            # breakdown at all. Only the =true rows are listed: salesagent-oz4j made the oracle
+            # derive its expectation from the dispatched request, so false/omitted now assert
+            # ABSENCE and genuinely pass. Before that fix the oracle read `daily`/`by_day` — field
+            # names that do not exist — behind `if daily is not None`, so every row passed.
+            (
+                "T-UC-004-partition-daily-breakdown",
+                {"explicit_true"},
+                "production returns no per-package daily_breakdown when the flag is set "
+                "(media_buy_delivery.py:549 daily_breakdown=None). See salesagent-76vn.",
+            ),
+            (
+                "T-UC-004-boundary-daily-breakdown",
+                {"true (explicit)"},
+                "production returns no per-package daily_breakdown when the flag is set "
+                "(media_buy_delivery.py:549 daily_breakdown=None). See salesagent-76vn.",
+            ),
             # account (salesagent-8n9): only the omitted/(field absent) rows
             # pass on every transport. The other rows fail transport-asym-
             # metrically — a2a/mcp/rest never parse/resolve AccountReference

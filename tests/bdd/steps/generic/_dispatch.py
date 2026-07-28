@@ -54,6 +54,12 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         if transport not in transport_map:
             raise RuntimeError(f"dispatch_request: unrecognized wire transport {transport!r}")
         transport = transport_map[transport]
+    # Record what this request actually carried, so oracles can derive their expectations from the
+    # dispatch instead of hardcoding them. Without this, a Then step wanting "what did the scenario
+    # ask for?" has nowhere to read it and reaches for a literal default — which makes the oracle a
+    # constant that passes with the behaviour absent (salesagent-1zy8, salesagent-oz4j).
+    ctx["dispatched_kwargs"] = {key: value for key, value in kwargs.items() if key != "identity"}
+
     try:
         result = env.call_via(transport, **kwargs)
         # Expose the normalized TransportResult so Then-steps can use the

@@ -2703,10 +2703,16 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         if requested_filter and deliveries:
             for d in deliveries:
                 actual_status = getattr(d, "status", None)
-                if actual_status:
-                    assert actual_status in requested_filter, (
-                        f"Status filter violation: got status '{actual_status}' but filter requested {requested_filter}"
-                    )
+                # Unconditional: `if actual_status:` let a delivery with no status slip the filter
+                # check entirely, so a response that stopped reporting status at all satisfied a
+                # status-filter scenario (salesagent-oz4j).
+                assert actual_status, (
+                    f"Status filter scenario: delivery {getattr(d, 'media_buy_id', '?')!r} carries no "
+                    f"status, so the filter {requested_filter} cannot be shown to have been honored"
+                )
+                assert actual_status in requested_filter, (
+                    f"Status filter violation: got status '{actual_status}' but filter requested {requested_filter}"
+                )
 
     elif field == "resolution":
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2740,16 +2746,47 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
     elif field in ("daily_breakdown", "daily breakdown", "include_package_daily_breakdown"):
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         assert deliveries, f"Valid {field}: expected non-empty deliveries"
-        # Verify daily breakdown data is structurally present
+        # Branch on what the scenario actually REQUESTED — this is scenario shape, not the
+        # salesagent-oz4j disease. What that ticket flagged was `if daily is not None: assert
+        # isinstance(daily, list)`, which graded only the TYPE and let production dropping the
+        # breakdown entirely satisfy every valid row. It also read `daily`/`by_day`, field names
+        # that do not exist: the response field is `daily_breakdown`.
+        dispatched = _require(
+            ctx,
+            "dispatched_kwargs",
+            hint="dispatch_request records what the request carried; this oracle must not guess",
+        )
+        wants_breakdown = bool(dispatched.get("include_package_daily_breakdown"))
+
+        checked_packages = 0
         for d in deliveries:
             pkgs = getattr(d, "by_package", None) or []
+            assert pkgs, (
+                f"Valid {field}: delivery {getattr(d, 'media_buy_id', '?')!r} has no packages, so the "
+                f"per-package breakdown contract cannot be graded either way"
+            )
             for pkg in pkgs:
-                daily = getattr(pkg, "daily", None) or getattr(pkg, "by_day", None)
-                if daily is not None:
-                    assert isinstance(daily, list), (
-                        f"Valid {field}: package {getattr(pkg, 'package_id', '?')!r} "
-                        f"daily field is not a list: {type(daily).__name__}"
+                breakdown = getattr(pkg, "daily_breakdown", None)
+                if wants_breakdown:
+                    assert breakdown is not None, (
+                        f"Valid {field}: package {getattr(pkg, 'package_id', '?')!r} carries no "
+                        f"daily_breakdown, but the request set include_package_daily_breakdown=true"
                     )
+                    assert isinstance(breakdown, list), (
+                        f"Valid {field}: package {getattr(pkg, 'package_id', '?')!r} daily_breakdown "
+                        f"is not a list: {type(breakdown).__name__}"
+                    )
+                    assert breakdown, (
+                        f"Valid {field}: package {getattr(pkg, 'package_id', '?')!r} daily_breakdown "
+                        f"is an empty list — an absent breakdown reported as present"
+                    )
+                else:
+                    assert breakdown is None, (
+                        f"Valid {field}: package {getattr(pkg, 'package_id', '?')!r} carries a "
+                        f"daily_breakdown the request did not ask for: {breakdown!r}"
+                    )
+                checked_packages += 1
+        assert checked_packages, f"Valid {field}: no package was examined, so nothing was graded"
 
     elif field == "account":
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
