@@ -1962,9 +1962,37 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #               "attribution_window.post_click.interval", with a suggestion.
             #   siblings  — passes on a2a/mcp/rest, and on e2e_rest via the BDD In-Network job
             #               on PR #1728; no entry in e2e_rest_known_failures.txt.
+            #
+            # Graduated: interval_negative (salesagent-06v8). Walked per
+            # .claude/rules/workflows/xpass-graduation.md, one row, evidence:
+            #   scenario  — Examples name the exact code and demand a suggestion
+            #               ("error \"VALIDATION_ERROR\" with suggestion") with the value
+            #               explicit (-1); the same Outline grades minimum:1 at 1 (valid rows
+            #               post_view_only/campaign_unit), 0 (interval_zero) and -1.
+            #   spec      — AdCP 3.1.1 core/duration.json `interval.minimum: 1`, so -1 is below
+            #               the minimum. VALIDATION_ERROR is canonical in BOTH the harness-pinned
+            #               enum (@04f59d2d5) and v3.1.1 (92 codes) with recovery=correctable in
+            #               each, so the row is not over-specified against the pin.
+            #   givens    — shared cross-transport harness only (MediaBuyFactory via
+            #               _ensure_media_buy_in_db, env.set_adapter_response); no per-transport
+            #               branching, so every transport runs the same scenario.
+            #   then      — _WIRE_ASSERTED_FIELDS -> _assert_error_outcome ->
+            #               TransportResult.assert_wire_error -> assert_envelope_shape on the
+            #               real wire envelope, with require_suggestion exercised.
+            #   production— rejected on all three transports before any adapter call: REST by
+            #               FastAPI on the typed GetMediaBuyDeliveryBody, remapped to
+            #               VALIDATION_ERROR by the attribution_window branch of
+            #               request_validation_error_handler (src/app.py); MCP by the FastMCP
+            #               TypeAdapter, normalized in RequestCompatMiddleware; A2A inside
+            #               adcp_validation_boundary around GetMediaBuyDeliveryRequest. Each
+            #               path yields recovery=correctable and a non-empty suggestion.
+            #   siblings  — a2a/mcp/rest are the only in-process params (interval_zero and
+            #               interval_negative collect as separate ids, so neither shadows the
+            #               other); e2e_rest via the BDD In-Network job on PR #1728, with no
+            #               entry in e2e_rest_known_failures.txt.
             (
                 "T-UC-004-partition-attribution",
-                {"interval_negative", "invalid_unit", "invalid_model"},
+                {"invalid_unit", "invalid_model"},
                 "attribution_window partition rows: retained on observed status pending per-row "
                 "graduation (#1545 removed the step-shadowing that was the original cause)",
             ),
