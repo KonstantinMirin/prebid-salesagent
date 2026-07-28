@@ -340,6 +340,10 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
         "url": _WEBHOOK_URL,
         "active": True,
     }
+    # Record the URL actually configured so `then_webhook_post` can assert against it
+    # rather than against a hardcoded literal (salesagent-1krl). Set here, at the single
+    # choke point all three "active reporting_webhook" Givens funnel through.
+    ctx["webhook_url"] = _WEBHOOK_URL
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
@@ -1518,12 +1522,24 @@ def then_period_end_today(ctx: dict) -> None:
 
 @then("the system should POST a delivery report to the configured webhook URL")
 def then_webhook_post(ctx: dict) -> None:
-    """Assert webhook POST was made to the configured URL."""
+    """Assert webhook POST was made to the configured URL.
+
+    The expected URL is the one the scenario actually configured. It used to default to
+    ``"https://example.com/webhook"``, a literal that nothing writes and that does not even
+    match the harness constant ``_WEBHOOK_URL`` — so the first run of this step would have
+    compared the real POST target against a URL appearing nowhere in the setup. The step is
+    masked today only because its scenario is xfailed on an unrelated production gap, which
+    made it a landmine for whoever implements webhook delivery. See salesagent-1krl.
+    """
     env = ctx["env"]
     assert env.mock["post"].called, "Expected webhook POST but none was made"
     call_args = env.mock["post"].call_args
     called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
-    configured_url = ctx.get("webhook_url", "https://example.com/webhook")
+    configured_url = _require(
+        ctx,
+        "webhook_url",
+        hint="the Given that configures the reporting_webhook must record the URL it configured",
+    )
     assert called_url == configured_url, (
         f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
     )
@@ -1789,9 +1805,22 @@ def then_single_probe(ctx: dict) -> None:
     """Assert exactly one probe delivery was dispatched in half-open state.
 
     The preceding step already verified the breaker transitioned to half_open.
-    This step verifies the behavioral claim: exactly one probe attempt was
-    made — the POST call count should have increased by exactly 1 since the
-    breaker opened, or the probe_count in ctx should be exactly 1.
+    This step verifies the behavioral claim: exactly one probe attempt was made.
+
+    A third branch used to sit between these two, counting ``mock_post.call_count`` minus
+    ``ctx.get("pre_open_call_count", 0)``. Nothing ever wrote ``pre_open_call_count``, so the
+    subtrahend was always 0 and the "delta during half-open" it claimed to compute was really
+    the TOTAL POST count for the whole scenario. It was also unreachable: neither
+    ``httpx_post`` nor ``webhook_post`` is a registered mock here, proven by injecting
+    ``assert False`` into that branch and still seeing all three transports pass (a control
+    mutation at the function entry did fail, so this was not a sync artifact). Removed as dead
+    code rather than repaired — fixing an oracle that cannot execute changes nothing.
+    See salesagent-1krl.
+
+    The remaining ``pytest.xfail`` below is an INLINE xfail in a step body: invisible to the
+    conftest xfail sweep and to the xpass audit, so it can never graduate on its own. That is
+    the salesagent-5bps disease, and relocating it — together with giving this harness a real
+    webhook POST mock so the probe count can be graded for real — is tracked there.
     """
     env = ctx["env"]
     probe_count = ctx.get("probe_count")
@@ -1799,23 +1828,12 @@ def then_single_probe(ctx: dict) -> None:
         # Probe count was explicitly recorded by the When step
         assert probe_count == 1, f"Expected exactly 1 probe delivery attempt, got {probe_count}"
     else:
-        # Check mock POST call count as evidence of dispatch
-        mock_post = env.mock.get("httpx_post") or env.mock.get("webhook_post")
-        if mock_post is not None:
-            # Count calls that happened during the half-open phase
-            pre_open_calls = ctx.get("pre_open_call_count", 0)
-            probe_dispatches = mock_post.call_count - pre_open_calls
-            assert probe_dispatches == 1, (
-                f"Expected exactly 1 probe dispatch in half-open state, "
-                f"got {probe_dispatches} (total={mock_post.call_count}, pre-open={pre_open_calls})"
-            )
-        else:
-            # No dispatch mock — verify the CB gate at least allowed the attempt
-            cb_can_attempt = ctx.get("cb_can_attempt")
-            assert cb_can_attempt is True, (
-                f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
-            )
-            pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
+        # No dispatch mock — verify the CB gate at least allowed the attempt
+        cb_can_attempt = ctx.get("cb_can_attempt")
+        assert cb_can_attempt is True, (
+            f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
+        )
+        pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
 
 
 @then("normal scheduled deliveries should resume")
