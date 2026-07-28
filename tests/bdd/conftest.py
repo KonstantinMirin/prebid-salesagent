@@ -1294,6 +1294,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
+            # NEWLY ROUTED (salesagent-oz4j, 2026-07-28) — only the explicit-true rows.
+            # These rows were passing vacuously: `_assert_valid_content` read
+            # `getattr(pkg, "daily") or getattr(pkg, "by_day")`, and NEITHER attribute exists on
+            # adcp.types.ByPackageItem (the field is `daily_breakdown`), so its `if daily is not
+            # None` guard was unconditionally false and the assertion was unreachable — proven by
+            # mutation (`assert False` in the guard body left all 18 rows green). The oracle now
+            # reads the real field and branches on the REQUESTED value, which exposes the true
+            # production gap below. The omitted/false rows are deliberately NOT listed: they
+            # correctly expect no daily data and pass for the right reason.
+            (
+                "T-UC-004-partition-daily-breakdown",
+                {"explicit_true"},
+                "include_package_daily_breakdown=true is accepted but never honoured: "
+                "media_buy_delivery.py:549 hardcodes daily_breakdown=None ('not calculated in this "
+                "implementation'), so no package carries a daily breakdown. Production gap.",
+            ),
+            (
+                "T-UC-004-boundary-daily-breakdown",
+                {"true (explicit)"},
+                "include_package_daily_breakdown=true is accepted but never honoured: "
+                "media_buy_delivery.py:549 hardcodes daily_breakdown=None ('not calculated in this "
+                "implementation'), so no package carries a daily breakdown. Production gap.",
+            ),
             # GRADUATED (removed): T-UC-004-partition-attribution — ALL FIVE invalid rows.
             # The attribution_window reference asserts the wire envelope (error
             # "VALIDATION_ERROR" with suggestion — the Examples were regenerated off the

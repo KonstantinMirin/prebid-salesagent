@@ -2751,11 +2751,13 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         requested_filter = request_params.get("status_filter")
         if requested_filter and deliveries:
             for d in deliveries:
+                # No `if actual_status:` guard — a delivery that comes back with no status is
+                # itself a filter violation (the filter cannot have been applied to it), and
+                # guarding on it let exactly that case pass silently. See salesagent-oz4j.
                 actual_status = getattr(d, "status", None)
-                if actual_status:
-                    assert actual_status in requested_filter, (
-                        f"Status filter violation: got status '{actual_status}' but filter requested {requested_filter}"
-                    )
+                assert actual_status in requested_filter, (
+                    f"Status filter violation: got status {actual_status!r} but filter requested {requested_filter}"
+                )
 
     elif field == "resolution":
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2785,15 +2787,38 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
     elif field in ("daily_breakdown", "daily breakdown", "include_package_daily_breakdown"):
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         assert deliveries, f"Valid {field}: expected non-empty deliveries"
-        # Verify daily breakdown data is structurally present
+        # Branch on what the scenario REQUESTED, not on what came back. The Outline has three
+        # valid rows — omitted / false / true — and omitted and false correctly expect NO daily
+        # data, so a blanket presence assertion would fail rows that are behaving correctly.
+        #
+        # This previously read `getattr(pkg, "daily", None) or getattr(pkg, "by_day", None)` and
+        # asserted only under `if daily is not None`. Neither attribute exists on
+        # adcp.types.ByPackageItem (the field is `daily_breakdown`), so the guard was
+        # unconditionally false and the assertion was dead by construction — no production change
+        # of any kind could reach it. Proven by mutation: `assert False` inside that guard left
+        # all 18 daily-breakdown rows passing. See salesagent-oz4j (twin of salesagent-ymvg).
+        dispatched = _require(
+            ctx,
+            "dispatched_kwargs",
+            hint="the include_package_daily_breakdown When step must dispatch before this assertion",
+        )
+        requested = dispatched.get("include_package_daily_breakdown")
         for d in deliveries:
-            pkgs = getattr(d, "by_package", None) or []
-            for pkg in pkgs:
-                daily = getattr(pkg, "daily", None) or getattr(pkg, "by_day", None)
-                if daily is not None:
+            for pkg in getattr(d, "by_package", None) or []:
+                pkg_id = getattr(pkg, "package_id", "?")
+                daily = getattr(pkg, "daily_breakdown", None)
+                if requested is True:
+                    assert daily, (
+                        f"Valid {field}: include_package_daily_breakdown was requested true, but "
+                        f"package {pkg_id!r} carries no daily_breakdown ({daily!r})"
+                    )
                     assert isinstance(daily, list), (
-                        f"Valid {field}: package {getattr(pkg, 'package_id', '?')!r} "
-                        f"daily field is not a list: {type(daily).__name__}"
+                        f"Valid {field}: package {pkg_id!r} daily_breakdown is not a list: {type(daily).__name__}"
+                    )
+                else:
+                    assert not daily, (
+                        f"Valid {field}: include_package_daily_breakdown was {requested!r}, so "
+                        f"package {pkg_id!r} must carry no daily_breakdown, got {daily!r}"
                     )
 
     elif field == "account":
