@@ -616,16 +616,18 @@ def manage_webhooks(tenant_id, principal_id):
 def register_webhook(tenant_id, principal_id):
     """Register a new webhook for a principal."""
     try:
-        from src.core.webhook_validator import WebhookURLValidator
+        from src.admin.utils.url_policy import redirect_if_url_blocked
 
         url = request.form.get("url")
         auth_type = request.form.get("auth_type", "none")
 
-        # Validate URL for SSRF protection
-        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
-        if not is_valid:
-            flash(f"Invalid webhook URL: {error_msg}", "error")
-            return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        # Stored now, posted to later — graded by ingest-time egress policy.
+        if blocked := redirect_if_url_blocked(
+            url,
+            "Webhook URL",
+            url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id),
+        ):
+            return blocked
 
         # Build auth config based on type
         auth_config = {}

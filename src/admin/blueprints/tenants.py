@@ -21,6 +21,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.domain_config import get_sales_agent_domain
 from src.core.validation import sanitize_form_data, validate_form_data
 from src.services.setup_checklist_service import SetupChecklistService
@@ -473,28 +474,28 @@ def update(tenant_id):
 def update_slack(tenant_id):
     """Update tenant Slack settings."""
     try:
-        from src.core.webhook_validator import WebhookURLValidator
+        from src.admin.utils.url_policy import redirect_if_url_blocked
 
         # Sanitize form data
         form_data = sanitize_form_data(request.form.to_dict())
         webhook_url = form_data.get("slack_webhook_url", "").strip()
 
-        # Validate webhook URL for SSRF protection
-        if webhook_url:
-            is_valid, error_msg = WebhookURLValidator.validate_webhook_url(webhook_url)
-            if not is_valid:
-                flash(f"Invalid Slack webhook URL: {error_msg}", "error")
-                return redirect(url_for("tenants.settings", tenant_id=tenant_id, section="slack"))
+        # Stored now, posted to later — graded by ingest-time egress policy.
+        # An empty value clears the webhook and has nothing to grade.
+        if webhook_url and (
+            blocked := redirect_if_url_blocked(
+                webhook_url,
+                "Slack webhook URL",
+                url_for("tenants.settings", tenant_id=tenant_id, section="slack"),
+            )
+        ):
+            return blocked
 
         with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
+            repository = TenantConfigRepository(db_session, tenant_id)
+            if not repository.update_tenant(slack_webhook_url=webhook_url or None):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
-
-            # Update Slack webhook
-            tenant.slack_webhook_url = webhook_url if webhook_url else None
-            tenant.updated_at = datetime.now(UTC)
 
             db_session.commit()
             flash("Slack settings updated successfully", "success")

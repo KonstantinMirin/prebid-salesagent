@@ -20,6 +20,7 @@ from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
+from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.services.ai.config import uses_legacy_gemini_api_key
 
 logger = logging.getLogger(__name__)
@@ -485,34 +486,32 @@ def update_adapter(tenant_id):
 def update_slack(tenant_id):
     """Update Slack integration settings."""
     try:
-        from src.core.webhook_validator import WebhookURLValidator
+        from src.admin.utils.url_policy import redirect_if_url_blocked
 
         webhook_url = request.form.get("slack_webhook_url", "").strip()
         audit_webhook_url = request.form.get("slack_audit_webhook_url", "").strip()
 
-        # Validate webhook URLs for SSRF protection
-        if webhook_url:
-            is_valid, error_msg = WebhookURLValidator.validate_webhook_url(webhook_url)
-            if not is_valid:
-                flash(f"Invalid Slack webhook URL: {error_msg}", "error")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+        # Both are stored now and posted to later, so both are graded by
+        # ingest-time egress policy. An empty value clears the webhook.
+        integrations_page = url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations")
+        if webhook_url and (blocked := redirect_if_url_blocked(webhook_url, "Slack webhook URL", integrations_page)):
+            return blocked
 
-        if audit_webhook_url:
-            is_valid, error_msg = WebhookURLValidator.validate_webhook_url(audit_webhook_url)
-            if not is_valid:
-                flash(f"Invalid Slack audit webhook URL: {error_msg}", "error")
-                return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
+        if audit_webhook_url and (
+            blocked := redirect_if_url_blocked(audit_webhook_url, "Slack audit webhook URL", integrations_page)
+        ):
+            return blocked
 
         with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
+            repository = TenantConfigRepository(db_session, tenant_id)
+            updated = repository.update_tenant(
+                slack_webhook_url=webhook_url or None,
+                slack_audit_webhook_url=audit_webhook_url or None,
+            )
+            if not updated:
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            # Update Slack webhooks
-            tenant.slack_webhook_url = webhook_url if webhook_url else None
-            tenant.slack_audit_webhook_url = audit_webhook_url if audit_webhook_url else None
-            tenant.updated_at = datetime.now(UTC)
             db_session.commit()
 
             if webhook_url or audit_webhook_url:

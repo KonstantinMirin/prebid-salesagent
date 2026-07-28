@@ -1,14 +1,18 @@
 """Unit tests for SSRF URL validation (F-04).
 
 Covers:
-- check_url_ssrf: core validator used across signals agents, webhooks, property lists
+- check_url_ssrf: core validator, still used by webhook delivery and property lists
 - validate_agent_url: media_buy_create wrapper
 - BLOCKED_HOSTNAMES: Docker-internal and cloud metadata hostname coverage
-- Flask endpoint-level wiring for signals agents add/edit handlers
+
+Admin ingest wiring is NOT covered here any more. The admin handlers no longer
+call ``check_url_ssrf``; they apply egress policy through
+``src.core.security.outbound_http.validate_url``, and the endpoint-level wiring
+that used to live in this file is graded against a real database and the real
+routes in ``tests/integration/test_admin_ingest_url_policy.py``.
 """
 
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from src.core.security.url_validator import BLOCKED_HOSTNAMES, check_url_ssrf
 
@@ -134,8 +138,9 @@ class TestValidateAgentUrl:
 
     This function is called during approval processing against URLs already stored
     in the database, not against live user input. It validates structure, not
-    network safety. SSRF protection for user-supplied URLs is enforced at the
-    admin ingestion boundary in signals_agents.py via check_url_ssrf().
+    network safety. Egress policy for user-supplied URLs is applied at the admin
+    ingestion boundary via src.admin.utils.url_policy, which delegates to
+    src.core.security.outbound_http.validate_url.
     """
 
     def test_none_rejected(self):
@@ -173,122 +178,3 @@ class TestValidateAgentUrl:
         from src.core.tools.media_buy_create import validate_agent_url
 
         assert validate_agent_url("https://not-deployed-yet.internal.example.com/agent") is True
-
-
-def _make_signals_agent_client():
-    """Create a Flask test client authenticated as super admin for signals agent endpoints."""
-    from src.admin.app import create_app
-
-    app = create_app({"TESTING": True, "SECRET_KEY": "test-secret", "WTF_CSRF_ENABLED": False})
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["test_user"] = "test_super_admin@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["authenticated"] = True
-    return client
-
-
-def _mock_db_for_signals_add(mock_db, tenant_id="default"):
-    """Wire mock_db so the add handler can query Tenant."""
-    mock_tenant = MagicMock()
-    mock_tenant.tenant_id = tenant_id
-    mock_session = MagicMock()
-    mock_session.scalars.return_value.first.return_value = mock_tenant
-    mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-    mock_db.return_value.__exit__ = MagicMock(return_value=False)
-    return mock_session
-
-
-class TestSignalsAgentEndpointSSRFWiring:
-    """Flask endpoint-level tests confirming check_url_ssrf() is wired into handlers.
-
-    These tests exercise the actual POST /tenant/<id>/signals-agents/add and
-    POST /tenant/<id>/signals-agents/<id>/edit endpoints so that removing or
-    bypassing the check_url_ssrf() call in the handler would cause a real failure.
-    """
-
-    def test_add_endpoint_rejects_docker_internal_url(self):
-        """POST /signals-agents/add with host.docker.internal URL must return a redirect with error flash."""
-        client = _make_signals_agent_client()
-
-        with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
-            _mock_db_for_signals_add(mock_db)
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-                response = client.post(
-                    "/tenant/default/signals-agents/add",
-                    data={
-                        "agent_url": "http://host.docker.internal:9999",
-                        "name": "SSRF Test Agent",
-                        "enabled": "on",
-                        "timeout": "30",
-                    },
-                    follow_redirects=False,
-                )
-
-        # Must redirect back to add form (not to list — which would mean success)
-        assert response.status_code == 302
-        assert "add" in response.headers.get("Location", "")
-
-    def test_add_endpoint_accepts_safe_public_url(self):
-        """POST /signals-agents/add with a safe public URL must proceed past the SSRF check."""
-        client = _make_signals_agent_client()
-
-        with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
-            mock_session = _mock_db_for_signals_add(mock_db)
-            # Make session.add() and commit() no-ops
-            mock_session.add = MagicMock()
-            mock_session.commit = MagicMock()
-            with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
-                with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-                    response = client.post(
-                        "/tenant/default/signals-agents/add",
-                        data={
-                            "agent_url": "https://signals.example.com/agent",
-                            "name": "Safe Agent",
-                            "enabled": "on",
-                            "timeout": "30",
-                        },
-                        follow_redirects=False,
-                    )
-
-        # Must redirect to list (success) — not back to add form
-        assert response.status_code == 302
-        assert "add" not in response.headers.get("Location", "")
-
-    def test_edit_endpoint_rejects_unsafe_url_on_update(self):
-        """POST /signals-agents/<id>/edit updating URL to host.docker.internal must be rejected.
-
-        This is the exact scenario the reviewer asked about: editing from a safe URL
-        to an unsafe one. The handler assigns agent.agent_url from the form value first,
-        then validates it — so it is the new submitted value being checked.
-        """
-        client = _make_signals_agent_client()
-
-        existing_agent = MagicMock()
-        existing_agent.id = 1
-        existing_agent.agent_url = "https://safe.example.com/agent"
-        existing_agent.auth_credentials = None
-
-        mock_session = MagicMock()
-        mock_session.scalars.return_value.first.return_value = existing_agent
-
-        with patch("src.admin.blueprints.signals_agents.get_db_session") as mock_db:
-            mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-            mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
-                response = client.post(
-                    "/tenant/default/signals-agents/1/edit",
-                    data={
-                        "agent_url": "http://host.docker.internal:9999",
-                        "name": "Existing Agent",
-                        "enabled": "on",
-                        "timeout": "30",
-                    },
-                    follow_redirects=False,
-                )
-
-        # Must redirect back to edit form (not to list — which would mean success)
-        assert response.status_code == 302
-        assert "edit" in response.headers.get("Location", "")
-        # Confirm the agent URL was NOT committed as the unsafe value
-        mock_session.commit.assert_not_called()

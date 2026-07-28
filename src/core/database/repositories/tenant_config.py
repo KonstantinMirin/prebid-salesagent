@@ -1,7 +1,8 @@
-"""Tenant config repository -- tenant-scoped read access for configuration models.
+"""Tenant config repository -- tenant-scoped access to configuration models.
 
 Provides access to PublisherPartner and AdapterConfig for _impl functions
-that need tenant-level configuration data without calling get_db_session().
+that need tenant-level configuration data without calling get_db_session(),
+plus the one write path admin settings handlers need (``update_tenant``).
 
 Core invariant: every query includes tenant_id in the WHERE clause. The tenant_id
 is set at construction time and injected into all queries automatically.
@@ -11,6 +12,9 @@ beads: salesagent-9y0
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -18,7 +22,7 @@ from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
 
 
 class TenantConfigRepository:
-    """Tenant-scoped read access for configuration models.
+    """Tenant-scoped access for configuration models.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
     tenant isolation.
@@ -40,6 +44,26 @@ class TenantConfigRepository:
         """Get the tenant record."""
         stmt = select(Tenant).filter_by(tenant_id=self._tenant_id)
         return self._session.scalars(stmt).first()
+
+    def update_tenant(self, **columns: Any) -> bool:
+        """Apply *columns* to the tenant row and stamp ``updated_at``.
+
+        Returns ``False`` when the tenant does not exist, so a caller can
+        render its own not-found response rather than have one imposed here.
+        The caller owns the transaction and commits.
+
+        This exists because settings handlers were each hand-rolling
+        load-then-mutate-then-stamp against a raw ``select(Tenant)``; two of
+        them had drifted into literally identical bodies. One method means the
+        ``updated_at`` stamp cannot be the thing a third copy forgets.
+        """
+        tenant = self.get_tenant()
+        if tenant is None:
+            return False
+        for column, value in columns.items():
+            setattr(tenant, column, value)
+        tenant.updated_at = datetime.now(UTC)
+        return True
 
     def list_publisher_partners(self) -> list[PublisherPartner]:
         """Get all publisher partners for the tenant."""
