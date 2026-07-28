@@ -1941,9 +1941,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # transport. The symptom was this step-shadowing, which made the field never
             # arrive at all.) The rows below are retained on their observed status only,
             # pending per-row graduation.
+            #
+            # Graduated: interval_zero (#1462 follow-up). Walked per
+            # .claude/rules/workflows/xpass-graduation.md, one row, evidence:
+            #   scenario  — Examples name the exact code and demand a suggestion
+            #               ("error \"VALIDATION_ERROR\" with suggestion"), value explicit.
+            #   spec      — AdCP 3.1.1 core/duration.json `interval.minimum: 1`, so 0 is below
+            #               the minimum. VALIDATION_ERROR/recovery=correctable is identical in
+            #               the harness-pinned enum (64 codes) and v3.1.1 (92), so the row is
+            #               not over-specified against the pin.
+            #   givens    — shared cross-transport harness only (MediaBuyFactory via
+            #               _ensure_media_buy_in_db, env.set_adapter_response); no per-transport
+            #               branching, so every transport runs the same scenario.
+            #   then      — _WIRE_ASSERTED_FIELDS -> _assert_error_outcome ->
+            #               TransportResult.assert_wire_error -> assert_envelope_shape on the
+            #               real wire envelope, with require_suggestion exercised.
+            #   production— pydantic minimum:1 inside adcp_validation_boundary
+            #               (src/core/validation_helpers.py:28) raises AdCPValidationError
+            #               VALIDATION_ERROR, recovery=correctable, field
+            #               "attribution_window.post_click.interval", with a suggestion.
+            #   siblings  — passes on a2a/mcp/rest, and on e2e_rest via the BDD In-Network job
+            #               on PR #1728; no entry in e2e_rest_known_failures.txt.
             (
                 "T-UC-004-partition-attribution",
-                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model"},
+                {"interval_negative", "invalid_unit", "invalid_model"},
                 "attribution_window partition rows: retained on observed status pending per-row "
                 "graduation (#1545 removed the step-shadowing that was the original cause)",
             ),
