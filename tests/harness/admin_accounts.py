@@ -232,8 +232,11 @@ class AdminAccountEnv:
         return self._get(self._url("create"))
 
     def post_create(self, form_data: dict[str, str]) -> _AdminResponse:
-        """POST the create account form."""
-        return self._post_form(self._url("create"), form_data)
+        """POST the create account form, recording any row it created for cleanup."""
+        before = self._account_ids_in_tenant()
+        response = self._post_form(self._url("create"), form_data)
+        self._created_account_ids.extend(self._account_ids_in_tenant() - before)
+        return response
 
     def get_detail_page(self, account_id: str) -> _AdminResponse:
         """GET the account detail page."""
@@ -314,6 +317,24 @@ class AdminAccountEnv:
                 stmt = stmt.where(Account.account_id == account_id)
             return session.scalars(stmt).first()
 
+    def accounts_on_natural_key(self, *, domain: str, operator: str) -> list[Account]:
+        """Accounts a natural key resolves to, through the production query.
+
+        Uses ``AccountRepository.list_by_natural_key`` — the same call
+        ``_resolve_by_natural_key`` makes for ambiguity detection — so a scenario
+        asserting on the key grades what a buyer's ``sync_accounts`` entry would
+        actually see. ``limit`` is above production's 2 so a failure message can
+        report how many rows really collide.
+        """
+        from src.core.database.repositories.account import AccountRepository
+
+        with get_db_session() as session:
+            repo = AccountRepository(session, self._tenant_id)
+            accounts = repo.list_by_natural_key(operator=operator, brand_domain=domain, limit=5)
+            for account in accounts:
+                session.expunge(account)
+            return accounts
+
     def get_account_id_by_name(self, name: str) -> str | None:
         """Get account_id by name."""
         account = self.get_account_from_db(name=name)
@@ -343,7 +364,23 @@ class AdminAccountEnv:
                 session.commit()
 
     def _cleanup_accounts(self) -> None:
-        """Remove test accounts created during this scenario."""
+        """Remove the accounts THIS env created, by id.
+
+        Deliberately id-scoped rather than "everything in the tenant". A
+        tenant-wide DELETE deadlocks: the integration tests pair this env with
+        ``AccountSyncEnv``, whose session still holds an open transaction on
+        those rows when this one exits first, so the DELETE blocks on its locks
+        and the suite hangs rather than fails. Ids also keep this env from
+        deleting rows another env owns.
+
+        ``_created_account_ids`` covers both ways a row appears: seeded through
+        ``create_account`` and created by POSTing the real admin form (recorded
+        in ``post_create``). Form-created rows used to survive the scenario,
+        which was harmless while a natural key could hold any number of accounts
+        — since salesagent-0njj a leaked row OCCUPIES its key, and the next
+        scenario creating the same brand+operator would be refused by a
+        collision it did not cause.
+        """
         if not self._created_account_ids:
             return
         with get_db_session() as session:
@@ -355,3 +392,15 @@ class AdminAccountEnv:
             )
             session.commit()
         self._created_account_ids.clear()
+
+    def _account_ids_in_tenant(self) -> set[str]:
+        """Committed account ids for this tenant.
+
+        A read, so it never blocks on another env's uncommitted writes — and by
+        the same token it does not see them, which is what keeps ``post_create``
+        from claiming rows this env did not create.
+        """
+        from sqlalchemy import select
+
+        with get_db_session() as session:
+            return set(session.scalars(select(Account.account_id).where(Account.tenant_id == self._tenant_id)).all())

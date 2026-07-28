@@ -902,6 +902,42 @@ class Account(Base):
         Index("idx_accounts_tenant", "tenant_id"),
         Index("idx_accounts_status", "status"),
         Index("idx_accounts_operator", "operator"),
+        # The natural key is IDENTITY, not a search convenience: every resolver
+        # reads this tuple (get_by_natural_key resolves a buyer's sync_accounts
+        # entry, list_by_natural_key detects ambiguity). salesagent-8sfr made the
+        # components immutable so an account cannot be re-keyed; without this
+        # index a second CREATE could still land on an occupied key, and then
+        # get_by_natural_key().first() answers non-deterministically while
+        # list_by_natural_key reports the key unresolvable. The repository's
+        # collision check is the good error message; this index is the invariant,
+        # and the only thing that closes the check-then-insert race.
+        #
+        # Two different NULL mechanics, each doing its own job:
+        # - COALESCE(sandbox, false) because NULL and false are the SAME key to
+        #   get_by_natural_key ("sandbox IS NULL OR sandbox = false"); NULLS NOT
+        #   DISTINCT would not merge them, since it equates NULLs to each other,
+        #   never to a non-NULL value.
+        # - NULLS NOT DISTINCT so a NULL `operator` or a NULL brand_id still
+        #   enforces uniqueness on the rest of the tuple, matching the sibling
+        #   idx_media_buys_idempotency_key / idx_idempotency_attempts_lookup.
+        #
+        # PARTIAL on brand.domain for the same reason that sibling is partial on
+        # idempotency_key: an account with no brand domain has no natural key at
+        # all. The admin form permits one (brand is None when the field is blank)
+        # and no resolver can ever reach it — every lookup supplies a domain — so
+        # constraining keyless rows would forbid a legitimate shape while
+        # preventing no ambiguity.
+        Index(
+            "uq_accounts_natural_key",
+            "tenant_id",
+            "operator",
+            text("(brand ->> 'domain')"),
+            text("(brand ->> 'brand_id')"),
+            text("COALESCE(sandbox, false)"),
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("(brand ->> 'domain') IS NOT NULL"),
+        ),
     )
 
 

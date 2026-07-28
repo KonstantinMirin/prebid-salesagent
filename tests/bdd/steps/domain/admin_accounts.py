@@ -89,6 +89,14 @@ def given_tenant_has_account(ctx: dict, name: str, status: str) -> None:
     ctx[f"account_id:{name}"] = account_id
 
 
+@given(parsers.parse('the tenant has an account "{name}" with brand domain "{domain}" and operator "{operator}"'))
+def given_tenant_has_keyed_account(ctx: dict, name: str, domain: str, operator: str) -> None:
+    """Seed one account holding a specific natural key (brand domain + operator)."""
+    env = _env(ctx)
+    account_id = env.create_account(name=name, status="active", brand_domain=domain, operator=operator)
+    ctx[f"account_id:{name}"] = account_id
+
+
 @given("the admin user is not authenticated")
 def given_admin_not_authenticated(ctx: dict) -> None:
     """Clear any existing authentication."""
@@ -323,6 +331,36 @@ def then_db_no_account_with_domain(ctx: dict, domain: str) -> None:
         for acct in accounts:
             if acct.brand and acct.brand.domain == domain:
                 raise AssertionError(f"Found account with brand domain '{domain}' — should not exist")
+
+
+@then(parsers.parse('exactly {count:d} account matches brand domain "{domain}" and operator "{operator}"'))
+def then_natural_key_holds_n_accounts(ctx: dict, count: int, domain: str, operator: str) -> None:
+    """Assert how many accounts the natural key resolves to.
+
+    Counted through ``AccountRepository`` — the same query production uses to
+    detect ambiguity — so the assertion grades what a buyer's ``sync_accounts``
+    entry would see, not a hand-rolled equivalent that could drift from it.
+    """
+    env = _env(ctx)
+    matches = env.accounts_on_natural_key(domain=domain, operator=operator)
+    assert len(matches) == count, (
+        f"expected {count} account(s) on brand domain {domain!r} c/o {operator!r}, found "
+        f"{len(matches)}: {[(a.account_id, a.name) for a in matches]}"
+    )
+
+
+@then(parsers.parse('the account matching brand domain "{domain}" and operator "{operator}" is named "{name}"'))
+def then_natural_key_account_is_named(ctx: dict, domain: str, operator: str, name: str) -> None:
+    """Assert WHICH account survived on the key, not merely that one did.
+
+    A refusal that dropped the original and kept the new row would leave exactly
+    one account and pass the count assertion alone.
+    """
+    env = _env(ctx)
+    matches = env.accounts_on_natural_key(domain=domain, operator=operator)
+    assert [a.name for a in matches] == [name], (
+        f"expected the key to still name {name!r}, got {[a.name for a in matches]}"
+    )
 
 
 @then(parsers.parse('the account "{name}" has brand domain "{domain}"'))

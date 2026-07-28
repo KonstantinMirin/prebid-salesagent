@@ -8,10 +8,29 @@ beads: salesagent-m44
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from adcp.types import BrandReference
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Account, AgentAccountAccess
+
+
+def _brand_key_parts(brand: BrandReference | dict | None) -> tuple[str | None, str | None]:
+    """Read the (domain, brand_id) half of the natural key out of ``Account.brand``.
+
+    Both shapes are real and neither is a fallback: ``create()`` receives a
+    freshly built row, where both callers assign a plain dict, while a row loaded
+    from the database carries a ``BrandReference``. The model branch reads
+    ``brand_id.root`` — ``BrandId`` is a RootModel whose ``str()`` is
+    ``"root='x'"``, and stringifying it without ``.root`` is exactly the
+    corruption filed as salesagent-myhs.
+    """
+    if brand is None:
+        return None, None
+    if isinstance(brand, dict):
+        raw_id = brand.get("brand_id")
+        return brand.get("domain"), None if raw_id is None else str(raw_id)
+    return brand.domain, None if brand.brand_id is None else str(brand.brand_id.root)
 
 
 class AccountRepository:
@@ -159,8 +178,6 @@ class AccountRepository:
         tenant-wide count to an agent who can access fewer is an info leak
         (#1417).
         """
-        from sqlalchemy import func
-
         stmt = (
             select(func.count())
             .select_from(Account)
@@ -225,16 +242,74 @@ class AccountRepository:
     def create(self, account: Account) -> Account:
         """Add a new account to the session.
 
-        Raises ValueError if the account's tenant_id doesn't match.
+        Raises ValueError if the account's tenant_id doesn't match, or if its
+        natural key is already occupied (salesagent-0njj).
         """
         if account.tenant_id != self._tenant_id:
             raise ValueError(
                 f"Tenant mismatch: repository is scoped to '{self._tenant_id}' "
                 f"but account has tenant_id='{account.tenant_id}'"
             )
+        self._require_natural_key_free(account)
         self._session.add(account)
         self._session.flush()
         return account
+
+    def _require_natural_key_free(self, account: Account) -> None:
+        """Refuse a create whose natural key already resolves to an account.
+
+        The other half of salesagent-8sfr. That bug closed the UPDATE path by
+        making the key components immutable; a second CREATE reached the same
+        buyer-visible harm from the other side. Once two rows share a key,
+        ``get_by_natural_key().first()`` answers non-deterministically and
+        ``list_by_natural_key`` reports the key unresolvable — and the buyer
+        cannot repair either, because the natural key is the only handle their
+        ``sync_accounts`` entry has and they do not own the extra row.
+
+        Here rather than in the admin form for the same reason ``_IMMUTABLE_FIELDS``
+        is here: there are two create callers (the admin blueprint and
+        ``sync_accounts``), and a guard living in one form guards one form. The
+        ``uq_accounts_natural_key`` index is the actual invariant — this check
+        exists so the common case gets a usable message instead of an
+        IntegrityError, and cannot replace the index (two concurrent creates can
+        both pass it).
+
+        Matches the index's key semantics exactly, NOT ``get_by_natural_key``'s
+        caller-facing ones: a lookup that omits ``brand_id`` deliberately matches
+        any brand_id, which would make this refuse two accounts that differ only
+        in brand_id — legitimately distinct accounts under the AdCP key
+        (brand.domain + brand.brand_id + operator + sandbox). A check that
+        disagreed with its own index would refuse rows the database accepts.
+        """
+        brand_domain, brand_id = _brand_key_parts(account.brand)
+
+        if brand_domain is None:
+            # No brand domain, no natural key: nothing resolves such a row (every
+            # lookup supplies a domain), so there is no ambiguity to prevent.
+            # Matches the partial `uq_accounts_natural_key` index — a check
+            # stricter than its own index would refuse rows the DB accepts.
+            return
+
+        existing = self._session.scalars(
+            select(Account).where(
+                Account.tenant_id == self._tenant_id,
+                Account.operator.is_not_distinct_from(account.operator),
+                Account.brand["domain"].as_string().is_not_distinct_from(brand_domain),
+                Account.brand["brand_id"].as_string().is_not_distinct_from(brand_id),
+                # NULL and false are ONE key to every resolver, so they must be
+                # one key here too — mirrors COALESCE(sandbox, false) in the index.
+                func.coalesce(Account.sandbox, False) == bool(account.sandbox),
+            )
+        ).first()
+
+        if existing is not None:
+            raise ValueError(
+                f"Natural key already in use: account '{existing.account_id}' already exists for "
+                f"operator={account.operator!r}, brand.domain={brand_domain!r}, "
+                f"brand.brand_id={brand_id!r}, sandbox={bool(account.sandbox)!r}. "
+                "Edit that account instead — a second account on one natural key makes the "
+                "buyer's sync_accounts entry unresolvable, and they cannot repair it."
+            )
 
     def update_status(self, account_id: str, status: str) -> Account | None:
         """Update an account's status. Returns None if not found."""
