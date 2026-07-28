@@ -20,7 +20,11 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
-from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
+from tests.bdd.steps.generic._account_resolution import (
+    ensure_tenant_principal,
+    seed_account_with_access,
+    seed_natural_key_matches,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.creative_asset import (
     assert_assets,
@@ -206,18 +210,17 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     access_denied_domains = {"other-agent.com"}
 
     if brand_domain == "multi.com":
-        # Ambiguous: create 3 accounts with same natural key, all accessible to the
-        # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
-        # resolution is access-scoped (#1417).
-        for i in range(3):
-            seed_account_with_access(
-                tenant,
-                principal,
-                account_id=f"acc-multi-{i}",
-                status="active",
-                brand_domain=brand_domain,
-                operator=operator,
-            )
+        # Ambiguous: 3 accounts one brand+operator reference all resolve to, each
+        # accessible to the requesting agent so the ambiguity is genuine FOR THIS
+        # AGENT — natural-key resolution is access-scoped (#1417).
+        seed_natural_key_matches(
+            tenant,
+            count=3,
+            brand_domain=brand_domain,
+            operator=operator,
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-multi",
+        )
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
