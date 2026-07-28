@@ -1128,15 +1128,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
                 True,
             ),
-            # Invalid status filter: NOT a production gap — the generic
-            # 'with {request_params}' When step shadows the specific
-            # status_filter step and parses 'status_filter "X"' (no '=') to {},
-            # so the request dispatches with NO params and succeeds (ah98
-            # red-step inspection, 2026-07-06). GetMediaBuyDeliveryRequest DOES
-            # reject invalid values; the REST wire already returns 400.
-            # Suggestion parity for this path is pinned by
-            # tests/integration/test_request_validation_suggestion_parity.py.
-            "T-UC-004-filter-invalid": ("step shadowing: generic request_params step drops status_filter", True),
+            # Invalid status filter: NOT a production gap, and NOT step shadowing either —
+            # that cause died with #1545, which narrowed the generic 'with {request_params}'
+            # step to the `\w+=` form so it can no longer match `status_filter "X"`.
+            # Re-derived 2026-07-28 by running the scenario with --runxfail: production DOES
+            # reject the value and the boundary emits VALIDATION_ERROR with a suggestion; the
+            # scenario fails on CASE alone — its Gherkin asserts the code as lowercase
+            # "validation_error" while the wire (and the AdCP error-code enum) is UPPERCASE
+            # VALIDATION_ERROR, so then_error_code raises "Expected error code
+            # 'validation_error', got 'VALIDATION_ERROR'". The fix is an upstream
+            # scenario-casing reconciliation, not production work. Suggestion parity for this
+            # path is pinned by tests/integration/test_request_validation_suggestion_parity.py.
+            "T-UC-004-filter-invalid": (
+                "scenario asserts the error code in lowercase ('validation_error'); the wire "
+                "emits the canonical UPPERCASE VALIDATION_ERROR — generated-scenario casing "
+                "defect, pending upstream reconciliation",
+                True,
+            ),
             # Date range validation: production doesn't validate start>end
             "T-UC-004-daterange-invalid": ("date range validation (start>end) not implemented", True),
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
@@ -1178,11 +1186,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # T-UC-004-attr-omitted: resolved — vvx9 + ral2 fixed enum→str handling
             # T-UC-004-attr-campaign-valid: resolved — _impl now resolves campaign unit to days
             # T-UC-004-attr-campaign-invalid: GRADUATED (#1417). The standalone
-            # "Campaign unit with interval != 1 - rejected" scenario now asserts on the wire
-            # envelope (its When uses the non-shadowed 'for "mb-001" with attribution_window'
-            # regex step, so the window reaches production and INV-5 fires VALIDATION_ERROR
-            # with a suggestion on a2a and e2e_rest). The old transport-blind strict marker
-            # was stale — removed rather than re-scoped (BDD has no in-process/_impl variant).
+            # "Campaign unit with interval != 1 - rejected" scenario asserts on the wire
+            # envelope: the window reaches production and INV-5 fires VALIDATION_ERROR with a
+            # suggestion on a2a and e2e_rest. (Its When happened to predate the shadowing fix,
+            # but since #1545 narrowed the generic step to the `\w+=` form NO attribution step
+            # is shadowed on any transport — do not read this as a live distinction.) The old
+            # transport-blind strict marker was stale — removed rather than re-scoped (BDD has
+            # no in-process/_impl variant).
             # FIXME(salesagent-7ag5): _impl uses str(enum) instead of enum.value for sort_by metric
             # T-UC-004-dim-sortby-valid: resolved — sort_by now works in _impl
             # Graduated: T-UC-004-dim-sortby-fallback (impl, mcp, rest pass — only a2a still fails)
@@ -1266,13 +1276,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            # GRADUATED (removed): T-UC-004-partition-attribution interval_zero /
-            # interval_negative / invalid_unit / invalid_model — the attribution_window
-            # reference now asserts the wire envelope (error "INVALID_REQUEST" with
-            # suggestion), which a2a/mcp/rest emit, closing the old reconstructed-path
-            # C4 gap. campaign_interval_not_one is xfailed separately below — its window
-            # never reaches production due to generic-step shadowing (#1417),
-            # not the #1462 in-process drop.
+            # GRADUATED (removed): T-UC-004-partition-attribution — ALL FIVE invalid rows.
+            # The attribution_window reference asserts the wire envelope (error
+            # "VALIDATION_ERROR" with suggestion — the Examples were regenerated off the
+            # earlier INVALID_REQUEST mis-pin), which a2a/mcp/rest all emit, closing the old
+            # reconstructed-path C4 gap. campaign_interval_not_one graduated with the rest
+            # (#1545 / salesagent-x18x) and is NOT xfailed below; interval_zero, interval_negative,
+            # invalid_unit and invalid_model followed per-row (salesagent-v4hb / 06v8 / gz0n / sg1z).
+            # The old "window never reaches production" rationale is dead: #1545 narrowed the
+            # generic step to `\w+=`, and #1462's in-process drop never reproduced.
             (
                 "T-UC-004-boundary-reporting-dims",
                 {"geo with geo_level=metro but no system"},
@@ -1280,25 +1292,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             # GRADUATED (removed): T-UC-004-boundary-attribution "unit=campaign with
             # interval=2" — BR-RULE-092 INV-5 is now enforced by the _validate_attribution_window
-            # check in _get_media_buy_delivery_impl (returns INVALID_REQUEST on all
-            # transports), so the description-only C10 gap is closed.
-            # reporting-dims / attribution boundary invalid-rows: Pydantic DOES
-            # reject these (missing geo_level / limit>=1 / enum), but the
-            # error is not normalized to AdCPError(INVALID_REQUEST) at the
-            # transport boundary — a2a wraps ValidationError in a bare
-            # RuntimeError, rest returns a 422 detail dict — so the BDD
-            # outcome assertion (expects AdCPError/ValidationError) fails.
-            # Same C4 transport-boundary error-normalization gap. These rows
-            # were previously covered by the blanket _UC004_BOUNDARY_TAGS
-            # strict=False, which 18h.10 Phase-2 (salesagent-04zf et al.)
-            # emptied; restored here as PRECISE strict=True tied to the real
-            # gap (no vacuous blanket). Forces marker removal when the
-            # transport-boundary error translator lands.
-            # Transport-scoped: impl genuinely PASSES these (production raises
-            # a bare ValidationError the outcome assertion accepts as a real
-            # rejection). Only a2a (RuntimeError-wrap) / mcp / rest (422 detail)
-            # fail the AdCPError/ValidationError type check — so xfail only
-            # those three, never impl.
+            # check in _get_media_buy_delivery_impl (VALIDATION_ERROR on all transports; the
+            # earlier INVALID_REQUEST reading was the mis-pin), so the description-only C10 gap
+            # is closed.
+            #
+            # STALE-AND-MASKED — the two entries below (salesagent-5zlo). Their reason string
+            # describes a C4 transport-boundary gap ("not normalized to
+            # AdCPError(INVALID_REQUEST) ... a2a RuntimeError-wrap, rest 422 detail") that no
+            # longer exists: REST emits the two-layer envelope through
+            # request_validation_error_handler (src/app.py), a2a normalizes inside
+            # adcp_validation_boundary, and MCP through RequestCompatMiddleware.
+            # Worse, the rows never prove out: the redundant-transport optimization at the end
+            # of pytest_collection_modifyitems DESELECTS mcp/rest items that carry a strict
+            # xfail, so a strict xpass cannot be caught here. Re-run 2026-07-28 with
+            # BDD_ALL_TRANSPORTS=1: all six attribution-boundary rows and all six
+            # reporting-dims-boundary rows XPASS(strict). They are kept only because removing
+            # them is a graduation that needs a per-row protocol walk — tracked in
+            # salesagent-5zlo, which also carries the question of whether the deselection
+            # should refuse to drop strict xfails at all.
+            #
+            # History: these rows were previously covered by the blanket _UC004_BOUNDARY_TAGS
+            # strict=False, which 18h.10 Phase-2 (salesagent-04zf et al.) emptied; restored here
+            # as PRECISE strict=True (no vacuous blanket). impl is not listed because #1417
+            # dropped it from the BDD parametrization entirely.
             (
                 "T-UC-004-boundary-reporting-dims",
                 {
@@ -1311,10 +1327,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-limit negative",
                     "[rest-limit negative",
                 },
-                "Pydantic rejects (missing geo_level / limit>=1) but error not normalized to "
-                "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
-                "(a2a RuntimeError-wrap, rest 422 detail). impl passes. "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
+                "STALE (salesagent-5zlo): kept only pending a per-row graduation walk — these "
+                "mcp/rest rows XPASS(strict) under BDD_ALL_TRANSPORTS=1 and are deselected as "
+                "redundant transports in normal runs, so the marker never proves out",
             ),
             (
                 "T-UC-004-boundary-attribution",
@@ -1328,10 +1343,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-model=last_click (not in enum)",
                     "[rest-model=last_click (not in enum)",
                 },
-                "Pydantic rejects (interval>=1 / unit enum / model enum) but error not normalized to "
-                "AdCPError(INVALID_REQUEST) at the a2a/mcp/rest transport boundary "
-                "(a2a RuntimeError-wrap, rest 422 detail). impl passes. "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
+                "STALE (salesagent-5zlo): kept only pending a per-row graduation walk — these "
+                "mcp/rest rows XPASS(strict) under BDD_ALL_TRANSPORTS=1 (production emits "
+                "VALIDATION_ERROR on the wire) and are deselected as redundant transports in "
+                "normal runs, so the marker never proves out",
             ),
             # C11 retired (salesagent-18h.1): the "production ignores buyer
             # start_date" failure was an artefact of the greedy with-params
