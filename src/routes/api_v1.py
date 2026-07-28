@@ -88,11 +88,9 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
-    # AdCP 3.1.1 create-in-paused-state. Declared on the body but NOT forwarded to the
-    # create_media_buy_raw call below — and forwarding it would be a no-op anyway: the
-    # raw wrapper does thread paused into CreateMediaBuyRequest, but _create_media_buy_impl
-    # never reads req.paused on the create path (packages are built with paused=False).
-    # Only update_media_buy honors paused. See #1619.
+    # AdCP 3.1.1 create-in-paused-state: forwarded to create_media_buy_raw below,
+    # persisted as MediaBuy.is_paused, and surfaced as media_buy_status "paused"
+    # once the buy would otherwise be active (GH #1619).
     paused: bool | None = None
     adcp_version: str = "1.0.0"
 
@@ -361,6 +359,7 @@ async def create_media_buy(
         context=context,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        paused=body.paused,
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )

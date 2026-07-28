@@ -718,6 +718,9 @@ class GoogleAdManager(AdServerAdapter):
                 package_pricing_info=package_pricing_info,
                 package_targeting=package_targeting,
                 line_item_name_template=self._line_item_name_template,
+                # AdCP 3.1.1 create-in-paused-state: book the line items PAUSED so
+                # GAM does not serve a buy we report as "paused" (GH #1619).
+                paused=bool(request.paused),
             )
             self.log(f"✓ Created {len(line_item_ids)} line items")
 

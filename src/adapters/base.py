@@ -293,7 +293,7 @@ class AdServerAdapter(ABC):
         media_buy_id: str,
         packages: list[MediaPackage],
         *,
-        paused: bool = False,
+        paused: bool | None = None,
         creative_deadline_days: int | None = 2,
         workflow_step_id: str | None = None,
         package_responses: list[ResponsePackage] | None = None,
@@ -309,7 +309,11 @@ class AdServerAdapter(ABC):
             request: The original create media buy request.
             media_buy_id: The generated media buy ID.
             packages: List of MediaPackage objects from the request.
-            paused: Whether packages should be marked as paused.
+            paused: Whether packages should be marked as paused. ``None`` (the
+                default) takes the buyer's AdCP 3.1.1 ``request.paused`` intent,
+                so every adapter reports the paused state it was asked to book
+                without repeating the plumbing; pass an explicit bool only when
+                the ad server's booked state differs from the request.
             creative_deadline_days: Days from now for creative deadline.
                 None means no creative deadline (e.g. GAM sets this explicitly).
             workflow_step_id: Optional workflow step ID for HITL tracking.
@@ -320,6 +324,8 @@ class AdServerAdapter(ABC):
         Returns:
             CreateMediaBuySuccess response.
         """
+        if paused is None:
+            paused = bool(getattr(request, "paused", False))
         if package_responses is None:
             package_responses = self._build_package_responses(
                 packages, paused=paused, include_product_id=include_product_id

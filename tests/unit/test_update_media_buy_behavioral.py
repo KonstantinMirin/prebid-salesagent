@@ -41,7 +41,7 @@ from src.core.schemas import (
 )
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.harness.media_buy_update import MediaBuyUpdateEnv
+from tests.harness.media_buy_update import MediaBuyUpdateEnv, mock_media_buy_row
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -1292,10 +1292,7 @@ class TestUC003UpdateCreativeIds:
             mock_session = env.mock["uow"].return_value.session
             uow = env.mock["uow"].return_value
 
-            mock_mb = MagicMock()
-            mock_mb.media_buy_id = "mb_creative"
-            mock_mb.status = "active"
-            mock_mb.approved_at = None
+            mock_mb = mock_media_buy_row(media_buy_id="mb_creative", status="active", approved_at=None)
             uow.media_buys.get_by_id.return_value = mock_mb
 
             c1 = MagicMock()
@@ -1530,10 +1527,7 @@ class TestUC003UpdateCreativeAssignments:
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             mock_session = env.mock["uow"].return_value.session
 
-            mock_mb = MagicMock()
-            mock_mb.media_buy_id = "mb_assign"
-            mock_mb.status = "active"
-            mock_mb.approved_at = None
+            mock_mb = mock_media_buy_row(media_buy_id="mb_assign", status="active", approved_at=None)
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # Package with product that has placements

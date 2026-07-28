@@ -127,6 +127,10 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
     against the flight window; a terminal/explicit state (paused, completed,
     rejected, canceled, failed) is returned verbatim.
 
+    The ``is_paused`` flag (set at create time by ``create-media-buy-request.paused``)
+    applies LAST, and only to a buy the refinement resolved to "active" — giving
+    the AdCP 3.1.1 precedence ``pending_creatives > pending_start > paused > active``.
+
     An *unmapped* persisted status is treated as a generic serving state and
     date-refined — never returned verbatim and never dropped — so a buy that
     exists is always describable. (Regression: the delivery copy passed unknown
@@ -167,8 +171,6 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
     start_compare = start_time.date() if start_time else buy.start_date
     end_compare = end_time.date() if end_time else buy.end_date
 
-    if getattr(buy, "is_paused", False):
-        return "paused"
     # Defensive: a serving-state buy with no resolvable flight edge cannot be
     # date-refined. This is schema-impossible on the happy path (MediaBuy
     # start_date/end_date are NOT NULL) and has no AdCP spec meaning (the media-buy
@@ -182,4 +184,16 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
         return "pending_start"
     if reference_date > end_compare:
         return "completed"
+    # The buy would otherwise be active — this is the ONLY point where an
+    # explicit pause overrides the refinement, which is exactly the precedence
+    # AdCP 3.1.1 mandates for create-media-buy-request.paused: "when the buy
+    # would otherwise be active ... the seller returns media_buy_status
+    # 'paused'. Setup blockers still take precedence: a buy with no creatives
+    # remains 'pending_creatives', and a future-dated buy remains
+    # 'pending_start' until its flight can start." Checking is_paused BEFORE the
+    # refinement (as this resolver used to) reported a future-dated paused buy as
+    # "paused" (GH #1619). A buy whose flight has ENDED likewise reports
+    # "completed": it is not one that "would otherwise be active".
+    if getattr(buy, "is_paused", False):
+        return "paused"
     return "active"

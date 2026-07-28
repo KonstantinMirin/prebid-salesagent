@@ -14,6 +14,7 @@ import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from tests.harness.media_buy_update import mock_media_buy_row
 
 
 class TestCreateMediaBuyDryRunResponseStructure:
@@ -117,8 +118,7 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             mock_uow.session = mock_session
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
-            _stub_mb = MagicMock()
-            _stub_mb.status = "active"
+            _stub_mb = mock_media_buy_row(status="active")
             mock_uow.media_buys.get_by_id.return_value = _stub_mb
             mock_uow.__enter__ = Mock(return_value=mock_uow)
             mock_uow.__exit__ = Mock(return_value=False)

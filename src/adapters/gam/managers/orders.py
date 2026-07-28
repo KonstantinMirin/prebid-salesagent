@@ -353,6 +353,7 @@ class GAMOrdersManager:
         package_pricing_info: dict[str, dict] | None = None,
         package_targeting: dict[str, dict] | None = None,
         line_item_name_template: str | None = None,
+        paused: bool = False,
     ) -> list[str]:
         """Create line items for an order.
 
@@ -369,6 +370,9 @@ class GAMOrdersManager:
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
             package_targeting: Pre-built GAM targeting dicts per package
                 Maps package_id → GAM targeting dict (built by adapter from targeting_overlay)
+            paused: Create the line items PAUSED instead of READY (AdCP 3.1.1
+                create-media-buy-request.paused). Resuming later goes through
+                resume_line_item, which sets them back to READY.
 
         Returns:
             List of created line item IDs
@@ -899,9 +903,10 @@ class GAMOrdersManager:
                     "second": end_time.second,
                     "timeZoneId": impl_config.get("time_zone", "America/New_York"),
                 },
-                # Set status based on whether manual approval is required
-                # DRAFT = needs manual approval, READY = ready to serve (when creatives added)
-                "status": "READY",  # Always create as READY since creatives will be added
+                # READY = ready to serve once creatives are added. A buy the buyer
+                # asked to create paused (AdCP 3.1.1) is booked PAUSED instead, so
+                # GAM does not serve inventory we report as "paused" (GH #1619).
+                "status": "PAUSED" if paused else "READY",
             }
 
             # Add frequency caps - merge buyer's frequency cap with product config

@@ -2802,7 +2802,11 @@ async def _create_media_buy_impl(
                 pending_packages.append(
                     Package(
                         package_id=package_id,
-                        paused=False,  # Initial state is not paused (AdCP 2.12.0)
+                        # AdCP 3.1.1 create-media-buy-request.paused travels buy -> package
+                        # (adcp 2.12.0 replaced the package status enum with this boolean).
+                        # The auto-approval path takes it from the adapter response instead,
+                        # since there the ad server is what actually books the paused state.
+                        paused=bool(req.paused),
                         product_id=pkg.product_id,
                         budget=pkg.budget,
                         bid_price=pkg.bid_price,
@@ -4327,9 +4331,11 @@ async def create_media_buy(
         bool | None,
         Field(
             description=(
-                "Accepted for AdCP 3.1.1 compatibility; pause-on-create is NOT yet honored — "
-                "the flag is carried into CreateMediaBuyRequest but _impl never reads it, so "
-                "the buy delivers as if paused=false, starting per start_time. Tracked in #1619."
+                "Create the media buy in a paused delivery state (AdCP 3.1.1). The buy is "
+                "booked with delivery suppressed and reports media_buy_status 'paused' once "
+                "it would otherwise be active; setup blockers still take precedence "
+                "(no creatives -> 'pending_creatives', flight not started -> 'pending_start'). "
+                "Defaults to false. Resume with update_media_buy(paused=false)."
             )
         ),
     ] = None,
@@ -4360,6 +4366,8 @@ async def create_media_buy(
         idempotency_key: Client-supplied idempotency key (REQUIRED per AdCP 3.0.1) —
             the same key replays the original success; a missing key rejects as
             VALIDATION_ERROR
+        paused: Book the buy with delivery suppressed (AdCP 3.1.1); it reports
+            media_buy_status 'paused' once it would otherwise be active
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -4421,7 +4429,7 @@ async def create_media_buy_raw(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None,
-    paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (tracked in #1619)
+    paused: bool | None = None,  # AdCP 3.1.1 create-in-paused-state (GH #1619)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -4443,6 +4451,8 @@ async def create_media_buy_raw(
         push_notification_config: Push notification config for status updates
         context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
+        paused: Book the buy with delivery suppressed (AdCP 3.1.1); it reports
+            media_buy_status 'paused' once it would otherwise be active
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
         raw_wire_payload: The request dict as sent on the wire (A2A DataPart

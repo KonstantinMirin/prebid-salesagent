@@ -907,6 +907,11 @@ class MockAdServer(AdServerAdapter):
                 "end_time": end_time,
                 "creatives": [],
                 "test_scenario": scenario.__dict__ if scenario else None,
+                # AdCP 3.1.1 create-media-buy-request.paused: a paused buy is booked
+                # but must not serve. Recorded so this adapter's delivery simulation
+                # reports nothing for it (GH #1619) — reporting media_buy_status
+                # "paused" while the ad server delivers would be a lie.
+                "paused": bool(request.paused),
             }
             self.log("✓ Media buy created successfully")
             self.log(f"  Campaign ID: {media_buy_id}")
@@ -914,14 +919,19 @@ class MockAdServer(AdServerAdapter):
             # Log successful creation
             self.audit_logger.log_success(f"Created Mock Order ID: {media_buy_id}")
 
-            # Start delivery simulation if enabled in config
-            self._start_delivery_simulation(
-                media_buy_id=media_buy_id,
-                tenant_id=tenant_id,
-                start_time=start_time,
-                end_time=end_time,
-                total_budget=total_budget,
-            )
+            # Start delivery simulation if enabled in config — unless the buyer
+            # asked for a paused buy (AdCP 3.1.1), which must not deliver until
+            # update_media_buy(paused=false) resumes it.
+            if request.paused:
+                self.log("⏸️  Created paused (AdCP 3.1.1 paused=true) — delivery simulation not started")
+            else:
+                self._start_delivery_simulation(
+                    media_buy_id=media_buy_id,
+                    tenant_id=tenant_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                    total_budget=total_budget,
+                )
         else:
             self.log(f"Would return: Campaign ID '{media_buy_id}' with status 'pending_creative'")
 
@@ -1224,7 +1234,14 @@ class MockAdServer(AdServerAdapter):
             self.log(f"Retrieving delivery data for campaign {media_buy_id}")
 
         # Get the media buy details
-        if media_buy_id in self._media_buys:
+        if media_buy_id in self._media_buys and self._media_buys[media_buy_id].get("paused"):
+            # Booked paused (AdCP 3.1.1) — nothing served, so nothing to report.
+            # Reporting simulated delivery for a buy we describe as "paused" would
+            # make the two required read tools contradict each other (GH #1619).
+            self.log(f"⏸️  Media buy {media_buy_id} is paused — reporting zero delivery")
+            impressions = 0
+            spend = 0.0
+        elif media_buy_id in self._media_buys:
             buy = self._media_buys[media_buy_id]
             total_budget = buy["total_budget"]
             start_time = buy["start_time"]

@@ -83,6 +83,31 @@ class _SimpleClock:
         return (datetime.now(UTC) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
 
 
+def mock_media_buy_row(**overrides: Any) -> MagicMock:
+    """A MagicMock shaped like a PERSISTED MediaBuy row.
+
+    A bare ``MagicMock()`` is not a shape the table can produce: it hands
+    production a truthy ``is_paused`` and MagicMock flight edges, while
+    ``start_date``/``end_date`` are NOT NULL columns and ``is_paused`` defaults
+    to False. The shared status resolver reads all three, so a bare double either
+    short-circuits to "paused" (masking whatever status the test meant to assert)
+    or raises ``TypeError`` on the date comparison. Defaults here describe a
+    mid-flight, unpaused, active buy; pass overrides for anything else.
+    """
+    from datetime import date, timedelta
+
+    mb = MagicMock()
+    mb.status = "active"
+    mb.is_paused = False
+    mb.start_date = date.today() - timedelta(days=1)
+    mb.end_date = date.today() + timedelta(days=30)
+    mb.start_time = None
+    mb.end_time = None
+    for key, value in overrides.items():
+        setattr(mb, key, value)
+    return mb
+
+
 class MediaBuyUpdateEnv(BaseTestEnv):
     """Unit test environment for _update_media_buy_impl.
 
@@ -126,9 +151,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         # Default media buy with non-terminal status so the state-machine
         # precondition guard in _update_media_buy_impl passes. Tests that
         # need a specific status call ``set_media_buy(status=...)``.
-        _default_mb = MagicMock()
-        _default_mb.status = "active"
-        self._uow_instance.media_buys.get_by_id.return_value = _default_mb
+        self._uow_instance.media_buys.get_by_id.return_value = mock_media_buy_row()
 
         # The *_or_raise repository helpers delegate to the plain getters and raise
         # the typed not-found when absent. Wiring the mock the same way lets tests
@@ -264,14 +287,14 @@ class MediaBuyUpdateEnv(BaseTestEnv):
 
         Returns the mock MediaBuy for further customization.
         """
-        mb = MagicMock()
-        mb.media_buy_id = media_buy_id
-        mb.currency = currency
-        mb.status = status
-        mb.start_time = start_time
-        mb.end_time = end_time
-        for k, v in extra.items():
-            setattr(mb, k, v)
+        mb = mock_media_buy_row(
+            media_buy_id=media_buy_id,
+            currency=currency,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            **extra,
+        )
         self._uow_instance.media_buys.get_by_id.return_value = mb
         return mb
 

@@ -774,6 +774,30 @@ mappings:
       business_rules: []
       status: new
   UC-002:
+    - adcp_scenario_id: "T-UC-002-local-create-paused"
+      adcp_feature: "local-uc002-create-paused.feature"
+      obligation_id: null
+      upstream_refs: ["create-media-buy-request.json#paused (adcp v3.1.1)"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-local-create-paused-precedence"
+      adcp_feature: "local-uc002-create-paused.feature"
+      obligation_id: null
+      upstream_refs: ["create-media-buy-request.json#paused (adcp v3.1.1)"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-local-create-paused-manual"
+      adcp_feature: "local-uc002-create-paused.feature"
+      obligation_id: null
+      upstream_refs: ["create-media-buy-request.json#paused (adcp v3.1.1)"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-local-create-unpaused"
+      adcp_feature: "local-uc002-create-paused.feature"
+      obligation_id: null
+      upstream_refs: ["create-media-buy-request.json#paused (adcp v3.1.1)"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-local-unknown-top-level-field"
       adcp_feature: "local-uc002-unknown-top-level-field.feature"
       obligation_id: null
@@ -10589,6 +10613,24 @@ mappings:
       business_rules: ["BR-RULE-209"]
       status: new
   UC-019:
+    - adcp_scenario_id: "T-UC-019-local-paused-pending-creatives"
+      adcp_feature: "local-uc019-paused-status-precedence.feature"
+      obligation_id: null
+      upstream_refs: ["create-media-buy-request.json#paused (adcp v3.1.1)"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-local-paused-pending-start"
+      adcp_feature: "local-uc019-paused-status-precedence.feature"
+      obligation_id: null
+      upstream_refs: ["create-media-buy-request.json#paused (adcp v3.1.1)"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-local-paused-completed"
+      adcp_feature: "local-uc019-paused-status-precedence.feature"
+      obligation_id: null
+      upstream_refs: ["create-media-buy-request.json#paused (adcp v3.1.1)"]
+      business_rules: ["BR-RULE-150"]
+      status: new
     - adcp_scenario_id: "T-UC-019-main-filter-ids"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null

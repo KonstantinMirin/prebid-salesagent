@@ -59,6 +59,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc002_unknown_top_level_field",
+    "tests.bdd.steps.domain.uc002_create_paused",
     "tests.bdd.steps.domain.uc001_discover_inventory",
     "tests.bdd.steps.domain.uc009_performance",
     "tests.bdd.steps.domain.uc010_capabilities",
@@ -2865,6 +2866,18 @@ _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
     "T-UC-002-alt-manual",
 }
 
+# Locally-added create-in-paused-state scenarios (GH #1619, AdCP 3.1.1
+# create-media-buy-request.paused). They need the FULL create chain — the
+# regression they grade is a transport-boundary drop (the REST route declared
+# `paused` on its body model but never forwarded it to create_media_buy_raw), so
+# only a real dispatch per transport can observe it.
+_UC002_CREATE_PAUSED_WIRED: set[str] = {
+    "T-UC-002-local-create-paused",
+    "T-UC-002-local-create-paused-precedence",
+    "T-UC-002-local-create-paused-manual",
+    "T-UC-002-local-create-unpaused",
+}
+
 
 def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
     """True when a brand_shorthand scenario targets create_media_buy (UC-002 harness)."""
@@ -3363,6 +3376,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # pattern, canonical) stay blanket-xfailed below until their
             # production gaps + steps are wired.
             yield from _wire_media_buy_create_env(request, ctx, e2e_config)
+        elif marker_names & _UC002_CREATE_PAUSED_WIRED:
+            # Create-in-paused-state (GH #1619): a full create per transport, so the
+            # AdCP 3.1.1 `paused` field crosses each real boundary (MCP wrapper,
+            # A2A raw wrapper, REST body->raw hop) instead of being asserted in-process.
+            yield from _wire_media_buy_create_env(request, ctx, e2e_config, dispatch_mode="create")
         elif "T-UC-002-local-unknown-top-level-field" in marker_names:
             # Locally-added Pattern #7 top-level unknown-field scenario (GH #1442).
             # Its Given forces dispatch_mode=create_raw so the unknown key reaches

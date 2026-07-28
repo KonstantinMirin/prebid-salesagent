@@ -351,6 +351,7 @@ class MediaBuyRepository:
         Args:
             media_buy_id: Unique media buy identifier.
             req: CreateMediaBuyRequest Pydantic model (serialized here, not by caller).
+                Its ``paused`` field lands on the ``is_paused`` column (AdCP 3.1.1).
             principal_id: Principal ID for ownership.
             advertiser_name: Display name of the advertiser.
             budget: Total budget for the media buy.
@@ -392,6 +393,12 @@ class MediaBuyRepository:
             "start_time": start_time,
             "end_time": end_time,
             "status": status,
+            # AdCP 3.1.1 create-media-buy-request.paused — persisted as an INTENT
+            # flag, never as status="paused": "paused" is a TERMINAL_STATUS and is
+            # never date-refined, so persisting it would bypass the spec's own
+            # precedence (a paused future-dated buy must still read
+            # "pending_start"). resolve_canonical_status applies this flag last.
+            "is_paused": bool(getattr(req, "paused", False)),
             "raw_request": raw,
             # Canonical request hash as computed by the idempotency probe —
             # raw_request is not canonicalizable (injected package_ids,

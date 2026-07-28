@@ -260,6 +260,13 @@ class MediaBuyCreateEnv(IntegrationEnv):
             if pkg_count == 0:
                 pkg_count = 1
 
+            # Mirror the shared AdServerAdapter._build_create_success contract: an
+            # ad server books what it was asked to book, so a request carrying the
+            # AdCP 3.1.1 `paused` intent comes back with paused packages (GH #1619).
+            # Without this the double would report unpaused packages for a paused
+            # request and no test could tell a dropped `paused` from an honored one.
+            paused = bool(getattr(req_obj, "paused", False))
+
             media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
             return CreateMediaBuySuccess(
                 media_buy_id=media_buy_id,
@@ -269,6 +276,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
                         "product_id": f"prod_{i}",
                         "budget": 5000.0,
                         "status": "active",
+                        "paused": paused,
                     }
                     for i in range(pkg_count)
                 ],

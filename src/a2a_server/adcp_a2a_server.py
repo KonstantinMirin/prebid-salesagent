@@ -1667,6 +1667,12 @@ class AdCPRequestHandler(RequestHandler):
             # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
             account=to_account_reference(params.get("account")),
             idempotency_key=params.get("idempotency_key"),
+            # AdCP 3.1.1 create-in-paused-state. Taken from the validated request
+            # (like po_number) so a non-boolean rejects at the boundary rather
+            # than reaching _impl. Dropping it here books a DELIVERING buy for a
+            # buyer who asked for a paused one — the same silent drop the REST
+            # route had (GH #1619).
+            paused=req.paused,
             identity=identity,
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are
             # the idempotency payload-hash input; the post-processed dict is the
