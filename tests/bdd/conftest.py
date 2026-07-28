@@ -1921,100 +1921,61 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "reporting_dimensions validation not implemented — production accepts invalid configs",
             ),
-            # attribution_window REFERENCE (clean scenario->step->harness path): the
-            # Examples name the exact error code (error "VALIDATION_ERROR" — the
-            # schema-canonical code for value/enum/range/business-rule violations,
-            # reconciled from the earlier INVALID_REQUEST mis-pin per the AdCP graded
-            # error-compliance storyboard) and the step asserts it on the wire envelope.
-            # Validation IS implemented: SDK model enum/range plus
-            # _validate_attribution_window for the campaign INV-5 cross-field rule.
+            # T-UC-004-partition-attribution: FULLY GRADUATED — no entry here, and none is to
+            # be re-added. attribution_window is the reference path for this tag family: the
+            # Examples name the exact error code (error "VALIDATION_ERROR" — the canonical code
+            # for a value/enum/range/business-rule violation on a structurally well-formed
+            # payload, reconciled from the earlier INVALID_REQUEST mis-pin) and the Then asserts
+            # it on the real wire envelope. Validation IS implemented: the SDK models carry the
+            # range/enum constraints, and _validate_attribution_window adds the campaign INV-5
+            # cross-field rule JSON Schema cannot express.
             #
-            # GRADUATED (salesagent-x18x, #1545): campaign_interval_not_one now passes
-            # unmasked — the window reaches production and INV-5 fires
-            # (VALIDATION_ERROR "interval must be 1 when unit is 'campaign'").
+            # Each of the five invalid rows was graduated on its own, per
+            # .claude/rules/workflows/xpass-graduation.md, never in bulk:
+            #   campaign_interval_not_one — salesagent-x18x / #1545
+            #   interval_zero             — salesagent-v4hb
+            #   interval_negative         — salesagent-06v8
+            #   invalid_unit              — salesagent-gz0n
+            #   invalid_model             — salesagent-sg1z
             #
-            # The generic "with {request_params}" step that used to shadow the specific
-            # attribution step was narrowed to the `\w+=` key=value form in #1545, so it
-            # can no longer match the space-form window. That cause is DEAD on every
-            # transport — do not re-cite it. (#1462 alleged a production request path that
-            # dropped post_click; re-derived 2026-07-27, it never reproduced on any
-            # transport. The symptom was this step-shadowing, which made the field never
-            # arrive at all.) The rows below are retained on their observed status only,
-            # pending per-row graduation.
-            #
-            # Graduated: interval_zero (#1462 follow-up). Walked per
-            # .claude/rules/workflows/xpass-graduation.md, one row, evidence:
-            #   scenario  — Examples name the exact code and demand a suggestion
-            #               ("error \"VALIDATION_ERROR\" with suggestion"), value explicit.
-            #   spec      — AdCP 3.1.1 core/duration.json `interval.minimum: 1`, so 0 is below
-            #               the minimum. VALIDATION_ERROR/recovery=correctable is identical in
-            #               the harness-pinned enum (64 codes) and v3.1.1 (92), so the row is
-            #               not over-specified against the pin.
+            # Shared evidence (verified per row, not assumed from the green mark):
+            #   spec      — AdCP 3.1.1 core/duration.json pins `interval.minimum: 1` and
+            #               `unit.enum: [seconds, minutes, hours, days, campaign]`;
+            #               enums/attribution-model.json pins the model enum
+            #               ([last_touch, first_touch, linear, time_decay, data_driven]), and the
+            #               request schema $refs it, so an out-of-enum model is rejected at the
+            #               request boundary. VALIDATION_ERROR is canonical with
+            #               recovery=correctable in BOTH the harness pin (@04f59d2d5) and v3.1.1
+            #               (92 codes), so no row is over-specified against the pin.
+            #   scenario  — every invalid row names the exact code AND demands a suggestion, and
+            #               the same Outline grades each constraint on the valid side too
+            #               (interval 1; units days/campaign; models last_touch/data_driven).
             #   givens    — shared cross-transport harness only (MediaBuyFactory via
             #               _ensure_media_buy_in_db, env.set_adapter_response); no per-transport
             #               branching, so every transport runs the same scenario.
             #   then      — _WIRE_ASSERTED_FIELDS -> _assert_error_outcome ->
             #               TransportResult.assert_wire_error -> assert_envelope_shape on the
             #               real wire envelope, with require_suggestion exercised.
-            #   production— pydantic minimum:1 inside adcp_validation_boundary
-            #               (src/core/validation_helpers.py:28) raises AdCPValidationError
-            #               VALIDATION_ERROR, recovery=correctable, field
-            #               "attribution_window.post_click.interval", with a suggestion.
-            #   siblings  — passes on a2a/mcp/rest, and on e2e_rest via the BDD In-Network job
-            #               on PR #1728; no entry in e2e_rest_known_failures.txt.
-            #
-            # Graduated: interval_negative (salesagent-06v8). Walked per
-            # .claude/rules/workflows/xpass-graduation.md, one row, evidence:
-            #   scenario  — Examples name the exact code and demand a suggestion
-            #               ("error \"VALIDATION_ERROR\" with suggestion") with the value
-            #               explicit (-1); the same Outline grades minimum:1 at 1 (valid rows
-            #               post_view_only/campaign_unit), 0 (interval_zero) and -1.
-            #   spec      — AdCP 3.1.1 core/duration.json `interval.minimum: 1`, so -1 is below
-            #               the minimum. VALIDATION_ERROR is canonical in BOTH the harness-pinned
-            #               enum (@04f59d2d5) and v3.1.1 (92 codes) with recovery=correctable in
-            #               each, so the row is not over-specified against the pin.
-            #   givens    — shared cross-transport harness only (MediaBuyFactory via
-            #               _ensure_media_buy_in_db, env.set_adapter_response); no per-transport
-            #               branching, so every transport runs the same scenario.
-            #   then      — _WIRE_ASSERTED_FIELDS -> _assert_error_outcome ->
-            #               TransportResult.assert_wire_error -> assert_envelope_shape on the
-            #               real wire envelope, with require_suggestion exercised.
-            #   production— rejected on all three transports before any adapter call: REST by
-            #               FastAPI on the typed GetMediaBuyDeliveryBody, remapped to
+            #   production— rejected before any adapter call on all three in-process transports:
+            #               REST by FastAPI on the typed GetMediaBuyDeliveryBody, remapped to
             #               VALIDATION_ERROR by the attribution_window branch of
             #               request_validation_error_handler (src/app.py); MCP by the FastMCP
             #               TypeAdapter, normalized in RequestCompatMiddleware; A2A inside
-            #               adcp_validation_boundary around GetMediaBuyDeliveryRequest. Each
-            #               path yields recovery=correctable and a non-empty suggestion.
-            #   siblings  — a2a/mcp/rest are the only in-process params (interval_zero and
-            #               interval_negative collect as separate ids, so neither shadows the
-            #               other); e2e_rest via the BDD In-Network job on PR #1728, with no
-            #               entry in e2e_rest_known_failures.txt.
+            #               adcp_validation_boundary around GetMediaBuyDeliveryRequest. Driving
+            #               that A2A boundary directly returns code=VALIDATION_ERROR,
+            #               recovery=correctable, field="attribution_window.<path>" and a
+            #               non-empty suggestion for each of the three enum/range rows.
+            #   siblings  — a2a/mcp/rest are the only in-process params, and every Example row
+            #               collects as its own id, so no row shadows another; e2e_rest is green
+            #               via the BDD In-Network job on PR #1728 and lists no attribution
+            #               partition row in e2e_rest_known_failures.txt.
             #
-            # Graduated: invalid_unit (salesagent-gz0n). Same walk, one row, evidence:
-            #   scenario  — exact code + "with suggestion", value literal; the same Outline
-            #               accepts `days` and `campaign`, so the enum is graded on both sides.
-            #               interval stays 1, isolating the unit enum from the interval range.
-            #   spec      — AdCP 3.1.1 core/duration.json `unit.enum` is
-            #               [seconds, minutes, hours, days, campaign]; "weeks" is not a member.
-            #               VALIDATION_ERROR/correctable in the harness pin and v3.1.1 alike.
-            #   givens    — identical shared-harness Givens as the siblings above.
-            #   then      — same wire path (assert_wire_error -> assert_envelope_shape),
-            #               require_suggestion exercised.
-            #   production— driving the real A2A boundary (adcp_validation_boundary +
-            #               GetMediaBuyDeliveryRequest.model_validate) with this payload yields
-            #               code=VALIDATION_ERROR recovery=correctable
-            #               field="attribution_window.post_click.unit" and a non-empty
-            #               suggestion; REST via the app.py attribution_window remap, MCP via
-            #               the TypeAdapter -> RequestCompatMiddleware normalization.
-            #   siblings  — a2a/mcp/rest collect as separate ids per row (no shadowing);
-            #               e2e_rest green on PR #1728's BDD In-Network job, unlisted in the ledger.
-            (
-                "T-UC-004-partition-attribution",
-                {"invalid_model"},
-                "attribution_window partition rows: retained on observed status pending per-row "
-                "graduation (#1545 removed the step-shadowing that was the original cause)",
-            ),
+            # The generic "with {request_params}" step that used to shadow the specific
+            # attribution step was narrowed to the `\w+=` key=value form in #1545, so it can no
+            # longer match the space-form window. That cause is DEAD on every transport — do not
+            # re-cite it. (#1462 alleged a production request path that dropped post_click;
+            # re-derived 2026-07-27, it never reproduced on any transport. The symptom was this
+            # step-shadowing, which made the field never arrive at all.)
             # daily breakdown: production doesn't validate non-boolean values
             (
                 "T-UC-004-partition-daily-breakdown",
