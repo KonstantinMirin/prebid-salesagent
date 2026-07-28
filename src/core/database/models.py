@@ -2394,3 +2394,49 @@ class SigningKey(Base):
             f"revoked_at={self.revoked_at}"
             f")>"
         )
+
+
+class ReplayNonce(Base):
+    """One live claim on an RFC 9421 ``(keyid, nonce)`` pair (#1291 A4, salesagent-z6nr.10).
+
+    A replay CACHE, not a permanent nonce ledger: every read filters
+    ``expires_at > now()``, so a dead row is indistinguishable from an absent one
+    and the table is safe to sweep at any time.
+
+    Schema translated from the DDL the SDK ships at
+    ``adcp/signing/pg/replay_store.sql``, table name included, so that file stays a
+    valid reference for this table and a future swap to the SDK's ``PgReplayStore``
+    needs no migration.
+
+    ``Text(collation="C")`` on both identifiers is security, not style: the SDK's
+    SQL header records that under some locales ``"Key-A"`` and ``"key-a"`` compare
+    equal, which would let an attacker collapse distinct kids or nonces into a
+    single slot and replay against it. ``"C"`` is byte-for-byte comparison. First
+    use of ``collation=`` in this file.
+
+    **No ``tenant_id``, no FK — a decision, not an oversight.** The RFC 9421
+    signature base covers ``@authority`` as a MANDATORY component (AdCP 3.1.1;
+    ``dist/compliance/3.1.1/test-vectors/request-signing/negative/006-missing-covered-component.json``
+    is literally "Covered components missing @authority"), so a nonce captured
+    against tenant A's virtual host cannot verify against tenant B's — cross-tenant
+    replay dies at verifier step 10, before this table is ever consulted. The
+    consequence is that the store is deployment-wide: it cannot use ``BaseUoW``
+    (which is ``(tenant_id)``-scoped) and its reaper is deployment-wide too.
+    """
+
+    __tablename__ = "adcp_replay"
+
+    keyid: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        # Sweep support (the SDK's index, same name).
+        Index("adcp_replay_expires_idx", "expires_at"),
+        # at_capacity's predicate — see the migration for why this composite is not
+        # optional and why a partial index on now() is impossible.
+        Index("adcp_replay_keyid_expires_idx", "keyid", "expires_at"),
+    )
+
+    def __repr__(self):
+        return f"<ReplayNonce(keyid='{self.keyid}', nonce='{self.nonce}', expires_at={self.expires_at})>"

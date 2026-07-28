@@ -7,8 +7,15 @@ management using environment variables.
 import os
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# AdCP 3.1.1 `security.mdx` §per-keyid cap, restated by the signed-requests test-kit
+# as `production_min_per_keyid_cap_requests: 1000000`.
+_PRODUCTION_MIN_PER_KEYID_CAP = 1_000_000
+
+# Characters that make an override key a PATTERN rather than one counterparty's keyid.
+_KEYID_PATTERN_CHARS = "*?%[]"
 
 
 class GAMOAuthConfig(BaseSettings):
@@ -115,6 +122,27 @@ class SigningConfig(BaseSettings):
         description="Name of the env var holding the PEM passphrase (the passphrase itself is never a config value)",
     )
 
+    # -- Replay store (#1291 A4) -------------------------------------------
+    # These are agent-level because the replay store is a property of the shared
+    # deployment, not of a tenant: one nonce is accepted at most once across every
+    # worker, whichever tenant's virtual host it arrived at.
+    per_keyid_cap: int = Field(
+        default=1_000_000,
+        description="Live replay entries per keyid before request_signature_rate_abuse (spec floor: 1,000,000)",
+    )
+    per_keyid_cap_overrides: dict[str, int] = Field(
+        default_factory=dict,
+        description="Per-counterparty cap override, keyed by explicit keyid (test-kit counterparties -> 100)",
+    )
+    replay_ttl_overrides: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-counterparty clamp (seconds) on replay row lifetime, keyed by explicit keyid",
+    )
+    replay_claim_ttl_seconds: float = Field(
+        default=60.0,
+        description="Lifetime written by the atomic claim before remember() raises it to the signature's own TTL",
+    )
+
     model_config = SettingsConfigDict(env_prefix="ADCP_SIGNING_", case_sensitive=False)
 
     @property
@@ -157,6 +185,59 @@ class SigningConfig(BaseSettings):
             raise ValueError(
                 "ADCP_SIGNING_PROVIDER='kms' is not implemented — no KMS SigningProvider exists yet. Use 'in_memory'."
             )
+        return v
+
+    @field_validator("per_keyid_cap")
+    @classmethod
+    def validate_per_keyid_cap(cls, v: int) -> int:
+        """Refuse a GLOBAL cap below the spec floor.
+
+        AdCP 3.1.1 ``security.mdx`` §per-keyid cap and the test-kit's
+        ``production_min_per_keyid_cap_requests: 1000000`` put the production floor
+        at 1,000,000 live entries per keyid. The test-kit's
+        ``grading_target_per_keyid_cap_requests: 100`` is permitted for the test-kit
+        COUNTERPARTY only, which is what ``per_keyid_cap_overrides`` is for. Refusing
+        the global lowering here is the mechanical form of "never a global lowering":
+        a misconfiguration kills the process at startup instead of quietly turning
+        every busy signer into ``request_signature_rate_abuse``.
+        """
+        if v < _PRODUCTION_MIN_PER_KEYID_CAP:
+            raise ValueError(
+                f"ADCP_SIGNING_PER_KEYID_CAP={v} is below the spec floor of "
+                f"{_PRODUCTION_MIN_PER_KEYID_CAP} live entries per keyid. Lower the cap for a single "
+                "test counterparty with ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES, never globally."
+            )
+        return v
+
+    @field_validator("per_keyid_cap_overrides", "replay_ttl_overrides")
+    @classmethod
+    def validate_overrides_name_explicit_keyids(cls, v: dict[str, float], info: ValidationInfo) -> dict[str, float]:
+        """Both override maps name explicit keyids — never a pattern.
+
+        Each map lowers a spec-mandated protection (the cap, and the replay row's
+        lifetime) for one counterparty. A wildcard or prefix key would re-introduce
+        the global lowering the validator above refuses, by the back door and for a
+        value nobody reads as global. Same rule, same reason, so one validator serves
+        both fields.
+        """
+        for key, value in v.items():
+            if not key.strip():
+                raise ValueError(f"{info.field_name}: an override key must be an explicit keyid, not empty")
+            if any(char in key for char in _KEYID_PATTERN_CHARS):
+                raise ValueError(
+                    f"{info.field_name}: override key {key!r} looks like a pattern. Overrides name explicit "
+                    "keyids only — a pattern would lower the protection globally, which is refused."
+                )
+            if value <= 0:
+                raise ValueError(f"{info.field_name}: override for keyid {key!r} must be positive, got {value}")
+        return v
+
+    @field_validator("replay_claim_ttl_seconds")
+    @classmethod
+    def validate_replay_claim_ttl(cls, v: float) -> float:
+        """A non-positive claim TTL would write an already-dead row — i.e. no replay protection at all."""
+        if v <= 0:
+            raise ValueError(f"ADCP_SIGNING_REPLAY_CLAIM_TTL_SECONDS must be positive, got {v}")
         return v
 
 
