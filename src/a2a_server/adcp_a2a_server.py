@@ -8,7 +8,7 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
@@ -1491,45 +1491,12 @@ class AdCPRequestHandler(RequestHandler):
                 ),
             )
 
-        # Map skill names to handlers. Handler signatures are heterogeneous
-        # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
-        # require non-None), so the dispatch is typed dynamically — the non-discovery
-        # guard above enforces a non-None identity before the call.
-        skill_handlers: dict[str, Callable[..., Awaitable[Any]]] = {
-            # Core AdCP Discovery Skills
-            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
-            # Core AdCP Media Buy Skills
-            "get_products": self._handle_get_products_skill,
-            "create_media_buy": self._handle_create_media_buy_skill,
-            # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
-            "list_creative_formats": self._handle_list_creative_formats_skill,
-            "list_accounts": self._handle_list_accounts_skill,
-            "sync_accounts": self._handle_sync_accounts_skill,
-            "list_authorized_properties": self._handle_list_authorized_properties_skill,
-            # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
-            "update_media_buy": self._handle_update_media_buy_skill,
-            "get_media_buys": self._handle_get_media_buys_skill,
-            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
-            "update_performance_index": self._handle_update_performance_index_skill,
-            # AdCP Spec Creative Management (centralized library approach)
-            "sync_creatives": self._handle_sync_creatives_skill,
-            "list_creatives": self._handle_list_creatives_skill,
-            "create_creative": self._handle_create_creative_skill,
-            "assign_creative": self._handle_assign_creative_skill,
-            # Creative Management & Approval
-            "approve_creative": self._handle_approve_creative_skill,
-            "get_media_buy_status": self._handle_get_media_buy_status_skill,
-            "optimize_media_buy": self._handle_optimize_media_buy_skill,
-            # Note: signals skills removed - should come from dedicated signals agents
-            # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
-        }
-
-        if skill_name not in skill_handlers:
-            available_skills = list(skill_handlers.keys())
+        if skill_name not in SKILL_HANDLERS:
+            available_skills = list(SKILL_HANDLERS.keys())
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
 
         try:
-            handler = skill_handlers[skill_name]
+            handler = getattr(self, SKILL_HANDLERS[skill_name])
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
@@ -2209,6 +2176,62 @@ class AdCPRequestHandler(RequestHandler):
             "Natural-language create_media_buy is not supported. "
             "Invoke the explicit ``create_media_buy`` skill with AdCP-spec parameters."
         )
+
+
+#: The A2A skill dispatch table — skill id -> the handler that serves it.
+#:
+#: Module scope rather than a local inside ``_handle_explicit_skill`` (#1291 B2,
+#: refinement R-M4): it is one of A2A's TWO hand-maintained skill-name lists, the other
+#: being the ``AgentSkill`` ids on the AgentCard below, and a rename that touches only
+#: one of them leaks straight into the signing posture's operation namespace — A2A skill
+#: ids ARE the AdCP operation names the resolver emits
+#: (``src/core/signing/operations.py``). Reconciling the two lists is what makes such a
+#: rename fail the build instead;
+#: ``tests/unit/test_architecture_signing_operations.py::TestA2ASkillListsAgree`` is
+#: what does the reconciling, and it cannot iterate a local.
+#:
+#: The values are handler METHOD NAMES, resolved per call with ``getattr(self, ...)``.
+#: Holding the function objects instead would freeze the binding at import time and
+#: silently defeat instance-level substitution, which is how the A2A error-boundary
+#: tests drive individual handlers. Handler signatures are heterogeneous — discovery
+#: skills accept ``identity: ResolvedIdentity | None``, the rest require non-None — so
+#: the dispatch stays dynamically typed; ``_handle_explicit_skill`` enforces a non-None
+#: identity for every non-discovery skill before it calls one.
+SKILL_HANDLERS: dict[str, str] = {
+    # Core AdCP Discovery Skills
+    "get_adcp_capabilities": "_handle_get_adcp_capabilities_skill",
+    # Core AdCP Media Buy Skills
+    "get_products": "_handle_get_products_skill",
+    "create_media_buy": "_handle_create_media_buy_skill",
+    # AdCP Discovery Skills
+    "list_creative_formats": "_handle_list_creative_formats_skill",
+    "list_accounts": "_handle_list_accounts_skill",
+    "sync_accounts": "_handle_sync_accounts_skill",
+    "list_authorized_properties": "_handle_list_authorized_properties_skill",
+    # Media Buy Management Skills
+    "update_media_buy": "_handle_update_media_buy_skill",
+    "get_media_buys": "_handle_get_media_buys_skill",
+    "get_media_buy_delivery": "_handle_get_media_buy_delivery_skill",
+    "update_performance_index": "_handle_update_performance_index_skill",
+    # AdCP Spec Creative Management (centralized library approach)
+    "sync_creatives": "_handle_sync_creatives_skill",
+    "list_creatives": "_handle_list_creatives_skill",
+    "create_creative": "_handle_create_creative_skill",
+    "assign_creative": "_handle_assign_creative_skill",
+    # Creative Management & Approval
+    "approve_creative": "_handle_approve_creative_skill",
+    "get_media_buy_status": "_handle_get_media_buy_status_skill",
+    "optimize_media_buy": "_handle_optimize_media_buy_skill",
+    # Note: signals skills removed - should come from dedicated signals agents
+    # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
+}
+
+_UNBOUND_SKILLS = sorted(skill for skill, method in SKILL_HANDLERS.items() if not hasattr(AdCPRequestHandler, method))
+if _UNBOUND_SKILLS:  # pragma: no cover - import-time wiring check
+    # Naming the handler by string is what keeps instance-level substitution working;
+    # this turns the typo that indirection allows into an import failure rather than an
+    # AttributeError on the one skill nobody exercised.
+    raise RuntimeError(f"SKILL_HANDLERS names handler methods AdCPRequestHandler does not define: {_UNBOUND_SKILLS}")
 
 
 def create_agent_card() -> AgentCard:

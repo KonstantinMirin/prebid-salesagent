@@ -55,18 +55,24 @@ Per-request sequence
    in order to sign. ``tests/unit/test_architecture_request_signature_middleware.py``
    ties the allowlist to ``app.routes`` so a NEW AdCP surface cannot ship silently
    unverified (R-M4).
-2. Thread hop #1: resolve the tenant -> its posture -> the bucket for this operation,
-   and (only when the decision needs it) the bearer -> ``Principal`` -> ``agent_url``.
-   The bucket is resolved BEFORE any body is buffered (R-H3): under the ``none`` bucket
-   two junk headers would otherwise buy a buffer, a DB round trip and an Ed25519 verify
-   whose result is then discarded.
-3. Signature headers absent -> the composition rule (below). Present -> buffer the body
-   with a replay ``receive``.
-4. Async: the counterparty's :class:`~adcp.signing.agent_resolver.AgentResolution` from
+2. Buffer the body and NAME the request (#1291 B2, ``src/core/signing/operations.py``).
+   Two of the three transports carry the operation IN the body and the webhook
+   escalation lives there on all three, so the name cannot precede the bytes; the pair
+   is skipped entirely while no tenant CAN declare a posture, which is what keeps
+   R-H3's "the ``none`` bucket costs nothing" true in production. The buffer is bounded
+   and its replay is lossless in every exit, including over-cap — an unsigned request
+   must reach its handler with every byte.
+3. Thread hop #1: resolve the tenant -> its posture -> the bucket for that name, and
+   (only when the decision needs it) the bearer -> ``Principal`` -> ``agent_url``. A
+   request nothing could name is promoted to the strictest bucket the posture declares,
+   so an unreadable shape cannot buy an exemption.
+4. Signature headers absent -> the composition rule and the webhook escalation (below).
+   Present -> the checklist, over the already-buffered bytes.
+5. Async: the counterparty's :class:`~adcp.signing.agent_resolver.AgentResolution` from
    the process cache, resolved on a cold entry. The WHOLE resolution is cached — jwks +
    jwks_uri + key_origins — because ``expected_key_origins`` must be handed to every
    verify or the spec's step-7 key-origin check silently no-ops with a warning (R-M2).
-5. Thread hop #2: the Postgres replay store and the synchronous
+6. Thread hop #2: the Postgres replay store and the synchronous
    ``verify_request_signature`` over ONE session checkout, per A4's wiring contract
    (``src/core/signing/replay_store.py``). Called directly with method/url/headers/body
    rather than through ``verify_starlette_request`` (R-M3), because the wrapper derives
@@ -93,6 +99,18 @@ UNCONDITIONALLY, which is the strict reading the spec normatively rejects. So:
   signals signer intent and must not downgrade silently.
 * both present -> the checklist runs.
 
+One rejection sits OUTSIDE that rule, deliberately: security.mdx :1462-1465 requires a
+signature on any request registering webhook credentials
+(``push_notification_config.authentication`` or any
+``accounts[].notification_configs[].authentication``), :1375 restating it as a trigger
+"regardless of ``required_for`` membership". The composition rule's exemption cannot
+apply — the rule exists BECAUSE the registering caller is normally bearer-authed and an
+on-path mutator can inject or strip that block, so "valid bearer ⇒ don't reject" would
+defeat it entirely. Compliance vector 027 cannot discriminate the two readings (its
+bearer resolves to no principal, so it 401s under both);
+``tests/integration/test_request_signature_operations.py`` grades the authenticated
+case that does.
+
 Rejections are a TRANSPORT-layer 401 carrying
 ``WWW-Authenticate: Signature error="<code>"`` (realm intentionally omitted), built by
 the SDK's ``unauthorized_response_headers``. They sit at the ASGI boundary, outside the
@@ -101,7 +119,8 @@ exception handlers are inner, so a raise here becomes a 500 in ``ServerErrorMidd
 Every code is spec-defined; this module invents none.
 
 Spec grounding: AdCP 3.1.1 via ``adcp==6.6.0``;
-``v3.1.1:dist/docs/.../L1/security.mdx`` and
+``v3.1.1:docs/building/by-layer/L1/security.mdx`` (there is no ``dist/docs/3.1.1/`` at
+that tag — ``dist/docs/`` stops at 3.1.0) and
 ``v3.1.1:dist/compliance/3.1.1/universal/signed-requests.yaml`` (12 positive / 28
 negative vectors, graded on 2xx / 401 + the ``WWW-Authenticate`` code byte-for-byte).
 """
@@ -127,7 +146,7 @@ from src.core.config import SigningConfig, get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
-from src.core.http_utils import headers_from_asgi_scope
+from src.core.http_utils import headers_from_asgi_scope, path_from_asgi_scope
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 
 # ``_detect_tenant`` is the Host/x-adcp-tenant resolution ladder every transport
@@ -136,7 +155,12 @@ from src.core.metrics import record_request_unsigned, record_signature_failed, r
 # it validates the credential and raises, which at this layer would turn an auth
 # failure into a signature rejection.
 from src.core.resolved_identity import _detect_tenant, _extract_auth_token
-from src.core.signing.operations import OperationResolver, UnresolvedOperationResolver
+from src.core.signing.operations import (
+    UNNAMED_OPERATION,
+    OperationResolver,
+    RegistryOperationResolver,
+    ResolvedOperation,
+)
 from src.core.signing.posture import (
     PostureBucket,
     RequestSigningPosture,
@@ -227,10 +251,10 @@ class RequestSignatureMiddleware:
 
     def __init__(self, app: Any, *, operation_resolver: OperationResolver | None = None) -> None:
         self.app = app
-        # B1 ships the seam, not a partial map: the default names no operation, so
-        # ``"" in required_for`` is False for every real declaration and B1 alone can
-        # never fail closed on an operation it guessed wrong. B2 swaps this.
-        self._operations: OperationResolver = operation_resolver or UnresolvedOperationResolver()
+        # B2 (``salesagent-z6nr.13``) swapped the inert seam for the registry-derived
+        # resolver, so the default is the production one and the argument stays for
+        # tests that want naming out of the picture.
+        self._operations: OperationResolver = operation_resolver or RegistryOperationResolver()
 
     async def __call__(self, scope: dict[str, Any], receive: Receive, send: Send) -> None:
         config = get_config().signing
@@ -239,8 +263,8 @@ class RequestSignatureMiddleware:
             return
 
         headers = headers_from_asgi_scope(scope)
-        operation, protocol_method = self._operations.resolve(scope, headers)
         signed = "signature" in headers or "signature-input" in headers
+        buffered, resolved = await self._name_request(config, scope, headers, receive, body_needed=signed)
 
         # The hop is unconditional even though the resolver often does no I/O at all
         # (see below): whether it blocks depends on the posture it reads, and the event
@@ -249,71 +273,144 @@ class RequestSignatureMiddleware:
             _resolve_request_context,
             headers=headers,
             token=_bearer_token(scope, headers),
-            operation=operation,
-            protocol_method=protocol_method,
+            resolved=resolved,
             signed=signed,
         )
 
         if not signed:
-            await self._handle_unsigned(context, operation, scope, receive, send)
+            await self._handle_unsigned(context, resolved, scope, buffered, send)
             return
 
-        # R-H3: the bucket is known before a single body byte is read.
         if context.bucket == "none":
-            record_request_unsigned(operation, "ignored")
-            await self.app(scope, receive, send)
+            record_request_unsigned(resolved.operation, "ignored")
+            await self.app(scope, buffered.receive, send)
             return
 
-        await self._handle_signed(context, operation, headers, config, scope, receive, send)
+        await self._handle_signed(context, resolved, headers, config, scope, buffered, send)
+
+    async def _name_request(
+        self,
+        config: SigningConfig,
+        scope: dict[str, Any],
+        headers: Mapping[str, str],
+        receive: Receive,
+        *,
+        body_needed: bool,
+    ) -> tuple[_BufferedBody, ResolvedOperation]:
+        """Buffer the body and NAME the request — the step B2 put ahead of the posture.
+
+        Two of the three transports carry the operation in the body and the payload
+        escalation (security.mdx :1462-1465) lives in the body on all three, so naming
+        cannot happen before buffering. Both are skipped while no tenant CAN declare a
+        posture (:func:`~src.core.signing.posture.request_signing_is_declarable`), which
+        is R-H3's rule restated one step earlier: under an undeclarable block every
+        bucket is ``none`` and neither the name nor the bytes could change an outcome.
+
+        The gate skips the BUFFER and the RESOLVE, never the pass-through (refinement
+        R-H1): ``posture_for_tenant`` is still consulted unconditionally, because it is
+        the seam the tests substitute — short-circuiting ahead of it would make the
+        whole enforcement ladder pass vacuously.
+
+        ``body_needed`` keeps the signed path buffered even under an undeclarable
+        block. It costs a bounded read on a request that already carries signature
+        headers, and it buys the property structurally rather than as an invariant
+        spanning two modules: the checklist can never be handed an empty body because
+        the buffer was skipped. The three expensive things R-H3 named — the tenant
+        read, the principal read and the Ed25519 verify — all still sit behind the
+        bucket.
+        """
+        if not (body_needed or request_signing_is_declarable()):
+            return _unbuffered(receive), UNNAMED_OPERATION
+
+        buffered = await _buffer_body(receive, config.max_signed_body_bytes)
+        # An over-cap body is truncated for NAMING purposes only (the replay downstream
+        # is lossless either way), and a truncated body names nothing -> unresolvable ->
+        # the strictest bucket the posture declares. Fails closed.
+        return buffered, self._operations.resolve(scope, headers, buffered.body)
 
     # -- branches ----------------------------------------------------------
 
     async def _handle_unsigned(
         self,
         context: _RequestContext,
-        operation: str,
+        resolved: ResolvedOperation,
         scope: dict[str, Any],
-        receive: Receive,
+        buffered: _BufferedBody,
         send: Send,
     ) -> None:
         """No signature headers: the composition rule (security.mdx :1268-1269).
 
         The SDK cannot decide this — ``_precheck_presence`` raises on the absent branch
         whatever the bucket says — so the rejection is built here from the SDK's own
-        error type and code constant. No body is read on this path.
+        error type and code constant.
+
+        Everything downstream of here gets ``buffered.receive``: the body has already
+        been drained by the time this runs, so forwarding the raw channel would hand
+        the app an exhausted one (R-H2).
         """
+        operation = resolved.operation
         if context.bucket == "required" and not context.authenticated:
-            record_signature_failed(operation, REQUEST_SIGNATURE_REQUIRED)
-            await _reject(
-                SignatureVerificationError(
-                    REQUEST_SIGNATURE_REQUIRED,
-                    step=0,
-                    message=(
-                        f"operation {operation!r} requires a signature and the caller presented "
-                        "no other credential this agent accepts"
-                    ),
-                ),
+            await self._reject_unsigned(
+                f"operation {operation!r} requires a signature and the caller presented "
+                "no other credential this agent accepts",
+                operation,
                 scope,
-                receive,
+                buffered,
+                send,
+            )
+            return
+
+        # security.mdx :1462-1465 — webhook credentials in the payload force a
+        # signature "regardless of required_for membership" (:1375), and NOT subject to
+        # the composition rule above: the rule exists precisely because the registering
+        # request is normally bearer-authed and an on-path mutator can inject or strip
+        # the ``authentication`` block, so exempting authenticated callers would defeat
+        # it entirely. Bounded by ``supported`` (:1465 binds sellers that support
+        # request signing), which is what the ``none`` bucket carries here.
+        if resolved.signature_forced and context.bucket != "none":
+            await self._reject_unsigned(
+                "the request registers webhook credentials (push_notification_config or "
+                "accounts[].notification_configs authentication), which this agent requires "
+                "to be signed (security.mdx :1462-1465)",
+                operation,
+                scope,
+                buffered,
                 send,
             )
             return
 
         record_request_unsigned(operation, "absent")
-        await self.app(scope, receive, send)
+        await self.app(scope, buffered.receive, send)
+
+    async def _reject_unsigned(
+        self,
+        message: str,
+        operation: str,
+        scope: dict[str, Any],
+        buffered: _BufferedBody,
+        send: Send,
+    ) -> None:
+        """The one ``request_signature_required`` rejection both unsigned rules emit."""
+        record_signature_failed(operation, REQUEST_SIGNATURE_REQUIRED)
+        await _reject(
+            SignatureVerificationError(REQUEST_SIGNATURE_REQUIRED, step=0, message=message),
+            scope,
+            buffered.receive,
+            send,
+        )
 
     async def _handle_signed(
         self,
         context: _RequestContext,
-        operation: str,
+        resolved: ResolvedOperation,
         headers: Mapping[str, str],
         config: SigningConfig,
         scope: dict[str, Any],
-        receive: Receive,
+        buffered: _BufferedBody,
         send: Send,
     ) -> None:
         """At least one signature header present: run the checklist and grade it."""
-        buffered = await _buffer_body(receive, config.max_signed_body_bytes)
+        operation = resolved.operation
         if buffered.over_cap:
             logger.warning("Signed request body exceeded %d bytes; rejecting", config.max_signed_body_bytes)
             await Response(status_code=413)(scope, buffered.receive, send)
@@ -386,10 +483,7 @@ class RequestSignatureMiddleware:
 
 def _is_adcp_surface(scope: Mapping[str, Any]) -> bool:
     """Whether this request targets one of the three AdCP protocol surfaces."""
-    path = scope.get("path", "")
-    root_path = scope.get("root_path") or ""
-    if root_path and path.startswith(root_path):
-        path = path[len(root_path) :] or "/"
+    path = path_from_asgi_scope(scope)
     return any(path == prefix or path.startswith(f"{prefix}/") for prefix in ADCP_SURFACE_PREFIXES)
 
 
@@ -412,12 +506,30 @@ def _bearer_token(scope: Mapping[str, Any], headers: Mapping[str, str]) -> str |
     return _extract_auth_token(dict(headers))[0]
 
 
+def _fail_closed_bucket(posture: RequestSigningPosture, bucket: PostureBucket) -> PostureBucket:
+    """Promote a request nothing could NAME to the strictest bucket *posture* declares.
+
+    Plan step 5's anti-bypass: without it, an attacker who finds a shape the resolver
+    cannot read gets ``bucket_for("", None)`` = ``none`` and skips enforcement
+    entirely — the silent-unverified failure this whole ticket exists to remove.
+
+    ``required`` only when the tenant actually declares a required bucket; an agent
+    that requires nothing must not start requiring signatures for malformed traffic.
+    A tenant that supports nothing (``supported: false``) keeps its ``none``, because
+    an agent that does not verify signatures cannot demand one.
+    """
+    if not posture.supported:
+        return bucket
+    if posture.required_for or posture.protocol_methods_required_for:
+        return "required"
+    return bucket
+
+
 def _resolve_request_context(
     *,
     headers: Mapping[str, str],
     token: str | None,
-    operation: str,
-    protocol_method: str | None,
+    resolved: ResolvedOperation,
     signed: bool,
 ) -> _RequestContext:
     """Resolve the seller's posture and, when the decision needs it, the caller.
@@ -439,7 +551,9 @@ def _resolve_request_context(
     """
     tenant_id, tenant = _detect_tenant(dict(headers)) if request_signing_is_declarable() else (None, None)
     posture = posture_for_tenant(tenant)
-    bucket = posture.bucket_for(operation, protocol_method)
+    bucket = posture.bucket_for(resolved.operation, resolved.protocol_method)
+    if not resolved.resolvable:
+        bucket = _fail_closed_bucket(posture, bucket)
 
     needs_principal = (signed and bucket != "none") or (not signed and bucket == "required")
     if not needs_principal or not token:
@@ -478,20 +592,38 @@ def _resolve_request_context(
 # ---------------------------------------------------------------------------
 
 
+def _unbuffered(receive: Receive) -> _BufferedBody:
+    """The identity element: nothing was read, so the raw channel IS the replay."""
+    return _BufferedBody(body=b"", receive=receive, complete=True, over_cap=False)
+
+
 async def _buffer_body(receive: Receive, max_bytes: int) -> _BufferedBody:
-    """Read the whole body, and return a ``receive`` that replays it exactly once.
+    """Read the body up to *max_bytes*, and return a ``receive`` that replays it whole.
 
     The downstream app builds its own ``Request`` from the same scope, so the receive
     channel this middleware drains is the SAME one the app will read — the SDK
     wrapper's docstring claim that Starlette caches the body for downstream handlers is
     wrong; that cache lives on the middleware's own ``Request`` instance.
 
-    Delegation after the replay matters: ``http.disconnect`` must still reach the app,
-    which a one-shot closure returning a fixed message would swallow.
+    LOSSLESS in every exit (R-H2). B2 moved this ahead of the signed/unsigned split, so
+    it now bounds UNSIGNED traffic too, and the previous over-cap branch discarded the
+    chunks it had already consumed — harmless only while its one caller 413'd
+    immediately. On the unsigned path that same branch would have been either a 413
+    this middleware has never issued on unsigned traffic, or a handler receiving a
+    destroyed body. So every byte read is replayed, and ``more_body`` on the replayed
+    message tells the app whether to keep reading the rest off the raw channel:
+
+    * whole body read       -> ``complete``, one final message;
+    * cap hit on the last chunk -> ``over_cap`` AND ``complete`` — the body is all here,
+      it is merely too big to HASH;
+    * cap hit mid-body      -> ``over_cap``, ``more_body=True``, remainder streams
+      through untouched;
+    * client disconnected   -> what arrived, then the disconnect, which must still
+      reach the app (a one-shot closure returning a fixed message would swallow it).
     """
     chunks: list[bytes] = []
     size = 0
-    pending: list[MutableMapping[str, Any]] = []
+    trailing: list[MutableMapping[str, Any]] = []
     complete = False
     over_cap = False
     more_body = True
@@ -499,21 +631,24 @@ async def _buffer_body(receive: Receive, max_bytes: int) -> _BufferedBody:
     while more_body:
         message = await receive()
         if message["type"] == "http.disconnect":
-            pending.append(message)
+            trailing.append(message)
             break
         chunk = bytes(message.get("body", b""))
+        chunks.append(chunk)
         size += len(chunk)
+        more_body = bool(message.get("more_body", False))
         if size > max_bytes:
             over_cap = True
+            complete = not more_body
             break
-        chunks.append(chunk)
-        more_body = bool(message.get("more_body", False))
     else:
         complete = True
 
     body = b"".join(chunks)
-    if complete:
-        pending.append({"type": "http.request", "body": body, "more_body": False})
+    pending: list[MutableMapping[str, Any]] = []
+    if chunks or complete:
+        pending.append({"type": "http.request", "body": body, "more_body": not complete})
+    pending.extend(trailing)
 
     async def replay() -> MutableMapping[str, Any]:
         if pending:

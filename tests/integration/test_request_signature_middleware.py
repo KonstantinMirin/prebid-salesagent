@@ -75,12 +75,12 @@ a posture through ``from_tenant`` yet. That is intended, and it is why D1
 (``salesagent-z6nr.20``) carries the obligation to re-run this same ladder
 through the real ``from_tenant`` path once the block is backed.
 
-B1's operation resolver is ``UnresolvedOperationResolver``, which returns
-``("", None)`` by design (plan step 2 — no partial hand-written map in B1), so
-the operation these declarations bucket is the empty string. B2
-(``salesagent-z6nr.13``) swaps in the registry-derived resolver; at that point
-:data:`B1_OPERATION` becomes the real AdCP operation name and NOTHING else in
-this file changes.
+B1 shipped with ``UnresolvedOperationResolver``, which returned ``("", None)``
+by design (plan step 2 — no partial hand-written map in B1), so the operation
+these declarations bucketed was the empty string. B2
+(``salesagent-z6nr.13``) swapped in the registry-derived resolver, and
+:data:`B1_OPERATIONS` now carries the real AdCP operation names this ladder
+invokes — which is what makes every assertion below non-vacuous.
 
 Covers: salesagent-z6nr.12 (Core Invariant + Refinement R-H1, R-H2, R-H3,
 R-L, and the shadow-mode ladder).
@@ -134,9 +134,17 @@ from tests.harness._base import BareIntegrationEnv
 #                                      passed and the key-origin check does not
 #                                      ship silently OFF)
 
-#: The operation ``UnresolvedOperationResolver`` yields in B1 (plan step 2).
-#: B2 (salesagent-z6nr.13) replaces the resolver; change this one constant.
-B1_OPERATION = ""
+#: The AdCP operations this file's ladder actually invokes, now that B2
+#: (salesagent-z6nr.13) has replaced ``UnresolvedOperationResolver`` with the
+#: registry-derived one and every request below is NAMED.
+#:
+#: Two names rather than the single ``""`` B1 shipped, because the ladder runs on two
+#: routes: ``/api/v1/capabilities`` (both verbs) is ``get_adcp_capabilities`` and POST
+#: ``/api/v1/media-buys`` is ``create_media_buy``. Each test still exercises exactly
+#: one of them, and :func:`_bucketed` puts BOTH in the bucket under test, so every
+#: assertion below grades the same thing it graded in B1 — against real operation names
+#: instead of the empty string, which is what makes the whole ladder non-vacuous.
+B1_OPERATIONS = ("get_adcp_capabilities", "create_media_buy")
 
 _AGENT_URL = "https://buyer.example.com/a2a"
 _KEY_ORIGIN = "https://buyer.example.com"
@@ -175,13 +183,24 @@ def _declared_posture(**declaration: Any) -> Iterator[None]:
     (``posture_for_tenant``) is replaced — ``request_signing`` is still in
     ``_UNBACKED_BLOCKS``, so there is no DB path that can carry a declaration
     in B1.
+
+    ``request_signing_is_declarable`` is substituted TRUE alongside it (B2
+    refinement R-H1). B1 gates only the tenant DB read on declarability and
+    calls ``posture_for_tenant`` unconditionally, so B1 never needed this. B2
+    gates the body BUFFER + operation RESOLVE on the same flag — which is
+    False in production today — so without this line every B2 declaration
+    would be graded against an operation the resolver was never asked to
+    name, and the whole ladder below would pass vacuously. Declaring a posture
+    and not making it declarable is not a state any tenant can be in.
     """
+    from src.core.signing import request_verifier_middleware as mw
     from src.core.signing.posture import RequestSigningPosture
 
-    from src.core.signing import request_verifier_middleware as mw
-
     posture = RequestSigningPosture(**declaration)
-    with patch.object(mw, "posture_for_tenant", lambda _tenant: posture):
+    with (
+        patch.object(mw, "posture_for_tenant", lambda _tenant: posture),
+        patch.object(mw, "request_signing_is_declarable", lambda: True),
+    ):
         yield
 
 
@@ -191,7 +210,7 @@ def _unsupported() -> dict[str, Any]:
 
 
 def _bucketed(bucket: str) -> dict[str, Any]:
-    """A declaration putting :data:`B1_OPERATION` in exactly one bucket.
+    """A declaration putting :data:`B1_OPERATIONS` in exactly one bucket.
 
     ``required_for`` entries must also appear in ``supported_for``
     (``get-adcp-capabilities-response.json`` x-adcp-validation: "an operation
@@ -200,11 +219,11 @@ def _bucketed(bucket: str) -> dict[str, Any]:
     ``required_for > warn_for > supported_for`` load-bearing rather than
     decorative.
     """
-    declaration: dict[str, Any] = {"supported": True, "supported_for": [B1_OPERATION]}
+    declaration: dict[str, Any] = {"supported": True, "supported_for": list(B1_OPERATIONS)}
     if bucket == "required":
-        declaration["required_for"] = [B1_OPERATION]
+        declaration["required_for"] = list(B1_OPERATIONS)
     elif bucket == "warn":
-        declaration["warn_for"] = [B1_OPERATION]
+        declaration["warn_for"] = list(B1_OPERATIONS)
     elif bucket != "supported":
         raise ValueError(f"unknown bucket {bucket!r}")
     return declaration

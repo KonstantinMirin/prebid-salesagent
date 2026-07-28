@@ -32,7 +32,7 @@ from typing import Any, Literal, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
-from pydantic import ConfigDict
+from pydantic import ConfigDict, RootModel, model_validator
 
 from src.core.enum_helpers import enum_value
 from src.core.schemas.capability_declarations import is_block_declarable
@@ -43,16 +43,33 @@ from src.core.schemas.capability_declarations import is_block_declarable
 PostureBucket = Literal["required", "warn", "supported", "none"]
 
 
-def _names(items: Any) -> frozenset[str]:
-    """Wire-format names from a declared bucket, ``None`` -> empty.
+def _name(item: Any) -> str:
+    """The wire string a single declared bucket entry compares against.
 
-    The ``protocol_methods_*`` buckets are typed as generated enum members while
-    ``required_for`` / ``warn_for`` / ``supported_for`` are plain strings; both
-    compare against a wire string only through ``.value``.
+    The three ``protocol_methods_*`` buckets are typed as generated
+    ``RootModel[str]`` wrappers (``ProtocolMethodsRequiredForItem`` and siblings,
+    each carrying the ``^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$`` pattern), while
+    ``required_for`` / ``warn_for`` / ``supported_for`` are plain strings. The
+    wrappers are NOT enums, so ``enum_value`` falls through to ``str(v)`` and
+    yields ``"root='tasks/cancel'"`` — a frozenset that matches no wire method,
+    i.e. silently zero enforcement for any tenant declaring a protocol-method
+    bucket. B1 could not see it because ``UnresolvedOperationResolver`` never
+    supplied a protocol method; B2 is what makes the branch reachable.
+
+    The unwrap is typed on :class:`pydantic.RootModel` rather than a defensive
+    attribute probe, which is both wrong (it would swallow a genuine shape change)
+    and forbidden by ``test_architecture_no_defensive_rootmodel``.
     """
+    if isinstance(item, RootModel):
+        return str(item.root)
+    return enum_value(item)
+
+
+def _names(items: Any) -> frozenset[str]:
+    """Wire-format names from a declared bucket, ``None`` -> empty."""
     if not items:
         return frozenset()
-    return frozenset(enum_value(item) for item in items)
+    return frozenset(_name(item) for item in items)
 
 
 def _bucket_for(name: str, required: Any, warn: Any, supported: Any) -> PostureBucket:
@@ -83,6 +100,42 @@ class RequestSigningPosture(LibraryRequestSigning):
     """
 
     model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="after")
+    def _namespaces_must_not_be_mixed(self) -> RequestSigningPosture:
+        """Reject a declaration that puts a JSON-RPC method in an AdCP bucket.
+
+        security.mdx :1045-1059 — the schema's own words on ``required_for``: "Not MCP
+        tool names, A2A skill names, or any transport-specific rename … JSON-RPC
+        protocol method names like ``tasks/cancel`` belong in
+        ``protocol_methods_required_for``, not here", and :1053 requires a
+        CONFIGURATION-time rejection rather than coercion.
+
+        Only this direction needs enforcing here: the ``protocol_methods_*`` items are
+        generated ``RootModel``s carrying the ``^[a-z][a-z0-9_]*/…`` pattern, so
+        pydantic already refuses a slash-free AdCP name in them. Nothing enforced the
+        reverse, and nothing could observe it either, until B2 started naming requests
+        in both namespaces.
+
+        D1 (``salesagent-z6nr.20``) feeds this real tenant declarations and owns the
+        remaining declaration-time rules (the ``x-adcp-validation`` subset/disjoint
+        checks, and a warning for a ``protocol_methods_*`` entry naming
+        ``message/send``, which explicit-skill A2A calls can never satisfy).
+        """
+        mixed = sorted(
+            name
+            for bucket in (self.required_for, self.warn_for, self.supported_for)
+            for name in _names(bucket)
+            if "/" in name
+        )
+        if mixed:
+            raise ValueError(
+                f"request_signing operation buckets name JSON-RPC protocol methods: {mixed}. "
+                "required_for / warn_for / supported_for carry AdCP operation names only; "
+                "a name containing '/' belongs in the matching protocol_methods_* bucket "
+                "(get-adcp-capabilities-response.json, security.mdx :1045-1059)."
+            )
+        return self
 
     def bucket_for(self, operation: str, protocol_method: str | None = None) -> PostureBucket:
         """Which enforcement bucket *operation* (or *protocol_method*) falls in.
