@@ -1,6 +1,6 @@
 """Collection guard: admin BDD scenarios are graded on BOTH admin transports.
 
-Core invariant (salesagent-jckl): a BDD scenario's transport is chosen by the
+Core invariant: a BDD scenario's transport is chosen by the
 parametrization at collection time and passed down through the harness env —
 never inferred inside the env from ambient environment variables — so the
 feature file's declared transports and the transports that actually grade the

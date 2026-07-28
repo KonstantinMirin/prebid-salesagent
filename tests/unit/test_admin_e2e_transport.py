@@ -1,6 +1,6 @@
 """AdminAccountEnv is TOLD its transport and address — it never infers them.
 
-Before salesagent-jckl this env auto-detected its transport from the process-global
+This env used to auto-detect its transport from the process-global
 ``ADCP_SALES_PORT``. That is the defect these tests now pin the absence of:
 
 - A global carries no sender, so the env could not tell "my caller wants e2e"

@@ -3163,7 +3163,7 @@ def _parametrize_ctx(
     """Parametrize ``ctx`` over the in-process transports, plus the e2e one when enabled.
 
     Extracted so the AdCP arm and the admin arm share ONE copy of the
-    append-e2e-when-enabled tail (salesagent-jckl). Duplicating it would be the
+    append-e2e-when-enabled tail. Duplicating it would be the
     same logical operation with substituted enum members — the R0801 shape the
     DRY invariant treats as a defect, against a duplication baseline that may
     only shrink.
@@ -3209,7 +3209,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # they DO have two transports of their own, both declared in
     # BR-ADMIN-ACCOUNTS.feature's header and both implemented by AdminAccountEnv.
     # Parametrize over them here so the transport is chosen at collection time
-    # rather than pinned inside the harness (salesagent-jckl).
+    # rather than pinned inside the harness.
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         from tests.harness.admin_accounts import AdminTransport
 
@@ -3910,7 +3910,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         from tests.harness.admin_accounts import AdminAccountEnv
 
         # Both transports the feature file declares, chosen by the collection-time
-        # parametrization rather than pinned here (salesagent-jckl). The env is
+        # parametrization rather than pinned here. The env is
         # TOLD its transport and, over e2e, the per-worker address e2e_stack
         # synthesised — it discovers neither.
         #

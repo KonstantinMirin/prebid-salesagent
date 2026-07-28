@@ -5,11 +5,10 @@ Provides two transports for admin account management BDD scenarios:
 - **e2e**: requests.Session against the live stack (full deployment)
 
 The transport and, for e2e, the server address are TOLD to this env by its
-caller — they are never inferred from the environment (salesagent-jckl). The
+caller — they are never inferred from the environment. The
 BDD parametrization picks the transport at collection time and the ``e2e_stack``
 fixture supplies the address; both arrive as arguments.
 
-beads: salesagent-oj0.1.2, salesagent-oj0.1.3
 """
 
 from __future__ import annotations
@@ -58,8 +57,8 @@ class _CaseInsensitiveHeaders(dict):
     names). Both source objects model that correctly — werkzeug ``Headers`` and
     requests ``CaseInsensitiveDict`` — but ``dict(response.headers)`` threw the
     property away, so ``headers.get("Location")`` silently returned "" over real
-    HTTP and every redirect assertion read as "no redirect happened"
-    (salesagent-jckl). Six BR-ADMIN-ACCOUNTS scenarios failed on this the first
+    HTTP and every redirect assertion read as "no redirect happened".
+    Six BR-ADMIN-ACCOUNTS scenarios failed on this the first
     time they ran over the wire.
     """
 
@@ -139,8 +138,8 @@ class AdminAccountEnv:
         """
         Args:
             mode: ``integration`` (Flask test_client) or ``e2e`` (live stack).
-                Defaults to the in-process transport; there is no auto-detection
-                (salesagent-jckl). An env that guesses its own transport from a
+                Defaults to the in-process transport; there is no auto-detection.
+                An env that guesses its own transport from a
                 process-global cannot tell "my caller wants e2e" from "the
                 container exports a port for unrelated reasons", and a global
                 cannot carry a different address per xdist worker at all.
@@ -400,7 +399,7 @@ class AdminAccountEnv:
         """Accounts in this tenant whose brand carries ``domain``.
 
         Owned by the env rather than read with a raw session in the step, so the
-        lookup follows whichever DB the transport selected (salesagent-jckl).
+        lookup follows whichever DB the transport selected.
         """
         from sqlalchemy import select
 
