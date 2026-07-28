@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, node_name
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,9 +34,7 @@ def _is_thread_dict_annotation(node: ast.AST) -> bool:
     """True if the annotation is dict[str, threading.Thread] / Dict[str, Thread]."""
     if not isinstance(node, ast.Subscript):
         return False
-    base = node.value
-    base_name = base.id if isinstance(base, ast.Name) else getattr(base, "attr", None)
-    if base_name not in ("dict", "Dict"):
+    if node_name(node.value) not in ("dict", "Dict"):
         return False
     sl = node.slice
     if not isinstance(sl, ast.Tuple) or len(sl.elts) != 2:

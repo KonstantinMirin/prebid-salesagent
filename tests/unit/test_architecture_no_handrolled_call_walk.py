@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_architecture_guard_trees
+from tests.unit._architecture_helpers import call_name, iter_architecture_guard_trees, node_name
 
 _EXEMPT = {
     Path("tests/unit/_architecture_helpers.py"),
@@ -208,3 +208,102 @@ def test_call_walk_guard_allows_out_of_scope_shapes() -> None:
     for source in out_of_scope_sources:
         for_nodes = _for_nodes_from_source(source)
         assert not any(_for_is_handrolled_call_walk(node) for node in for_nodes)
+
+
+# --- One call-name extraction definition in the guard tree (#1600) --------------------
+
+#: Files whose Name/Attribute split is a DIFFERENT operation, not this duplication.
+_NAME_SPLIT_EXEMPT: set[str] = {
+    # Owns the primitive.
+    "_architecture_helpers.py",
+    # Keeps bare vs attribute decorators in SEPARATE sets (@overload vs @size.setter);
+    # collapsing them to one string would erase the distinction the guard depends on.
+    "test_architecture_no_duplicate_module_defs.py",
+}
+
+
+def find_handrolled_name_extractions(tree: ast.AST) -> list[int]:
+    """Line numbers of hand-rolled ``Name.id`` / ``Attribute.attr`` name extraction.
+
+    Matches the ternary, the ``getattr(f, "attr", None)`` and the if/elif spellings
+    alike by looking for the *pair*: an ``isinstance(x, ast.Name)`` test in the same
+    statement as an ``.attr``/``.id`` read. All three spellings collapse to
+    ``node_name`` / ``call_name``.
+    """
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.IfExp | ast.If):
+            continue
+        test = node.test
+        if not (isinstance(test, ast.Call) and call_name(test) == "isinstance" and len(test.args) == 2):
+            continue
+        if node_name(test.args[1]) != "Name":
+            continue
+        # Does the same statement also read `.attr` (the Attribute branch)?
+        reads_attr = any(
+            isinstance(sub, ast.Attribute) and sub.attr == "attr"
+            for branch in ((node.body, node.orelse) if isinstance(node, ast.If) else ([node.body], [node.orelse]))
+            for stmt in branch
+            for sub in ast.walk(stmt)
+        )
+        # `getattr(x, "attr", None)` spelling
+        reads_getattr = any(
+            isinstance(sub, ast.Call)
+            and call_name(sub) == "getattr"
+            and len(sub.args) >= 2
+            and isinstance(sub.args[1], ast.Constant)
+            and sub.args[1].value == "attr"
+            for branch in ((node.body, node.orelse) if isinstance(node, ast.If) else ([node.body], [node.orelse]))
+            for stmt in branch
+            for sub in ast.walk(stmt)
+        )
+        if reads_attr or reads_getattr:
+            lines.append(node.lineno)
+    return sorted(lines)
+
+
+class TestSingleCallNameExtraction:
+    """``node_name``/``call_name`` own "what is this expression called".
+
+    23 hand-rolled copies existed across 15 guard files in three spellings — ternary,
+    ``getattr`` and if/elif — including four inside the helper module itself. Guards are
+    long-lived infrastructure; duplicated AST matching drifts until two guards disagree
+    about what a call is named.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_handrolled_name_extraction_in_guards(self):
+        violations: list[str] = []
+        for path in sorted(Path(__file__).parent.glob("*.py")):
+            if path.name in _NAME_SPLIT_EXEMPT:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            violations += [f"{path.name}:{lineno}" for lineno in find_handrolled_name_extractions(tree)]
+        assert not violations, (
+            "Hand-rolled Name/Attribute name extraction — use node_name() or call_name() "
+            "from tests.unit._architecture_helpers:\n  " + "\n  ".join(violations)
+        )
+
+    @pytest.mark.arch_guard
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "name = f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)",
+            'name = f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)',
+        ],
+        ids=["ternary", "getattr"],
+    )
+    def test_guard_detects_planted_spellings(self, source: str):
+        """Positive meta-tests: both one-line spellings that dominated the migration."""
+        assert find_handrolled_name_extractions(ast.parse(source)) == [1]
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_migrated_form(self):
+        """Negative meta-test: the helper call is clean."""
+        assert find_handrolled_name_extractions(ast.parse("name = call_name(node)\n")) == []
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_a_bare_name_check(self):
+        """Negative meta-test: an isinstance(x, ast.Name) test that does NOT also read
+        ``.attr`` is a different question (is this a bare name?) and must not be flagged."""
+        assert find_handrolled_name_extractions(ast.parse("if isinstance(f, ast.Name):\n    use(f.id)\n")) == []

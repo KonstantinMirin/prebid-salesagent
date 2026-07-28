@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import call_name, iter_call_expressions, node_name
 
 _SRC = Path(__file__).parent.parent.parent / "src"
 
@@ -87,18 +87,12 @@ def _format_key_falsy_guards(tree: ast.AST) -> list[int]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.IfExp) or not isinstance(node.body, ast.Call):
             continue
-        func = node.body.func
-        name = func.id if isinstance(func, ast.Name) else (func.attr if isinstance(func, ast.Attribute) else None)
-        if name not in ("format_key", "format_key_display"):
+        if call_name(node.body) not in ("format_key", "format_key_display"):
             continue
-        if not isinstance(node.test, ast.Name | ast.Attribute):
+        test_name = node_name(node.test)
+        if test_name is None:
             continue
-        test_name = node.test.id if isinstance(node.test, ast.Name) else node.test.attr
-        call_args = {
-            a.id if isinstance(a, ast.Name) else a.attr
-            for a in node.body.args
-            if isinstance(a, ast.Name | ast.Attribute)
-        }
+        call_args = {node_name(a) for a in node.body.args} - {None}
         if test_name in call_args:
             guarded.append(node.lineno)
     return guarded

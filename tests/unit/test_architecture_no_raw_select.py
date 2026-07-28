@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations, node_name
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,12 +51,7 @@ def _discover_orm_model_names() -> set[str]:
         if node.name == "Base":
             continue
         for base in node.bases:
-            base_name = ""
-            if isinstance(base, ast.Name):
-                base_name = base.id
-            elif isinstance(base, ast.Attribute):
-                base_name = base.attr
-            if base_name in ("Base", "JSONValidatorMixin"):
+            if node_name(base) in ("Base", "JSONValidatorMixin"):
                 model_names.add(node.name)
                 break
 

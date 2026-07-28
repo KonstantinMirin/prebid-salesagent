@@ -28,6 +28,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import call_name
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BDD_CONFTEST = _REPO_ROOT / "tests" / "bdd" / "conftest.py"
 _HARNESS_DIR = _REPO_ROOT / "tests" / "harness"
@@ -140,9 +142,7 @@ def find_unsupported_declarations(tree: ast.Module, relpath: str) -> list[tuple[
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "e2e_unsupported":
             found.append((relpath, scope, _reason(node)))
         if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call):
-            func = node.exc.func
-            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-            if name == "E2EUnsupportedSetup":
+            if call_name(node.exc) == "E2EUnsupportedSetup":
                 found.append((relpath, scope, _reason(node.exc)))
         for child in ast.iter_child_nodes(node):
             _visit(child, scope)

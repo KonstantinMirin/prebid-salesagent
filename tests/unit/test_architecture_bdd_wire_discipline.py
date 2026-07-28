@@ -27,7 +27,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, call_name, node_name
 
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _TESTS_ROOT = _STEPS_DIR.parent.parent
@@ -96,8 +96,7 @@ def _is_then(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _error_class_name(call: ast.Call) -> str | None:
     """Return the constructed class name if it ends in 'Error', else None."""
-    fn = call.func
-    name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+    name = call_name(call)
     return name if name and name.endswith("Error") else None
 
 
@@ -105,10 +104,8 @@ def _func_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     """All identifiers/attributes referenced in the function body."""
     names: set[str] = set()
     for node in ast.walk(func):
-        if isinstance(node, ast.Name):
-            names.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            names.add(node.attr)
+        if (name := node_name(node)) is not None:
+            names.add(name)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             names.add(node.value)
     return names

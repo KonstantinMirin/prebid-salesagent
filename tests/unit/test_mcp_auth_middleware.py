@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
+from tests.unit._architecture_helpers import call_name
 
 
 class TestMCPAuthMiddlewareExists:
@@ -249,11 +250,8 @@ class TestToolsDoNotCallResolveIdentityDirectly:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if node.name == func_name:
                     for child in ast.walk(node):
-                        if isinstance(child, ast.Call):
-                            if isinstance(child.func, ast.Name):
-                                calls.append(child.func.id)
-                            elif isinstance(child.func, ast.Attribute):
-                                calls.append(child.func.attr)
+                        if (name := call_name(child)) is not None:
+                            calls.append(name)
         return calls
 
     @pytest.mark.parametrize(

@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions, safe_parse
+from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions, node_name, safe_parse
 
 # Adapter-raised typed errors with no raise-site ``pytest.raises`` test. MUST stay
 # empty — a new uncovered adapter raise fails the guard immediately. Do not add
@@ -97,9 +97,7 @@ def collect_pytest_raises_classes() -> set[str]:
             first = node.args[0]
             candidates = first.elts if isinstance(first, ast.Tuple) else [first]
             for cand in candidates:
-                name = (
-                    cand.id if isinstance(cand, ast.Name) else (cand.attr if isinstance(cand, ast.Attribute) else None)
-                )
+                name = node_name(cand)
                 if name is not None and _is_adcp_error_name(name):
                     caught.add(name)
     return caught

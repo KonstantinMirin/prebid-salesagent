@@ -12,6 +12,7 @@ import ast
 from pathlib import Path
 
 from src.core.schemas import CreateMediaBuyRequest
+from tests.unit._architecture_helpers import call_name
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,12 +137,7 @@ def _extract_call_kwargs(file_path: Path, caller_name: str, callee_name: str) ->
     for node in ast.walk(caller_node):
         if not isinstance(node, ast.Call):
             continue
-        called_name = None
-        if isinstance(node.func, ast.Name):
-            called_name = node.func.id
-        elif isinstance(node.func, ast.Attribute):
-            called_name = node.func.attr
-        if called_name != callee_name:
+        if call_name(node) != callee_name:
             continue
         for kw in node.keywords:
             if kw.arg is not None:

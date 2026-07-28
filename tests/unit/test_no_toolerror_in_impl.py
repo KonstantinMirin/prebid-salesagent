@@ -14,6 +14,8 @@ import re
 
 import pytest
 
+from tests.unit._architecture_helpers import call_name
+
 # Files that should have zero ToolError raises in _impl functions
 SIMPLE_MODULE_FILES = [
     "src/core/main.py",
@@ -58,17 +60,9 @@ def _find_toolerror_raises(filepath: str) -> list[tuple[int, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Raise) and node.exc is not None:
             # Check for raise ToolError(...)
-            exc = node.exc
-            if isinstance(exc, ast.Call):
-                func = exc.func
-                name = None
-                if isinstance(func, ast.Name):
-                    name = func.id
-                elif isinstance(func, ast.Attribute):
-                    name = func.attr
-                if name == "ToolError":
-                    line = source.splitlines()[node.lineno - 1].strip()
-                    results.append((node.lineno, line))
+            if call_name(node.exc) == "ToolError":
+                line = source.splitlines()[node.lineno - 1].strip()
+                results.append((node.lineno, line))
 
     return results
 

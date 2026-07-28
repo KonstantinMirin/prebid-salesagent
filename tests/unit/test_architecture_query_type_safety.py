@@ -20,6 +20,7 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     iter_call_expressions,
+    node_name,
     repo_root,
     src_python_files,
 )
@@ -93,12 +94,9 @@ def _find_in_queries_on_integer_columns(filepath: str) -> list[tuple[int, str, s
 
         column_name = value.attr
 
-        # The model is value.value (a Name node)
-        if isinstance(value.value, ast.Name):
-            model_name = value.value.id
-        elif isinstance(value.value, ast.Attribute):
-            model_name = value.value.attr
-        else:
+        # The model owner is value.value (Model or mod.Model)
+        model_name = node_name(value.value)
+        if model_name is None:
             continue
 
         # Check if this model.column is an Integer PK

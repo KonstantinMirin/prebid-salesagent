@@ -13,6 +13,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import call_name
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_BASE = REPO_ROOT / "tests" / "harness" / "_base.py"
 TARGET_FN = "_envelope_to_adcp_error"
@@ -46,9 +48,7 @@ def _calls_with_keyword(fn_node: ast.AST, callee: str, kwarg: str) -> bool:
     for node in ast.walk(fn_node):
         if not isinstance(node, ast.Call):
             continue
-        func = node.func
-        fn_name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-        if fn_name != callee:
+        if call_name(node) != callee:
             continue
         # Keyword: kwarg=<expr>, but reject a literal None/"" (value dropped).
         if any(kw.arg == kwarg and not _is_empty_constant(kw.value) for kw in node.keywords):

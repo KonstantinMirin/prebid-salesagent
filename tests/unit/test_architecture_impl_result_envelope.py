@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import call_name, node_name
+
 _TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 
 # Every *_impl that must return its ProtocolEnvelope wrapper (so wire transports
@@ -57,11 +59,9 @@ def _return_annotation_name(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str
     ann = func.returns
     if ann is None:
         return None
-    if isinstance(ann, ast.Name):
-        return ann.id
-    if isinstance(ann, ast.Attribute):
-        return ann.attr
-    return ast.unparse(ann)
+    # Name/Attribute head is shared; the unparse tail is this guard's own —
+    # a subscripted annotation (Result[...]) has no single name.
+    return node_name(ann) or ast.unparse(ann)
 
 
 def _find_bare_domain_returns(func: ast.FunctionDef | ast.AsyncFunctionDef, bare_types: set[str]) -> list[int]:
@@ -74,14 +74,8 @@ def _find_bare_domain_returns(func: ast.FunctionDef | ast.AsyncFunctionDef, bare
         if val is None:
             continue
         # Direct: return <DomainSuccess>(...) or return <DomainError>(...)
-        if isinstance(val, ast.Call):
-            func_name = None
-            if isinstance(val.func, ast.Name):
-                func_name = val.func.id
-            elif isinstance(val.func, ast.Attribute):
-                func_name = val.func.attr
-            if func_name in bare_types:
-                bare_lines.append(node.lineno)
+        if call_name(val) in bare_types:
+            bare_lines.append(node.lineno)
     return bare_lines
 
 

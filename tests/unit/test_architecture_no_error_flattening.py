@@ -34,7 +34,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_module_trees
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_module_trees, node_name
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
@@ -84,7 +84,7 @@ def _raises_fresh_adcp_error(handler: ast.ExceptHandler) -> str | None:
         if not isinstance(node, ast.Raise) or node.exc is None:
             continue
         raised = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
-        name = raised.id if isinstance(raised, ast.Name) else raised.attr if isinstance(raised, ast.Attribute) else None
+        name = node_name(raised)
         if name and name.startswith("AdCP") and name.endswith("Error"):
             return name
     return None

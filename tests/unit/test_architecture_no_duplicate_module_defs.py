@@ -95,6 +95,11 @@ def _decorators(node: _Def) -> tuple[set[str], set[str]]:
     attrs: set[str] = set()
     for decorator in node.decorator_list:
         target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        # NOT a candidate for _architecture_helpers.node_name, despite the shape.
+        # That helper collapses Name and Attribute to ONE string; this function must
+        # keep them APART — @overload (bare) and @size.setter (attribute) mean
+        # different things here, and merging them would erase the distinction the
+        # duplicate-definition guard depends on. Deliberate divergence (#1600).
         if isinstance(target, ast.Name):
             bare.add(target.id)
         elif isinstance(target, ast.Attribute):

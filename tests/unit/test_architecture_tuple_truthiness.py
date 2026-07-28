@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import call_name
+
 _SRC = Path(__file__).parent.parent.parent / "src"
 
 ALLOWLIST: set[str] = set()
@@ -30,17 +32,10 @@ def _tuple_bool_validators(src_root: Path) -> set[str]:
     return names
 
 
-def _call_name(node: ast.expr) -> str | None:
-    if not isinstance(node, ast.Call):
-        return None
-    f = node.func
-    return f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else None)
-
-
 def _truthiness_violations(tree: ast.AST, validators: set[str]) -> list[int]:
     lines: list[int] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.If) and _call_name(node.test) in validators:
+        if isinstance(node, ast.If) and call_name(node.test) in validators:
             lines.append(node.lineno)
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             assigned: dict[str, str] = {}
@@ -49,7 +44,7 @@ def _truthiness_violations(tree: ast.AST, validators: set[str]) -> list[int]:
                     isinstance(sub, ast.Assign)
                     and len(sub.targets) == 1
                     and isinstance(sub.targets[0], ast.Name)
-                    and (name := _call_name(sub.value)) in validators
+                    and (name := call_name(sub.value)) in validators
                     and name is not None
                 ):
                     assigned[sub.targets[0].id] = name

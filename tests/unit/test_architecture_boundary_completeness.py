@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, call_name, iter_call_expressions
 
 TOOLS_DIR = Path("src/core/tools")
 
@@ -125,14 +125,7 @@ def _find_impl_call_args_in_function(file_path: Path, wrapper_name: str, impl_na
     # Find _impl calls within the wrapper function body
     results = []
     for node in iter_call_expressions(wrapper_node):
-        func = node.func
-        called_name = None
-        if isinstance(func, ast.Name):
-            called_name = func.id
-        elif isinstance(func, ast.Attribute):
-            called_name = func.attr
-
-        if called_name != impl_name:
+        if call_name(node) != impl_name:
             continue
 
         kwargs = {kw.arg for kw in node.keywords if kw.arg is not None}

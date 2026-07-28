@@ -11,8 +11,10 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_violations_match_allowlist,
+    call_name,
     iter_call_expressions,
     iter_git_tracked_files,
+    node_name,
     postgres_image_ref,
     postgres_tag_pattern_map,
     uv_version_pattern_map,
@@ -173,3 +175,51 @@ def test_git_available_never_engages_fallback(tmp_path: Path) -> None:
     assert names == {"tracked.py"}, (
         f"with working git the helper must yield exactly the tracked set (hermetic), got {sorted(names)}"
     )
+
+
+# --- node_name / call_name (#1600) ---------------------------------------------------
+
+
+@pytest.mark.arch_guard
+def test_node_name_returns_the_trailing_identifier() -> None:
+    """Bare name and dotted attribute both resolve to the TAIL."""
+    assert node_name(ast.parse("Foo", mode="eval").body) == "Foo"
+    assert node_name(ast.parse("mod.Foo", mode="eval").body) == "Foo"
+    assert node_name(ast.parse("pkg.mod.Foo", mode="eval").body) == "Foo"
+
+
+@pytest.mark.arch_guard
+def test_node_name_returns_none_for_non_name_shapes() -> None:
+    """A subscript/call/literal has no name — callers rely on None to fall through."""
+    assert node_name(ast.parse("Foo[int]", mode="eval").body) is None
+    assert node_name(ast.parse("f()", mode="eval").body) is None
+    assert node_name(ast.parse("'x'", mode="eval").body) is None
+    assert node_name(None) is None
+
+
+@pytest.mark.arch_guard
+def test_call_name_resolves_bare_and_attribute_calls() -> None:
+    assert call_name(ast.parse("f()", mode="eval").body) == "f"
+    assert call_name(ast.parse("mod.f()", mode="eval").body) == "f"
+
+
+@pytest.mark.arch_guard
+def test_call_name_accepts_a_non_call_and_returns_none() -> None:
+    """The superset signature: guards pass ``node.exc`` without proving it is a Call.
+
+    Losing this makes every ``call_name(node.exc)`` site need its own isinstance
+    check — which is the duplication this helper exists to remove.
+    """
+    assert call_name(ast.parse("Foo", mode="eval").body) is None
+    assert call_name(ast.parse("mod.Foo", mode="eval").body) is None
+    assert call_name(None) is None
+
+
+@pytest.mark.arch_guard
+def test_call_name_is_the_tail_not_the_root() -> None:
+    """Guards name the callable, not the module that must be imported.
+
+    ``check_import_usage`` walks the same shape to its ROOT and is deliberately NOT
+    routed through here; this pins the direction so the two never get conflated.
+    """
+    assert call_name(ast.parse("pkg.mod.build()", mode="eval").body) == "build"

@@ -147,22 +147,46 @@ def find_tenant_config_violations(tree: ast.Module) -> list[int]:
     return lines
 
 
+def node_name(node: ast.AST | None) -> str | None:
+    """The trailing identifier of a name-shaped expression, else None.
+
+    ``Foo`` -> ``"Foo"``, ``mod.Foo`` -> ``"Foo"``; anything else -> ``None``.
+
+    The ONE definition of "what this expression is called" for the guard tree. Every
+    structural guard needs it — to name a raised exception, a decorator, a base class,
+    a return annotation, the owner of ``Model.column`` — and each hand-rolled copy is a
+    chance for two guards to disagree about what a name is. Callers keep their own tail
+    logic (an ``ast.unparse`` fallback for subscripted annotations, say); only this head
+    is shared.
+
+    Deliberately returns the TAIL, not the root: ``foo.bar.Baz`` is ``"Baz"``. Code that
+    needs the ROOT (the name that must be imported) is doing the opposite operation and
+    must not route through here.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def call_name(node: ast.AST | None) -> str | None:
+    """The name of the callable a Call invokes, else None.
+
+    ``foo()`` -> ``"foo"``, ``mod.foo()`` -> ``"foo"``. Accepts a non-Call and returns
+    ``None``, so a caller can hand it ``node.exc`` or a returned value without first
+    proving it is a Call — the superset signature the guards actually want.
+    """
+    return node_name(node.func) if isinstance(node, ast.Call) else None
+
+
 def find_plain_json_column_violations(tree: ast.Module) -> list[int]:
     """Return line numbers of mapped_column/Column calls using plain JSON."""
     lines: list[int] = []
     for call in iter_call_expressions(tree):
-        func_name: str | None = None
-        if isinstance(call.func, ast.Name):
-            func_name = call.func.id
-        elif isinstance(call.func, ast.Attribute):
-            func_name = call.func.attr
-        if func_name not in {"Column", "mapped_column"} or not call.args:
+        if call_name(call) not in {"Column", "mapped_column"} or not call.args:
             continue
-        first_arg = call.args[0]
-        uses_plain_json = (isinstance(first_arg, ast.Name) and first_arg.id == "JSON") or (
-            isinstance(first_arg, ast.Attribute) and first_arg.attr == "JSON"
-        )
-        if uses_plain_json:
+        if node_name(call.args[0]) == "JSON":
             lines.append(call.lineno)
     return lines
 
@@ -172,13 +196,7 @@ def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[as
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if name is None:
-            yield node
-            continue
-        f = node.func
-        if isinstance(f, ast.Name) and f.id == name:
-            yield node
-        elif isinstance(f, ast.Attribute) and f.attr == name:
+        if name is None or node_name(node.func) == name:
             yield node
 
 
@@ -190,12 +208,7 @@ def select_call_model_name(call: ast.Call) -> str | None:
     """
     if not (isinstance(call.func, ast.Name) and call.func.id == "select") or not call.args:
         return None
-    model_arg = call.args[0]
-    if isinstance(model_arg, ast.Name):
-        return model_arg.id
-    if isinstance(model_arg, ast.Attribute):
-        return model_arg.attr
-    return None
+    return node_name(call.args[0])
 
 
 def extract_select_calls(

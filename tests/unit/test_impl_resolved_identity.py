@@ -15,6 +15,7 @@ import inspect
 import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
+from tests.unit._architecture_helpers import call_name
 
 # ---------------------------------------------------------------------------
 # Signature tests — verify _impl functions accept ResolvedIdentity
@@ -240,8 +241,7 @@ class TestNoPrincipalDbLookupsInTools:
             tree = ast.parse(path.read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
-                    fn = node.func
-                    name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+                    name = call_name(node)
                     if name in self._BANNED:
                         violations.append((f"src/core/tools/{path.relative_to(tools_dir)}", name))
         new = [v for v in violations if v not in self.ALLOWLIST]
