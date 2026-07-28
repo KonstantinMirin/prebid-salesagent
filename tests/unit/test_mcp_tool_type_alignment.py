@@ -13,30 +13,51 @@ This would have caught the status_filter bug where:
 """
 
 import inspect
-import types
 import typing
 from typing import Any, get_args, get_origin
 
 import pytest
+
+from tests.helpers import rootmodel_root, union_args, unwrap_annotated
 
 
 def normalize_type(type_hint: Any) -> set[str]:
     """Normalize a type hint to a set of base type names for comparison.
 
     Returns simplified type names like {'str', 'list', 'None'} for union types.
+
+    Every branch below is a way this function can stop resolving a type. When it does, it falls
+    through to the opaque ``{str(type_hint)}`` fallback, which contains neither ``'list'`` nor
+    ``'dict'`` — so every guard in this file that asks "does this accept an array?" answers no,
+    for every annotation, and passes without grading anything. The three unwrapping steps are
+    therefore load-bearing, not conveniences:
+
+    - unions under BOTH spellings (``X | None`` has origin ``types.UnionType``, not ``typing.Union``)
+    - ``Annotated[T, ...]``, whose metadata hides ``T``
+    - pydantic ``RootModel[list[X]]``, which is how the adcp SDK spells a JSON array
+
+    The walk itself lives in ``tests/helpers/type_introspection`` — shared with the other
+    annotation walkers in the suite, because this exact blind spot was written twice in this one
+    file (see ``TestGetSignalsObjectTypedParams._scalar_leaves``) and caught by mutation both times.
     """
     if type_hint is None:
         return {"None"}
 
-    origin = get_origin(type_hint)
-    args = get_args(type_hint)
+    type_hint = unwrap_annotated(type_hint)
 
-    # Handle Union types (including | syntax which becomes Union)
-    if origin is typing.Union:
+    # Handle Union types (both `typing.Union[...]` and the PEP 604 `X | None`)
+    if members := union_args(type_hint):
         result = set()
-        for arg in args:
+        for arg in members:
             result.update(normalize_type(arg))
         return result
+
+    # Handle pydantic RootModel wrappers (the SDK's spelling for a JSON array)
+    root = rootmodel_root(type_hint)
+    if root is not None:
+        return normalize_type(root)
+
+    origin = get_origin(type_hint)
 
     # Handle list types
     if origin is list:
@@ -91,6 +112,50 @@ def get_schema_field_types(schema_class) -> dict[str, set[str]]:
     return result
 
 
+class TestNormalizeType:
+    """Meta-tests: the normalizer every guard in this file depends on must actually resolve types.
+
+    ``normalize_type`` is the oracle for both alignment guards below. When it falls through to
+    its opaque ``{str(type_hint)}`` fallback, ``"list" in <result>`` is False for every real
+    annotation, both guards' conditions go permanently false, and they pass while grading
+    nothing. These meta-tests pin the three fall-through causes:
+
+    - **PEP 604 unions.** ``get_origin(X | None)`` is ``types.UnionType``, not ``typing.Union``
+      — and ``X | None`` is what this codebase writes everywhere. (The identical defect in this
+      file's ``_scalar_leaves`` was caught by mutation, not review.)
+    - **``typing.Annotated``.** Constrained SDK aliases carry metadata that hides the base type.
+    - **Pydantic ``RootModel``.** The SDK expresses a JSON array as a RootModel wrapping
+      ``list[...]`` (``StatusFilter`` is ``RootModel[list[MediaBuyStatus]]``), so the array-ness
+      the guards check for is one level down — invisible to a normalizer that stops at the class.
+    """
+
+    def test_normalize_type_handles_both_union_spellings(self):
+        """PEP 604 ``X | None`` must normalize identically to ``typing.Optional[X]``."""
+        # noqa UP045 below: the explicit typing.Optional spelling IS the point — the two
+        # spellings have different get_origin() results and both must be handled.
+        assert normalize_type(typing.Optional[list[str]]) == {"list", "None"}  # noqa: UP045
+        assert normalize_type(list[str] | None) == {"list", "None"}
+        assert normalize_type(str | list[str] | None) == {"str", "list", "None"}
+        assert normalize_type(dict[str, Any] | None) == {"dict", "None"}
+
+    def test_normalize_type_unwraps_annotated(self):
+        """``Annotated[T, ...]`` must normalize to ``T`` — the metadata is not part of the type."""
+        assert normalize_type(typing.Annotated[list[str], "constraint"]) == {"list"}
+        assert normalize_type(typing.Annotated[list[str], "constraint"] | None) == {"list", "None"}
+
+    def test_normalize_type_unwraps_rootmodel(self):
+        """A ``RootModel[list[...]]`` is an array on the wire and must normalize as one.
+
+        Without this, the status_filter regression test below cannot fire: the SDK types
+        ``status_filter`` as ``MediaBuyStatus | StatusFilter | None`` where ``StatusFilter`` is
+        ``RootModel[list[MediaBuyStatus]]``, so ``"list"`` never appears in the schema types.
+        """
+        from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import StatusFilter
+
+        assert normalize_type(StatusFilter) == {"list"}
+        assert "list" in normalize_type(StatusFilter | None)
+
+
 class TestMCPToolTypeAlignment:
     """Test that MCP tool signatures match schema definitions."""
 
@@ -111,13 +176,26 @@ class TestMCPToolTypeAlignment:
         func_types = get_function_param_types(get_media_buy_delivery)
         func_status_filter = func_types.get("status_filter", set())
 
+        # Pin the PREMISE first. This assertion used to be the condition of an `if`, which made
+        # the whole test inert for its entire lifetime: normalize_type could not resolve the
+        # annotation, "list" was never in the result, and the regression this test is named for
+        # would have slipped through. The schema allowing an array is a fact about the pin — if
+        # it stops being true, this test must fail and point at the pin, not silently stop
+        # grading. (Same reason test_request_model_still_types_them_as_objects below pins its own
+        # premise.)
+        assert "list" in schema_status_filter, (
+            f"GetMediaBuyDeliveryRequest.status_filter no longer resolves to an array type "
+            f"(got {schema_status_filter}). Either the pin dropped the array form — re-derive "
+            f"this guard — or normalize_type stopped resolving the annotation, in which case "
+            f"every array check in this file is inert."
+        )
+
         # Schema allows list - function must also allow list
-        if "list" in schema_status_filter:
-            assert "list" in func_status_filter, (
-                f"get_media_buy_delivery.status_filter should accept list type.\n"
-                f"Schema type: {schema_status_filter}\n"
-                f"Function type: {func_status_filter}"
-            )
+        assert "list" in func_status_filter, (
+            f"get_media_buy_delivery.status_filter should accept list type.\n"
+            f"Schema type: {schema_status_filter}\n"
+            f"Function type: {func_status_filter}"
+        )
 
     def test_all_mcp_tools_array_parameters_match_schema(self):
         """Test all MCP tools accept arrays when their schemas define array types.
@@ -149,6 +227,7 @@ class TestMCPToolTypeAlignment:
         ]
 
         issues = []
+        array_params_compared = []
 
         for func, schema_class, name in tool_schema_pairs:
             schema_types = get_schema_field_types(schema_class)
@@ -161,6 +240,9 @@ class TestMCPToolTypeAlignment:
 
                 schema_type = schema_types[param_name]
                 func_type = func_types[param_name]
+
+                if "list" in schema_type or "dict" in schema_type:
+                    array_params_compared.append(f"{name}.{param_name}")
 
                 # If schema allows list, function must also allow list
                 if "list" in schema_type and "list" not in func_type:
@@ -177,6 +259,17 @@ class TestMCPToolTypeAlignment:
                         f"  Schema: {schema_type}\n"
                         f"  Function: {func_type}"
                     )
+
+        # Pin the premise: this test's only two conditions are "list"/"dict" membership, so a
+        # normalizer that stops resolving annotations empties `issues` and the assertion below
+        # passes for every possible signature. That is exactly what happened for this test's whole
+        # lifetime. Requiring that the sweep actually SAW container-typed schema params makes the
+        # inert state fail loudly instead of reading as clean.
+        assert array_params_compared, (
+            "No list/dict-typed schema parameter was compared across the 5 covered tools — the "
+            "sweep below graded nothing. Either normalize_type stopped resolving annotations, or "
+            "every covered schema dropped its array/object params."
+        )
 
         assert not issues, "Found MCP tool type mismatches with schemas:\n\n" + "\n\n".join(issues)
 
@@ -261,20 +354,21 @@ class TestGetSignalsObjectTypedParams:
     def _scalar_leaves(hint) -> set[str]:
         """Scalar type names reachable through unions and list element types.
 
-        Both union spellings must be handled: ``get_origin`` returns ``typing.Union`` for
-        ``Optional[X]`` / ``Union[X, Y]`` but ``types.UnionType`` for the PEP 604 ``X | None``
-        that this codebase actually writes. Matching only ``typing.Union`` makes the whole
-        walk fall through to the scalar check, which a parameterised generic fails — so the
-        function returns "no scalars" for every annotation and the guard silently passes.
-        (That exact defect was present in the first draft of this guard and caught by
-        mutation, not by review.)
+        The union walk goes through ``tests.helpers.union_args`` because both spellings must be
+        handled: ``get_origin`` returns ``typing.Union`` for ``Optional[X]`` / ``Union[X, Y]`` but
+        ``types.UnionType`` for the PEP 604 ``X | None`` that this codebase actually writes.
+        Matching only ``typing.Union`` makes the whole walk fall through to the scalar check, which
+        a parameterised generic fails — so the function returns "no scalars" for every annotation
+        and the guard silently passes. (That exact defect was present in the first draft of this
+        guard and caught by mutation, not by review; it was then written a second time in
+        ``normalize_type`` above, which is why the walk is now shared rather than re-implemented.)
         """
-        origin, args = get_origin(hint), get_args(hint)
-        if origin is typing.Union or origin is types.UnionType:
+        if members := union_args(hint):
             leaves: set[str] = set()
-            for arg in args:
+            for arg in members:
                 leaves |= TestGetSignalsObjectTypedParams._scalar_leaves(arg)
             return leaves
+        origin, args = get_origin(hint), get_args(hint)
         if origin is list:
             return TestGetSignalsObjectTypedParams._scalar_leaves(args[0]) if args else set()
         if isinstance(hint, type) and hint.__name__ in ("str", "int", "float", "bool"):

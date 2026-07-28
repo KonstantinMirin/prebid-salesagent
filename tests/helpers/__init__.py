@@ -83,10 +83,15 @@ from tests.helpers.idempotency_seeds import (
     seed_media_buy,
     seed_principal,
 )
+from tests.helpers.type_introspection import rootmodel_root, union_args, unwrap_annotated
 
 __all__ = [
     # Auth helpers
     "assert_resolve_auth_dep_passes_token",
+    # Annotation introspection (shared by the type-alignment guards)
+    "rootmodel_root",
+    "union_args",
+    "unwrap_annotated",
     # Envelope assertions
     "assert_envelope_shape",
     "assert_no_raw_validation_leak",

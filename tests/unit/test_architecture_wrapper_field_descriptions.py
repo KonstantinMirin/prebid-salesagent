@@ -5,13 +5,13 @@ functions use Annotated[type, Field(description=...)] so buyer agents see
 meaningful descriptions in the JSON Schema, not just parameter names.
 """
 
-import types
 import typing
 from typing import Any
 
 import pytest
 from pydantic.fields import FieldInfo
 
+from tests.helpers import union_args, unwrap_annotated
 from tests.unit.test_architecture_wrapper_typed_params import MCP_WRAPPERS
 
 # Parameters to skip — transport infrastructure or non-domain params
@@ -25,21 +25,18 @@ SCALAR_TYPES = {str, int, float, bool}
 
 
 def _get_base_types(annotation: Any) -> set[type]:
-    """Extract the concrete base types from an annotation, unwrapping Annotated and Union."""
-    # Unwrap Annotated first
-    if hasattr(annotation, "__metadata__"):
-        annotation = annotation.__args__[0]
+    """Extract the concrete base types from an annotation, unwrapping Annotated and Union.
 
-    # Handle Union types (X | Y, Optional[X])
-    if isinstance(annotation, types.UnionType):
-        result = set()
-        for arg in annotation.__args__:
-            result.update(_get_base_types(arg))
-        return result
-    origin = getattr(annotation, "__origin__", None)
-    if origin is typing.Union:
-        result = set()
-        for arg in typing.get_args(annotation):
+    The unwrapping goes through ``tests.helpers.type_introspection`` so that both union spellings
+    stay handled in one place: a walker that resolves only ``typing.Union`` reads every PEP 604
+    ``X | None`` as an opaque leaf, and this guard then sees no scalars anywhere and passes
+    without grading anything.
+    """
+    annotation = unwrap_annotated(annotation)
+
+    if members := union_args(annotation):
+        result: set[type] = set()
+        for arg in members:
             result.update(_get_base_types(arg))
         return result
 

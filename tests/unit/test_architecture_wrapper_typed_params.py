@@ -6,11 +6,12 @@ schema drift and ensures buyer agents see accurate tool schemas.
 """
 
 import inspect
-import types
 import typing
 from typing import Any
 
 import pytest
+
+from tests.helpers import union_args
 
 # Parameters that are allowed to use Any because they have no SDK type
 # or are transport infrastructure (ctx, etc.)
@@ -76,13 +77,12 @@ REQUIRED_SDK_TYPES = {
 
 
 def _get_union_args(annotation: Any) -> tuple[Any, ...]:
-    """Extract args from both typing.Union and Python 3.10+ X | Y unions."""
-    if isinstance(annotation, types.UnionType):
-        return annotation.__args__
-    origin = getattr(annotation, "__origin__", None)
-    if origin is typing.Union:
-        return typing.get_args(annotation)
-    return ()
+    """Extract args from both typing.Union and Python 3.10+ X | Y unions.
+
+    Thin alias over the shared primitive — kept as a local name because this module's checks read
+    against it. See ``tests/helpers/type_introspection.py`` for why the walk is shared.
+    """
+    return union_args(annotation)
 
 
 def _is_any_type(annotation: Any) -> bool:
