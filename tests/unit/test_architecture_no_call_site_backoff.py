@@ -67,10 +67,10 @@ SLEEP_NAME = "sleep"
 # shrinks — the named ticket for each entry is what removes it.
 ALLOWLIST = {
     # Counterparty-supplied URLs — these migrate onto the seam and inherit its
-    # schedule. Tickets: salesagent-4fya.11, .10, .8, .9, salesagent-cnkq.
+    # schedule. Tickets: salesagent-4fya.11, .10, .9, salesagent-cnkq
+    # (salesagent-4fya.8 migrated order_approval_service and removed its entry).
     ("src/core/webhook_delivery.py", 1),
     ("src/services/webhook_delivery_service.py", 1),
-    ("src/services/order_approval_service.py", 1),
     ("src/core/creative_agent_registry.py", 2),  # the 429 Retry-After fallback and the plain retry
     ("src/services/protocol_webhook_service.py", 2),
     # Egress retry schedules that no migration ticket covered — found by the
@@ -205,7 +205,7 @@ class TestNoCallSiteBackoff:
         call site grew its own schedule, which is the thing the guard exists to
         prevent.
         """
-        assert len(ALLOWLIST) <= 10, (
+        assert len(ALLOWLIST) <= 9, (
             f"allowlist grew to {len(ALLOWLIST)} entries — a new call-site backoff was admitted. {FIX_HINT}"
         )
 

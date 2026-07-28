@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import SyncJob
+from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundRequestBlocked, send
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
@@ -354,8 +355,6 @@ def _send_approval_webhook(
         attempts: Number of polling attempts (if available)
     """
     try:
-        import httpx
-
         payload: dict[str, Any] = {
             "event": "order_approval_update",
             "media_buy_id": media_buy_id,
@@ -395,34 +394,22 @@ def _send_approval_webhook(
             if config.validation_token:
                 headers["X-Webhook-Token"] = config.validation_token
 
-        # Send webhook with retries
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.post(webhook_url, json=payload, headers=headers)
-
-                    if 200 <= response.status_code < 300:
-                        logger.info(
-                            f"Approval webhook sent to {webhook_url} (status: {status}, attempt: {attempt + 1})"
-                        )
-                        return
-
-                    logger.warning(
-                        f"Approval webhook to {webhook_url} returned status {response.status_code} (attempt: {attempt + 1}/{max_retries})"
-                    )
-
-            except httpx.TimeoutException:
-                logger.warning(f"Approval webhook to {webhook_url} timed out (attempt: {attempt + 1}/{max_retries})")
-            except httpx.RequestError as e:
-                logger.warning(f"Approval webhook to {webhook_url} failed: {e} (attempt: {attempt + 1}/{max_retries})")
-
-            # Wait before retry (exponential backoff)
-            if attempt < max_retries - 1:
-                time.sleep(2**attempt)
-
-        logger.error(f"Failed to send approval webhook to {webhook_url} after {max_retries} attempts")
+        # Send through the egress seam: it owns address and TLS policy, redirect
+        # refusal, what counts as retryable, and the BR-RULE-029 backoff. Nothing
+        # about those decisions is restated here — that is the point of the seam.
+        try:
+            result = send(webhook_url, json=payload, headers=headers, timeout=10.0, max_attempts=3)
+        except OutboundRequestBlocked:
+            # The URL never left the process. Deliberately opaque: the seam has
+            # already logged which policy refused it and why.
+            logger.warning(f"Approval webhook to {webhook_url} was refused by egress policy")
+        except OutboundDeliveryFailed as e:
+            logger.error(
+                f"Failed to send approval webhook to {webhook_url} after {e.attempts} attempts "
+                f"(last status: {e.last_status})"
+            )
+        else:
+            logger.info(f"Approval webhook sent to {webhook_url} (status: {status}, attempts: {result.attempts})")
 
     except Exception as e:
         logger.error(f"Error sending approval webhook: {e}", exc_info=True)

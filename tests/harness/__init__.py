@@ -62,6 +62,9 @@ from tests.harness.delivery_webhook import WebhookEnv
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
 
+# Order approval env
+from tests.harness.order_approval_webhook import OrderApprovalWebhookEnv
+
 # Product env
 from tests.harness.product import ProductEnv
 
@@ -86,6 +89,8 @@ __all__ = [
     # Media buy envs
     "MediaBuyCreateEnv",
     "MediaBuyUpdateEnv",
+    # Order approval env
+    "OrderApprovalWebhookEnv",
     # Product env
     "ProductEnv",
     # Transport

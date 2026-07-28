@@ -26,8 +26,8 @@ What does NOT count, deliberately:
   nothing. Match on construction and call.
 
 The allowlist was seeded at its maximum with the 17 modules in the #1589
-inventory and only ever shrinks — ``src/core/property_list_resolver.py`` is
-migrated, so it is 16 now. Each entry pairs a module with its current
+inventory and only ever shrinks — ``src/core/property_list_resolver.py`` and
+``src/services/order_approval_service.py`` are migrated, so it is 15 now. Each entry pairs a module with its current
 egress-call count, so adding a call to an already-allowlisted module fails too
 rather than hiding behind the entry.
 """
@@ -68,7 +68,6 @@ ALLOWLIST = {
     # Counterparty-supplied URL — the actual SSRF surface.
     ("src/core/webhook_delivery.py", 1),
     ("src/services/webhook_delivery_service.py", 1),
-    ("src/services/order_approval_service.py", 1),
     ("src/core/creative_agent_registry.py", 1),
     ("src/services/protocol_webhook_service.py", 1),
     # Operator-configured vendor endpoints.

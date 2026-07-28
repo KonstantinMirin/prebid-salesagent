@@ -716,7 +716,7 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
     ``suggestion``, ``recovery`` and ``field`` on both layers at once.
 
     The second half pins the default: a caller that supplies no ``field`` gets
-    no ``field`` KEY, not a null. Every one of the 15 unmigrated
+    no ``field`` KEY, not a null. Every one of the 14 unmigrated
     ``# FIXME(#1589)`` call sites and both existing callers fetch stored
     operator config, where there is no request-payload path to name; emitting
     one would invent a path the buyer never sent, which Level 2 makes worse
