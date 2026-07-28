@@ -1122,27 +1122,45 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # FIXME(salesagent-ckb): These production features are not yet implemented.
         # strict=True: test MUST fail. strict=False: test MAY pass (some examples work).
         _UC004_XFAIL_TAGS: dict[str, tuple[str, bool]] = {
-            # Empty array validation: schema allows [] but spec says reject
-            "T-UC-004-identify-empty": ("empty media_buy_ids=[] not rejected by schema", True),
+            # Empty array validation. The old reason ("not rejected by schema") was FALSE and has
+            # been retired: production DOES reject media_buy_ids=[] and the boundary emits
+            # VALIDATION_ERROR. Re-derived 2026-07-28 (salesagent-c5o9) by running the scenario
+            # un-xfailed after correcting its error-code casing: it now gets PAST the code
+            # assertion and dies one step later, on the message text. The scenario demands the
+            # message contain the raw JSON-Schema keyword "minItems"; production emits the
+            # humanized "media_buy_ids: List should have at least 1 item after validation, not 0".
+            # Real gap: scenario asserts schema-internal vocabulary that the buyer-facing message
+            # deliberately does not use. Fix is an upstream scenario reconciliation (assert the
+            # constraint, not the keyword) — not production work.
+            "T-UC-004-identify-empty": (
+                "scenario demands the literal JSON-Schema keyword 'minItems' in the error message; "
+                "production emits the humanized 'List should have at least 1 item after validation, "
+                "not 0' — scenario asserts schema-internal vocabulary, pending upstream reconciliation",
+                True,
+            ),
             "T-UC-004-identify-buyer-refs-empty": (
                 "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
                 True,
             ),
-            # Invalid status filter: NOT a production gap, and NOT step shadowing either —
-            # that cause died with #1545, which narrowed the generic 'with {request_params}'
-            # step to the `\w+=` form so it can no longer match `status_filter "X"`.
-            # Re-derived 2026-07-28 by running the scenario with --runxfail: production DOES
-            # reject the value and the boundary emits VALIDATION_ERROR with a suggestion; the
-            # scenario fails on CASE alone — its Gherkin asserts the code as lowercase
-            # "validation_error" while the wire (and the AdCP error-code enum) is UPPERCASE
-            # VALIDATION_ERROR, so then_error_code raises "Expected error code
-            # 'validation_error', got 'VALIDATION_ERROR'". The fix is an upstream
-            # scenario-casing reconciliation, not production work. Suggestion parity for this
-            # path is pinned by tests/integration/test_request_validation_suggestion_parity.py.
+            # Invalid status filter: NOT a production gap, and NOT step shadowing — that cause
+            # died with #1545, which narrowed the generic 'with {request_params}' step to the
+            # `\w+=` form so it can no longer match `status_filter "X"`.
+            # The previous reason ("fails on CASE alone") was ALSO wrong, and is retired here:
+            # casing was only the FIRST of two failures, and it masked the second. The lowercase
+            # 'validation_error' literal was corrected to canonical VALIDATION_ERROR in
+            # salesagent-c5o9; re-running un-xfailed on 2026-07-28 shows the row now clears the
+            # code assertion and dies on the SUGGESTION instead. The scenario demands a suggestion
+            # containing "valid status values" (i.e. enumerate the accepted enum members);
+            # production emits the generic "Correct the 'status_filter.str-enum[MediaBuyStatus]'
+            # field to match the AdCP specification and resend."
+            # Real gap: the validation-suggestion builder does not enumerate permitted enum values
+            # for an enum-constrained field. That is a production enhancement, not a scenario bug.
+            # Suggestion parity for this path is pinned by
+            # tests/integration/test_request_validation_suggestion_parity.py.
             "T-UC-004-filter-invalid": (
-                "scenario asserts the error code in lowercase ('validation_error'); the wire "
-                "emits the canonical UPPERCASE VALIDATION_ERROR — generated-scenario casing "
-                "defect, pending upstream reconciliation",
+                "scenario demands a suggestion enumerating the valid status values; production's "
+                "validation-suggestion builder emits only a generic 'correct the field' message "
+                "for enum-constrained fields — production enhancement",
                 True,
             ),
             # Date range validation: production doesn't validate start>end

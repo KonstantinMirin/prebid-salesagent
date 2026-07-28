@@ -21,6 +21,7 @@ quality-ci:
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
 	uv run python .pre-commit-hooks/check_roundtrip_tests.py
 	uv run python scripts/verify_feature_error_codes.py --uc UC-002 UC-003
+	uv run python scripts/verify_feature_error_codes.py --casing-only
 	uv run python .pre-commit-hooks/check_route_conflicts.py
 	uv run python .pre-commit-hooks/check_type_ignore_count.py
 	uv run python .pre-commit-hooks/check_ruff_complexity_count.py
