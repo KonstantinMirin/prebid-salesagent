@@ -89,11 +89,12 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary
 # _UC004_E2E_WEBHOOK_INTERNAL_TAGS (conftest) -> env-owned strict=False xfail, off the
 # nodeid ledger (same mechanism as the other webhook-internal e2e scenarios).
 
-# --- explicit inline-xfail production gaps (2) ---
-# GENUINE GAP (already inline-xfailed in the step body): seller attribution-default not
-# implemented (production echoes the buyer request), and push_notification_config webhook
+# --- explicit inline-xfail production gaps (1) ---
+# GENUINE GAP (already inline-xfailed in the step body): push_notification_config webhook
 # registration acknowledgement not implemented. src/ feature work.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]
+# RETIRED (salesagent-5bps): scenario T-UC-004-attr-unsupported was reconciled away --
+# the spec does not require any seller to be non-supporting, and this seller always
+# honours the requested attribution window. The nodeid no longer exists.
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
 
 # --- uc004 roas/cpa aggregated_totals — RETIRED from the ledger (#1430 item 4),

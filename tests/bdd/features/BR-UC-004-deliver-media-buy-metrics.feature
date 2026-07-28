@@ -593,15 +593,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-092 INV-1: buyer provides -> seller applies requested lookback
     # BR-RULE-092 INV-3: response echoes applied attribution_window
 
-  @T-UC-004-attr-unsupported @invariant @BR-RULE-092 @attribution
-  Scenario: Seller ignores attribution request - returns platform default
-    Given a media buy "mb-001" owned by "buyer-001" with status "active"
-    And the seller does NOT support configurable attribution windows
-    And the ad server adapter has delivery data for "mb-001"
-    When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 30, "unit": "days"}}
-    Then the response should include attribution_window with the seller's platform default
-    And no error should be returned
-    # BR-RULE-092 INV-2: seller ignores request, returns platform default
+  # RECONCILED (salesagent-5bps, AdCP 3.1.1): the "seller ignores attribution request"
+  # scenario (BR-RULE-092 INV-2) was removed. The spec sentence it graded --
+  # "Sellers that do not support configurable windows ignore this field and return their
+  # default" -- describes what a NON-supporting seller does; it does not require any seller to
+  # be non-supporting. This seller always honours the requested window
+  # (_resolve_attribution_window), which is conformant, so INV-2 does not apply to it. INV-1 and
+  # INV-3 remain graded by T-UC-004-attr-echo, T-UC-004-attr-omitted and the attribution
+  # partition/boundary Outlines. Conformance storyboard: ungraded at v3.1.1.
 
   @T-UC-004-attr-echo @invariant @BR-RULE-092 @attribution
   Scenario: Response always echoes applied attribution window with model

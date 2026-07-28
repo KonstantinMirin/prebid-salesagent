@@ -652,16 +652,50 @@ def given_seller_no_capability(ctx: dict, capability: str) -> None:
     ctx.setdefault("unsupported_capabilities", []).append(capability)
 
 
+# REMOVED (salesagent-5bps): given_seller_no_attribution ("the seller does NOT support
+# configurable attribution windows"). It only wrote ctx["supports_attribution_windows"] = False,
+# a flag no production code reads, so it produced state byte-identical to its "supports" sibling
+# and the two scenarios were the same test. Its scenario (T-UC-004-attr-unsupported) has been
+# reconciled away: this seller always honours the requested window, which AdCP 3.1.1 permits.
+# 39 sibling dead Given flags are tracked in salesagent-ki3b.
+
+
 @given("the seller supports configurable attribution windows")
 def given_seller_supports_attribution(ctx: dict) -> None:
-    """Seller supports configurable attribution windows."""
-    ctx["supports_attribution_windows"] = True
+    """State the precondition that this seller honours configurable attribution windows.
 
+    Kept — unlike its deleted "does NOT support" sibling — because two live scenarios still
+    use it (T-UC-004-attr-custom and the campaign-unit valid row).
 
-@given("the seller does NOT support configurable attribution windows")
-def given_seller_no_attribution(ctx: dict) -> None:
-    """Seller does not support configurable attribution windows."""
-    ctx["supports_attribution_windows"] = False
+    It formerly wrote ``ctx["supports_attribution_windows"] = True``, a flag nothing reads, which
+    gave the false impression of configuring something. There is nothing to configure: this
+    seller has no capability gate, so the precondition is true by construction. Rather than
+    assert nothing, the step now VERIFIES that — it calls the production resolver and confirms a
+    requested window really is honoured. If a capability gate is ever introduced (see the
+    reconciliation note on T-UC-004-attr-unsupported), this Given fails loudly instead of letting
+    the scenarios above quietly stop testing what they claim.
+    """
+    from types import SimpleNamespace
+
+    from adcp.types import Duration
+
+    from src.core.tools.media_buy_delivery import _resolve_attribution_window
+
+    probe = SimpleNamespace(
+        attribution_window=SimpleNamespace(
+            post_click=Duration(interval=5, unit="days"),
+            post_view=None,
+            model=None,
+        )
+    )
+    resolved = _resolve_attribution_window(probe, None)
+    assert resolved.post_click is not None and resolved.post_click.interval == 5, (
+        "Precondition violated: this seller no longer honours a configurable attribution window "
+        f"(requested post_click interval 5 days, resolver returned {resolved.post_click!r}). "
+        "A capability gate appears to have been added — revisit salesagent-5bps, which removed "
+        "the 'seller does NOT support configurable attribution windows' scenario on the premise "
+        "that no such gate exists."
+    )
 
 
 @given(parsers.parse('the seller does NOT report metric "{metric}"'))
@@ -2459,47 +2493,13 @@ def then_attribution_echo(ctx: dict) -> None:
     assert pc == requested, f"attribution_window.post_click should echo the request {requested}, got {pc}"
 
 
-@then("the response should include attribution_window with the seller's platform default")
-def then_attribution_default(ctx: dict) -> None:
-    """Assert attribution window uses the seller's platform default.
-
-    When the seller does NOT support configurable attribution, the response
-    should contain only the platform default model without buyer-requested
-    post_click/post_view windows.
-    """
-    from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
-
-    aw = _wire_attribution_window(
-        ctx, expectation="production should always echo an attribution window, even for unsupported sellers"
-    )
-    actual_model = aw.get("model")
-    expected_model = PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
-    assert actual_model == expected_model, (
-        f"attribution_window.model should be platform default '{expected_model}', got '{actual_model}'"
-    )
-
-    # When seller does not support configurable windows, post_click/post_view
-    # should be absent — the buyer's requested window must be discarded.
-    pc = aw.get("post_click")
-    pv = aw.get("post_view")
-    if pc is not None or pv is not None:
-        # Production currently echoes the buyer request instead of stripping it.
-        # Xfail only the specific assertion that checks the unimplemented behavior.
-        try:
-            assert pc is None, (
-                f"attribution_window.post_click should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pc!r}"
-            )
-            assert pv is None, (
-                f"attribution_window.post_view should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pv!r}"
-            )
-        except AssertionError:
-            pytest.xfail(
-                "PRODUCTION GAP: seller 'does NOT support configurable attribution' "
-                "check not implemented — production echoes buyer request instead of "
-                "returning bare platform default (post_click/post_view should be None)"
-            )
+# REMOVED (salesagent-5bps): then_attribution_default. It graded the deleted
+# T-UC-004-attr-unsupported scenario, and it wrapped its own post_click/post_view
+# assertions in `try/except AssertionError: pytest.xfail(...)` -- the only
+# self-swallowing assertion in the repo, invisible to the conftest xfail sweep and to
+# the xpass audit, so it could never graduate and would have stayed green if the gap
+# ever closed. Both it and its scenario are gone; see the RECONCILED note in
+# BR-UC-004-deliver-media-buy-metrics.feature.
 
 
 @then('the response attribution_window should include "model" field (required)')
