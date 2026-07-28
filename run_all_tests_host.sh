@@ -90,6 +90,26 @@ elif [ "$MODE" = "ci" ]; then
     # healthy stack across runs); torn down with the Docker stack on EXIT.
     ./scripts/creative-agent-stack.sh up
     export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
+
+    # ─── Outbound egress escape hatches — TEST PATH ONLY (#1589) ──────────────
+    # The line above exports a loopback http://localhost:<port>/... URL, which
+    # src/core/security/outbound_http.py refuses on BOTH counts: plain http and
+    # a reserved address. docker-compose.e2e.yml opens the same two hatches for
+    # the in-network runner; tox.ini only PASSES them through (pass_env, not
+    # setenv), so on this host path nothing creates them and the two authoritative
+    # run paths would diverge — in-network green, host red, same commit.
+    #
+    # Set here and NOT in quick mode or at file scope, deliberately: quick mode
+    # starts no Docker and no creative-agent stack, so it has no loopback fixture
+    # to accommodate, and it is the mode that carries the in-process refusal
+    # grading (set_flags() in tests/integration/test_outbound_http.py, plus the
+    # BDD refusal scenarios). Ambient hatches there would make the seam accept
+    # exactly the URLs it exists to reject.
+    #
+    # Literal "true" — the seam compares the lowercased string.
+    export ADCP_OUTBOUND_ALLOW_PRIVATE="true"
+    export ADCP_OUTBOUND_ALLOW_INSECURE="true"
+
     trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
 
     if [ -n "$PYTEST_TARGET" ]; then
