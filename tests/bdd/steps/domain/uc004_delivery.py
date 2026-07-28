@@ -652,7 +652,7 @@ def given_seller_no_capability(ctx: dict, capability: str) -> None:
     ctx.setdefault("unsupported_capabilities", []).append(capability)
 
 
-# REMOVED (salesagent-5bps): given_seller_no_attribution ("the seller does NOT support
+# REMOVED (GH #1726): given_seller_no_attribution ("the seller does NOT support
 # configurable attribution windows"). It only wrote ctx["supports_attribution_windows"] = False,
 # a flag no production code reads, so it produced state byte-identical to its "supports" sibling
 # and the two scenarios were the same test. Its scenario (T-UC-004-attr-unsupported) has been
@@ -692,7 +692,7 @@ def given_seller_supports_attribution(ctx: dict) -> None:
     assert resolved.post_click is not None and resolved.post_click.interval == 5, (
         "Precondition violated: this seller no longer honours a configurable attribution window "
         f"(requested post_click interval 5 days, resolver returned {resolved.post_click!r}). "
-        "A capability gate appears to have been added — revisit salesagent-5bps, which removed "
+        "A capability gate appears to have been added — revisit GH #1726, which removed "
         "the 'seller does NOT support configurable attribution windows' scenario on the premise "
         "that no such gate exists."
     )
@@ -1853,7 +1853,7 @@ def then_single_probe(ctx: dict) -> None:
 
     The remaining ``pytest.xfail`` below is an INLINE xfail in a step body: invisible to the
     conftest xfail sweep and to the xpass audit, so it can never graduate on its own. That is
-    the salesagent-5bps disease, and relocating it — together with giving this harness a real
+    the GH #1726 disease, and relocating it — together with giving this harness a real
     webhook POST mock so the probe count can be graded for real — is tracked there.
     """
     env = ctx["env"]
@@ -2493,7 +2493,7 @@ def then_attribution_echo(ctx: dict) -> None:
     assert pc == requested, f"attribution_window.post_click should echo the request {requested}, got {pc}"
 
 
-# REMOVED (salesagent-5bps): then_attribution_default. It graded the deleted
+# REMOVED (GH #1726): then_attribution_default. It graded the deleted
 # T-UC-004-attr-unsupported scenario, and it wrapped its own post_click/post_view
 # assertions in `try/except AssertionError: pytest.xfail(...)` -- the only
 # self-swallowing assertion in the repo, invisible to the conftest xfail sweep and to

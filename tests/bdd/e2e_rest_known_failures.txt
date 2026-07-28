@@ -92,7 +92,7 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary
 # --- explicit inline-xfail production gaps (1) ---
 # GENUINE GAP (already inline-xfailed in the step body): push_notification_config webhook
 # registration acknowledgement not implemented. src/ feature work.
-# RETIRED (salesagent-5bps): scenario T-UC-004-attr-unsupported was reconciled away --
+# RETIRED (GH #1726): scenario T-UC-004-attr-unsupported was reconciled away --
 # the spec does not require any seller to be non-supporting, and this seller always
 # honours the requested attribution window. The nodeid no longer exists.
 tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]
@@ -136,3 +136,16 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]
 tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]
 tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]
+
+# --- newly VISIBLE production gap (2) — owner-approved addition 2026-07-28 (salesagent-oz4j) ---
+# These rows are NOT newly broken. They were passing VACUOUSLY: the oracle read
+# getattr(pkg,'daily') or getattr(pkg,'by_day'), and neither attribute exists on
+# adcp.types.ByPackageItem (the field is daily_breakdown), so its guard was unconditionally
+# false and the assertion unreachable. Repairing the oracle made the pre-existing gap
+# observable: include_package_daily_breakdown=true is accepted but never honoured
+# (media_buy_delivery.py:549 hardcodes daily_breakdown=None). AdCP 3.1.1 has no
+# 'ignore if unsupported' clause for this field, so it is genuine non-conformance.
+# The in-process twins are routed in conftest _UC004_GENUINE_XFAIL_ROWS. Retire BOTH
+# records together when GH #1319 item C5 lands.
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_true-true-valid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-true (explicit)-true-valid]

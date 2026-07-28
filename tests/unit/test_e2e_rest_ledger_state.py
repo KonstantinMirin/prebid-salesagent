@@ -60,8 +60,20 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
+        # RETIRED (GH #1726, 2026-07-28): T-UC-004-attr-unsupported was reconciled away.
+        # AdCP 3.1.1 says sellers that do NOT support configurable attribution windows ignore the
+        # field; it does not require any seller to be non-supporting, and this seller always
+        # honours the requested window, so INV-2 never applied to it. The nodeid no longer exists,
+        # so this is a scenario retirement, not a graduation.
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
+        # Added 2026-07-28 (owner-approved, salesagent-oz4j): NOT newly broken — these two rows
+        # were passing vacuously against a guard that could never be entered (the oracle read
+        # pkg.daily / pkg.by_day, neither of which exists on ByPackageItem). Repairing it made a
+        # pre-existing production gap observable: include_package_daily_breakdown=true is accepted
+        # but never honoured. Tracked as GH #1319 item C5; retire with its in-process
+        # twins in conftest _UC004_GENUINE_XFAIL_ROWS when that lands.
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_true-true-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-true (explicit)-true-valid]",
         # Added 2026-07-09 on the adcp-6.6 branch (owner-approved) when
         # perf/parallelize-test-suite enabled parallel e2e_rest (E2E_PER_WORKER):
         # mock-injection-incompatible artifacts, not regressions — UC-004

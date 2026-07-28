@@ -593,7 +593,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-092 INV-1: buyer provides -> seller applies requested lookback
     # BR-RULE-092 INV-3: response echoes applied attribution_window
 
-  # RECONCILED (salesagent-5bps, AdCP 3.1.1): the "seller ignores attribution request"
+  # RECONCILED (GH #1726, AdCP 3.1.1): the "seller ignores attribution request"
   # scenario (BR-RULE-092 INV-2) was removed. The spec sentence it graded --
   # "Sellers that do not support configurable windows ignore this field and return their
   # default" -- describes what a NON-supporting seller does; it does not require any seller to
