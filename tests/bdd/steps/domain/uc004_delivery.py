@@ -1774,6 +1774,9 @@ def then_log_auth_rejection(ctx: dict) -> None:
     assert success is False, f"Expected webhook delivery to fail on auth rejection, got success={success!r}"
 
     # 2. Verify auth rejection was logged
+    # FIXME(#1749): reads ctx 'captured_logs', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
     assert log_records is not None, "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
     found_auth_log = any("client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records)
@@ -2109,6 +2112,9 @@ def then_error_no_reveal(ctx: dict) -> None:
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
     # The media_buy_id should not be echoed back in a way that confirms existence
+    # FIXME(#1749): reads ctx 'media_buy_id' / 'target_media_buy_id', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
     if mb_id:
         assert msg.count(mb_id.lower()) <= 1, (

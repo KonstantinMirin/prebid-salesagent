@@ -2427,6 +2427,9 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
         or "not found" in str(error).lower()
     ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
     # Verify the error references the bad package from the Given step
+    # FIXME(#1749): reads ctx 'bad_package_id', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
     if bad_package:
         assert bad_package in str(error), (

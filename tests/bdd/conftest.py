@@ -3249,6 +3249,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - Unknown UC → no harness (yields immediately)
     """
     uc = _detect_uc(request)
+    # FIXME(#1749): reads ctx 'e2e_config', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     e2e_config = ctx.get("e2e_config")
 
     # E2E shares one live DB across all scenarios; flush it to a clean baseline so

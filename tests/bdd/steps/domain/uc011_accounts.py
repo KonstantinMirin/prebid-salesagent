@@ -1539,6 +1539,9 @@ def then_webhook_registered(ctx: dict) -> None:
     # Verify the request actually carried push_notification_config (distinguishes
     # this step from a plain "sync succeeded" check)
     push_config = (
+        # FIXME(#1749): reads ctx 'request_push_config', which no step writes — dead branch,
+        # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+        # where the precondition is established, or delete the read; then drop it from the allowlist.
         ctx.get("push_notification_config") or ctx.get("request_push_config") or ctx.get("push_notification_url")
     )
     assert push_config is not None, (

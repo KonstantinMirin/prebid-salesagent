@@ -1070,6 +1070,9 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
     assert resp is not None, (
         f"Expected response for pipeline routing to '{expected_pipeline}' but ctx['response'] is None"
     )
+    # FIXME(#1749): reads ctx 'dispatched_pipeline', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     dispatched = ctx.get("dispatched_pipeline")
     if dispatched is None:
         pytest.xfail(
@@ -1079,6 +1082,9 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
         )
     assert dispatched == expected_pipeline, f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
     if is_default:
+        # FIXME(#1749): reads ctx 'explicit_buying_mode', which no step writes — dead branch,
+        # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+        # where the precondition is established, or delete the read; then drop it from the allowlist.
         explicit_mode = ctx.get("explicit_buying_mode")
         assert explicit_mode is None, (
             f"Expected default pipeline routing (no explicit buying_mode), "
@@ -1259,6 +1265,9 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
     elif outcome.startswith("tasks filtered to"):
         _assert_tasks_filtered(tasks, outcome)
     elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
+        # FIXME(#1749): reads ctx 'seeded_task_count', which no step writes — dead branch,
+        # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+        # where the precondition is established, or delete the read; then drop it from the allowlist.
         seeded_count = ctx.get("seeded_task_count")
         if seeded_count is not None:
             assert len(tasks) >= seeded_count, f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
@@ -1905,6 +1914,9 @@ def then_remember_order_name(ctx: dict, alias: str) -> None:
     response = ctx.get("response")
     assert response is not None, "No response in ctx"
     # Order name is typically in the adapter call args or response metadata
+    # FIXME(#1749): reads ctx 'last_order_name', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     order_name = ctx.get("last_order_name")
     assert order_name is not None, "No order name recorded — harness must capture it"
     ctx.setdefault("remembered", {})[alias] = order_name
