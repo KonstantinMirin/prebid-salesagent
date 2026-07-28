@@ -552,21 +552,33 @@ def test_auth_token(live_server):
     return "ci-test-token"
 
 
-@pytest.fixture
-def auto_approval_adapter(live_server):
-    """Pin the ci-test mock adapter to auto-approval before the test runs.
+@pytest.fixture(autouse=True)
+def adapter_state_baseline(request):
+    """Reset the shared ci-test adapter test-behavior around EVERY live-stack test.
 
-    The e2e suite shares ONE live database and pytest-randomly reorders tests
-    per run, so a prior test that enables manual approval (the a2a submitted-
-    webhook tests) leaks that state into any later test asserting the
+    The e2e suite shares ONE live database and pytest-randomly reorders tests per
+    run, so a test that enables manual approval (the a2a submitted-webhook tests)
+    or injects an adapter fault leaks that state into any later test asserting the
     synchronous success shape — create/update then returns Submitted with no
-    media_buy_id, flakily (salesagent-d1n0). Every test that requires the mock
-    adapter's auto-approval path must request this fixture instead of trusting
-    whatever state the previous test left behind.
-    """
-    from tests.e2e.utils import set_live_adapter_behavior
+    media_buy_id, flakily (salesagent-d1n0).
 
-    set_live_adapter_behavior(live_server, manual_approval_required=False)
+    Pinning the five known victims was inverted here (salesagent-wkjc): this is the
+    single OWNER of that shared state. It resets to the default baseline on setup
+    AND teardown, so tests only ever opt INTO non-default behavior and never have
+    to opt back out — a newly-added sync-success test is safe by default, and a
+    hard interrupt between an opt-in and its cleanup is repaired before the next
+    test runs. Both sides are needed: reset-on-setup alone would leave the last
+    leaker's state in the DB for whatever touches the ci-test tenant next.
+
+    Autouse but conditional — see ``reset_adapter_baseline_if_live``: tests that
+    never request ``live_server`` (the hermetic wire-format classes) must not drag
+    Docker in.
+    """
+    from tests.e2e.utils import reset_adapter_baseline_if_live
+
+    reset_adapter_baseline_if_live(request)
+    yield
+    reset_adapter_baseline_if_live(request)
 
 
 @pytest.fixture

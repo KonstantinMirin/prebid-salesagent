@@ -65,7 +65,7 @@ class TestCreativeAssignment:
 
     @pytest.mark.asyncio
     async def test_creative_sync_with_assignment_in_single_call(
-        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
+        self, docker_services_e2e, live_server, test_auth_token
     ):
         """
         Test creative sync with assignment in a single call.
@@ -258,9 +258,7 @@ class TestCreativeAssignment:
             print("=" * 80)
 
     @pytest.mark.asyncio
-    async def test_multiple_creatives_multiple_packages(
-        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
-    ):
+    async def test_multiple_creatives_multiple_packages(self, docker_services_e2e, live_server, test_auth_token):
         """
         Test multiple creatives assigned to multiple packages.
 

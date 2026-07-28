@@ -168,7 +168,7 @@ class AdapterConfigFactory(factory.alchemy.SQLAlchemyModelFactory):
     adapter_type = "mock"
 
 
-def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> AdapterConfig:
+def set_adapter_test_behavior(env: Any, tenant_id: str, *, replace: bool = False, **behavior: Any) -> AdapterConfig:
     """Persist adapter test-behavior to the tenant's AdapterConfig row.
 
     BDD Given steps configure the in-process mock adapter directly (attribute /
@@ -184,9 +184,18 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> Adap
     additionally written to the ``mock_manual_approval_required`` column, which is
     the read path used when the real mock adapter is constructed from config.
 
+    ``replace=True`` REPLACES the blob with the passed flags instead of merging,
+    and rewrites the column from the RESULTING value (defaulting to False when the
+    flag is absent). That is what makes a reset-to-baseline a real reset: merging
+    ``manual_approval_required=False`` in would leave every accumulated
+    ``fail_on_*`` fault standing. Merge remains the default — the BDD Given steps
+    depend on accumulation. Used by ``tests/e2e/utils.reset_live_adapter_behavior``,
+    the single owner of the shared ci-test tenant's adapter state.
+
     Args:
         env: Harness environment exposing ``get_session()`` (real-DB envs).
         tenant_id: Tenant whose AdapterConfig to upsert.
+        replace: Replace ``test_behavior`` wholesale instead of merging into it.
         **behavior: Test-behavior flags to persist.
     """
     session = env.get_session()
@@ -199,13 +208,15 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> Adap
     # Reassign config_json (rather than mutating in place) so SQLAlchemy's JSON
     # change tracking marks the column dirty and emits an UPDATE.
     config_json = dict(row.config_json or {})
-    test_behavior = dict(config_json.get("test_behavior") or {})
+    test_behavior = {} if replace else dict(config_json.get("test_behavior") or {})
     test_behavior.update(behavior)
     config_json["test_behavior"] = test_behavior
     row.config_json = config_json
 
-    if "manual_approval_required" in behavior:
-        row.mock_manual_approval_required = bool(behavior["manual_approval_required"])
+    # On replace the column tracks the resulting blob even when the flag is
+    # absent — a replaced baseline must not inherit a stale True.
+    if replace or "manual_approval_required" in behavior:
+        row.mock_manual_approval_required = bool(test_behavior.get("manual_approval_required", False))
 
     session.commit()
     return row

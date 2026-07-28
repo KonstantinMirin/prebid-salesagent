@@ -28,7 +28,7 @@ class TestAdCPFullLifecycle:
     """Minimal E2E test for the core AdCP 4-phase lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_four_phase_lifecycle(self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter):
+    async def test_four_phase_lifecycle(self, docker_services_e2e, live_server, test_auth_token):
         """
         Minimal lifecycle: get_products -> create_media_buy -> sync_creatives -> get_media_buy_delivery.
 

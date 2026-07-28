@@ -39,7 +39,7 @@ class TestAdCPReferenceImplementation:
 
     @pytest.mark.asyncio
     async def test_complete_campaign_lifecycle_with_webhooks(
-        self, docker_services_e2e, live_server, test_auth_token, webhook_server, auto_approval_adapter
+        self, docker_services_e2e, live_server, test_auth_token, webhook_server
     ):
         """Discovery → create → creatives → delivery → update → verify, over sync + webhook responses."""
         print("\n" + "=" * 80)
@@ -241,9 +241,7 @@ class TestAdCPReferenceImplementation:
             "fires; update_media_buy needs the same treatment. Remove this marker once it does."
         ),
     )
-    async def test_update_media_buy_push_webhook_delivery(
-        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
-    ):
+    async def test_update_media_buy_push_webhook_delivery(self, docker_services_e2e, live_server, test_auth_token):
         """update_media_buy must deliver a task-status push webhook to the configured URL.
 
         Uses the shared helper's default (reachable) callback host — not the lifecycle's

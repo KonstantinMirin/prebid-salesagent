@@ -107,7 +107,9 @@ def live_db_env(live_server: dict):
         engine.dispose()
 
 
-def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-test", **behavior):
+def set_live_adapter_behavior(
+    live_server: dict, *, tenant_subdomain: str = "ci-test", replace: bool = False, **behavior
+):
     """Upsert adapter test-behavior on the live e2e DB via the shared factory helper.
 
     Single e2e entry point for what used to be five copy-pasted psycopg2
@@ -116,6 +118,9 @@ def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-
     the logical operation — through :func:`live_db_env`. Fails loud: a missing
     tenant or DB error is a test-infrastructure defect, never something to
     print-and-continue past.
+
+    Tests call this only to opt INTO non-default behavior; resetting back to the
+    baseline is the autouse fixture's job (:func:`reset_adapter_baseline_if_live`).
     """
     from src.core.database.models import Tenant
     from tests.factories.core import set_adapter_test_behavior
@@ -127,7 +132,43 @@ def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-
                 f"Tenant with subdomain {tenant_subdomain!r} not found in the live e2e DB — "
                 "did the stack's init_database_ci.py seed run?"
             )
-        return set_adapter_test_behavior(env, tenant.tenant_id, **behavior)
+        return set_adapter_test_behavior(env, tenant.tenant_id, replace=replace, **behavior)
+
+
+def reset_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-test"):
+    """Reset the live tenant's adapter test-behavior to the default baseline.
+
+    ``replace=True`` (not a merged ``manual_approval_required=False``) because the
+    leaked state is broader than one flag: ``set_adapter_test_behavior`` merges and
+    never removes keys, so ``fail_on_create`` / ``fail_on_update`` / ``error_message``
+    would survive a merge-style "reset". Same tenant lookup and same DB path as
+    :func:`set_live_adapter_behavior` — deliberately defined in terms of it rather
+    than re-resolving the tenant.
+
+    Kept tenant-scoped: run_all_tests.sh runs suites in parallel, so a global reset
+    would race bdd_e2e's per-scenario tenants.
+    """
+    return set_live_adapter_behavior(
+        live_server,
+        tenant_subdomain=tenant_subdomain,
+        replace=True,
+        manual_approval_required=False,
+    )
+
+
+def reset_adapter_baseline_if_live(request) -> None:
+    """Reset the shared adapter baseline when *request* reaches the live stack.
+
+    A plain function, not a fixture: pytest 9 fixture objects are not directly
+    callable, and the autouse baseline fixture must call this on BOTH sides of the
+    yield. The ``live_server`` gate is load-bearing — requesting ``live_server``
+    unconditionally would drag the Docker stack into the hermetic e2e classes
+    (TestProtocolWebhookWireFormat, test_schema_validation_standalone.py) that take
+    no fixtures at all.
+    """
+    if "live_server" not in request.fixturenames:
+        return
+    reset_live_adapter_behavior(request.getfixturevalue("live_server"))
 
 
 def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
