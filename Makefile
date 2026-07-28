@@ -22,6 +22,7 @@ quality-ci:
 	uv run python .pre-commit-hooks/check_roundtrip_tests.py
 	uv run python scripts/verify_feature_error_codes.py --uc UC-002 UC-003
 	uv run python .pre-commit-hooks/check_route_conflicts.py
+	uv run python .pre-commit-hooks/check_sqlalchemy_2_0.py $$(git ls-files 'src/**/*.py')
 	uv run python .pre-commit-hooks/check_type_ignore_count.py
 	uv run python .pre-commit-hooks/check_ruff_complexity_count.py
 	uv run python .pre-commit-hooks/check_mypy_untyped_defs_count.py

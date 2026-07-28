@@ -134,6 +134,10 @@ repos:
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
+        # IPR_POLICY.md's trailing double-space is a markdown HARD LINE BREAK in a legal
+        # document, not stray whitespace — stripping it silently reflows the text
+        # (salesagent-qcv2).
+        exclude: ^IPR_POLICY\.md$
       - id: end-of-file-fixer
         exclude: ^\.claude/
       - id: check-yaml

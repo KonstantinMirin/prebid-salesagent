@@ -12,6 +12,13 @@ from scripts.ci.workflow_helpers import load_ci_workflow, rendered_ci_check_name
 
 REQUIRED_RENDERED_CHECKS = {
     "CI / Quality Gate",
+    # Runs `pre-commit run --all-files --hook-stage pre-push`. Before this job, NOTHING in CI
+    # invoked pre-commit at any stage, so every pre-push hook — migration completeness, docs links,
+    # route conflicts, tenant-context order, the count ratchets, MCP schema alignment, hardcoded
+    # URLs — was graded only on a developer's machine and only over their push range. That is how
+    # salesagent-nzgg stayed latent (salesagent-5v2w). Mirror this into branch protection's
+    # required checks.
+    "CI / Pre-push Hooks",
     "CI / Type Check",
     "CI / Schema Contract",
     "CI / Security Audit",

@@ -15,6 +15,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _migration_allowlist import KNOWN_EMPTY_DOWNGRADE  # noqa: E402
+
 from scripts.ci.migration_helpers import (
     MigrationParseError,
     is_empty_body,
@@ -50,6 +53,12 @@ def check_migration_file(path: Path) -> list[str]:
 
     for name, node in (("upgrade", upgrade), ("downgrade", downgrade)):
         if node is None:
+            continue
+        # The allowlist is shared with tests/unit/test_architecture_migration_completeness.py.
+        # It used to live only in the pytest guard, so this hook failed on 017_handle_partial_schemas
+        # while `make quality` was green — a divergence nothing surfaced, because no CI job runs the
+        # pre-push stage (salesagent-5v2w, salesagent-md0r).
+        if name == "downgrade" and path.name in KNOWN_EMPTY_DOWNGRADE:
             continue
         if is_empty_body(node):
             errors.append(f"{path}: {name}() is empty (only pass/docstring) — must contain migration logic")

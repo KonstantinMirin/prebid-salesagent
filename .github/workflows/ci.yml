@@ -49,6 +49,36 @@ jobs:
       - name: Run static analysis (make quality-ci)
         run: make quality-ci
 
+  # The pre-push hooks were graded ONLY on a developer's machine, and only over the
+  # files in their push range — no workflow invoked pre-commit at any stage. That is how
+  # salesagent-nzgg stayed latent: the hook was red on an unchanged tree while `make quality`
+  # and CI were green. This job closes that gap (salesagent-5v2w).
+  #
+  # --all-files, not the push range: a range-scoped run is exactly the blind spot above.
+  # The stage also runs the file-MODIFYING hooks (trailing-whitespace, end-of-file-fixer,
+  # ruff-format); pre-commit exits non-zero if any of them rewrite a file, so a formatting
+  # drift fails here instead of surprising the next person to push.
+  pre-push-hooks:
+    name: Pre-push Hooks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/_setup-env
+      # check_type_ignore_count.py and the other ratchets compare against origin/main.
+      - name: Fetch origin/main for baseline ratchet comparison
+        run: git fetch origin main --depth=1
+      - name: Run pre-push hooks over the whole tree
+        run: uv run --with pre-commit pre-commit run --all-files --hook-stage pre-push
+
   # mypy also runs inside Quality Gate via `make quality-ci` (the unified local
   # target — removing it there would drift local from CI). The dedicated job is
   # kept as a separate required-check signal; jobs run in parallel, so the

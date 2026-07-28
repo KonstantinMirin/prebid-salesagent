@@ -24,7 +24,7 @@ from scripts.ci.migration_helpers import (
     iter_migration_trees,
     parse_function,
 )
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions
 
 # Alembic operations that modify schema structure
 SCHEMA_OPS = {
@@ -42,14 +42,26 @@ SCHEMA_OPS = {
     "create_check_constraint",
 }
 
-# Pre-existing violations — allowlists shrink as violations are fixed.
-# FIXME(salesagent-t735): These legacy migrations have incomplete downgrades.
-KNOWN_EMPTY_DOWNGRADE = {
-    # Legacy: data migration (adds default values), no structural revert needed
-    "017_handle_partial_schemas.py",
-    # Legacy: fixes JSON encoding, no structural revert
-    "e81e275c9b29_fix_price_guidance_json_encoding.py",
-}
+
+# Shared with the pre-push hook (.pre-commit-hooks/check_migration_completeness.py) so the two
+# enforcers of this rule cannot drift — they already had, and nothing surfaced it because no CI job
+# runs the pre-push stage (salesagent-5v2w).
+def _load_shared_allowlist() -> set[str]:
+    """Load the allowlist the pre-push hook uses, by path.
+
+    Same technique test_architecture_import_usage.py uses to load its hook: the shared data lives
+    next to the hook so the hook has no test-directory dependency, and the guard reads it here.
+    """
+    import importlib.util
+
+    path = REPO_ROOT / ".pre-commit-hooks" / "_migration_allowlist.py"
+    spec = importlib.util.spec_from_file_location("_migration_allowlist", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return set(module.KNOWN_EMPTY_DOWNGRADE)
+
+
+KNOWN_EMPTY_DOWNGRADE = _load_shared_allowlist()
 
 KNOWN_DOWNGRADE_COVERAGE_GAPS = {
     # Legacy: upgrade creates index but downgrade doesn't drop it
