@@ -41,6 +41,7 @@ not the adcp library Format (which does not).
 # ---
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -416,17 +417,32 @@ class TestListAvailableFormats:
     """Tests for list_available_formats() error and success paths."""
 
     # SUSPECT(salesagent-z60b): infrastructure error silently returns [] — should it propagate?
-    def test_registry_creation_fails_returns_empty(self):
-        """Returns empty list when get_creative_agent_registry raises."""
-        with patch(
-            "src.core.creative_agent_registry.get_creative_agent_registry",
-            side_effect=RuntimeError("Registry initialization failed"),
+    def test_registry_creation_fails_returns_empty(self, caplog):
+        """Returns empty list AND logs the failure when get_creative_agent_registry raises.
+
+        The log assertion is what makes this test able to fail. ``result == []`` alone is satisfied
+        by a registry that simply has no formats, so it cannot distinguish "the failure was handled"
+        from "there was no failure" — proven by neutralizing the tripwire, after which the test still
+        passed. The ERROR record is the only observable consequence of the handled-failure path
+        (src/core/format_resolver.py:227), so it is the assertion that carries the contract.
+        """
+        with (
+            caplog.at_level(logging.ERROR, logger="src.core.format_resolver"),
+            patch(
+                "src.core.creative_agent_registry.get_creative_agent_registry",
+                side_effect=RuntimeError("Registry initialization failed"),
+            ),
         ):
             from src.core.format_resolver import list_available_formats
 
             result = list_available_formats(tenant_id="t1")
 
         assert result == []
+        assert any("Registry initialization failed" in r.message for r in caplog.records), (
+            "list_available_formats swallowed the registry failure without logging it — the caller "
+            "cannot tell an infrastructure outage from a tenant with no formats. "
+            f"Records: {[r.message for r in caplog.records]}"
+        )
 
     # SUSPECT(salesagent-z60b): connection error silently returns [] — should it propagate?
     def test_format_fetch_fails_returns_empty(self):

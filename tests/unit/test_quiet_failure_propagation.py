@@ -9,6 +9,7 @@ gracefully on expected service failures but propagate programming errors
 beads: salesagent-o3x6
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -98,21 +99,28 @@ class TestDynamicVariantsExceptionPropagation:
                 await _get_products_impl(_make_request(), _make_identity())
 
     @pytest.mark.asyncio
-    async def test_runtime_error_is_graceful(self):
-        """RuntimeError (service failure) degrades gracefully.
+    async def test_runtime_error_is_graceful(self, caplog):
+        """RuntimeError (service failure) degrades gracefully AND is logged.
 
         Covers: UC-001-MAIN-41
+
+        The obligation has two Then clauses on this path: "static products are returned without
+        dynamic variants" AND "a warning is logged". Only the first was graded, and it is satisfied
+        by the no-failure path too — a variant generator that simply returns nothing also yields
+        exactly one static product. Neutralizing the tripwire left this test green, so
+        UC-001-MAIN-41 counted as covered while nothing distinguished the two worlds. The WARNING
+        record (src/core/tools/products.py:436) is the clause that does.
         """
         from tests.helpers.adcp_factories import create_test_product
 
         product = create_test_product(product_id="p1")
         mock_uow = _mock_uow_with_products([product])
 
+        variant_generator = AsyncMock(side_effect=RuntimeError("Connection refused"))
         patches = _base_patches(mock_uow) + [
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("Connection refused"),
+                variant_generator,
             ),
             patch(
                 "src.services.dynamic_pricing_service.DynamicPricingService",
@@ -129,9 +137,23 @@ class TestDynamicVariantsExceptionPropagation:
         with contextlib.ExitStack() as stack:
             for p in patches:
                 stack.enter_context(p)
+            stack.enter_context(caplog.at_level(logging.WARNING, logger="src.core.tools.products"))
             result = await _get_products_impl(_make_request(), _make_identity())
-            # Should still return the static product despite variant failure
-            assert len(result.products) == 1
+
+        # Clause 1: static products are returned without dynamic variants.
+        assert len(result.products) == 1
+
+        # The failing collaborator was actually reached — otherwise the clauses below grade nothing.
+        variant_generator.assert_awaited_once()
+
+        # Clause 2: a warning is logged. This is the assertion the no-failure path cannot satisfy.
+        assert any(
+            "Connection refused" in record.message and record.levelno == logging.WARNING for record in caplog.records
+        ), (
+            "Dynamic variant generation failed silently — UC-001-MAIN-41 requires the failure to be "
+            "logged, otherwise a signals-agent outage is indistinguishable from a brief that simply "
+            f"produced no variants. Records: {[(r.levelname, r.message) for r in caplog.records]}"
+        )
 
 
 class TestDynamicPricingExceptionPropagation:

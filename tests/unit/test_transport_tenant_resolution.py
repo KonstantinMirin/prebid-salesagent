@@ -9,6 +9,7 @@ ResolvedIdentity with a lazy-loading tenant context that defers DB
 queries until non-tenant_id fields are accessed.
 """
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -125,11 +126,20 @@ class TestLazyTenantContext:
         assert bool(lazy)
         assert not lazy.is_loaded
 
-    def test_fallback_when_db_unavailable(self):
-        """Returns minimal TenantContext with defaults when DB fails."""
+    def test_fallback_when_db_unavailable(self, caplog):
+        """Returns minimal TenantContext with defaults AND records why, when the DB lookup fails.
+
+        The three value assertions below are all satisfied by a lookup that simply finds no tenant:
+        ``get_tenant_by_id`` returning ``None`` reaches the SAME minimal-TenantContext fallback with
+        the same defaults. Neutralizing the tripwire left this test green. The log record emitted at
+        src/core/tenant_context.py:188 is the only thing that distinguishes "the DB failed and we
+        degraded" from "there was nothing to load" — so it is the assertion that carries the claim
+        in this test's name.
+        """
         lazy = LazyTenantContext("test_tenant")
 
         with (
+            caplog.at_level(logging.DEBUG, logger="src.core.tenant_context"),
             patch(
                 "src.core.config_loader.get_tenant_by_id",
                 side_effect=RuntimeError("DB not available"),
@@ -142,6 +152,11 @@ class TestLazyTenantContext:
         assert lazy.is_loaded
         assert lazy.tenant_id == "test_tenant"
         assert mode == "require-human"  # default
+        assert any("DB not available" in record.message for record in caplog.records), (
+            "LazyTenantContext fell back to defaults without recording the database failure — the "
+            "fallback is then indistinguishable from an unknown tenant. "
+            f"Records: {[r.message for r in caplog.records]}"
+        )
 
     def test_resolve_does_not_set_current_tenant(self):
         """Property access (_resolve) must NOT mutate the ContextVar.
