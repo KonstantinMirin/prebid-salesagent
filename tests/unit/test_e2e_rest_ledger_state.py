@@ -49,32 +49,27 @@ from pathlib import Path
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
-        # All four date-range invalid rows graduated: boundary rows 2026-07-09
-        # (#1270 tripwires fired on the first in-network CI run — live server
-        # validates start>=end now), partition twins at the origin/pr-1417 merge
-        # (d4af23095, strict-xfail XPASS in-network).
-        # Account valid rows graduated at the #1417 merge (jr5b seeded-account
-        # Given; XPASS in-network innet_140726_1516) — see ledger note.
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
-        "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
-        # Added 2026-07-09 on the adcp-6.6 branch (owner-approved) when
-        # perf/parallelize-test-suite enabled parallel e2e_rest (E2E_PER_WORKER):
-        # mock-injection-incompatible artifacts, not regressions — UC-004
-        # set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
-        # injected cross-principal creatives are invisible to the separate HTTP
-        # server. Preserved through the main merge.
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-true (explicit)-true-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_true-true-valid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal matches owner-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
+        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-failures_only (last enum value)-failures_only-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-random (first enum value)-random-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-failures_only-failures_only-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-random-random-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-recent-recent-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-stratified-stratified-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
         "tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]",
         "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]",
         "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]",
+        "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
         "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]",
         "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]",
         "tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]",

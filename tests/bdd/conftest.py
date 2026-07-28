@@ -1572,7 +1572,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-failures_only",
                     "mcp-unknown_value-systematic",
                     "[rest-unknown_value-systematic",
-                    # Unmasked by salesagent-bhhz (see comment above).
+                    # Unmasked by salesagent-bhhz (see comment above). The e2e_rest twins are
+                    # NOT listed here — this list is gated `if not is_e2e_rest`, so entries for
+                    # that transport would be dead code. They go in
+                    # tests/bdd/e2e_rest_known_failures.txt instead.
                     "[rest-random-random",
                     "[rest-stratified",
                     "[rest-recent",
@@ -1798,15 +1801,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="sampling_method boundary: not implemented on this transport", strict=False
                     )
                 )
-            # FIXME(#1270): e2e_rest: Docker doesn't validate sampling_method —
-            # invalid enum value succeeds instead of failing.
-            if is_e2e_rest and "Unknown string not in enum" in nodeid:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: Docker does not validate sampling_method — invalid value succeeds",
-                        strict=True,
-                    )
-                )
+            # GRADUATED (salesagent-bhhz, in-network run innet_280726_1823): was FIXME(#1270)
+            # "e2e_rest: Docker doesn't validate sampling_method — invalid enum value succeeds".
+            # The server was never given the chance: SignalsEnv/DeliveryPollEnv-style
+            # build_rest_body DROPPED raw kwargs, so sampling_method never reached the wire and the
+            # live server had nothing to reject. With the drop removed the field arrives and IS
+            # rejected, so this strict xfail XPASSed. Do not re-add — if it regresses, the cause is
+            # the harness dropping the field again, not the server.
 
         # Graduated: T-UC-004-boundary-date-range — valid examples (before, omitted)
         # pass on rest; invalid examples (equals, after) pass on impl.
@@ -1988,15 +1989,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # structured AdCP error envelope (not a raw 500/empty body), so the
         # wire-envelope assertion handles it.
 
-        # e2e_rest: principal_ownership "differs from owner" — ownership check not enforced
-        # through REST layer; test succeeds when it should fail (strict=True xfail).
-        if "T-UC-004-boundary-ownership" in marker_names and is_e2e_rest and "differs from owner" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: ownership boundary not enforced through REST — test succeeds unexpectedly",
-                    strict=True,
-                )
-            )
+        # GRADUATED (salesagent-bhhz, in-network run innet_280726_1823): was "e2e_rest: ownership boundary
+        # not enforced through REST layer". Same cause as the sampling row above — the step
+        # dispatches `ownership` as a request field and build_rest_body dropped it, so the REST leg
+        # sent a request that could not fail. With the drop removed the row XPASSed strictly.
 
         # e2e_rest: sort_by_metric_not_available — the spend-fallback needs injected
         # by_placement data, but the injector (_inject_placement_data) is in-process

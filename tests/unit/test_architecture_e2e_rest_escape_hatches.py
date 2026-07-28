@@ -77,7 +77,13 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     # was retired in PR #1567: it xfailed the pre-3.1.1 workflow_step_id assertion,
     # which the spec-reconciled scenario no longer makes — the scenario now grades
     # the CreateMediaBuySubmitted envelope live on all four transports.
-    "'T-UC-004-boundary-ownership' in marker_names and is_e2e_rest and ('differs from owner' in nodeid)",
+    # GRADUATED (salesagent-bhhz, in-network innet_280726_1823): the
+    # T-UC-004-boundary-ownership 'differs from owner' route and the
+    # "is_e2e_rest and 'Unknown string not in enum' in nodeid" route below.
+    # Both were strict=True tripwires asserting the live server does not validate the field. It was
+    # never asked to: the harness build_rest_body DROPPED raw field kwargs, so `ownership` and
+    # `sampling_method` never reached the wire. With the drop removed both are rejected and both
+    # routes XPASSed strictly. The two ledger entries went with them.
     "'T-UC-004-dim-sortby-fallback' in marker_names and is_e2e_rest",
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-ext-a' in marker_names",
@@ -87,7 +93,6 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and 'T-UC-002-nfr-001-enforcement' in marker_names",
     "is_e2e_rest and 'T-UC-004-daterange-end-only' in marker_names",
     "is_e2e_rest and 'T-UC-005-empty-catalog' in marker_names",
-    "is_e2e_rest and 'Unknown string not in enum' in nodeid",
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",
