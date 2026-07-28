@@ -665,3 +665,193 @@ class TestSyncAccountsBrandlessEntryRejected:
             "VALIDATION_ERROR",
             recovery="correctable",
         )
+
+
+class TestSyncAccountsBrandIdRoundTrip:
+    """Regression (salesagent-myhs): a brand_id entry must persist the brand_id VALUE.
+
+    ``BrandReference.brand_id`` is ``BrandId``, a ``RootModel[str]`` whose
+    ``__str__`` is ``BaseModel.__str__`` — so ``str(brand.brand_id)`` yields the
+    repr ``"root='brand_one'"``, not ``'brand_one'``. sync_accounts stringified it
+    that way at four sites, persisting the mangled text into
+    ``accounts.brand->>'brand_id'`` and looking the natural key up under the same
+    mangled value. ``_resolve_by_natural_key`` (account_helpers) always used
+    ``.root``, so a media buy referencing such an account by natural key could
+    never resolve it.
+
+    The natural key is brand.domain + brand.brand_id + operator + sandbox
+    (BR-RULE-056), so this is a corruption of the key itself, not a cosmetic echo.
+    """
+
+    @pytest.mark.asyncio
+    async def test_brand_id_persists_unmangled_and_resolves(self, integration_db):
+        from adcp.types import (
+            AccountReference,
+            AccountReferenceByNaturalKey,
+        )
+
+        from src.core.database.repositories.uow import AccountUoW
+        from src.core.helpers.account_helpers import resolve_account
+
+        with AccountSyncEnv(tenant_id="sync_bid1", principal_id="agent_sync_bid") as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acme.com", "brand_id": "brand_one"},
+                        "operator": "example.com",
+                        "billing": "operator",
+                    }
+                ],
+            )
+            response = await env.call_impl_async(req=req)
+
+            assert len(response.accounts) == 1
+            result = response.accounts[0]
+            assert _action_value(result.action) == "created"
+            created_account_id = result.account_id
+
+            # The persisted natural-key component must be the submitted value.
+            # Loading the row AT ALL is half the assertion: brand is a
+            # JSONType(model=BrandReference) column that validates on read, and
+            # "root='brand_one'" violates BrandId's ^[a-z0-9_]+$ pattern — so
+            # before the fix this raised ValidationError instead of comparing.
+            with AccountUoW("sync_bid1") as uow:
+                assert uow.accounts is not None
+                rows = uow.accounts.list_all()
+                assert len(rows) == 1
+                assert rows[0].brand.brand_id.root == "brand_one"
+
+            # ...and the resolver (which reads .root) must find that same row.
+            ref = AccountReference(
+                AccountReferenceByNaturalKey(
+                    brand={"domain": "acme.com", "brand_id": "brand_one"},
+                    operator="example.com",
+                )
+            )
+            with AccountUoW("sync_bid1") as uow:
+                assert uow.accounts is not None
+                resolved = resolve_account(ref, env.identity, uow.accounts)
+
+            assert resolved == created_account_id
+
+    @pytest.mark.asyncio
+    async def test_settings_update_by_natural_key_with_brand_id_applies(self, integration_db):
+        """A settings-update entry keyed by a natural key WITH brand_id must match.
+
+        Covers the second defective site (_process_settings_update_entry): the
+        reference lookup mangled brand_id the same way, so the entry matched
+        nothing and came back UNSUPPORTED_PROVISIONING — the buyer's update was
+        silently not applied to an account that plainly exists.
+        """
+        with AccountSyncEnv(tenant_id="sync_bid3", principal_id="agent_sync_bid3") as env:
+            env.setup_default_data()
+
+            brand = {"domain": "acme.com", "brand_id": "brand_one"}
+            created = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[{"brand": brand, "operator": "example.com", "billing": "operator"}],
+                )
+            )
+            assert _action_value(created.accounts[0].action) == "created"
+
+            updated = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[
+                        {
+                            "account": {"brand": brand, "operator": "example.com"},
+                            "payment_terms": "net_30",
+                        }
+                    ],
+                )
+            )
+
+        assert len(updated.accounts) == 1
+        result = updated.accounts[0]
+        assert _action_value(result.action) == "updated", f"settings-update did not match the account: {result!r}"
+        assert result.account_id == created.accounts[0].account_id
+
+    @pytest.mark.asyncio
+    async def test_already_proven_subscriber_is_not_reproven_for_a_brand_id_account(self, integration_db):
+        """A re-sent, already-proven subscriber must not be re-proven (proof reuse).
+
+        Covers the remaining two defective sites (_lookup_existing_for_entry),
+        which feed _already_proven_tuples. With the brand_id mangled, the second
+        sync failed to find the account it had just created, so it treated an
+        already-proven subscriber as new and fired a fresh proof-of-control
+        request at the buyer's endpoint — an externally visible side effect, not
+        just an internal lookup miss.
+
+        The assertion drives that consequence rather than the lookup: proof is
+        forced to FAIL before the second sync, so a re-proof would surface as a
+        failed entry. Staying 'unchanged' is only possible if no proof was fired.
+        """
+        with AccountSyncEnv(tenant_id="sync_bid4", principal_id="agent_sync_bid4") as env:
+            env.setup_default_data()
+
+            entry = {
+                "brand": {"domain": "acme.com", "brand_id": "brand_one"},
+                "operator": "example.com",
+                "billing": "operator",
+                "notification_configs": [
+                    {
+                        "subscriber_id": "sub_1",
+                        "url": "https://buyer.example.com/hook",
+                        # Account-scoped: media-buy-anchored types are refused on
+                        # this surface, which is a different rule than the one
+                        # under test here.
+                        "event_types": ["creative.status_changed"],
+                        "active": True,
+                    }
+                ],
+            }
+
+            first = await env.call_impl_async(req=SyncAccountsRequest(accounts=[entry]))
+            assert _action_value(first.accounts[0].action) == "created", (
+                f"first sync must provision and prove the subscriber: {first.accounts[0]!r}"
+            )
+
+            # From here on, any NEW proof-of-control attempt fails.
+            env.set_notification_proof_result(succeeds=False)
+
+            second = await env.call_impl_async(req=SyncAccountsRequest(accounts=[entry]))
+
+        assert len(second.accounts) == 1
+        result = second.accounts[0]
+        assert _action_value(result.action) == "unchanged", (
+            f"re-sending an already-proven subscriber must reuse the proof, not re-fire it: {result!r}"
+        )
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_echoed_account_name_carries_the_plain_brand_id(self, integration_db, transport):
+        """The buyer-visible name must not carry the RootModel repr.
+
+        The mangled brand_id also reached _generate_account_name, and unlike
+        ``brand`` — which is echoed from the parsed REQUEST object and was
+        therefore never corrupted — ``name`` is built from the extracted value
+        and IS returned to the buyer. This is the one buyer-facing surface the
+        defect reached, so it is graded on the real wire across every transport.
+        """
+        with AccountSyncEnv(
+            tenant_id=f"sync_bid_name_{transport.value}",
+            principal_id=f"agent_bid_name_{transport.value}",
+        ) as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acme.com", "brand_id": "brand_one"},
+                        "operator": "example.com",
+                        "billing": "operator",
+                    }
+                ],
+            )
+            result = env.call_via(transport, req=req)
+
+        assert result.is_success, f"sync must succeed on {transport.value}: {result.payload!r}"
+        account = result.payload.accounts[0]
+        assert account.name == "acme.com:brand_one c/o example.com", (
+            f"the echoed name must carry the plain brand_id on {transport.value}, got {account.name!r}"
+        )

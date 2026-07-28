@@ -8,29 +8,11 @@ beads: salesagent-m44
 
 from __future__ import annotations
 
-from adcp.types import BrandReference
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Account, AgentAccountAccess
-
-
-def _brand_key_parts(brand: BrandReference | dict | None) -> tuple[str | None, str | None]:
-    """Read the (domain, brand_id) half of the natural key out of ``Account.brand``.
-
-    Both shapes are real and neither is a fallback: ``create()`` receives a
-    freshly built row, where both callers assign a plain dict, while a row loaded
-    from the database carries a ``BrandReference``. The model branch reads
-    ``brand_id.root`` — ``BrandId`` is a RootModel whose ``str()`` is
-    ``"root='x'"``, and stringifying it without ``.root`` is exactly the
-    corruption filed as salesagent-myhs.
-    """
-    if brand is None:
-        return None, None
-    if isinstance(brand, dict):
-        raw_id = brand.get("brand_id")
-        return brand.get("domain"), None if raw_id is None else str(raw_id)
-    return brand.domain, None if brand.brand_id is None else str(brand.brand_id.root)
+from src.core.helpers.brand_key import brand_key_parts
 
 
 class AccountRepository:
@@ -281,7 +263,7 @@ class AccountRepository:
         (brand.domain + brand.brand_id + operator + sandbox). A check that
         disagreed with its own index would refuse rows the database accepts.
         """
-        brand_domain, brand_id = _brand_key_parts(account.brand)
+        brand_domain, brand_id = brand_key_parts(account.brand)
 
         if brand_domain is None:
             # No brand domain, no natural key: nothing resolves such a row (every

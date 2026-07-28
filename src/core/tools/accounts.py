@@ -41,6 +41,7 @@ from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -882,10 +883,7 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
             "(or 'account' for a settings-update entry).",
             recovery="correctable",
         )
-    brand_domain = brand.domain
-    brand_id = None
-    if hasattr(brand, "brand_id") and brand.brand_id is not None:
-        brand_id = str(brand.brand_id)
+    brand_domain, brand_id = brand_key_parts(brand)
     operator = entry.operator
     sandbox = entry.sandbox
     return brand_domain, brand_id, operator, sandbox
@@ -1016,10 +1014,7 @@ def _process_settings_update_entry(
     if isinstance(ref, AccountReference1):
         existing = repo.get_by_id(ref.account_id)
     else:
-        brand_domain = ref.brand.domain if ref.brand else None
-        brand_id = None
-        if ref.brand is not None and hasattr(ref.brand, "brand_id") and ref.brand.brand_id is not None:
-            brand_id = str(ref.brand.brand_id)
+        brand_domain, brand_id = brand_key_parts(ref.brand)
         existing = repo.get_by_natural_key(
             operator=ref.operator,
             brand_domain=brand_domain,
@@ -1271,19 +1266,16 @@ def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
         inner = ref.root
         if isinstance(inner, AccountReference1):
             return repo.get_by_id(inner.account_id)
-        brand_domain = inner.brand.domain if inner.brand else None
-        brand_id = None
-        if inner.brand is not None and getattr(inner.brand, "brand_id", None) is not None:
-            brand_id = str(inner.brand.brand_id)
+        brand_domain, brand_id = brand_key_parts(inner.brand)
         return repo.get_by_natural_key(
             operator=inner.operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=inner.sandbox
         )
     brand = getattr(entry, "brand", None)
     if brand is None:
         return None
-    brand_id = str(brand.brand_id) if getattr(brand, "brand_id", None) is not None else None
+    brand_domain, brand_id = brand_key_parts(brand)
     return repo.get_by_natural_key(
-        operator=entry.operator, brand_domain=brand.domain, brand_id=brand_id, sandbox=entry.sandbox
+        operator=entry.operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=entry.sandbox
     )
 
 
