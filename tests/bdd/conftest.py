@@ -3913,6 +3913,18 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # parametrization rather than pinned here (salesagent-jckl). The env is
         # TOLD its transport and, over e2e, the per-worker address e2e_stack
         # synthesised — it discovers neither.
+        #
+        # This is the ONE branch that passes `base_url=` instead of `e2e_config=`,
+        # and the asymmetry is deliberate rather than an oversight: the admin UI is
+        # an HTML form surface, not an AdCP tool surface, so the env needs the
+        # ADDRESS and nothing else from E2EConfig. Handing it the whole object
+        # would pull an AdCP-shaped dependency into a surface that has no AdCP
+        # protocol — the same reason AdminTransport is not a member of the
+        # Transport enum (see its docstring). A census that asks "does every env
+        # here receive e2e_config?" will flag this line; that flag is expected.
+        # What actually must hold — no branch pins its own DB scope — is machine
+        # -checked by tests/unit/test_bdd_admin_transport_parametrization.py
+        # ::test_harness_env_never_pins_its_db_scope, not by that heuristic.
         mode = "e2e" if e2e_config is not None else "integration"
         base_url = e2e_config.base_url if e2e_config is not None else None
         with _db_scope_for(request, e2e_config), AdminAccountEnv(mode=mode, base_url=base_url) as env:
