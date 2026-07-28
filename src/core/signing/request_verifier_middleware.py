@@ -144,6 +144,7 @@ from src.core.signing.posture import (
     request_signing_is_declarable,
 )
 from src.core.signing.replay_store import PostgresReplayStore
+from src.core.signing.revocation import checker_for
 
 logger = logging.getLogger(__name__)
 
@@ -616,9 +617,14 @@ def _run_verifier(
     ``agent_url``, ``signing_purpose`` and ``posture``. Omitting the first turns a
     mandatory check into a ``UserWarning``.
 
-    Revocation stays unwired: no revocation list is published yet (#1291 A5), and the
-    SDK correctly skips the check when both hooks are absent rather than failing open
-    on a list it never fetched.
+    Revocation (step 9) is wired through ``revocation_checker`` and ONLY that hook.
+    ``revocation_list`` is the staleness-only branch — ``verifier.py:283-292`` calls
+    ``is_stale()`` and never ``is_revoked()`` — so passing both would be two sources
+    for one decision; :func:`~src.core.signing.revocation.checker_for` owns both
+    halves. Step 9 runs before crypto verify because the SDK calls it at
+    ``verifier.py:294`` and crypto at :311; nothing here may reorder that, and
+    ``tests/integration/test_request_signature_revocation.py``'s ordering canary is
+    what keeps it true.
     """
     with get_db_session() as session:
         options = VerifyOptions(
@@ -633,6 +639,7 @@ def _run_verifier(
             expected_key_origins=resolution.key_origins if resolution is not None else None,
             signing_purpose=_SIGNING_PURPOSE,
             posture=bucket,
+            revocation_checker=checker_for(resolution, config),
         )
         return verify_request_signature(method=method, url=url, headers=headers, body=body, options=options)
 

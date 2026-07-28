@@ -18,6 +18,10 @@ long-running multi-tenant process:
 - **``keyid``** is the signer's real key id ONLY after the verifier resolved it
   (checklist step 7), i.e. only for a key we already recognize. Before that it is
   attacker-supplied, so it is recorded as ``"unresolved"``.
+- **``reason``** (revocation availability) is the closed set
+  :data:`REVOCATION_UNAVAILABLE_REASONS`. Deliberately NOT the issuer origin,
+  which is derived from a counterparty-supplied ``brand_json_url`` and would let
+  a pre-auth caller mint series; the origin goes in the WARNING log instead.
 
 Call sites must record AI-review metrics through :func:`record_ai_review` and
 :func:`record_ai_review_error`, and request-signature outcomes through
@@ -196,6 +200,27 @@ request_unsigned_total = Counter(
     ["operation", "reason"],
 )
 
+# ---------------------------------------------------------------------------
+# Revocation availability — checklist step 9 (#1291 A5)
+# ---------------------------------------------------------------------------
+# The evidence base for flipping ``SigningConfig.require_revocation_list``: every
+# increment is a signed request served WITHOUT a revocation answer. No ``issuer``
+# label — the issuer origin comes from a counterparty-supplied ``brand_json_url``,
+# so labelling by it would let a PRE-AUTH caller mint series at will. ``reason`` is
+# the closed set of ways the SDK's fetch can fail, and it stays in lockstep with the
+# translation site's exception tuple in ``src/core/signing/revocation.py``. The
+# issuer origin is carried in that module's WARNING log line, where cardinality is
+# free and the operator actually wants it.
+request_revocation_unavailable_total = Counter(
+    "adcp_request_revocation_unavailable_total",
+    "Signed requests served without a revocation answer because the list could not be read",
+    ["reason"],
+)
+
+#: Closed vocabulary for the ``reason`` label above — one member per member of the
+#: exception tuple in ``CounterpartyRevocationChecker.__call__``.
+REVOCATION_UNAVAILABLE_REASONS = frozenset({"fetch", "parse", "signature", "ssrf"})
+
 
 # ---------------------------------------------------------------------------
 # Recording helpers — single source of truth for label bounding
@@ -244,6 +269,19 @@ def record_request_unsigned(operation: str, reason: str) -> None:
     request_unsigned_total.labels(
         operation=operation,
         reason=reason if reason in UNSIGNED_REASONS else "other",
+    ).inc()
+
+
+def record_signature_revocation_unavailable(reason: str) -> None:
+    """Increment :data:`request_revocation_unavailable_total` with a bounded ``reason``.
+
+    Called on the fail-open path only: the counterparty's revocation list could not
+    be read at all, so step 9 was answered from the local set alone. Anything outside
+    :data:`REVOCATION_UNAVAILABLE_REASONS` collapses to ``"other"``, which keeps the
+    series count fixed even if a future exception member is added without its label.
+    """
+    request_revocation_unavailable_total.labels(
+        reason=reason if reason in REVOCATION_UNAVAILABLE_REASONS else "other",
     ).inc()
 
 

@@ -205,6 +205,47 @@ class SigningConfig(BaseSettings):
     # URL. The SDK default (pinned) is what production gets. B4's sandbox counterparty
     # needs the relaxation only inside tests, which is where it stays.
 
+    # -- Revocation, checklist step 9 (#1291 A5) ---------------------------
+    # Step 9 has two halves and this group carries both: a locally-seeded
+    # revoked set (membership) and the posture for a list we could not read
+    # (staleness). Grounded in `git -C ~/projects/adcp show
+    # v3.1.1:docs/building/by-layer/L1/security.mdx` :1238, :1328, :1333.
+    revoked_keyids: str = Field(
+        default="",
+        description=(
+            "Comma-separated counterparty keyids this deployment treats as revoked, regardless of "
+            "any published list. Monotone in the fail-closed direction — it can only ADD rejections "
+            "— which is what makes it a posture and not a backdoor; there is deliberately no "
+            "un-revoke knob. Set to test-revoked-2026 on the conformance-grading deployment"
+        ),
+    )
+    require_revocation_list: bool = Field(
+        default=False,
+        description=(
+            "Whether a counterparty that publishes NO readable revocation list is rejected with "
+            "request_signature_revocation_stale instead of served. False today because nobody in "
+            "the ecosystem publishes one yet; flip it to True once counterparties this deployment "
+            "accepts serve /.well-known/governance-revocations.json. It does NOT govern a list "
+            "that HAS loaded and then aged out — that rejection is unconditional (security.mdx :1333)"
+        ),
+    )
+    revocation_grace_multiplier: float = Field(
+        default=4.0,
+        description=(
+            "Multiples of the list's declared polling interval tolerated beyond next_update before "
+            "request_signature_revocation_stale. security.mdx :1333 requires 4x; the SDK default is "
+            "2.0, so this is passed explicitly at the single construction site"
+        ),
+    )
+    revocation_issuer_origin: str | None = Field(
+        default=None,
+        description=(
+            "Pins the revocation-list issuer origin for every counterparty, overriding the "
+            "per-counterparty derivation from brand_json_url (security.mdx :1328). For a deployment "
+            "fronted by one governance issuer, and for the conformance sandbox"
+        ),
+    )
+
     # -- Trust-root publication (#1291 A3) ---------------------------------
     grace_seconds: int = Field(
         default=2 * CACHE_MAX_AGE_SECONDS,
@@ -228,6 +269,17 @@ class SigningConfig(BaseSettings):
         least worth making awkward to set. Same shape as ``SuperAdminConfig``.
         """
         return [scheme.strip() for scheme in self.allowed_key_ref_schemes.split(",") if scheme.strip()]
+
+    @property
+    def revoked_keyid_list(self) -> list[str]:
+        """Locally-seeded revoked keyids as a list.
+
+        Comma-joined ``str`` for the same reason as
+        :attr:`key_ref_scheme_list`: pydantic-settings JSON-parses sequence
+        fields, so ``ADCP_SIGNING_REVOKED_KEYIDS=test-revoked-2026`` would raise
+        at startup if this were a ``list[str]``.
+        """
+        return [keyid.strip() for keyid in self.revoked_keyids.split(",") if keyid.strip()]
 
     @property
     def key_passphrase(self) -> bytes | None:
