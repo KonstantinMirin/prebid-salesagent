@@ -3266,6 +3266,41 @@ def _wire_simple_env(
         yield
 
 
+def _wire_media_buy_create_env(
+    request: pytest.FixtureRequest,
+    ctx: dict,
+    e2e_config,
+    *,
+    dispatch_mode: str | None = None,
+) -> Generator[None, None, None]:
+    """Shared _harness_env wiring for branches needing the full create_media_buy chain.
+
+    Enters ``MediaBuyCreateEnv`` under the right DB scope, seeds the product/pricing
+    dependency chain, publishes tenant/principal/product/pricing into ``ctx``, yields.
+
+    Sibling of ``_wire_simple_env``, which covers envs whose setup is
+    ``setup_default_data()`` (a 2-tuple) rather than ``setup_media_buy_data()`` (a
+    4-tuple) — hence a separate helper rather than another parameter on that one.
+
+    Tag gating deliberately stays in the CALLER: these branches carry per-tag
+    predicates and per-tag rationale comments, and flattening them into one wired-tag
+    set would erase which scenarios are live for which reason. The caller also keeps
+    its own pre-yield ctx writes (e.g. ``uc002_full_create``).
+    """
+    from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+    with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
+        tenant, principal, product, pricing_option = env.setup_media_buy_data()
+        ctx["env"] = env
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+        ctx["default_product"] = product
+        ctx["default_pricing_option"] = pricing_option
+        if dispatch_mode is not None:
+            ctx["dispatch_mode"] = dispatch_mode
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
@@ -3297,16 +3332,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # — or succeeds — on the wire. MediaBuyCreateEnv gives the create
             # transport wrappers + the full product/pricing dependency chain; the
             # account Given steps seed the account rows on top.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
+            yield from _wire_media_buy_create_env(request, ctx, e2e_config)
         elif (
             any(t.startswith("T-UC-002-ext-") for t in marker_names)
             or "nfr-highvalue" in marker_names
@@ -3321,17 +3347,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # which needs the same full create_media_buy flow to reach the
             # pending-approval audit feed.
             # Use MediaBuyCreateEnv which calls _create_media_buy_impl with real DB.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                ctx["dispatch_mode"] = "create"
-                yield
+            yield from _wire_media_buy_create_env(request, ctx, e2e_config, dispatch_mode="create")
         elif marker_names & (_UC002_IDEMPOTENCY_WIRED | _UC002_MANUAL_APPROVAL_WIRED) or _is_brand_shorthand_media_buy(
             marker_names
         ):
@@ -3346,32 +3362,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # remaining @idempotency-key scenarios (in-flight, expired, conflict,
             # pattern, canonical) stay blanket-xfailed below until their
             # production gaps + steps are wired.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
+            yield from _wire_media_buy_create_env(request, ctx, e2e_config)
         elif "T-UC-002-local-unknown-top-level-field" in marker_names:
             # Locally-added Pattern #7 top-level unknown-field scenario (GH #1442).
             # Its Given forces dispatch_mode=create_raw so the unknown key reaches
             # the production transport boundary unfiltered; REST/A2A grade the
             # INVALID_REQUEST envelope, MCP grades the FastMCP signature-level
             # rejection (owner decision 2026-07-11).
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
+            yield from _wire_media_buy_create_env(request, ctx, e2e_config)
         elif "T-UC-002-inv-015-6" in marker_names:
             pytest.xfail("T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652")
         else:
@@ -3597,16 +3595,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # Webhook-credential-length scenarios dispatch a real create_media_buy
             # carrying a reporting_webhook so production's Pydantic boundary
             # (Authentication.credentials MinLen=32) accepts/rejects on the wire.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
+            yield from _wire_media_buy_create_env(request, ctx, e2e_config)
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     elif uc == "UC-008":

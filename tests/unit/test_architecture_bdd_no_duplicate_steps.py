@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
 # Threshold: flag when N or more functions share the same body
@@ -140,3 +142,69 @@ class TestBddNoDuplicateSteps:
             f"Stale _ALLOWED_DUPLICATES entries ({len(missing)}) — step removed/renamed, "
             f"remove from allowlist:\n" + "\n".join(f"  {name}" for name in missing)
         )
+
+
+# --- One MediaBuyCreateEnv wiring definition in the BDD harness fixture (#1600) -------
+
+_CONFTEST = Path(__file__).parent.parent / "bdd" / "conftest.py"
+
+#: The single function allowed to construct MediaBuyCreateEnv wiring.
+_WIRING_OWNER = "_wire_media_buy_create_env"
+
+
+def _media_buy_create_env_constructors(tree: ast.AST) -> dict[str, list[int]]:
+    """Enclosing-function name -> line numbers constructing MediaBuyCreateEnv."""
+    found: dict[str, list[int]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for call in iter_call_expressions(node, "MediaBuyCreateEnv"):
+            found.setdefault(node.name, []).append(call.lineno)
+    return found
+
+
+class TestSingleMediaBuyCreateEnvWiring:
+    """``_harness_env`` must not re-inline the create-media-buy wiring block.
+
+    Five branches each pasted the same ``with _db_scope_for(...), MediaBuyCreateEnv(...)``
+    block: identical ``setup_media_buy_data()`` unpack, identical five ``ctx[...]``
+    publications. A fix to the wiring would have had to land five times. They now route
+    through ``_wire_media_buy_create_env``; this keeps it that way.
+
+    Scoped to construction, not to tag gating: each branch legitimately keeps its own
+    predicate and rationale comment, and this guard must not push anyone to flatten those.
+    """
+
+    @pytest.mark.arch_guard
+    def test_only_the_helper_constructs_the_create_env(self):
+        tree = ast.parse(_CONFTEST.read_text(encoding="utf-8"))
+        offenders = {fn: lines for fn, lines in _media_buy_create_env_constructors(tree).items() if fn != _WIRING_OWNER}
+        assert not offenders, (
+            f"MediaBuyCreateEnv constructed outside {_WIRING_OWNER}: {offenders}. "
+            f"Route the branch through `yield from {_WIRING_OWNER}(request, ctx, e2e_config)` "
+            f"instead of pasting the wiring block again."
+        )
+
+    @pytest.mark.arch_guard
+    def test_the_helper_still_exists_and_owns_it(self):
+        """Premise check: the guard is meaningless if the owner was renamed away."""
+        tree = ast.parse(_CONFTEST.read_text(encoding="utf-8"))
+        assert _WIRING_OWNER in _media_buy_create_env_constructors(tree), (
+            f"{_WIRING_OWNER} no longer constructs MediaBuyCreateEnv — re-derive this guard."
+        )
+
+    @pytest.mark.arch_guard
+    def test_guard_detects_planted_inline_block(self):
+        """Positive meta-test: an inlined branch is caught."""
+        source = (
+            "def _harness_env(request, ctx):\n"
+            "    with _db_scope_for(request, c), MediaBuyCreateEnv(e2e_config=c) as env:\n"
+            "        yield\n"
+        )
+        assert _media_buy_create_env_constructors(ast.parse(source)) == {"_harness_env": [2]}
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_delegating_branch(self):
+        """Negative meta-test: the migrated form is clean."""
+        source = "def _harness_env(request, ctx):\n    yield from _wire_media_buy_create_env(request, ctx, c)\n"
+        assert _media_buy_create_env_constructors(ast.parse(source)) == {}
