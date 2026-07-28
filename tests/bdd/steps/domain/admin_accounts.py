@@ -320,17 +320,12 @@ def then_db_has_account(ctx: dict, name: str) -> None:
 @then(parsers.parse('the database does not contain an account with brand domain "{domain}"'))
 def then_db_no_account_with_domain(ctx: dict, domain: str) -> None:
     """Assert no account with the given brand domain exists."""
-    from sqlalchemy import select
+    matches = _env(ctx).accounts_with_brand_domain(domain)
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Account
-
-    env = _env(ctx)
-    with get_db_session() as session:
-        accounts = session.scalars(select(Account).where(Account.tenant_id == env.tenant_id)).all()
-        for acct in accounts:
-            if acct.brand and acct.brand.domain == domain:
-                raise AssertionError(f"Found account with brand domain '{domain}' — should not exist")
+    assert matches == [], (
+        f"Found {len(matches)} account(s) with brand domain '{domain}' "
+        f"({[a.account_id for a in matches]}) — should not exist"
+    )
 
 
 @then(parsers.parse('exactly {count:d} account matches brand domain "{domain}" and operator "{operator}"'))

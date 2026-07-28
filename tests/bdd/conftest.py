@@ -3153,6 +3153,29 @@ _CHANNEL_COLUMN_TAGS = {"T-UC-010-auth"}
 _NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
 
 
+def _parametrize_ctx(
+    metafunc: pytest.Metafunc,
+    base_transports: list[Any],
+    base_ids: list[str],
+    e2e_member: Any | None,
+    e2e_id: str | None,
+) -> None:
+    """Parametrize ``ctx`` over the in-process transports, plus the e2e one when enabled.
+
+    Extracted so the AdCP arm and the admin arm share ONE copy of the
+    append-e2e-when-enabled tail (salesagent-jckl). Duplicating it would be the
+    same logical operation with substituted enum members — the R0801 shape the
+    DRY invariant treats as a defect, against a duplication baseline that may
+    only shrink.
+    """
+    transports = list(base_transports)
+    ids = list(base_ids)
+    if e2e_member is not None and os.environ.get("BDD_E2E_ENABLED") == "true":
+        transports.append(e2e_member)
+        ids.append(e2e_id)
+    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Parametrize BDD scenarios across the wire transports (a2a/mcp/rest).
 
@@ -3182,8 +3205,21 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         # Channel-column outline — each row dispatches via its own channel
         return
 
-    # Admin scenarios use Flask test_client, not API transports
+    # Admin scenarios are not AdCP tool surfaces (no a2a/mcp/rest/e2e_rest), but
+    # they DO have two transports of their own, both declared in
+    # BR-ADMIN-ACCOUNTS.feature's header and both implemented by AdminAccountEnv.
+    # Parametrize over them here so the transport is chosen at collection time
+    # rather than pinned inside the harness (salesagent-jckl).
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
+        from tests.harness.admin_accounts import AdminTransport
+
+        _parametrize_ctx(
+            metafunc,
+            [AdminTransport.INTEGRATION],
+            [AdminTransport.INTEGRATION.value],
+            AdminTransport.E2E,
+            AdminTransport.E2E.value,
+        )
         return
 
     # IMPL-only scenarios: harness has no transport wrappers for this path
@@ -3210,11 +3246,13 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         transports = [Transport.A2A, Transport.MCP]
         ids = ["a2a", "mcp"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
-        transports.append(Transport.E2E_REST)
-        ids.append("e2e_rest")
-
-    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+    _parametrize_ctx(
+        metafunc,
+        transports,
+        ids,
+        None if no_rest_uc else Transport.E2E_REST,
+        None if no_rest_uc else "e2e_rest",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -3868,12 +3906,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail(f"UC-011 harness not yet wired for markers: {marker_names}")
 
     elif uc == "ADMIN":
-        request.getfixturevalue("integration_db")
         from tests.harness.admin_accounts import AdminAccountEnv
 
-        # BDD suite always uses integration mode (Flask test_client).
-        # E2E mode (requests.Session + Docker) is tested separately.
-        with AdminAccountEnv(mode="integration") as env:
+        # Both transports the feature file declares, chosen by the collection-time
+        # parametrization rather than pinned here (salesagent-jckl). The env is
+        # TOLD its transport and, over e2e, the per-worker address e2e_stack
+        # synthesised — it discovers neither.
+        mode = "e2e" if e2e_config is not None else "integration"
+        base_url = e2e_config.base_url if e2e_config is not None else None
+        with _db_scope_for(request, e2e_config), AdminAccountEnv(mode=mode, base_url=base_url) as env:
             ctx["env"] = env
             yield
 

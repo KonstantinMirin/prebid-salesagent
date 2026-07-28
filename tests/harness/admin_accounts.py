@@ -2,9 +2,12 @@
 
 Provides two transports for admin account management BDD scenarios:
 - **integration**: Flask test_client (in-process, no Docker)
-- **e2e**: requests.Session against Docker stack (full deployment)
+- **e2e**: requests.Session against the live stack (full deployment)
 
-Transport selection is automatic based on ``ADCP_SALES_PORT`` env var.
+The transport and, for e2e, the server address are TOLD to this env by its
+caller — they are never inferred from the environment (salesagent-jckl). The
+BDD parametrization picks the transport at collection time and the ``e2e_stack``
+fixture supplies the address; both arrive as arguments.
 
 beads: salesagent-oj0.1.2, salesagent-oj0.1.3
 """
@@ -12,17 +15,65 @@ beads: salesagent-oj0.1.2, salesagent-oj0.1.3
 from __future__ import annotations
 
 import logging
-import os
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Account, Tenant
-from tests.e2e.conftest import e2e_host
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 logger = logging.getLogger(__name__)
+
+
+class AdminTransport(StrEnum):
+    """The two transports BR-ADMIN-ACCOUNTS.feature declares for admin scenarios.
+
+    Deliberately NOT members of ``tests.harness.transport.Transport``:
+    ``TRANSPORT_PROTOCOL`` maps every ``Transport`` member to an AdCP
+    ``ResolvedIdentity.protocol`` consumed by ``_base.call_via``, and the admin
+    UI is an HTML form surface with no AdCP protocol — a member there would have
+    to be given a fabricated one, which is a lie in the AdCP enum rather than a
+    naming inconvenience. Because ``StrEnum`` members ARE ``str``, a value that
+    leaks into ``dispatch_request`` misses ``transport_map`` and raises
+    "unrecognized wire transport" loudly instead of dispatching somewhere wrong.
+
+    The ``e2e_`` prefix on ``E2E`` is load-bearing: the ``ctx`` fixture stashes
+    ``e2e_config`` (and hard-errors on an unreachable stack) for any param whose
+    value starts with it, and ``_outcome_helpers.is_e2e()`` keys on the same
+    prefix.
+    """
+
+    INTEGRATION = "admin_integration"  # Flask test_client, in-process
+    E2E = "e2e_admin"  # requests.Session against the live stack
+
+
+class _CaseInsensitiveHeaders(dict):
+    """Header mapping that looks up regardless of case, on either transport.
+
+    HTTP header names are case-insensitive (RFC 9110 §5.1), and the two
+    transports genuinely differ: werkzeug hands back canonical ``Location``,
+    while the live server emits lowercase ``location`` (ASGI normalizes header
+    names). Both source objects model that correctly — werkzeug ``Headers`` and
+    requests ``CaseInsensitiveDict`` — but ``dict(response.headers)`` threw the
+    property away, so ``headers.get("Location")`` silently returned "" over real
+    HTTP and every redirect assertion read as "no redirect happened"
+    (salesagent-jckl). Six BR-ADMIN-ACCOUNTS scenarios failed on this the first
+    time they ran over the wire.
+    """
+
+    def __init__(self, headers: Any) -> None:
+        super().__init__({str(k).lower(): v for k, v in dict(headers).items()})
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return super().get(key.lower(), default)
+
+    def __getitem__(self, key: str) -> Any:
+        return super().__getitem__(key.lower())
+
+    def __contains__(self, key: object) -> bool:
+        return super().__contains__(str(key).lower())
 
 
 class _AdminResponse:
@@ -32,10 +83,10 @@ class _AdminResponse:
     know which transport is active.
     """
 
-    def __init__(self, status_code: int, data: bytes, headers: dict[str, str], json_data: Any = None) -> None:
+    def __init__(self, status_code: int, data: bytes, headers: Any, json_data: Any = None) -> None:
         self.status_code = status_code
         self._data = data
-        self.headers = headers
+        self.headers = _CaseInsensitiveHeaders(headers)
         self._json_data = json_data
 
     @property
@@ -79,29 +130,39 @@ class AdminAccountEnv:
 
     Supports two modes:
     - ``integration``: Flask test_client (default, in-process)
-    - ``e2e``: requests.Session against Docker stack (when ADCP_SALES_PORT set)
+    - ``e2e``: requests.Session against the live stack
     """
 
     DEFAULT_TENANT_ID = "bdd_admin_tenant"
 
-    def __init__(self, *, mode: str | None = None, tenant_id: str | None = None) -> None:
+    def __init__(self, *, mode: str = "integration", tenant_id: str | None = None, base_url: str | None = None) -> None:
         """
         Args:
-            mode: ``integration`` (Flask test_client) or ``e2e`` (Docker stack).
-                Auto-detected from ``ADCP_SALES_PORT`` when omitted.
+            mode: ``integration`` (Flask test_client) or ``e2e`` (live stack).
+                Defaults to the in-process transport; there is no auto-detection
+                (salesagent-jckl). An env that guesses its own transport from a
+                process-global cannot tell "my caller wants e2e" from "the
+                container exports a port for unrelated reasons", and a global
+                cannot carry a different address per xdist worker at all.
             tenant_id: Tenant to operate on. Defaults to ``DEFAULT_TENANT_ID``.
                 Pass an explicit id to drive the admin surface for a tenant some
                 OTHER env already seeded — e.g. pairing with ``AccountSyncEnv`` to
                 check that an admin edit does not orphan an account from the
                 buyer's sync (salesagent-8sfr). ``_ensure_tenant_for_id`` already
                 handled arbitrary ids; this just exposes it at construction.
+            base_url: Where the live server is, e.g.
+                ``http://myproj-server-gw2:8080``. REQUIRED for ``mode="e2e"``
+                and meaningless otherwise. Supplied by whoever knows it — under
+                BDD that is ``e2e_stack``, which synthesises a per-worker address.
         """
-        self._e2e_port = os.environ.get("ADCP_SALES_PORT")
-        # Explicit mode overrides auto-detection
-        if mode is not None:
-            self._mode = mode
-        else:
-            self._mode = "e2e" if self._e2e_port else "integration"
+        if mode not in ("integration", "e2e"):
+            raise ValueError(f"mode must be 'integration' or 'e2e', got {mode!r}")
+        if mode == "e2e" and not base_url:
+            raise ValueError(
+                "mode='e2e' requires base_url — the caller knows the address, this env does not discover it"
+            )
+
+        self._mode = mode
 
         # Integration mode: Flask app + test_client
         self._app: Any = None
@@ -109,7 +170,7 @@ class AdminAccountEnv:
 
         # E2E mode: requests.Session
         self._session: Any = None
-        self._base_url: str = ""
+        self._base_url: str = base_url or ""
 
         self._tenant_id: str = tenant_id or self.DEFAULT_TENANT_ID
         self._created_account_ids: list[str] = []
@@ -153,13 +214,13 @@ class AdminAccountEnv:
         self._flask_client = self._app.test_client().__enter__()
 
     def _setup_e2e(self) -> None:
-        """Set up requests.Session for e2e transport against Docker stack."""
+        """Set up requests.Session for e2e transport against the live stack.
+
+        ``base_url`` was supplied at construction — this env resolves no
+        addresses of its own.
+        """
         import requests
 
-        # Host path: localhost:<published-port>. In-network the server is reached
-        # by service name (ADCP_TEST_HOST=proxy) with no published host port.
-        host = e2e_host()
-        self._base_url = f"http://{host}:{self._e2e_port}"
         self._session = requests.Session()
         logger.info("Admin e2e transport: %s", self._base_url)
 
@@ -334,6 +395,21 @@ class AdminAccountEnv:
             for account in accounts:
                 session.expunge(account)
             return accounts
+
+    def accounts_with_brand_domain(self, domain: str) -> list[Account]:
+        """Accounts in this tenant whose brand carries ``domain``.
+
+        Owned by the env rather than read with a raw session in the step, so the
+        lookup follows whichever DB the transport selected (salesagent-jckl).
+        """
+        from sqlalchemy import select
+
+        with get_db_session() as session:
+            accounts = session.scalars(select(Account).where(Account.tenant_id == self._tenant_id)).all()
+            matches = [a for a in accounts if a.brand and a.brand.domain == domain]
+            for account in matches:
+                session.expunge(account)
+            return matches
 
     def get_account_id_by_name(self, name: str) -> str | None:
         """Get account_id by name."""
