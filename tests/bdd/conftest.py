@@ -1368,27 +1368,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-limit negative",
                     "[rest-limit negative",
                 },
-                "STALE (salesagent-5zlo): kept only pending a per-row graduation walk — these "
-                "mcp/rest rows XPASS(strict) under BDD_ALL_TRANSPORTS=1 and are deselected as "
-                "redundant transports in normal runs, so the marker never proves out",
+                "reporting_dimensions boundary rows assert a categorical 'invalid' routed to "
+                "_assert_wire_rejection, not a named wire code, so a green mark here is a "
+                "weak-assertion artefact rather than proof. Their identical-payload partition "
+                "twins still XFAIL on a2a demanding INVALID_REQUEST, and REST emits "
+                "INVALID_REQUEST (src/app.py) where MCP/A2A emit VALIDATION_ERROR for the same "
+                "input — so the transports genuinely disagree on the wire code. Re-derived "
+                "2026-07-28: NOT a graduation; strengthen the Then to a named code and reconcile "
+                "the REST/MCP divergence first",
             ),
-            (
-                "T-UC-004-boundary-attribution",
-                {
-                    # a2a now normalizes these to AdCPError(INVALID_REQUEST) (wire-drop
-                    # confirmed XPASS, #1417) — removed. mcp/rest still gap.
-                    "mcp-interval=0 (below minimum)",
-                    "[rest-interval=0 (below minimum)",
-                    "mcp-unit=weeks (not in enum)",
-                    "[rest-unit=weeks (not in enum)",
-                    "mcp-model=last_click (not in enum)",
-                    "[rest-model=last_click (not in enum)",
-                },
-                "STALE (salesagent-5zlo): kept only pending a per-row graduation walk — these "
-                "mcp/rest rows XPASS(strict) under BDD_ALL_TRANSPORTS=1 (production emits "
-                "VALIDATION_ERROR on the wire) and are deselected as redundant transports in "
-                "normal runs, so the marker never proves out",
-            ),
+            # GRADUATED (removed 2026-07-28, salesagent-5zlo): T-UC-004-boundary-attribution —
+            # ALL SIX mcp/rest rows (interval=0, unit=weeks, model=last_click).
+            # The scenario names VALIDATION_ERROR and routes through _WIRE_ASSERTED_FIELDS ->
+            # assert_wire_error, i.e. it grades the real two-layer envelope, not a categorical
+            # "invalid". Its byte-identical partition twins (T-UC-004-partition-attribution) were
+            # fully graduated earlier under the STRICTER "with suggestion" assertion and pass on
+            # mcp and rest today, so the boundary rows carry no obligation the partition rows do
+            # not already prove. The old reason string was also factually dead: it described a C4
+            # transport-boundary gap ("not normalized to AdCPError(INVALID_REQUEST) ... a2a
+            # RuntimeError-wrap, rest 422 detail") that no longer exists — REST emits the
+            # two-layer envelope via request_validation_error_handler (src/app.py), a2a
+            # normalizes inside adcp_validation_boundary, and the Examples were regenerated to
+            # demand VALIDATION_ERROR rather than INVALID_REQUEST.
             # C11 retired (salesagent-18h.1): the "production ignores buyer
             # start_date" failure was an artefact of the greedy with-params
             # step shadowing when_request_date_range and mis-parsing the
@@ -1655,17 +1656,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-004-boundary-status-filter",
                 {
-                    "impl-pending_activation (first enum value)",
-                    "a2a-pending_activation (first enum value)",
-                    # a2a now raises AdCPError on failed/[] (wire-drop confirmed XPASS,
-                    # #1417) — removed. mcp still fails (mcp-failed kept).
-                    "mcp-pending_activation (first enum value)",
+                    # DEAD STRINGS REMOVED (2026-07-28, salesagent-5zlo): the four
+                    # "*-pending_activation (first enum value)" substrings matched nothing.
+                    # `pending_activation` was renamed to `pending_creatives` and now appears
+                    # ZERO times in BR-UC-004-deliver-media-buy-metrics.feature, so those four
+                    # entries had been silently routing nothing. A substring that matches no
+                    # nodeid is indistinguishable from one that matches a passing row, which is
+                    # why they survived: the marker simply never applied.
                     "mcp-failed (not in AdCP enum",
-                    "[rest-pending_activation (first enum value)",
                 },
-                "pending_activation: Gherkin value not a valid AdCP MediaBuyStatus "
-                "(item B1). failed/[]: ValidationError not AdCPError on a2a/mcp (item C4). "
-                "See docs/test-debt-bdd-strict-markers.md.",
+                "mcp-failed: 'failed' is not in the AdCP MediaBuyStatus enum (internal-only "
+                "status). Kept because the mcp row still raises ValidationError rather than a "
+                "normalized AdCPError; its a2a and rest siblings already run green. "
+                "See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # credentials (salesagent-f8u4): FULLY reconciled — the When step
             # now validates the real AdCP reporting_webhook Authentication
