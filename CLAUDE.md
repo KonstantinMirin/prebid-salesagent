@@ -125,7 +125,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ## AdCP Spec Version
 
-This project targets AdCP spec **3.1.0-beta.3** via the `adcp==5.7.0` Python SDK. See
+This project targets AdCP spec **3.1.1** via the `adcp==6.6.0` Python SDK. See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
 and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
 fails on pin drift.
@@ -332,6 +332,37 @@ with get_db_session() as session:
   code must use factories regardless. The structural guard (`test_architecture_repository_pattern.py`)
   will catch new violations immediately at `make quality`. Pre-existing violations are allowlisted
   and tracked with FIXME comments — they shrink over time, never grow.
+
+### 9. Outbound HTTP: The Application Implements No SSRF Protection
+**Every outbound request goes through `src/core/security/outbound_http.py` (`send` / `asend`).**
+
+Do not add URL validation, private-IP checks, metadata blocklists, resolve-then-check, or
+redirect re-validation anywhere else — `adcp.signing` owns address validation and IP pinning,
+httpx owns the response state machine (including NOT following redirects). If you find yourself
+writing `ipaddress`, `socket.gethostbyname`, or a hostname blocklist in `src/`, stop: that logic
+is already owned elsewhere.
+
+**Why:** address, TLS, redirect and retry policy re-decided at each call site is exactly how SSRF
+kept recurring here (#1589) — one call site always forgets one of them. One seam, one decision.
+
+```python
+# CORRECT: the seam decides address, TLS, redirect and retry policy
+from src.core.security.outbound_http import asend
+
+result = await asend("POST", url, json=payload)
+```
+
+```python
+# WRONG: raw client plus hand-rolled address policy at the call site
+import httpx, ipaddress, socket
+
+if ipaddress.ip_address(socket.gethostbyname(host)).is_private:  # TOCTOU, and not our job
+    raise ValueError("blocked")
+async with httpx.AsyncClient() as client:
+    await client.post(url, json=payload)
+```
+
+- **Enforced by:** `test_architecture_no_raw_egress.py` (allowlist only shrinks)
 
 ---
 
