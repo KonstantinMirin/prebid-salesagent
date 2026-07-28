@@ -1260,6 +1260,40 @@ def _entry_account_hint(entry: Any) -> str:
     return str(getattr(brand, "domain", None) or "unknown")
 
 
+def _new_account_row(
+    *,
+    tenant_id: str,
+    account_id: str,
+    name: str,
+    status: str,
+    brand_domain: str,
+    brand_id: str | None,
+    operator: str,
+    principal_id: str | None,
+    created_fields: dict[str, Any],
+) -> DBAccount:
+    """Build the Account row a provisioning entry would create.
+
+    Shared by the live create and the dry_run preview so the two cannot describe
+    different rows — a preview built from its own field list is how the two arms
+    drift (#1721). The dry_run caller deliberately never adds the result to the
+    session; it only needs an object to compare LATER entries in the same request
+    against, the way the live arm compares them against the flushed row.
+    """
+    return DBAccount(
+        tenant_id=tenant_id,
+        account_id=account_id,
+        name=name,
+        status=status,
+        brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+        operator=operator,
+        principal_id=principal_id,
+        # Every settable field comes from the one walk in the caller -- naming them
+        # here is what let a field be added to the re-sync arm and forgotten at create.
+        **created_fields,
+    )
+
+
 def _apply_to_existing_account(entry: Any, existing: Any, repo: Any, operator: str) -> SyncResponseAccount:
     """Apply a provisioning entry to the account that already holds its natural key.
 
@@ -1354,6 +1388,9 @@ async def _sync_accounts_impl(
     results: list[SyncResponseAccount] = []
     # Track natural keys in the payload for delete_missing
     seen_account_ids: set[str] = set()
+    #: dry_run only — natural key -> the row that key's earlier entry WOULD have
+    #: created. Stands in for the flush the live arm gets from repo.create().
+    previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount] = {}
 
     # Activation proof runs BEFORE the write transaction opens (see
     # _resolve_activation_proofs). Holding a Postgres transaction across an
@@ -1459,6 +1496,14 @@ async def _sync_accounts_impl(
                 sandbox=sandbox,
             )
 
+            # The FULL key the unique index and every resolver use — a partial key
+            # would collapse accounts that differ only by brand_id or sandbox, which
+            # are legitimately distinct.
+            natural_key = (brand_domain, brand_id, operator, bool(sandbox))
+            previewed = previewed_by_key.get(natural_key) if dry_run else None
+            if existing is None and previewed is not None:
+                existing = previewed
+
             if existing is not None:
                 seen_account_ids.add(existing.account_id)
 
@@ -1466,6 +1511,15 @@ async def _sync_accounts_impl(
                     # Check if fields would change
                     changes = _account_fields_changed(existing, entry)
                     action = "updated" if changes else "unchanged"
+                    if previewed is not None and changes:
+                        # Carry the change forward exactly as the live arm does by
+                        # UPDATING the row: a third entry on this key must be
+                        # resolved against the state the second one left, not the
+                        # first. Only ever mutates the unpersisted preview object —
+                        # mutating a real loaded row here would be written out at
+                        # commit, which a dry_run must never do.
+                        for field, value in changes.items():
+                            setattr(previewed, field, value)
                     results.append(
                         _build_sync_result(
                             brand=entry.brand,
@@ -1510,6 +1564,25 @@ async def _sync_accounts_impl(
                 initial_status = "pending_approval" if setup else "active"
 
                 if dry_run:
+                    # Remember what this entry WOULD create, so a later entry on the
+                    # same natural key resolves against it. The live arm gets that
+                    # memory for free — repo.create() flushes, so the next lookup
+                    # finds the row — and without an equivalent here a payload
+                    # carrying one key twice previewed "created" twice, under two
+                    # account_ids, an outcome no real run can produce (BR-RULE-062).
+                    # The row is built by the SAME helper the live arm uses and is
+                    # deliberately never added to the session.
+                    previewed_by_key[natural_key] = _new_account_row(
+                        tenant_id=tenant_id,
+                        account_id=account_id,
+                        name=account_name,
+                        status=initial_status,
+                        brand_domain=brand_domain,
+                        brand_id=brand_id,
+                        operator=operator,
+                        principal_id=principal_id,
+                        created_fields=created_fields,
+                    )
                     # account_id was generated above (BR-RULE-062 — preview reflects
                     # what a real create would return). It is a preview value, not a
                     # commitment to that specific id.
@@ -1530,18 +1603,16 @@ async def _sync_accounts_impl(
                     )
                     continue
 
-                new_account = DBAccount(
+                new_account = _new_account_row(
                     tenant_id=tenant_id,
                     account_id=account_id,
                     name=account_name,
                     status=initial_status,
-                    brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+                    brand_domain=brand_domain,
+                    brand_id=brand_id,
                     operator=operator,
                     principal_id=principal_id,
-                    # Every settable field comes from the one walk above -- naming
-                    # them here is what let a field be added to the re-sync arm and
-                    # forgotten at create.
-                    **created_fields,
+                    created_fields=created_fields,
                 )
                 try:
                     repo.create(new_account)

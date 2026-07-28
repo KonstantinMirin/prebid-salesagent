@@ -336,6 +336,168 @@ class TestSyncAccountsDryRun:
         assert result.setup.url is not None
         assert result.setup.expires_at is not None
 
+    @pytest.mark.asyncio
+    async def test_two_entries_on_one_key_preview_the_outcome_a_real_run_produces(self, integration_db):
+        """BR-RULE-062: a preview must reflect what a real create would return.
+
+        For a payload carrying TWO entries on the SAME natural key it did not. The
+        live path creates on entry 1 and FLUSHES, so entry 2's lookup finds that
+        row and reports it — the buyer sees created, then unchanged, both naming
+        one account. The dry_run arm appends its result and continues before any
+        write, so entry 2's lookup still missed and the preview claimed created
+        TWICE, under two different account_ids: an outcome a real run cannot
+        produce, and precisely the one the buyer would use the preview to rule out.
+        """
+        entry = {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}
+
+        with AccountSyncEnv(tenant_id="sync_dup_dry", principal_id="agent_dup_dry") as env:
+            env.setup_default_data()
+            preview = await env.call_impl_async(
+                req=SyncAccountsRequest(accounts=[dict(entry), dict(entry)], dry_run=True)
+            )
+
+        # The live run is the oracle, not a hand-written expectation.
+        with AccountSyncEnv(tenant_id="sync_dup_live", principal_id="agent_dup_live") as env:
+            env.setup_default_data()
+            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(entry), dict(entry)]))
+
+        assert [_action_value(a.action) for a in live.accounts] == ["created", "unchanged"], (
+            "precondition: the live path must resolve the second entry against the first"
+        )
+        assert live.accounts[0].account_id == live.accounts[1].account_id
+
+        assert [_action_value(a.action) for a in preview.accounts] == [
+            _action_value(a.action) for a in live.accounts
+        ], (
+            f"dry_run previewed {[_action_value(a.action) for a in preview.accounts]} but a real run returns "
+            f"{[_action_value(a.action) for a in live.accounts]}"
+        )
+        assert preview.accounts[0].account_id == preview.accounts[1].account_id, (
+            "the two previewed entries name different accounts "
+            f"({preview.accounts[0].account_id} vs {preview.accounts[1].account_id}); one natural key is one account"
+        )
+
+    @pytest.mark.asyncio
+    async def test_two_entries_on_one_key_that_differ_preview_the_update(self, integration_db):
+        """A later entry that CHANGES a field must preview 'updated', with the new value.
+
+        The obvious fix — remember which keys were previewed — reports 'unchanged'
+        here and drops the difference from the preview entirely. Only carrying the
+        previewed STATE forward, and running the same field comparison the live arm
+        runs against it, gets this right.
+        """
+        first = {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}
+        second = {**first, "payment_terms": "net_30"}
+
+        with AccountSyncEnv(tenant_id="sync_dup_diff_dry", principal_id="agent_ddd") as env:
+            env.setup_default_data()
+            preview = await env.call_impl_async(
+                req=SyncAccountsRequest(accounts=[dict(first), dict(second)], dry_run=True)
+            )
+
+        with AccountSyncEnv(tenant_id="sync_dup_diff_live", principal_id="agent_ddl") as env:
+            env.setup_default_data()
+            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(first), dict(second)]))
+
+        assert [_action_value(a.action) for a in live.accounts] == ["created", "updated"], (
+            "precondition: the live path must apply the second entry's change"
+        )
+        assert [_action_value(a.action) for a in preview.accounts] == [
+            _action_value(a.action) for a in live.accounts
+        ], (
+            f"dry_run previewed {[_action_value(a.action) for a in preview.accounts]} but a real run returns "
+            f"{[_action_value(a.action) for a in live.accounts]}"
+        )
+        assert preview.accounts[1].payment_terms == live.accounts[1].payment_terms, (
+            f"the preview must show the value the change WOULD apply: {preview.accounts[1].payment_terms!r} "
+            f"vs live {live.accounts[1].payment_terms!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_three_entries_on_one_key_resolve_against_the_running_state(self, integration_db):
+        """The third entry is resolved against what the SECOND left, not the first.
+
+        The live arm updates the row, so entry 3 compares against the updated row.
+        A preview that remembered only entry 1's state would report entry 3 against
+        stale values — a case no two-entry payload can expose.
+        """
+        base = {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}
+        entries = [dict(base), {**base, "payment_terms": "net_30"}, {**base, "payment_terms": "net_30"}]
+
+        with AccountSyncEnv(tenant_id="sync_trip_dry", principal_id="agent_td") as env:
+            env.setup_default_data()
+            preview = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries, dry_run=True))
+
+        with AccountSyncEnv(tenant_id="sync_trip_live", principal_id="agent_tl") as env:
+            env.setup_default_data()
+            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries))
+
+        assert [_action_value(a.action) for a in live.accounts] == ["created", "updated", "unchanged"], (
+            "precondition: the third entry matches what the second applied, so it is unchanged"
+        )
+        assert [_action_value(a.action) for a in preview.accounts] == [
+            _action_value(a.action) for a in live.accounts
+        ], (
+            f"dry_run previewed {[_action_value(a.action) for a in preview.accounts]} but a real run returns "
+            f"{[_action_value(a.action) for a in live.accounts]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_entries_differing_only_by_brand_id_stay_distinct_accounts(self, integration_db):
+        """brand_id is part of the key, so these are two accounts, not one.
+
+        Guards the fix against being written against a PARTIAL natural key: keying
+        on domain+operator alone would collapse these and preview one account where
+        a real run creates two — a worse preview bug than the one being fixed.
+        """
+        entries = [
+            {
+                "brand": {"domain": "acme.com", "brand_id": "brand_one"},
+                "operator": "example.com",
+                "billing": "operator",
+            },
+            {
+                "brand": {"domain": "acme.com", "brand_id": "brand_two"},
+                "operator": "example.com",
+                "billing": "operator",
+            },
+        ]
+
+        with AccountSyncEnv(tenant_id="sync_bid_dry", principal_id="agent_bd") as env:
+            env.setup_default_data()
+            preview = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries, dry_run=True))
+
+        with AccountSyncEnv(tenant_id="sync_bid_live", principal_id="agent_bl") as env:
+            env.setup_default_data()
+            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries))
+
+        assert [_action_value(a.action) for a in live.accounts] == ["created", "created"]
+        assert live.accounts[0].account_id != live.accounts[1].account_id
+
+        assert [_action_value(a.action) for a in preview.accounts] == ["created", "created"], (
+            f"a different brand_id is a different natural key: {[_action_value(a.action) for a in preview.accounts]}"
+        )
+        assert preview.accounts[0].account_id != preview.accounts[1].account_id, (
+            "the preview collapsed two distinct brand_ids onto one account"
+        )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_key_dry_run_persists_nothing(self, integration_db):
+        """The preview builds ORM rows now, so pin that none of them reach the DB."""
+        from src.core.database.repositories.uow import AccountUoW
+
+        entry = {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}
+
+        with AccountSyncEnv(tenant_id="sync_dup_nodb", principal_id="agent_dnd") as env:
+            env.setup_default_data()
+            await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(entry), dict(entry)], dry_run=True))
+
+            with AccountUoW("sync_dup_nodb") as uow:
+                assert uow.accounts is not None
+                rows = uow.accounts.list_all()
+
+        assert rows == [], f"dry_run persisted {[(r.account_id, r.brand) for r in rows]}"
+
 
 class TestSyncAccountsBillingPolicy:
     """BR-RULE-059: billing policy enforcement per-account."""
