@@ -9,7 +9,6 @@ When metrics exist, CPM pricing options get floor_price and price_guidance.
 
 from __future__ import annotations
 
-import logging
 from decimal import Decimal
 
 import pytest
@@ -182,16 +181,23 @@ class TestDynamicPricingUnmocked:
             )
 
     @pytest.mark.asyncio
-    async def test_non_numeric_id_token_reports_no_recognizable_sizes(self, integration_db, caplog):
-        """An id token that merely contains an 'x' is not a size, and says so.
+    async def test_non_numeric_id_token_is_not_treated_as_a_size(self, integration_db):
+        """An id token that merely contains an 'x' must not be priced as a size.
 
         ``parse_size_token`` requires BOTH sides of the ``x`` to be numeric (#1600). The
         pre-consolidation dynamic-pricing parser accepted any token containing an ``x``, so
-        ``display_boxad`` produced the pseudo-size ``"boxad"``: it matched no metric row and
-        the product landed on ``_default_pricing()`` down the silent ``logger.debug``
-        no-metrics path, suppressing the "no recognizable creative sizes" warning that is the
-        actual diagnosis. The price is the same either way — the diagnostic is the behavior
-        under test.
+        ``display_boxad`` produced the pseudo-size ``"boxad"``.
+
+        The discriminator is a metric row keyed on that very pseudo-size: the OLD parser
+        matches it and prices the product from those metrics, while the correct parser
+        derives no sizes at all and returns ``_default_pricing()`` before the metric query
+        ever runs. So the two behaviours differ in the PRICE, which is what this asserts.
+
+        Deliberately not asserted via the "no recognizable creative sizes" log line. That
+        was the original form of this test and it passed alone but failed in the full suite
+        with zero captured records — an earlier test on the same xdist worker leaves ``src.*``
+        loggers disabled, so a log-only assertion is silently vacuous exactly when the suite
+        runs for real.
         """
         with ProductEnv(tenant_id="pricing-token", principal_id="pricing-token-p") as env:
             tenant = TenantFactory(tenant_id="pricing-token", subdomain="pricing-token")
@@ -203,20 +209,34 @@ class TestDynamicPricingUnmocked:
                 name="Boxad Product",
                 format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_boxad"}],
             )
-            PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("10.0"), is_fixed=True)
+            PricingOptionFactory(
+                product=p,
+                pricing_model="cpm",
+                rate=Decimal("10.0"),
+                is_fixed=False,
+                price_guidance={"floor": 5.0, "p25": 4.0, "p50": 6.0, "p75": 8.0, "p90": 11.0},
+            )
 
-            FormatPerformanceMetricsFactory(tenant=tenant, creative_size="300x250")
+            # Keyed on the PSEUDO-size the broken parser produced. Only a parser that
+            # accepts "boxad" as a size can reach these numbers.
+            FormatPerformanceMetricsFactory(
+                tenant=tenant,
+                creative_size="boxad",
+                median_cpm=Decimal("7.77"),
+                p75_cpm=Decimal("9.99"),
+                p90_cpm=Decimal("13.13"),
+            )
 
-            with caplog.at_level(logging.WARNING, logger="src.services.dynamic_pricing_service"):
-                response = await env.call_impl(brief="display ads")
+            response = await env.call_impl(brief="display ads")
 
             assert len(response.products) == 1
-            warnings = [
-                r.getMessage()
-                for r in caplog.records
-                if r.name == "src.services.dynamic_pricing_service" and r.levelno == logging.WARNING
+            cpm_options = [
+                po.root for po in response.products[0].pricing_options if po.root.pricing_model.upper() == "CPM"
             ]
-            assert any("boxad_product" in m and "no recognizable creative sizes" in m for m in warnings), (
-                "Expected the explicit 'no recognizable creative sizes' warning for "
-                f"format id 'display_boxad' ('boxad' is not a WxH size), got: {warnings}"
+            assert len(cpm_options) >= 1
+            floor_price = getattr(cpm_options[0], "floor_price", None)
+            assert floor_price != 7.77, (
+                "'boxad' was treated as a creative size: the product was priced from the "
+                "pseudo-size metric row (floor_price=7.77 == median_cpm). Both sides of the "
+                "'x' must be numeric."
             )
