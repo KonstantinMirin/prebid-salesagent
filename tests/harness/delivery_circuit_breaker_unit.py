@@ -1,7 +1,8 @@
 """CircuitBreakerEnv — unit test environment for WebhookDeliveryService and CircuitBreaker.
 
-Patches: httpx.Client, time.sleep, random.uniform, get_db_session
-         (all in src.services.webhook_delivery_service)
+Patches: time.sleep, random.uniform, get_db_session, the module logger.
+Real: a local HTTP origin that actually serves the delivery attempts — the
+outbound transport is NOT patched (see ``LocalOriginMixin``).
 
 Usage::
 
@@ -15,14 +16,13 @@ Usage::
         env.set_http_response(200)
         service = env.get_service()
         service.send_delivery_webhook(...)
+        assert env.delivery_attempts == 1
 
 Available mocks via env.mock:
-    "client"    -- httpx.Client mock
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
     "db"        -- get_db_session mock
     "logger"    -- module-level logger mock
-    "post"      -- shortcut to httpx client.post mock
 """
 
 from __future__ import annotations
@@ -38,11 +38,14 @@ from tests.harness._mixins import CircuitBreakerMixin
 class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
     """Unit test environment for WebhookDeliveryService and CircuitBreaker.
 
-    Fluent API (from CircuitBreakerMixin):
+    Fluent API (from CircuitBreakerMixin / LocalOriginMixin):
+        webhook_url                      -- the running origin's URL
+        endpoint_key(tenant_id)          -- production's per-endpoint breaker key
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- answer every attempt with one status
         call_send(...)                   -- call service.send_delivery_webhook
+        delivery_attempts / last_delivery -- what the endpoint actually received
 
     Unit-only API:
         set_db_webhooks(webhook_list)    -- configure mock DB results
@@ -51,7 +54,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
     MODULE = "src.services.webhook_delivery_service"
     EXTERNAL_PATCHES = {
-        "client": f"{MODULE}.httpx.Client",
         "sleep": f"{MODULE}.time.sleep",
         "random": f"{MODULE}.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
@@ -67,16 +69,13 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
-        # httpx.Client: 200 OK by default (from mixin)
+        # The origin answers 200 OK unless a test programs otherwise.
         self.set_http_response(200)
-
-        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
-        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
 
         # DB session: return a mock session with one active webhook config
         # (BDD Given steps store config in ctx dict; the unit env provides a default
         # so send_delivery_webhook finds at least one endpoint to deliver to)
-        default_config = self.make_webhook_config(url="https://buyer.example.com/webhook")
+        default_config = self.make_webhook_config()
         mock_session = MagicMock()
         mock_scalars = MagicMock()
         mock_scalars.all.return_value = [default_config]
@@ -95,14 +94,18 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
     def make_webhook_config(
         self,
-        url: str = "https://example.com/webhook",
+        url: str | None = None,
         auth_type: str | None = None,
         auth_token: str | None = None,
         secret: str | None = None,
     ) -> MagicMock:
-        """Create a mock webhook config object."""
+        """Create a mock webhook config object.
+
+        ``url`` defaults to the running origin, so the configured endpoint is one
+        that really answers.
+        """
         config = MagicMock()
-        config.url = url
+        config.url = url if url is not None else self.webhook_url
         config.authentication_type = auth_type
         config.authentication_token = auth_token
         config.webhook_secret = secret

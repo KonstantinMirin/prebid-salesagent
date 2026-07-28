@@ -595,9 +595,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             )
 
         # FIXME(salesagent-got8): E2E_REST — webhook/circuit assertions observe
-        # env.mock['post'] or CircuitBreaker state, neither of which is visible
-        # through the Docker HTTP path. Remove when an E2E webhook receiver or
-        # circuit-breaker introspection is available.
+        # the in-process local origin or CircuitBreaker state, neither of which
+        # is reachable from the Docker HTTP path (the origin listens on the
+        # runner's loopback, not the container's). Remove when an E2E webhook
+        # receiver or circuit-breaker introspection is available.
         _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
             "T-UC-004-webhook-bearer",
             "T-UC-004-webhook-hmac",
@@ -606,8 +607,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-webhook-circuit-open",
             "T-UC-004-webhook-circuit-recovery",
             "T-UC-004-webhook-retry-success",
-            # jdy1-M4: retry/sequence observability — assert on env.mock['post']
-            # call counts / args, not visible over the Docker HTTP path.
+            # jdy1-M4: retry/sequence observability — assert on the requests the
+            # in-process origin received, not visible over the Docker HTTP path.
             "T-UC-004-webhook-retry-5xx",
             "T-UC-004-webhook-retry-network",
             "T-UC-004-webhook-no-retry-4xx",
@@ -616,7 +617,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         if is_e2e_rest and (marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS):
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="E2E: webhook POST mock + CircuitBreaker state not observable through Docker HTTP",
+                    reason="E2E: in-process webhook origin + CircuitBreaker state not observable through Docker HTTP",
                     strict=False,
                 )
             )

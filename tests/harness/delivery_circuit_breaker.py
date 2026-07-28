@@ -1,7 +1,12 @@
 """CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
 
-Patches: httpx.Client, time.sleep, random.uniform (external/timing concerns).
-Real: get_db_session for PushNotificationConfig queries (real DB).
+Patches: time.sleep, random.uniform (timing and randomness only).
+Real: a local HTTP origin that actually serves the delivery attempts, and
+      get_db_session for PushNotificationConfig queries (real DB).
+
+The outbound transport is NOT patched — see ``LocalOriginMixin``. Webhook
+endpoints must therefore be configured with ``env.webhook_url``, which is the
+origin that is really listening.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -12,14 +17,14 @@ Usage::
         with CircuitBreakerEnv() as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant)
-            PushNotificationConfigFactory(tenant=tenant, principal=principal)
+            PushNotificationConfigFactory(tenant=tenant, principal=principal, url=env.webhook_url)
 
             env.set_http_response(200)
             service = env.get_service()
             result = service.send_delivery_webhook(...)
+            assert env.delivery_attempts == 1
 
 Available mocks via env.mock:
-    "client"    -- httpx.Client mock
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
 """
@@ -51,22 +56,24 @@ class _LogCaptureHandler(logging.Handler):
 class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     """Integration test environment for WebhookDeliveryService and CircuitBreaker.
 
-    Only mocks external HTTP client, timing, and randomness.
-    DB queries for PushNotificationConfig run against real database.
+    Only mocks timing and randomness. Delivery goes over real HTTP to a real
+    local origin; DB queries for PushNotificationConfig run against real database.
 
-    Fluent API (from CircuitBreakerMixin):
+    Fluent API (from CircuitBreakerMixin / LocalOriginMixin):
+        webhook_url                      -- the running origin's URL
+        endpoint_key(tenant_id)          -- production's per-endpoint breaker key
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- answer every attempt with one status
         call_send(...)                   -- call service.send_delivery_webhook
         make_webhook_config(...)         -- create a PushNotificationConfig in DB
         set_db_webhooks(configs)         -- replace webhook configs in DB
+        delivery_attempts / last_delivery -- what the endpoint actually received
     """
 
     MODULE = "src.services.webhook_delivery_service"
 
     EXTERNAL_PATCHES = {
-        "client": "src.services.webhook_delivery_service.httpx.Client",
         "sleep": "src.services.webhook_delivery_service.time.sleep",
         "random": "src.services.webhook_delivery_service.random.uniform",
     }
@@ -98,21 +105,24 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
-        # httpx.Client: 200 OK by default
+        # The origin answers 200 OK unless a test programs otherwise.
         self.set_http_response(200)
-
-        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
-        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
 
     def make_webhook_config(
         self,
-        url: str = "https://example.com/webhook",
+        url: str | None = None,
         auth_type: str | None = None,
         auth_token: str | None = None,
         secret: str | None = None,
     ) -> PushNotificationConfig:
-        """Create a PushNotificationConfig via factory and return the ORM instance."""
+        """Create a PushNotificationConfig via factory and return the ORM instance.
+
+        ``url`` defaults to the running origin, so the configured endpoint is one
+        that really answers.
+        """
         from tests.factories import PushNotificationConfigFactory
+
+        url = url if url is not None else self.webhook_url
 
         # Reuse existing tenant/principal from setup_default_data
         session = self._session

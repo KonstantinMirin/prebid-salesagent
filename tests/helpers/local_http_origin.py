@@ -18,15 +18,23 @@ dependency: stdlib ``http.server`` only.
 from __future__ import annotations
 
 import contextlib
-import time
+import json
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from time import sleep as _sleep
 from typing import Any, ClassVar
 
 # Default body for a programmable origin that a test never configures.
 _DEFAULT_BODY = b'{"ok": true}'
+
+# ``_sleep`` is bound at import, on purpose. A caller under test may be patching
+# ``<its module>.time.sleep`` to make its own retry backoff instant — and because
+# ``import time`` yields the one shared module object, that patch lands on
+# ``time.sleep`` for the whole process, this server thread included. Looking the
+# name up through the module at call time would therefore make the origin's
+# stall silently vanish, and a stall that does not stall cannot trip a timeout.
 
 
 @contextlib.contextmanager
@@ -61,10 +69,77 @@ def serve_in_thread(
 
 @dataclass(frozen=True)
 class OriginRequest:
-    """One request the origin actually received."""
+    """One request the origin actually received — headers and body included.
+
+    The headers are the raw ``http.client.HTTPMessage``, so lookups are
+    case-insensitive exactly as they are on the wire; a plain ``dict`` would
+    make ``"X-ADCP-Signature" in request.headers`` depend on the casing the
+    sender happened to choose.
+    """
 
     method: str
     path: str
+    headers: Any = field(default_factory=dict)
+    body: bytes = b""
+
+    def json(self) -> Any:
+        """Decode the request body as JSON — what the origin was actually sent.
+
+        This is the honest counterpart of reading ``call_args.kwargs["json"]``
+        off a transport mock: that reads back the object the caller *passed*,
+        which proves nothing about serialization; this reads the bytes that
+        crossed the socket.
+        """
+        return json.loads(self.body)
+
+
+@dataclass(frozen=True)
+class OriginResponse:
+    """One programmed answer: everything the origin does for a single request.
+
+    A ``LocalOrigin`` in ``fixed`` mode answers every request with a snapshot of
+    its own fields; in ``sequence`` mode it answers with the next entry. Making
+    both the same object is what lets a sequence express *faults* — a hang-up, a
+    stall past the caller's timeout, a body that does not decode — and not just
+    a list of status codes. A retry policy is only graded honestly when the
+    failure it recovers from is a real one.
+    """
+
+    mode: str = "fixed"
+    status: int = 200
+    body: bytes = _DEFAULT_BODY
+    content_type: str = "application/json"
+    location: str = ""
+    total_bytes: int = 0
+    chunk_size: int = 64 * 1024
+    delay_seconds: float = 0.0
+
+
+def responds(status: int = 200, *, body: bytes = _DEFAULT_BODY, delay_seconds: float = 0.0) -> OriginResponse:
+    """A complete, well-formed response — optionally after stalling ``delay_seconds``.
+
+    A stall longer than the caller's timeout is how a *real* timeout is
+    produced: the request provably arrived (it is counted in :attr:`LocalOrigin.hits`)
+    and the caller's own clock is what gives up.
+    """
+    return OriginResponse(mode="fixed", status=status, body=body, delay_seconds=delay_seconds)
+
+
+def hangs_up() -> OriginResponse:
+    """Accept the request, then close the connection without a status line."""
+    return OriginResponse(mode="error")
+
+
+def sends_malformed_body() -> OriginResponse:
+    """Answer with valid headers and a body that violates chunked framing.
+
+    The status line and headers parse, so this is not a connection failure; the
+    body then fails to decode mid-read. That distinction matters because HTTP
+    clients classify the two differently (``requests`` raises
+    ``ChunkedEncodingError``, not ``ConnectionError``), and a retry policy that
+    only handles connection failures would drop this one on the floor.
+    """
+    return OriginResponse(mode="malformed")
 
 
 @dataclass
@@ -90,7 +165,7 @@ class LocalOrigin:
     delay_seconds: float = 0.0
     total_bytes: int = 0
     chunk_size: int = 64 * 1024
-    sequence: list[tuple[int, bytes]] = field(default_factory=list)
+    sequence: list[OriginResponse] = field(default_factory=list)
 
     @property
     def base_url(self) -> str:
@@ -121,16 +196,22 @@ class LocalOrigin:
 
     def respond_in_sequence(
         self,
-        responses: Sequence[tuple[int, bytes]],
+        responses: Sequence[tuple[int, bytes] | OriginResponse],
         *,
         content_type: str = "application/json",
     ) -> None:
-        """Answer each subsequent request with the next ``(status, body)``; the last entry repeats.
+        """Answer each subsequent request with the next entry; the last entry repeats.
 
         This is what a real origin needs in order to express *recovery*: ``503,
         503, 200`` is a transient failure that clears on the third attempt, and
         only a queue can say that — a fixed status can say "always fails" or
         "always succeeds" and nothing in between.
+
+        An entry is either a ``(status, body)`` pair or a full
+        :class:`OriginResponse`, so the failure a caller recovers *from* can be
+        a genuine fault — :func:`hangs_up`, :func:`sends_malformed_body`, or a
+        :func:`responds` with a stall past the caller's timeout — and not merely
+        an unhappy status code.
 
         The last entry repeating rather than the queue running dry means a test
         never has to know how many attempts the caller will actually make. It
@@ -140,10 +221,12 @@ class LocalOrigin:
         if not responses:
             raise ValueError("respond_in_sequence needs at least one response")
         self.mode = "sequence"
-        self.sequence = list(responses)
+        self.sequence = [
+            item if isinstance(item, OriginResponse) else responds(item[0], body=item[1]) for item in responses
+        ]
         self.content_type = content_type
 
-    def take_from_sequence(self) -> tuple[int, bytes]:
+    def take_from_sequence(self) -> OriginResponse:
         """Consume the next programmed response; the final entry repeats forever.
 
         Consuming the queue rather than indexing it by hit count keeps "the last
@@ -154,16 +237,43 @@ class LocalOrigin:
             return self.sequence.pop(0)
         return self.sequence[0]
 
+    def next_answer(self) -> OriginResponse:
+        """What the origin does for the request it is serving right now.
+
+        In ``sequence`` mode this consumes the queue; in every other mode it is
+        a snapshot of the fixed programming. One object either way, so the
+        handler has exactly one dispatch table and a mode cannot be reachable
+        from a fixed response but not from a sequenced one.
+
+        A sequence entry that carries no stall of its own inherits the origin's
+        :meth:`delay` — programming a stall once still stalls every answer.
+        """
+        if self.mode != "sequence":
+            return OriginResponse(
+                mode=self.mode,
+                status=self.status,
+                body=self.body,
+                content_type=self.content_type,
+                location=self.location,
+                total_bytes=self.total_bytes,
+                chunk_size=self.chunk_size,
+                delay_seconds=self.delay_seconds,
+            )
+        answer = self.take_from_sequence()
+        if not answer.delay_seconds and self.delay_seconds:
+            answer = replace(answer, delay_seconds=self.delay_seconds)
+        if answer.content_type == "application/json" and self.content_type != "application/json":
+            answer = replace(answer, content_type=self.content_type)
+        return answer
+
     def close_without_responding(self) -> None:
         """Accept the request, record the hit, then close the connection with no response.
 
         The hit is recorded first, so the request provably arrived; nothing is
         written after it, so the client sees the socket close before a status
-        line and raises a *genuine* transport error of its own making. That is
-        the one behaviour a real origin could not express before, and the reason
-        ``WebhookMixin.set_http_error`` has to fake it by assigning an exception
-        to a mock's ``side_effect`` — a mock can only restate which exception the
-        test already chose, never prove the client raises it.
+        line and raises a *genuine* transport error of its own making. A mock
+        with an exception on its ``side_effect`` can only restate which
+        exception the test already chose; this proves the client raises it.
         """
         self.mode = "error"
 
@@ -193,8 +303,20 @@ class LocalOrigin:
         """
         self.delay_seconds = seconds
 
-    def record(self, method: str, path: str) -> None:
-        self.requests.append(OriginRequest(method=method, path=path))
+    def record(self, method: str, path: str, headers: Any = None, body: bytes = b"") -> None:
+        self.requests.append(
+            OriginRequest(method=method, path=path, headers=headers if headers is not None else {}, body=body)
+        )
+
+    @property
+    def last_request(self) -> OriginRequest:
+        """The most recent request, or a failed assertion naming the silence."""
+        assert self.requests, "The origin received no requests at all"
+        return self.requests[-1]
+
+    def payloads(self) -> list[Any]:
+        """Every request body decoded as JSON, oldest first."""
+        return [req.json() for req in self.requests]
 
     def reset(self) -> None:
         self.requests.clear()
@@ -221,45 +343,38 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
         origin: LocalOrigin = self.server.origin  # type: ignore[attr-defined]
 
         content_length = int(self.headers.get("Content-Length") or 0)
-        if content_length:
-            self.rfile.read(content_length)
+        body = self.rfile.read(content_length) if content_length else b""
 
-        origin.record(self.command, self.path)
+        origin.record(self.command, self.path, self.headers, body)
 
-        if origin.delay_seconds:
-            time.sleep(origin.delay_seconds)
+        answer = origin.next_answer()
+        if answer.delay_seconds:
+            _sleep(answer.delay_seconds)
 
         try:
-            self._SENDERS[origin.mode](self, origin)
+            self._SENDERS[answer.mode](self, answer)
         except (BrokenPipeError, ConnectionResetError):
             # The caller aborted — a timeout or a size cap tripping is exactly
             # the behaviour under test, so this is expected, not a failure.
             pass
 
-    def _send_redirect(self, origin: LocalOrigin) -> None:
-        self.send_response(origin.status)
-        self.send_header("Location", origin.location)
+    def _send_redirect(self, answer: OriginResponse) -> None:
+        self.send_response(answer.status)
+        self.send_header("Location", answer.location)
         self.send_header("Content-Length", "0")
         self.send_header("Connection", "close")
         self.end_headers()
 
-    def _send_body(self, status: int, body: bytes, content_type: str) -> None:
-        """Write one complete, length-declared response — the shape both fixed and sequence need."""
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
+    def _send_fixed(self, answer: OriginResponse) -> None:
+        """Write one complete, length-declared response."""
+        self.send_response(answer.status)
+        self.send_header("Content-Type", answer.content_type)
+        self.send_header("Content-Length", str(len(answer.body)))
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(answer.body)
 
-    def _send_fixed(self, origin: LocalOrigin) -> None:
-        self._send_body(origin.status, origin.body, origin.content_type)
-
-    def _send_sequence(self, origin: LocalOrigin) -> None:
-        status, body = origin.take_from_sequence()
-        self._send_body(status, body, origin.content_type)
-
-    def _send_nothing(self, origin: LocalOrigin) -> None:
+    def _send_nothing(self, answer: OriginResponse) -> None:
         """Write no bytes at all and close the connection.
 
         ``close_connection`` ends ``BaseHTTPRequestHandler``'s keep-alive loop,
@@ -270,30 +385,46 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
         """
         self.close_connection = True
 
-    def _send_chunked(self, origin: LocalOrigin) -> None:
-        self.send_response(origin.status)
+    def _send_chunked(self, answer: OriginResponse) -> None:
+        self._begin_chunked(answer.status)
+
+        remaining = answer.total_bytes
+        filler = b"x" * answer.chunk_size
+        while remaining > 0:
+            chunk = filler[: min(answer.chunk_size, remaining)]
+            self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
+            remaining -= len(chunk)
+        self.wfile.write(b"0\r\n\r\n")
+
+    def _send_malformed(self, answer: OriginResponse) -> None:
+        """Announce a chunked body and then write a chunk-size line that is not a number.
+
+        The headers are valid, so the client accepts the response and begins
+        reading; the framing then fails mid-body. That is a different failure
+        class from a connection that never answered, and clients report it as
+        such.
+        """
+        self._begin_chunked(answer.status)
+        self.wfile.write(b"not-a-chunk-length\r\n")
+        self.close_connection = True
+
+    def _begin_chunked(self, status: int) -> None:
+        """Send the header block that announces a chunked body."""
+        self.send_response(status)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Connection", "close")
         self.end_headers()
 
-        remaining = origin.total_bytes
-        filler = b"x" * origin.chunk_size
-        while remaining > 0:
-            chunk = filler[: min(origin.chunk_size, remaining)]
-            self.wfile.write(b"%X\r\n%s\r\n" % (len(chunk), chunk))
-            remaining -= len(chunk)
-        self.wfile.write(b"0\r\n\r\n")
-
     # Mode -> sender. A table rather than an if/elif ladder: adding a mode is
     # one entry, and an unrecognised mode is a KeyError raised at the origin
     # rather than a silent fall-through to "fixed" that would quietly grade the
     # wrong behaviour.
-    _SENDERS: ClassVar[dict[str, Callable[[Any, LocalOrigin], None]]] = {
+    _SENDERS: ClassVar[dict[str, Callable[[Any, OriginResponse], None]]] = {
         "fixed": _send_fixed,
         "redirect": _send_redirect,
         "chunked": _send_chunked,
-        "sequence": _send_sequence,
+        "malformed": _send_malformed,
         "error": _send_nothing,
     }
 

@@ -21,6 +21,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.harness._mixins import LocalOriginMixin
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -39,22 +40,25 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
+def _webhook_deliveries(ctx: dict) -> list[Any]:
+    """Every webhook request the local origin actually received, oldest first."""
+    return ctx["env"].delivered_requests
+
+
 def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
-    """Extract the JSON payload from the most recent webhook POST call."""
-    mock_post = ctx["env"].mock["post"]
-    assert mock_post.called, "No webhook POST was made"
-    call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
-    payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
-    assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
+    """The JSON body of the most recent webhook delivery, as it crossed the socket."""
+    deliveries = _webhook_deliveries(ctx)
+    assert deliveries, "No webhook POST was made"
+    payload = deliveries[-1].json()
+    assert payload, f"Webhook POST had no JSON payload: {deliveries[-1].body!r}"
     return payload
 
 
-def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
-    """Extract headers from the most recent webhook POST call."""
-    mock_post = ctx["env"].mock["post"]
-    assert mock_post.called, "No webhook POST was made"
-    call_kwargs = mock_post.call_args_list[-1][1]
-    return call_kwargs.get("headers", {})
+def _get_last_webhook_headers(ctx: dict) -> Any:
+    """The headers of the most recent webhook delivery, as the endpoint received them."""
+    deliveries = _webhook_deliveries(ctx)
+    assert deliveries, "No webhook POST was made"
+    return deliveries[-1].headers
 
 
 def _collect_all_packages(resp: Any) -> list[Any]:
@@ -326,7 +330,25 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 # ── Webhook configuration steps ─────────────────────────────────────
 
 
-_WEBHOOK_URL = "https://buyer.example.com/webhook"
+# The URL a buyer *declares* in a create_media_buy request. It is never fetched
+# by these scenarios — only validated — so it stays a stable literal.
+_DECLARED_WEBHOOK_URL = "https://buyer.example.com/webhook"
+
+
+def _webhook_url(env: Any) -> str:
+    """The endpoint a delivery for this scenario would actually be POSTed to.
+
+    Envs that DELIVER (``WebhookEnv``, ``CircuitBreakerEnv``) run a real local
+    origin, and every webhook config row — plus every circuit-breaker key
+    derived from one — has to name it, or production would POST somewhere the
+    scenario cannot observe. Its port is assigned by the kernel, so it cannot be
+    a module constant.
+
+    Envs that merely CARRY a webhook config through a create or poll request
+    (``DeliveryPollEnv``, ``MediaBuyCreateEnv``) never fetch it: for them the URL
+    is data being validated, and the declared literal is the honest value.
+    """
+    return env.webhook_url if isinstance(env, LocalOriginMixin) else _DECLARED_WEBHOOK_URL
 
 
 def _set_active_webhook(ctx: dict, mb_id: str) -> None:
@@ -336,7 +358,7 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
     integration env (CircuitBreakerEnv) so send_delivery_webhook can find it.
     """
     ctx.setdefault("webhook_config", {})[mb_id] = {
-        "url": _WEBHOOK_URL,
+        "url": _webhook_url(ctx["env"]),
         "active": True,
     }
     env = ctx["env"]
@@ -399,7 +421,7 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
         select(PushNotificationConfig).where(
             PushNotificationConfig.tenant_id == tenant_id,
             PushNotificationConfig.principal_id == principal_id,
-            PushNotificationConfig.url == _WEBHOOK_URL,
+            PushNotificationConfig.url == _webhook_url(env),
         )
     ).first()
     if existing is not None:
@@ -427,7 +449,7 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
     PushNotificationConfigFactory(
         tenant=tenant,
         principal=principal,
-        url=_WEBHOOK_URL,
+        url=_webhook_url(env),
         is_active=True,
         **auth_fields,
     )
@@ -476,8 +498,8 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
     wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
     wh["auth_scheme"] = scheme
     wh["active"] = True
-    wh["url"] = _WEBHOOK_URL
     env = ctx["env"]
+    wh["url"] = _webhook_url(env)
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
 
@@ -523,18 +545,14 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
 
 @given("the webhook endpoint is unreachable (connection timeout)")
 def given_webhook_unreachable(ctx: dict) -> None:
-    """Configure webhook endpoint to timeout.
+    """Make the webhook endpoint accept the connection and then drop it.
 
-    Uses ``httpx.ConnectError`` (a subclass of ``httpx.RequestError``) so
-    :class:`WebhookDeliveryService`, which catches ``httpx.RequestError`` and
-    retries with backoff, exercises the network-error retry path. Plain
-    builtin ``ConnectionError`` would fall through to the catch-all
-    ``except Exception`` branch and skip retries.
+    The client raises its own transport error, which is what
+    :class:`WebhookDeliveryService` catches as ``httpx.RequestError`` and
+    retries with backoff. Nothing here names the exception — the endpoint
+    misbehaves and the client decides what that was.
     """
-    import httpx
-
-    env = ctx["env"]
-    env.mock["post"].side_effect = httpx.ConnectError("Connection timeout")
+    ctx["env"].set_http_error()
 
 
 @given(parsers.parse("the webhook endpoint returns {status_code:d} Unauthorized"))
@@ -551,7 +569,7 @@ def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _WEBHOOK_URL)
+    webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _webhook_url(env))
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     if endpoint_key not in service._circuit_breakers:
         service._circuit_breakers[endpoint_key] = CircuitBreaker()
@@ -569,7 +587,7 @@ def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _WEBHOOK_URL)
+    webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _webhook_url(env))
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     if endpoint_key not in service._circuit_breakers:
         service._circuit_breakers[endpoint_key] = CircuitBreaker()
@@ -592,7 +610,7 @@ def given_circuit_breaker_timeout(ctx: dict) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         cb.last_failure_time = _dt.now(UTC) - timedelta(seconds=61)
@@ -902,7 +920,7 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     """
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         ctx["cb_can_attempt"] = cb.can_attempt()
@@ -917,7 +935,7 @@ def when_deliver_probe_reports(ctx: dict, n: int) -> None:
     """Record n successful deliveries on the circuit breaker (simulates probe recovery)."""
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         for _ in range(n):
@@ -957,7 +975,7 @@ def when_validate_webhook_config(ctx: dict) -> None:
     if pricing_option is not None:
         kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
     kwargs["reporting_webhook"] = {
-        "url": _WEBHOOK_URL,
+        "url": _DECLARED_WEBHOOK_URL,
         "reporting_frequency": "daily",
         "authentication": {"schemes": ["Bearer"], "credentials": secret},
     }
@@ -1517,15 +1535,17 @@ def then_period_end_today(ctx: dict) -> None:
 
 @then("the system should POST a delivery report to the configured webhook URL")
 def then_webhook_post(ctx: dict) -> None:
-    """Assert webhook POST was made to the configured URL."""
+    """Assert the configured endpoint actually received a POST.
+
+    The configured endpoint IS the env's local origin, and the origin only
+    records requests that genuinely reached it — so "went to the configured URL"
+    is not a separate assertion here, it is the precondition for there being
+    anything to observe at all.
+    """
     env = ctx["env"]
-    assert env.mock["post"].called, "Expected webhook POST but none was made"
-    call_args = env.mock["post"].call_args
-    called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
-    configured_url = ctx.get("webhook_url", "https://example.com/webhook")
-    assert called_url == configured_url, (
-        f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
-    )
+    deliveries = _webhook_deliveries(ctx)
+    assert deliveries, f"Expected webhook POST to {_webhook_url(env)} but none was made"
+    assert deliveries[-1].method == "POST", f"Expected the delivery report to be POSTed, got {deliveries[-1].method}"
 
 
 @then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
@@ -1609,10 +1629,10 @@ def then_next_expected(ctx: dict, next_expected: str) -> None:
 
 @then("each report should have a higher sequence_number than the previous")
 def then_sequence_ascending(ctx: dict) -> None:
-    """Assert sequence numbers are strictly increasing across consecutive POST calls."""
-    calls = ctx["env"].mock["post"].call_args_list
-    assert len(calls) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(calls)}"
-    seq_nums = [call[1].get("json", {}).get("sequence_number") for call in calls]
+    """Assert sequence numbers are strictly increasing across consecutive deliveries."""
+    deliveries = _webhook_deliveries(ctx)
+    assert len(deliveries) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(deliveries)}"
+    seq_nums = [req.json().get("sequence_number") for req in deliveries]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
         assert seq_nums[i] > seq_nums[i - 1], (
@@ -1623,9 +1643,9 @@ def then_sequence_ascending(ctx: dict) -> None:
 @then("the first sequence_number should be >= 1")
 def then_first_sequence(ctx: dict) -> None:
     """Assert first webhook POST has sequence_number >= 1."""
-    calls = ctx["env"].mock["post"].call_args_list
-    assert calls, "No webhook POSTs were made"
-    first_payload = calls[0][1].get("json", {})
+    deliveries = _webhook_deliveries(ctx)
+    assert deliveries, "No webhook POSTs were made"
+    first_payload = deliveries[0].json()
     seq = first_payload.get("sequence_number")
     assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
@@ -1648,7 +1668,7 @@ def then_retry_3_times(ctx: dict) -> None:
     the retry mechanism was triggered, not just that it stayed under the cap.
     """
     env = ctx["env"]
-    call_count = env.mock["post"].call_count
+    call_count = env.delivery_attempts
     assert call_count >= 2, (
         f"Expected at least 2 POST calls (original + retry), got {call_count} — retry mechanism may not have triggered"
     )
@@ -1663,6 +1683,12 @@ def _assert_exponential_backoff(ctx: dict, *, expected_sleeps: int = 2) -> list[
     them (= ``expected_sleeps + 1`` total attempts), and that each duration is
     at least 1.5x the previous one (exponential growth). Returns the durations
     for any further per-step assertions.
+
+    ``sleep`` is the one thing these scenarios still mock. It is not a transport:
+    the delivery attempts themselves reach a real endpoint and are counted there.
+    Mocking the clock is what keeps a 1s/2s/4s schedule assertable in a test that
+    finishes in milliseconds — the alternative is to wait it out, and a schedule
+    nobody waits for cannot be graded at all.
     """
     sleep_calls = ctx["env"].mock["sleep"].call_args_list
     assert sleep_calls, "Expected at least one sleep call for backoff"
@@ -1696,9 +1722,7 @@ def then_retry_with_backoff(ctx: dict) -> None:
     Production WebhookDeliveryService does 3 total attempts with 2 sleeps between them.
     """
     env = ctx["env"]
-    assert env.mock["post"].call_count <= 4, (
-        f"Expected at most 4 calls (1 + 3 retries), got {env.mock['post'].call_count}"
-    )
+    assert env.delivery_attempts <= 4, f"Expected at most 4 calls (1 + 3 retries), got {env.delivery_attempts}"
     _assert_exponential_backoff(ctx)
 
 
@@ -1706,7 +1730,9 @@ def then_retry_with_backoff(ctx: dict) -> None:
 def then_no_retry(ctx: dict) -> None:
     """Assert no retry was attempted."""
     env = ctx["env"]
-    assert env.mock["post"].call_count <= 1, "Expected no retries"
+    assert env.delivery_attempts <= 1, (
+        f"Expected no retries, but the endpoint received {env.delivery_attempts} requests"
+    )
 
 
 @then("the system should log the authentication rejection")
@@ -1763,15 +1789,14 @@ def then_deliveries_suppressed(ctx: dict) -> None:
     count, attempt a delivery, and verify no new POST was dispatched.
     """
     env = ctx["env"]
-    post_mock = env.mock["post"]
-    calls_before = post_mock.call_count
+    calls_before = env.delivery_attempts
 
     # Attempt a delivery while breaker is open — it should be suppressed
     result = env.call_send()
     assert result is False, f"Expected delivery to be suppressed (return False) while CB is open, got {result!r}"
-    assert post_mock.call_count == calls_before, (
+    assert env.delivery_attempts == calls_before, (
         f"Expected no new POST calls while CB is open (suppressed), "
-        f"but call count went from {calls_before} to {post_mock.call_count}"
+        f"but the endpoint went from {calls_before} to {env.delivery_attempts} requests"
     )
 
 
@@ -1830,7 +1855,7 @@ def then_deliveries_resume(ctx: dict) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
     cb = service._circuit_breakers.get(endpoint_key)
 
     # The breaker must allow attempts (closed state permits delivery)
@@ -2073,13 +2098,9 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
     Verifies that no POST call contains this media buy's ID in its payload,
     confirming the system correctly skipped delivery when no webhook is configured.
     """
-    env = ctx["env"]
     real_id = _resolve_media_buy_id(ctx, mb_id)
-    post_mock = env.mock["post"]
     # Collect all media_buy_ids that received webhook POSTs
-    posted_mb_ids = [
-        call[1].get("json", {}).get("media_buy_id") for call in post_mock.call_args_list if call[1].get("json")
-    ]
+    posted_mb_ids = [req.json().get("media_buy_id") for req in _webhook_deliveries(ctx)]
     assert real_id not in posted_mb_ids, (
         f"Webhook POST was made for '{real_id}' but it should have been skipped "
         f"(no webhook configured). All posted IDs: {posted_mb_ids}"
@@ -2088,9 +2109,9 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
 
 @then("no delivery attempt should be made")
 def then_no_delivery_attempt(ctx: dict) -> None:
-    """Assert no delivery attempt was made."""
+    """Assert the endpoint received nothing at all."""
     env = ctx["env"]
-    assert not env.mock["post"].called, "Expected no delivery attempt"
+    assert env.delivery_attempts == 0, f"Expected no delivery attempt, endpoint received {env.delivery_attempts}"
 
 
 # ── Reporting dimension assertions ─────────────────────────────────
@@ -3298,14 +3319,6 @@ def _call_webhook_service(
     if next_expected_interval_seconds is not None:
         kwargs["next_expected_interval_seconds"] = next_expected_interval_seconds
     return env.call_send(**kwargs)
-
-
-def _get_webhook_payload(ctx: dict) -> dict:
-    """Extract the JSON payload from the most recent webhook POST call."""
-    env = ctx["env"]
-    call_args = env.mock["post"].call_args
-    assert call_args is not None, "No POST call recorded"
-    return call_args.kwargs.get("json") or call_args[1].get("json", {})
 
 
 _DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [

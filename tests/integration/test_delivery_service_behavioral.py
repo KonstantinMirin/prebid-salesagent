@@ -1,8 +1,12 @@
 """Integration behavioral tests for UC-004 delivery service (WebhookDeliveryService, CircuitBreaker).
 
-Migrated from tests/unit/test_delivery_service_behavioral.py to use CircuitBreakerEnv
-integration harness. External services (httpx.Client, time.sleep, random.uniform)
-are mocked; DB operations for PushNotificationConfig queries are real.
+Delivery runs against a REAL local HTTP origin (``CircuitBreakerEnv``): webhook
+configs point at ``env.webhook_url``, and the assertions read what the endpoint
+actually received. Only ``time.sleep`` and ``random.uniform`` are mocked, so the
+backoff schedule stays observable and deterministic; the outbound transport is
+not patched, which is what keeps these tests indifferent to whether delivery is
+implemented with ``httpx`` directly or through the egress seam. DB operations
+for PushNotificationConfig queries are real.
 
 Pure CircuitBreaker state machine tests remain in the unit file.
 
@@ -49,7 +53,7 @@ class TestCircuitBreakerServiceIntegration:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://example.com/webhook",
+                url=env.webhook_url,
             )
 
             # Make HTTP fail to trip the circuit breaker
@@ -68,12 +72,12 @@ class TestCircuitBreakerServiceIntegration:
                     spend=100.0,
                 )
 
-            endpoint_key = "t1:https://example.com/webhook"
+            endpoint_key = env.endpoint_key("t1")
             state, _ = service.get_circuit_breaker_state(endpoint_key)
             assert state == CircuitState.OPEN
 
-            # Reset mock to track new calls
-            env.mock["client"].return_value.__enter__.return_value.post.reset_mock()
+            # Everything after this point must leave the endpoint untouched.
+            attempts_before_suppression = env.delivery_attempts
 
             result = service.send_delivery_webhook(
                 media_buy_id="mb_suppressed",
@@ -86,7 +90,7 @@ class TestCircuitBreakerServiceIntegration:
             )
 
             assert result is False
-            env.mock["client"].return_value.__enter__.return_value.post.assert_not_called()
+            assert env.delivery_attempts == attempts_before_suppression
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +119,7 @@ class TestCircuitBreakerHalfOpenProbeService:
         with CircuitBreakerEnv() as env:
             service = env.get_service()
 
-            endpoint_key = "t1:https://example.com/webhook"
+            endpoint_key = env.endpoint_key("t1")
             cb = CircuitBreaker(failure_threshold=3, success_threshold=2, timeout_seconds=60)
             cb.state = CircuitState.OPEN
             cb.last_failure_time = datetime.now(UTC) - timedelta(seconds=120)
@@ -213,7 +217,7 @@ class TestSendWebhookEnhancedAuthBlockedSkip:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://blocked.example.com/webhook",
+                url=env.webhook_url,
                 auth_blocked_at=datetime(2025, 6, 1, tzinfo=UTC),
             )
 
@@ -227,7 +231,7 @@ class TestSendWebhookEnhancedAuthBlockedSkip:
             )
 
             assert result is False
-            env.mock["client"].return_value.__enter__.return_value.post.assert_not_called()
+            assert env.delivery_attempts == 0
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +265,7 @@ class TestSendWebhookEnhancedHmacSigning:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://hmac.example.com/webhook",
+                url=env.webhook_url,
                 webhook_secret="a" * 32,  # Exactly 32 chars — meets minimum
             )
 
@@ -275,9 +279,8 @@ class TestSendWebhookEnhancedHmacSigning:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            post_mock.assert_called_once()
-            sent_headers = post_mock.call_args.kwargs["headers"]
+            assert env.delivery_attempts == 1
+            sent_headers = env.last_delivery.headers
             assert "X-ADCP-Signature" in sent_headers
             assert len(sent_headers["X-ADCP-Signature"]) > 0
 
@@ -306,7 +309,7 @@ class TestSendWebhookEnhancedHmacSigning:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://hmac-verify.example.com/webhook",
+                url=env.webhook_url,
                 webhook_secret=secret,
             )
 
@@ -319,8 +322,7 @@ class TestSendWebhookEnhancedHmacSigning:
                 delivery_payload=payload,
             )
 
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_headers = post_mock.call_args.kwargs["headers"]
+            sent_headers = env.last_delivery.headers
             sent_signature = sent_headers["X-ADCP-Signature"]
             sent_timestamp = sent_headers["X-ADCP-Timestamp"]
 
@@ -363,7 +365,7 @@ class TestSendWebhookEnhancedBearerAuth:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://bearer.example.com/webhook",
+                url=env.webhook_url,
                 authentication_type="bearer",
                 authentication_token="my-secret-token-xyz",
             )
@@ -378,9 +380,8 @@ class TestSendWebhookEnhancedBearerAuth:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            post_mock.assert_called_once()
-            sent_headers = post_mock.call_args.kwargs["headers"]
+            assert env.delivery_attempts == 1
+            sent_headers = env.last_delivery.headers
             assert sent_headers["Authorization"] == "Bearer my-secret-token-xyz"
 
 
@@ -415,7 +416,7 @@ class TestSendWebhookEnhancedHappyPath:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://happy.example.com/webhook",
+                url=env.webhook_url,
             )
 
             env.set_http_response(200)
@@ -429,10 +430,9 @@ class TestSendWebhookEnhancedHappyPath:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            post_mock.assert_called_once()
-            assert post_mock.call_args.args[0] == "https://happy.example.com/webhook"
-            assert post_mock.call_args.kwargs["json"] == payload
+            assert env.delivery_attempts == 1
+            assert env.last_delivery.path == "/webhook"
+            assert env.last_delivery.json() == payload
 
     def test_no_configs_returns_false(self, integration_db):
         """When no PushNotificationConfig exists, _send_webhook_enhanced returns False.
@@ -458,7 +458,7 @@ class TestSendWebhookEnhancedHappyPath:
             )
 
             assert result is False
-            env.mock["client"].return_value.__enter__.return_value.post.assert_not_called()
+            assert env.delivery_attempts == 0
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +492,7 @@ class TestDeliverWithBackoffSuccess:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://success.example.com/webhook",
+                url=env.webhook_url,
             )
 
             env.set_http_response(200)
@@ -507,7 +507,7 @@ class TestDeliverWithBackoffSuccess:
             assert result is True
 
             # Circuit breaker should remain CLOSED (success recorded)
-            endpoint_key = "t1:https://success.example.com/webhook"
+            endpoint_key = env.endpoint_key("t1")
             state, failure_count = service.get_circuit_breaker_state(endpoint_key)
             assert state == CircuitState.CLOSED
             assert failure_count == 0
@@ -544,7 +544,7 @@ class TestDeliverWithBackoffRetry:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://failing.example.com/webhook",
+                url=env.webhook_url,
             )
 
             env.set_http_response(500)
@@ -559,14 +559,13 @@ class TestDeliverWithBackoffRetry:
             assert result is False
 
             # httpx.Client.post should have been called 3 times (max_retries=3)
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            assert post_mock.call_count == 3
+            assert env.delivery_attempts == 3
 
             # sleep should have been called for backoff (attempts 1 and 2, not before attempt 0)
             assert env.mock["sleep"].call_count == 2
 
             # Circuit breaker should record failure
-            endpoint_key = "t1:https://failing.example.com/webhook"
+            endpoint_key = env.endpoint_key("t1")
             state, failure_count = service.get_circuit_breaker_state(endpoint_key)
             assert failure_count == 1
 
@@ -577,20 +576,28 @@ class TestDeliverWithBackoffRetry:
 
 
 @pytest.mark.requires_db
-class TestDeliverWithBackoffTimeout:
-    """httpx raises TimeoutException -> retries with backoff, records failure.
+class TestDeliverWithBackoffTransportFailure:
+    """A transport-level failure -> retries with backoff, records failure.
+
+    The endpoint drops the connection instead of stalling: production builds its
+    httpx client with a hardcoded ``timeout=10.0``, so provoking a genuine
+    timeout would cost three ten-second waits, and faking one would put back the
+    transport mock this suite exists to remove. A dropped connection is a real
+    failure of the same class (``httpx.RequestError``) with the same
+    consequence — retry, then record one circuit-breaker failure. The timeout
+    path itself is graded against a real stalling origin in
+    ``tests/integration/test_outbound_http.py``, which is where it moves when
+    delivery lands on the egress seam.
 
     Covers: UC-004-EXT-G-01
     """
 
-    def test_timeout_triggers_retries_and_records_failure(self, integration_db):
-        """httpx raises TimeoutException on all attempts -> retries exhaust,
+    def test_dropped_connection_triggers_retries_and_records_failure(self, integration_db):
+        """Every attempt is dropped mid-request -> retries exhaust,
         circuit breaker records failure.
 
         Covers: UC-004-EXT-G-01
         """
-        import httpx
-
         from tests.factories import (
             PrincipalFactory,
             PushNotificationConfigFactory,
@@ -604,13 +611,10 @@ class TestDeliverWithBackoffTimeout:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://timeout.example.com/webhook",
+                url=env.webhook_url,
             )
 
-            # Make httpx.Client().post() raise TimeoutException
-            env.mock["client"].return_value.__enter__.return_value.post.side_effect = httpx.TimeoutException(
-                "Connection timed out"
-            )
+            env.set_http_error()
 
             service = env.get_service()
             result = service._send_webhook_enhanced(
@@ -623,11 +627,10 @@ class TestDeliverWithBackoffTimeout:
             assert result is False
 
             # Should have retried 3 times
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            assert post_mock.call_count == 3
+            assert env.delivery_attempts == 3
 
             # Circuit breaker should record failure
-            endpoint_key = "t1:https://timeout.example.com/webhook"
+            endpoint_key = env.endpoint_key("t1")
             state, failure_count = service.get_circuit_breaker_state(endpoint_key)
             assert failure_count == 1
 
@@ -664,7 +667,7 @@ class TestIsAdjustedNotificationType:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://adjusted.example.com/webhook",
+                url=env.webhook_url,
             )
 
             env.set_http_response(200)
@@ -681,8 +684,7 @@ class TestIsAdjustedNotificationType:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_payload = post_mock.call_args.kwargs["json"]
+            sent_payload = env.last_delivery.json()
             assert sent_payload["notification_type"] == "adjusted"
             assert sent_payload["is_adjusted"] is True
 
@@ -719,14 +721,14 @@ class TestQueueFullDropsWebhook:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://full-queue.example.com/webhook",
+                url=env.webhook_url,
             )
 
             env.set_http_response(200)
             service = env.get_service()
 
             # Pre-populate the queue to capacity (use small max_size)
-            endpoint_key = "t1:https://full-queue.example.com/webhook"
+            endpoint_key = env.endpoint_key("t1")
             small_queue = WebhookQueue(max_size=1)
             small_queue.enqueue({"dummy": "data"})  # Fill it
             service._queues[endpoint_key] = small_queue
@@ -771,7 +773,7 @@ class TestWeakSecretNoSignature:
             PushNotificationConfigFactory(
                 tenant=tenant,
                 principal=principal,
-                url="https://weak-secret.example.com/webhook",
+                url=env.webhook_url,
                 webhook_secret="tooshort",  # < 32 chars
             )
 
@@ -785,8 +787,7 @@ class TestWeakSecretNoSignature:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_headers = post_mock.call_args.kwargs["headers"]
+            sent_headers = env.last_delivery.headers
             assert "X-ADCP-Signature" not in sent_headers
 
 
@@ -815,5 +816,5 @@ class TestEmptyDequeueReturnsFalse:
             cb = CircuitBreaker()
             empty_queue = WebhookQueue()
 
-            result = service._deliver_with_backoff("t1:https://empty.example.com", cb, empty_queue)
+            result = service._deliver_with_backoff(env.endpoint_key("t1"), cb, empty_queue)
             assert result is False

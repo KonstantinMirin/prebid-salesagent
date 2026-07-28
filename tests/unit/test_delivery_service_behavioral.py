@@ -233,17 +233,18 @@ class TestExtG07WebhookAuthFailureRecovery:
             env.set_http_status(401, "Unauthorized: invalid credentials")
 
             success, result = env.call_deliver(
-                webhook_url="https://buyer.example.com/webhook",
                 payload={"media_buy_id": "mb_001", "status": "active"},
                 event_type="delivery.update",
                 tenant_id="test_tenant",
                 object_id="mb_001",
             )
+            attempts_made = env.delivery_attempts
 
         assert success is False
         assert result["status"] == "failed"
         assert result["response_code"] == 401
         assert result["attempts"] == 1
+        assert attempts_made == 1
         assert "Client error 401" in result["error"]
 
         # --- Step 2: Circuit breaker opens after auth failures ---
@@ -259,13 +260,14 @@ class TestExtG07WebhookAuthFailureRecovery:
             env.set_http_status(200, "OK")
 
             success_after, result_after = env.call_deliver(
-                webhook_url="https://buyer.example.com/webhook",
                 payload={"media_buy_id": "mb_001", "status": "active"},
                 headers={"Authorization": "Bearer new-valid-token"},
                 event_type="delivery.update",
                 tenant_id="test_tenant",
                 object_id="mb_001",
             )
+            # The reconfigured credential really reached the endpoint.
+            assert env.last_delivery.headers["Authorization"] == "Bearer new-valid-token"
 
         assert success_after is True
         assert result_after["status"] == "delivered"
@@ -281,7 +283,6 @@ class TestExtG07WebhookAuthFailureRecovery:
             env.set_http_status(401, "Unauthorized")
 
             success, result = env.call_deliver(
-                webhook_url="https://buyer.example.com/webhook",
                 event_type="delivery.update",
                 tenant_id="test_tenant",
                 object_id="mb_001",
@@ -291,7 +292,7 @@ class TestExtG07WebhookAuthFailureRecovery:
             assert result["response_code"] == 401
             assert result["attempts"] == 1
             assert result["status"] == "failed"
-            env.mock["post"].assert_called_once()
+            assert env.delivery_attempts == 1
 
     def test_403_causes_immediate_failure_no_retry(self):
         """403 forbidden error is treated as 4xx client error: no retry.
@@ -304,7 +305,6 @@ class TestExtG07WebhookAuthFailureRecovery:
             env.set_http_status(403, "Forbidden")
 
             success, result = env.call_deliver(
-                webhook_url="https://buyer.example.com/webhook",
                 headers={"Authorization": "Bearer expired-token"},
                 event_type="delivery.update",
                 tenant_id="test_tenant",
@@ -315,7 +315,7 @@ class TestExtG07WebhookAuthFailureRecovery:
             assert result["response_code"] == 403
             assert result["attempts"] == 1
             assert result["status"] == "failed"
-            env.mock["post"].assert_called_once()
+            assert env.delivery_attempts == 1
 
     def test_circuit_breaker_opens_after_repeated_auth_failures(self):
         """Circuit breaker opens after threshold auth failures, blocking delivery.

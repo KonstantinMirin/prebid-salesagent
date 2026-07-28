@@ -10,9 +10,10 @@ Mixins may call ``self._commit_factory_data()`` which is a no-op in unit mode.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
-from typing import Any
-from unittest.mock import MagicMock
+from typing import Any, Self
+from unittest.mock import MagicMock, patch
 
 from src.adapters.mock_ad_server import simulate_breakdowns
 from src.core.schemas import (
@@ -33,6 +34,13 @@ from src.services.webhook_delivery_service import (
     WebhookDeliveryService,
 )
 from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.helpers.local_http_origin import (
+    LocalOrigin,
+    OriginRequest,
+    OriginResponse,
+    responds,
+    run_local_origin,
+)
 
 
 def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryResponse) -> Any:
@@ -258,44 +266,107 @@ class DeliveryPollMixin:
         )
 
 
-class WebhookMixin:
+class LocalOriginMixin:
+    """A REAL local HTTP origin, shared by every webhook-delivery env.
+
+    The webhook envs used to patch the transport itself — ``requests.post`` in
+    one env, ``httpx.Client`` in another — which made the tests a description of
+    *how* delivery is currently implemented rather than of what delivery does.
+    Migrating production onto ``src.core.security.outbound_http`` deletes both of
+    those symbols, so every one of those tests would have had to be rewritten as
+    part of the migration, which is exactly when a rewrite is least trustworthy.
+
+    An origin that actually serves HTTP is neutral to that choice: it answers
+    ``requests.post`` today and ``send()`` tomorrow, and the assertions — how
+    many requests arrived, with which headers, carrying which bytes — mean the
+    same thing under both. That is why this lands before the migration and not
+    with it.
+
+    Both outbound escape hatches are opened for the duration of the env because
+    the origin necessarily listens on loopback with plain HTTP, which the seam
+    refuses by default; opening them here is the same statement the seam's own
+    integration tests make with ``set_flags(private=True, insecure=True)``.
+    """
+
+    origin: LocalOrigin
+
+    # -- Lifecycle ----------------------------------------------------------
+
+    def __enter__(self) -> Self:
+        self._origin_ctx = run_local_origin()
+        self.origin = self._origin_ctx.__enter__()
+        self._egress_hatches = patch.dict(
+            os.environ,
+            {"ADCP_OUTBOUND_ALLOW_PRIVATE": "true", "ADCP_OUTBOUND_ALLOW_INSECURE": "true"},
+        )
+        self._egress_hatches.start()
+        return super().__enter__()  # type: ignore[misc,no-any-return]
+
+    def __exit__(self, *exc: object) -> bool:
+        try:
+            return super().__exit__(*exc)  # type: ignore[misc,no-any-return]
+        finally:
+            self._egress_hatches.stop()
+            self._origin_ctx.__exit__(None, None, None)
+
+    # -- The endpoint under test -------------------------------------------
+
+    @property
+    def webhook_url(self) -> str:
+        """The URL of the running origin — the endpoint every webhook test targets."""
+        return f"{self.origin.base_url}/webhook"
+
+    # -- Programming the endpoint ------------------------------------------
+
+    def set_http_status(self, code: int, text: str = "") -> None:
+        """Answer every attempt with ``code`` and ``text`` as the body."""
+        self.origin.respond_with(code, body=(text or f"Status {code}").encode())
+
+    def set_http_sequence(self, responses: list[tuple[int, str] | OriginResponse]) -> None:
+        """Answer each attempt with the next entry; the last entry repeats.
+
+        An entry is either ``(status_code, text)`` or a full ``OriginResponse``
+        (``hangs_up()``, ``sends_malformed_body()``, ``responds(..., delay_seconds=...)``)
+        so a sequence can express recovery from a genuine transport fault, not
+        just from an unhappy status code.
+        """
+        self.origin.respond_in_sequence(
+            [
+                item if isinstance(item, OriginResponse) else responds(item[0], body=item[1].encode())
+                for item in responses
+            ]
+        )
+
+    def set_http_error(self) -> None:
+        """Accept every attempt and then drop the connection without answering."""
+        self.origin.close_without_responding()
+
+    # -- Observing what actually arrived ------------------------------------
+
+    @property
+    def delivery_attempts(self) -> int:
+        """How many requests the endpoint actually received."""
+        return self.origin.hits
+
+    @property
+    def delivered_requests(self) -> list[OriginRequest]:
+        """Every request the endpoint received, oldest first."""
+        return self.origin.requests
+
+    @property
+    def last_delivery(self) -> OriginRequest:
+        """The most recent request the endpoint received."""
+        return self.origin.last_request
+
+
+class WebhookMixin(LocalOriginMixin):
     """Shared fluent API for webhook delivery testing."""
 
     _seq_counter: dict[str, int]
 
-    def set_http_status(self, code: int, text: str = "") -> None:
-        """Configure requests.post to return a single response with the given status."""
-        mock_response = MagicMock()
-        mock_response.status_code = code
-        mock_response.text = text or f"Status {code}"
-        self.mock["post"].return_value = mock_response  # type: ignore[attr-defined]
-        self.mock["post"].side_effect = None  # type: ignore[attr-defined]
-
-    def set_http_sequence(self, responses: list[tuple[int, str]]) -> None:
-        """Configure requests.post to return a sequence of responses.
-
-        Args:
-            responses: List of (status_code, text) tuples.
-        """
-        mocks = []
-        for code, text in responses:
-            r = MagicMock()
-            r.status_code = code
-            r.text = text
-            mocks.append(r)
-        self.mock["post"].side_effect = mocks  # type: ignore[attr-defined]
-
-    def set_http_error(self, exception: Exception) -> None:
-        """Make requests.post raise the given exception."""
-        self.mock["post"].side_effect = exception  # type: ignore[attr-defined]
-
-    def set_url_invalid(self, error_msg: str = "Invalid URL") -> None:
-        """Make URL validation fail, short-circuiting delivery."""
-        self.mock["validate"].return_value = (False, error_msg)  # type: ignore[attr-defined]
-
     def call_deliver(
         self,
-        webhook_url: str = "https://example.com/webhook",
+        webhook_url: str | None = None,
         payload: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         signing_secret: str | None = None,
@@ -315,8 +386,15 @@ class WebhookMixin:
         ``notification_type`` / ``next_expected_at``.  This mirrors the payload
         shape that ``WebhookDeliveryService`` produces so that BDD Then steps can
         assert on payload fields without requiring the full service stack.
+
+        ``webhook_url`` defaults to the running local origin, so a test that
+        does not care where delivery goes gets a destination that really
+        answers. Passing an explicit URL is how a test targets somewhere the
+        origin is NOT — e.g. a cloud-metadata address, which production's own
+        URL policy refuses before any request leaves.
         """
         self._commit_factory_data()  # type: ignore[attr-defined]
+        webhook_url = webhook_url if webhook_url is not None else self.webhook_url
         mb = media_buy_id or "mb_001"
 
         # Per-media-buy sequence counter (simulates WebhookDeliveryService behaviour)
@@ -359,7 +437,7 @@ class WebhookMixin:
         return self.call_deliver(**kwargs)
 
 
-class CircuitBreakerMixin:
+class CircuitBreakerMixin(LocalOriginMixin):
     """Shared fluent API for circuit breaker / webhook delivery service testing."""
 
     _service: WebhookDeliveryService | None
@@ -375,24 +453,17 @@ class CircuitBreakerMixin:
         return CircuitBreaker(**kwargs)
 
     def set_http_response(self, status_code: int) -> None:
-        """Configure the httpx Client mock to return the given status code."""
-        mock_response = MagicMock()
-        mock_response.status_code = status_code
-        self.mock["client"].return_value.__enter__.return_value.post.return_value = mock_response  # type: ignore[attr-defined]
+        """Answer every attempt with the given status code."""
+        self.set_http_status(status_code)
 
-    def set_http_status(self, code: int, text: str = "") -> None:
-        """Alias for set_http_response — BDD steps use this name consistently."""
-        self.set_http_response(code)
+    def endpoint_key(self, tenant_id: str | None = None) -> str:
+        """The per-endpoint circuit-breaker key production derives for this origin.
 
-    def set_http_sequence(self, responses: list[tuple[int, str]]) -> None:
-        """Configure httpx Client to return a sequence of responses."""
-        mocks = []
-        for code, text in responses:
-            r = MagicMock()
-            r.status_code = code
-            r.text = text
-            mocks.append(r)
-        self.mock["client"].return_value.__enter__.return_value.post.side_effect = mocks  # type: ignore[attr-defined]
+        Production keys breakers on ``f"{tenant_id}:{config.url}"``. The origin's
+        port is only known at runtime, so a test cannot spell that key as a
+        literal; deriving it here keeps the one place it is built.
+        """
+        return f"{tenant_id or self._tenant_id}:{self.webhook_url}"  # type: ignore[attr-defined]
 
     def call_send(
         self,
