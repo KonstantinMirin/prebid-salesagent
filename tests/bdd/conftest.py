@@ -1990,9 +1990,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #               interval_negative collect as separate ids, so neither shadows the
             #               other); e2e_rest via the BDD In-Network job on PR #1728, with no
             #               entry in e2e_rest_known_failures.txt.
+            #
+            # Graduated: invalid_unit (salesagent-gz0n). Same walk, one row, evidence:
+            #   scenario  — exact code + "with suggestion", value literal; the same Outline
+            #               accepts `days` and `campaign`, so the enum is graded on both sides.
+            #               interval stays 1, isolating the unit enum from the interval range.
+            #   spec      — AdCP 3.1.1 core/duration.json `unit.enum` is
+            #               [seconds, minutes, hours, days, campaign]; "weeks" is not a member.
+            #               VALIDATION_ERROR/correctable in the harness pin and v3.1.1 alike.
+            #   givens    — identical shared-harness Givens as the siblings above.
+            #   then      — same wire path (assert_wire_error -> assert_envelope_shape),
+            #               require_suggestion exercised.
+            #   production— driving the real A2A boundary (adcp_validation_boundary +
+            #               GetMediaBuyDeliveryRequest.model_validate) with this payload yields
+            #               code=VALIDATION_ERROR recovery=correctable
+            #               field="attribution_window.post_click.unit" and a non-empty
+            #               suggestion; REST via the app.py attribution_window remap, MCP via
+            #               the TypeAdapter -> RequestCompatMiddleware normalization.
+            #   siblings  — a2a/mcp/rest collect as separate ids per row (no shadowing);
+            #               e2e_rest green on PR #1728's BDD In-Network job, unlisted in the ledger.
             (
                 "T-UC-004-partition-attribution",
-                {"invalid_unit", "invalid_model"},
+                {"invalid_model"},
                 "attribution_window partition rows: retained on observed status pending per-row "
                 "graduation (#1545 removed the step-shadowing that was the original cause)",
             ),
