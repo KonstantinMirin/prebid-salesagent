@@ -69,7 +69,6 @@ _ALLOWED_ORPHANS: frozenset[str] = frozenset(
         "bad_package_id",
         "captured_logs",
         "dispatched_pipeline",
-        "e2e_config",
         "existing_product",
         "expected_existing_package_id",
         "explicit_buying_mode",
@@ -106,6 +105,37 @@ def _ctx_key(node: ast.expr) -> str | None:
     return None
 
 
+def _ctx_fixture_alias_writes(tree: ast.AST) -> set[str]:
+    """Keys the ``ctx`` FIXTURE seeds through the local dict it yields.
+
+    The fixture builds its dict under a local name and yields that -- currently
+    ``d["e2e_config"] = ...; ... yield d``. Those writes are as real as any step's,
+    but a scanner keyed on the literal name ``ctx`` cannot see them, so every key
+    seeded this way looks like an orphan.
+
+    That is not hypothetical: ``e2e_config`` was allowlisted as a dead read on
+    exactly this mistake, and the FIXME it carried told the next reader to delete a
+    load-bearing line -- doing so would break every e2e_rest scenario (no server-DB
+    repoint, no ``_reset_e2e_db``, ``RestE2EDispatcher`` errors out).
+    """
+    seeded: set[str] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "ctx"):
+            continue
+        yielded = {y.value.id for y in ast.walk(node) if isinstance(y, ast.Yield) and isinstance(y.value, ast.Name)}
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Assign):
+                for target in inner.targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id in yielded
+                        and (key := _ctx_key(target.slice)) is not None
+                    ):
+                        seeded.add(key)
+    return seeded
+
+
 def _scan() -> tuple[set[str], dict[str, list[str]], list[tuple[str, str]], list[str]]:
     """Return (written keys, read key -> sites, defaulted orphan reads, dynamic writes)."""
     written: set[str] = set()
@@ -116,6 +146,9 @@ def _scan() -> tuple[set[str], dict[str, list[str]], list[tuple[str, str]], list
     for path in sorted(_BDD_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
         rel = path.relative_to(_BDD_ROOT)
+
+        # Keys the ctx fixture seeds through the local dict it yields count as writes.
+        written |= _ctx_fixture_alias_writes(tree)
 
         for node in ast.walk(tree):
             # ctx["k"] = ...   (and the unresolvable ctx[<expr>] = ... form)

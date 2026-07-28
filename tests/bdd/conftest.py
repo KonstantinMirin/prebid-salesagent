@@ -3249,9 +3249,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - Unknown UC → no harness (yields immediately)
     """
     uc = _detect_uc(request)
-    # FIXME(#1749): reads ctx 'e2e_config', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
+    # Seeded by the `ctx` fixture itself (`d["e2e_config"] = e2e_stack`), not by any step —
+    # which is why a step-only census briefly mistook this for a dead read. It is load-bearing:
+    # without it there is no server-DB repoint, no `_reset_e2e_db`, and RestE2EDispatcher errors
+    # out, i.e. every e2e_rest scenario breaks.
     e2e_config = ctx.get("e2e_config")
 
     # E2E shares one live DB across all scenarios; flush it to a clean baseline so
