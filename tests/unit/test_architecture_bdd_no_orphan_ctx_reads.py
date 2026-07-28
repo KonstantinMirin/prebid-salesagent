@@ -42,6 +42,8 @@ import ast
 from collections import defaultdict
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 _BDD_ROOT = Path(__file__).resolve().parents[1] / "bdd"
 
 # Functions whose bodies are oracle-shaped: Then-steps, assertion helpers, and the
@@ -197,26 +199,26 @@ class TestBddNoOrphanCtxReads:
             "absence fails loudly. See GH #1749."
         )
 
-    def test_no_orphan_ctx_reads(self) -> None:
-        """TIER 2: reading a never-written key at all is dead code."""
-        written, read, _defaulted, _dynamic = _scan()
-        orphans = {key: sites for key, sites in read.items() if key not in written}
-        unexpected = sorted(set(orphans) - _ALLOWED_ORPHANS)
-        assert not unexpected, (
-            "BDD steps read ctx keys that no step writes:\n  "
-            + "\n  ".join(f"{key} (read at {', '.join(sorted(set(orphans[key]))[:3])})" for key in unexpected)
-            + "\n\nEither write the key where the precondition is established, or delete the "
-            "dead read. Do not add it to the allowlist. See GH #1749."
-        )
+    def test_orphan_ctx_reads_match_allowlist(self) -> None:
+        """TIER 2: reading a never-written key at all is dead code.
 
-    def test_orphan_allowlist_has_no_stale_entries(self) -> None:
-        """A fixed orphan must leave the allowlist, so the ratchet only turns one way."""
+        One assertion covers both directions -- a NEW orphan and a STALE allowlist entry
+        (a violation that was fixed but left listed) -- via the shared helper, so the
+        ratchet only turns one way and the stale check cannot drift from the new-violation
+        check. Hand-rolling the set diff here is itself a guarded anti-pattern
+        (``test_architecture_no_handrolled_allowlist_diff``).
+        """
         written, read, _defaulted, _dynamic = _scan()
-        orphans = {key for key in read if key not in written}
-        stale = sorted(_ALLOWED_ORPHANS - orphans)
-        assert not stale, (
-            "These keys are allowlisted as orphans but are no longer orphans -- remove them from "
-            f"_ALLOWED_ORPHANS: {stale}"
+        found = {(key,) for key in read if key not in written}
+        assert_violations_match_allowlist(
+            found=found,
+            allowlist={(key,) for key in _ALLOWED_ORPHANS},
+            fix_hint=(
+                "A BDD step reads a ctx key no step writes. Either write the key where the "
+                "precondition is established (and read it with `_require(ctx, key, hint=...)` so "
+                "absence fails loudly), or delete the dead read. Do not grow the allowlist. "
+                "See GH #1749."
+            ),
         )
 
     def test_dynamic_key_writes_do_not_grow(self) -> None:
