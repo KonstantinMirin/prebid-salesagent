@@ -573,6 +573,13 @@ class Principal(Base, JSONValidatorMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     platform_mappings: Mapped[dict] = mapped_column(JSONType, nullable=False)
     access_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # RFC 9421 (#1291 B1): the counterparty's own AdCP agent URL, from onboarding.
+    # This is the ONLY legitimate source for it — security.mdx @ v3.1.1 :1212/:1216
+    # forbid taking the signer's agent URL from a header, a body field or any other
+    # self-assertion, because that would let the signer choose which brand.json (and
+    # therefore which key set) it is verified against. NULL means we cannot resolve a
+    # key for this counterparty, not that it is trusted.
+    agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

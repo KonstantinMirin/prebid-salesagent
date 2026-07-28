@@ -12,11 +12,20 @@ long-running multi-tenant process:
   attacker-influenceable).
 - **``policy_triggered``** is validated against :data:`POLICY_TRIGGERED_ALLOWLIST`
   via :func:`sanitize_policy_triggered`; unknown values collapse to ``"other"``.
+- **``code``** (request-signature outcomes) is validated against the SDK's own
+  request-family taxonomy via :func:`sanitize_signature_code`; anything else —
+  including anything an attacker could induce — collapses to ``"other"``.
+- **``keyid``** is the signer's real key id ONLY after the verifier resolved it
+  (checklist step 7), i.e. only for a key we already recognize. Before that it is
+  attacker-supplied, so it is recorded as ``"unresolved"``.
 
 Call sites must record AI-review metrics through :func:`record_ai_review` and
-:func:`record_ai_review_error` so the bounding logic lives in exactly one place.
+:func:`record_ai_review_error`, and request-signature outcomes through
+:func:`record_signature_verified` / :func:`record_signature_failed` /
+:func:`record_request_unsigned`, so the bounding logic lives in exactly one place.
 """
 
+from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
 from src.core.exceptions import (
@@ -71,6 +80,26 @@ def sanitize_policy_triggered(value: str | None) -> str:
     if value in POLICY_TRIGGERED_ALLOWLIST:
         return value
     return "other"
+
+
+#: The 27 request-family signature rejection codes, taken from the SDK's own
+#: request->webhook translation table rather than re-listed here. The spec grades
+#: these byte-for-byte, so a hand-maintained copy would be a second source that can
+#: drift from the one the verifier actually raises.
+SIGNATURE_ERROR_CODES = frozenset(REQUEST_TO_WEBHOOK_CODE)
+
+#: ``keyid`` before the verifier resolved one (checklist step 7). Every rejection
+#: carries this: ``SignatureVerificationError`` does not expose the keyid, and a
+#: pre-resolution keyid is attacker-supplied and therefore unbounded.
+UNRESOLVED_KEYID = "unresolved"
+
+#: Why a request was not verified. Two values, both closed.
+UNSIGNED_REASONS = frozenset({"absent", "ignored"})
+
+
+def sanitize_signature_code(code: str | None) -> str:
+    """Return ``code`` if it is a spec request-signature code, else ``"other"``."""
+    return code if code in SIGNATURE_ERROR_CODES else "other"
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +170,32 @@ webhook_queue_size = Gauge(
     ["tenant_id"],
 )
 
+# ---------------------------------------------------------------------------
+# RFC 9421 inbound request-signature outcomes (#1291 B1)
+# ---------------------------------------------------------------------------
+# The middleware is the ONLY layer that sees the verifier's outcome before it is
+# swallowed (``warn_for``) or turned into a transport 401, so these three counters
+# are the whole evidence base for the shadow-mode promotion ladder
+# (supported_for -> warn_for -> required_for). No ``tenant_id`` label: the posture
+# is per-tenant but the series count must not grow with the tenant list.
+request_signature_verified_total = Counter(
+    "adcp_request_signature_verified_total",
+    "Inbound RFC 9421 request signatures that passed the verifier checklist",
+    ["operation", "keyid"],
+)
+
+request_signature_failed_total = Counter(
+    "adcp_request_signature_failed_total",
+    "Inbound RFC 9421 request signatures rejected by the verifier checklist",
+    ["operation", "keyid", "code"],
+)
+
+request_unsigned_total = Counter(
+    "adcp_request_unsigned_total",
+    "Inbound AdCP requests the verifier did not grade (no signature, or posture ignores it)",
+    ["operation", "reason"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Recording helpers — single source of truth for label bounding
@@ -157,6 +212,39 @@ def record_ai_review(tenant_id: str, decision: str, policy_triggered: str | None
 def record_ai_review_error(tenant_id: str, error: BaseException) -> None:
     """Increment :data:`ai_review_errors` with a bounded ``error_type``."""
     ai_review_errors.labels(tenant_id=tenant_id, error_type=categorize_error(error)).inc()
+
+
+def record_signature_verified(operation: str, keyid: str) -> None:
+    """Increment :data:`request_signature_verified_total` for a verified signer.
+
+    ``keyid`` is safe to record verbatim here and ONLY here: the verifier resolved it
+    against the counterparty's JWKS at checklist step 7, so the value is drawn from a
+    key set we already know.
+    """
+    request_signature_verified_total.labels(operation=operation, keyid=keyid).inc()
+
+
+def record_signature_failed(operation: str, code: str | None) -> None:
+    """Increment :data:`request_signature_failed_total` with a bounded ``code``."""
+    request_signature_failed_total.labels(
+        operation=operation,
+        keyid=UNRESOLVED_KEYID,
+        code=sanitize_signature_code(code),
+    ).inc()
+
+
+def record_request_unsigned(operation: str, reason: str) -> None:
+    """Increment :data:`request_unsigned_total`.
+
+    ``reason="absent"`` — the request carried no signature headers.
+    ``reason="ignored"`` — headers were present but the tenant's posture puts this
+    operation in the ``none`` bucket, so nothing was verified (and, per R-H3, nothing
+    was buffered or hashed either).
+    """
+    request_unsigned_total.labels(
+        operation=operation,
+        reason=reason if reason in UNSIGNED_REASONS else "other",
+    ).inc()
 
 
 def get_metrics_text() -> str:

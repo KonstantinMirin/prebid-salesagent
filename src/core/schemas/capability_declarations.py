@@ -134,6 +134,19 @@ _EXPERIMENTAL_FEATURE_BY_BLOCK: dict[str, str] = {
 }
 
 
+def is_block_declarable(block: str) -> bool:
+    """Whether a tenant may declare *block* — i.e. whether this deployment backs it.
+
+    Public read of the STRICT policy above, for consumers that must know whether a
+    stored declaration can exist at all. The inbound signature verifier (#1291 B1) uses
+    it to skip resolving a tenant whose posture cannot yet differ from the default: an
+    unbacked block means no tenant can have declared one, so the read could not change
+    any decision. Removing an entry from ``_UNBACKED_BLOCKS`` therefore switches those
+    consumers on by itself, with no second flag to remember.
+    """
+    return block not in _UNBACKED_BLOCKS
+
+
 class MeasurementDeclaration(LibraryMeasurementDeclaration):
     """The tenant's measurement vendor/metric catalog.
 

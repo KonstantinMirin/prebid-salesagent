@@ -50,6 +50,7 @@ from src.core.http_utils import get_header_case_insensitive as _get_header_case_
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import resolve_identity
+from src.core.signing.request_verifier_middleware import RequestSignatureMiddleware
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error
 from src.landing import generate_tenant_landing_page
 from src.landing.landing_page import generate_fallback_landing_page
@@ -518,13 +519,29 @@ app.include_router(health_debug_router)
 app.include_router(well_known_router)
 
 # ---------------------------------------------------------------------------
-# Middleware stack (via add_middleware — outermost = last registered):
-#   1. CORSMiddleware (outermost — adds CORS headers to all responses)
-#   2. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
+# Middleware stack. `add_middleware` inserts at index 0 and the stack is built
+# with `reversed(user_middleware)`, so LAST REGISTERED IS OUTERMOST and the
+# source order below is the INVERSE of the execution order. Execution, outermost
+# to innermost:
+#
+#   1. CORSMiddleware                        — CORS headers on every response
+#   2. UnifiedAuthMiddleware                 — sets scope["state"]["auth_context"]
+#   3. RequestSignatureMiddleware            — RFC 9421 inbound verifier (#1291 B1)
+#   4. RestCompatMiddleware                  — REWRITES the body (deprecated field names)
+#   5. a2a_messageid_compatibility_middleware — REWRITES the body (registered above via
+#                                              the @app.middleware("http") decorator)
+#   6. router
+#
+# The verifier's position is not stylistic. It must run INSIDE UnifiedAuthMiddleware,
+# because the spec's composition rule decides the required_for rejection on whether the
+# bearer resolves to a principal we accept; and OUTSIDE both body rewriters, because a
+# verifier downstream of one hashes bytes the signer never signed. Both halves are
+# pinned by tests/unit/test_architecture_request_signature_middleware.py.
 # ---------------------------------------------------------------------------
 
-app.add_middleware(UnifiedAuthMiddleware)
 app.add_middleware(RestCompatMiddleware)
+app.add_middleware(RequestSignatureMiddleware)
+app.add_middleware(UnifiedAuthMiddleware)
 
 _cors_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 

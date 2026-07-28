@@ -100,16 +100,23 @@ class SuperAdminConfig(BaseSettings):
 
 
 class SigningConfig(BaseSettings):
-    """Agent-level posture for OUR OWN RFC 9421 signing key material (#1291 A2).
+    """Agent-level posture for RFC 9421 message signing (#1291).
 
     Not to be confused with ``adcp.signing.SigningConfig``, which is the SDK's
     auto-signing bundle — alias at any import site that touches both.
 
-    The split this class encodes: the STORE KIND is agent-level (one process, one
+    Originally scoped to OUR OWN key material (A2); A4 added the replay knobs and B1
+    the inbound-verifier knobs, so the scope is now "everything about signing that is
+    a property of the DEPLOYMENT rather than of a tenant".
+
+    The split the key fields encode: the STORE KIND is agent-level (one process, one
     key store), while each key's LOCATION is per-tenant and lives on the
     ``signing_keys`` row's ``private_key_ref``. Each tenant is a distinct seller
     identity with its own brand domain and therefore its own key material, so a
-    single agent-level key location is unimplementable.
+    single agent-level key location is unimplementable. Verifier POSTURE is likewise
+    per-tenant and lives in the tenant's declaration
+    (:class:`src.core.signing.posture.RequestSigningPosture`), never here — the knobs
+    below are transport limits and a kill switch, not policy.
     """
 
     provider: Literal["in_memory", "kms"] = Field(
@@ -144,6 +151,59 @@ class SigningConfig(BaseSettings):
         default=60.0,
         description="Lifetime written by the atomic claim before remember() raises it to the signature's own TTL",
     )
+
+    # -- Inbound verifier (#1291 B1) ---------------------------------------
+    verifier_enabled: bool = Field(
+        default=True,
+        description=(
+            "Kill switch for the inbound RFC 9421 verifier middleware. False makes every "
+            "request pass through untouched, so a rollback is a flag flip and not a deploy"
+        ),
+    )
+    max_skew_seconds: int = Field(
+        default=60,
+        description="Clock skew the verifier tolerates on a signature's created/expires params",
+    )
+    max_window_seconds: int = Field(
+        default=300,
+        description="Longest signature validity window the verifier accepts (spec ceiling)",
+    )
+    max_signed_body_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        description=(
+            "Cap on the request body the verifier buffers before hashing. Bounds the memory a "
+            "pre-auth caller can make one worker hold; over-cap requests are rejected with 413"
+        ),
+    )
+    agent_resolution_ttl_seconds: float = Field(
+        default=3600.0,
+        description=(
+            "How long a resolved counterparty AgentResolution (jwks + jwks_uri + key_origins) "
+            "stays usable before the brand.json walk is repeated. The whole resolution is cached, "
+            "not just the JWKS, because expected_key_origins must be passed on every verify"
+        ),
+    )
+    agent_resolution_refetch_cooldown_seconds: float = Field(
+        default=30.0,
+        description=(
+            "Quiet period after a failed counterparty resolution. Without it every signed request "
+            "from a counterparty with a broken brand.json starts a fresh 3-hop outbound walk"
+        ),
+    )
+    counterparty_agent_type: str = Field(
+        default="buying",
+        description=(
+            "brand.json agents[] type used to resolve a signing counterparty's JWKS. The agents "
+            "that sign requests TO a sales agent are the buy side, so their brand.json entry is "
+            "the buying agent, not the sales one"
+        ),
+    )
+    # There is deliberately NO `allow_private_destinations` knob. Plan step 7 proposed
+    # one; `tests/unit/test_architecture_no_private_destinations.py` forbids any src/
+    # call site from passing it, and that guard is right: a configurable SSRF pin is a
+    # pin an operator can remove, and key discovery follows a counterparty-supplied
+    # URL. The SDK default (pinned) is what production gets. B4's sandbox counterparty
+    # needs the relaxation only inside tests, which is where it stays.
 
     # -- Trust-root publication (#1291 A3) ---------------------------------
     grace_seconds: int = Field(

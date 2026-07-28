@@ -393,6 +393,73 @@ class TestClaimHappensAfterCryptoVerify:
         )
 
 
+class TestCapacityHappensBeforeCryptoVerify:
+    """The other half of the pair (#1291 B1, refinement R-L).
+
+    ``TestClaimHappensAfterCryptoVerify`` pins the LATE end of the SDK's call order.
+    This pins the EARLY end: ``at_capacity`` runs at ``verifier.py:304`` (step 9a),
+    BEFORE ``verify_signature`` at ``:329``, precisely so a signer at its cap is
+    rejected without paying for an Ed25519 verify. If an SDK bump moved step 9a after
+    step 10, a keyid at capacity would become an amplifier — every abusive request
+    would buy a full crypto verify before being told no — and nothing else in the suite
+    would notice, because the rejection code on the happy path is unchanged.
+    """
+
+    def test_a_keyid_at_capacity_is_rejected_without_crypto_verify(self, replay_session, keyid):
+        """A request that is BOTH over cap and cryptographically invalid answers 9a.
+
+        The two failures are ordered: ``request_signature_rate_abuse`` (step 9a) can
+        only be the answer if capacity was checked first. If the checks swapped, the
+        same request would raise ``request_signature_invalid`` (step 10) and this test
+        fails — which is the tripwire. The contrast test below keeps the assertion from
+        passing vacuously.
+
+        The cap is reached by REAL accepted traffic rather than by a zero override
+        (which ``SigningConfig`` rejects, correctly — a zero cap would reject every
+        request from a counterparty forever).
+        """
+        honest_pem, honest_jwk = generate_ed25519(keyid)
+        filler_headers = _sign(keyid, nonce="fills-the-cap", signing_jwk_pair=(honest_pem, honest_jwk))[0]
+        _verify(filler_headers, honest_jwk, _build_store(replay_session, _signing_config()))
+        assert _live_row_count(replay_session, keyid) == 1, "setup: the accepted request must occupy the cap"
+
+        store = _build_store(replay_session, _signing_config(per_keyid_cap_overrides={keyid: 1}))
+        impostor_pem, _ = generate_ed25519(keyid)
+        headers, _ = _sign(keyid, nonce="at-capacity", signing_jwk_pair=(impostor_pem, None))
+
+        with pytest.raises(SignatureVerificationError) as exc_info:
+            _verify(headers, honest_jwk, store)
+
+        assert exc_info.value.code == "request_signature_rate_abuse", (
+            "a keyid at capacity must be rejected at step 9a, before the crypto verify "
+            f"this signature would also have failed; got {exc_info.value.code!r} at step "
+            f"{exc_info.value.step!r}"
+        )
+        assert _live_row_count(replay_session, keyid, "at-capacity") == 0, (
+            "a request rejected at step 9a must not have claimed a nonce either"
+        )
+
+    def test_the_same_request_under_a_normal_cap_reaches_the_crypto_verify(self, replay_session, keyid):
+        """The contrast: without the cap override the SAME request fails at step 10.
+
+        This is what makes the ordering assertion above non-vacuous — the request is
+        genuinely capable of reaching (and failing) the crypto verify, so answering 9a
+        can only mean 9a ran first.
+        """
+        store = _build_store(replay_session, _signing_config())
+
+        impostor_pem, _ = generate_ed25519(keyid)
+        _, honest_jwk = generate_ed25519(keyid)
+        headers, _ = _sign(keyid, nonce="under-capacity", signing_jwk_pair=(impostor_pem, None))
+
+        with pytest.raises(SignatureVerificationError) as exc_info:
+            _verify(headers, honest_jwk, store)
+
+        assert exc_info.value.code == "request_signature_invalid", (
+            f"expected the step-10 failure, got {exc_info.value.code!r} at step {exc_info.value.step!r}"
+        )
+
+
 class TestPerKeyidTtlOverride:
     """Refinement R1: the row lifetime comes from ``remember()``, and it is clampable
     per counterparty only."""
