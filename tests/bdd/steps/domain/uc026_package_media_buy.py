@@ -13,7 +13,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_error
+from tests.bdd.steps._outcome_helpers import _require, _require_error, _require_response
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2282,17 +2282,23 @@ def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
         f"Expected a NEW package_id for '{mb_id}' but got the same as existing: '{pkg_id}'"
     )
     # Verify the response media_buy_id matches the target (different from original)
-    named_mb_ids = ctx.get("named_media_buy_ids", {})
-    original_mb_id = named_mb_ids.get("mb-A") or ctx.get("existing_media_buy_id")
-    resp = ctx.get("response")
-    if resp is not None:
-        inner = getattr(resp, "response", resp)
-        resp_mb_id = getattr(inner, "media_buy_id", None)
-        if resp_mb_id and original_mb_id:
-            assert resp_mb_id != original_mb_id, (
-                f"Expected package in NEW media buy '{mb_id}' but response media_buy_id "
-                f"'{resp_mb_id}' matches original '{original_mb_id}'"
-            )
+    # The original media buy is the one the Given step recorded. This used to consult a
+    # `named_media_buy_ids` map first, but no step anywhere writes that key, so the `.get(..., {})`
+    # default made the named lookup dead and the fallback always won — a branch that could never
+    # run, dressed as a lookup (salesagent-1krl). The recorded id IS the contract; read it loudly.
+    original_mb_id = _require(
+        ctx,
+        "existing_media_buy_id",
+        hint="the Given step that creates the original media buy must record its id",
+    )
+    resp = _require_response(ctx)
+    inner = getattr(resp, "response", resp)
+    resp_mb_id = getattr(inner, "media_buy_id", None)
+    assert resp_mb_id, f"Response carries no media_buy_id, so '{mb_id}' cannot be shown to be a NEW media buy"
+    assert resp_mb_id != original_mb_id, (
+        f"Expected package in NEW media buy '{mb_id}' but response media_buy_id "
+        f"'{resp_mb_id}' matches original '{original_mb_id}'"
+    )
 
 
 @then("a new package should be created with a seller-assigned package_id")

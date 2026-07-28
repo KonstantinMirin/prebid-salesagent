@@ -16,7 +16,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import _require, _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.helpers import assert_envelope_shape
@@ -398,6 +398,10 @@ def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     from src.core.schemas.account import ListAccountsRequest
 
     try:
+        # Recorded for the continuation step below, which must page with the SAME size the
+        # scenario chose — otherwise it silently requests a different page than the one set up
+        # (salesagent-1krl).
+        ctx["last_max_results"] = value
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=value))
         dispatch_request(ctx, req=req)
     except Exception as exc:
@@ -413,8 +417,14 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 
     prev_response = _require_response(ctx)
     cursor = prev_response.pagination.cursor
-    # Use same max_results as before (stored in ctx or default)
-    max_results = ctx.get("last_max_results", 50)
+    # Page with the SAME size the scenario used for the first page. This read used to supply a
+    # default of 50 that nothing ever wrote, so a scenario paging by 2 silently asked for 50 on the
+    # continuation and the pagination behaviour under test was never exercised (salesagent-1krl).
+    max_results = _require(
+        ctx,
+        "last_max_results",
+        hint="the When step that sent the first list_accounts page must record its max_results",
+    )
     try:
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=max_results, cursor=cursor))
         dispatch_request(ctx, req=req)
@@ -852,6 +862,8 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
         ctx["error"] = err
         return
 
+    _snapshot_account_ids(ctx)
+
     try:
         req = SyncAccountsRequest(accounts=accounts)
         dispatch_request(ctx, req=req, **kwargs)
@@ -1072,6 +1084,38 @@ def then_error_exists(ctx: dict) -> None:
     )
 
 
+def _seller_tenant_id(ctx: dict) -> str:
+    """The seller tenant whose account table the isolation check reads.
+
+    Deliberately NOT dependent on an authenticated principal: the scenarios that assert "no accounts
+    were modified" are error scenarios, and the sharpest of them is the UNAUTHENTICATED one, where
+    there is no principal to scope by. The seller's tenant still exists — it is the env's — and it
+    is the side effect the buyer must not have caused.
+    """
+    tenant = ctx.get("tenant")
+    if tenant is not None:
+        return str(tenant.tenant_id)
+    return str(ctx["env"]._tenant_id)
+
+
+def _snapshot_account_ids(ctx: dict) -> None:
+    """Record the seller-side account set for this principal, before a request is dispatched.
+
+    `then_no_accounts_modified` compares against this. Without it that step fell back to
+    ``ctx.get("pre_request_account_ids", set())`` — a hardcoded EMPTY set, which turned an
+    isolation check into "the principal has zero accounts". Any scenario with pre-existing accounts
+    would have failed it, and the one scenario that uses it passes only because its set happens to
+    be empty; nothing was actually being verified (salesagent-1krl).
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant_id = _seller_tenant_id(ctx)
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant_id)
+        ctx["pre_request_account_ids"] = {a.account_id for a in repo.list_all()}
+
+
 @then(parsers.re(r"no accounts were modified on the seller"))
 def then_no_accounts_modified(ctx: dict) -> None:
     """Assert no accounts were created/modified/deleted by the failed request.
@@ -1084,24 +1128,21 @@ def then_no_accounts_modified(ctx: dict) -> None:
     from src.core.database.repositories.account import AccountRepository
 
     _get_error(ctx)  # Confirm an error occurred
-    tenant = ctx.get("tenant")
-    principal = ctx.get("principal")
-    if tenant is not None and principal is not None:
-        with get_db_session() as session:
-            repo = AccountRepository(session, tenant.tenant_id)
-            current_accounts = repo.list_by_principal(principal.principal_id)
-            pre_request_ids = ctx.get("pre_request_account_ids", set())
-            current_ids = {a.account_id for a in current_accounts}
-            assert current_ids == pre_request_ids, (
-                f"Accounts were modified despite error. "
-                f"Before: {pre_request_ids}, After: {current_ids}. "
-                f"Created: {current_ids - pre_request_ids}, "
-                f"Deleted: {pre_request_ids - current_ids}"
-            )
-    else:
-        # Unauthenticated caller — no tenant context, so no accounts could have been created.
-        # The error itself proves no side effects occurred for this caller.
-        pass
+    pre_request_ids = _require(
+        ctx,
+        "pre_request_account_ids",
+        hint="the When step that dispatches the request must call _snapshot_account_ids(ctx) first",
+    )
+    with get_db_session() as session:
+        repo = AccountRepository(session, _seller_tenant_id(ctx))
+        current_ids = {a.account_id for a in repo.list_all()}
+
+    assert current_ids == pre_request_ids, (
+        f"Accounts were modified despite error. "
+        f"Before: {pre_request_ids}, After: {current_ids}. "
+        f"Created: {current_ids - pre_request_ids}, "
+        f"Deleted: {pre_request_ids - current_ids}"
+    )
 
 
 @then(parsers.re(r"the errors array may contain multiple errors"))

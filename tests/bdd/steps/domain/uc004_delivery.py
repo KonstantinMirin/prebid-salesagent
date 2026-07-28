@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -906,6 +907,14 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         ctx["cb_can_attempt"] = cb.can_attempt()
+
+    # Baseline for the probe-count oracle in `then_single_probe`. The probe is dispatched by the
+    # call_send() below, so "how many probes did half-open allow?" is the delta across THIS step —
+    # not the scenario's total POST count. Recording it here is what makes that Then step able to
+    # distinguish one probe from ten (salesagent-1krl).
+    mock_post = env.mock.get("post")
+    ctx["pre_probe_call_count"] = mock_post.call_count if mock_post is not None else 0
+
     try:
         ctx["circuit_result"] = env.call_send()
     except Exception as exc:
@@ -1797,24 +1806,43 @@ def then_single_probe(ctx: dict) -> None:
     if probe_count is not None:
         # Probe count was explicitly recorded by the When step
         assert probe_count == 1, f"Expected exactly 1 probe delivery attempt, got {probe_count}"
-    else:
-        # Check mock POST call count as evidence of dispatch
-        mock_post = env.mock.get("httpx_post") or env.mock.get("webhook_post")
-        if mock_post is not None:
-            # Count calls that happened during the half-open phase
-            pre_open_calls = ctx.get("pre_open_call_count", 0)
-            probe_dispatches = mock_post.call_count - pre_open_calls
-            assert probe_dispatches == 1, (
-                f"Expected exactly 1 probe dispatch in half-open state, "
-                f"got {probe_dispatches} (total={mock_post.call_count}, pre-open={pre_open_calls})"
-            )
-        else:
-            # No dispatch mock — verify the CB gate at least allowed the attempt
-            cb_can_attempt = ctx.get("cb_can_attempt")
-            assert cb_can_attempt is True, (
-                f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
-            )
-            pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
+        return
+
+    # CircuitBreakerEnv exposes the inner httpx client's post as mock["post"]
+    # (tests/harness/delivery_circuit_breaker_unit.py:74). This lookup used to ask for
+    # "httpx_post"/"webhook_post" — neither of which any env defines — so it ALWAYS missed and the
+    # step fell through to a pytest.xfail("HARNESS GAP: no webhook POST mock"). There was no
+    # harness gap; the key was wrong, and the "exactly one probe" claim in this step's name went
+    # ungraded for the scenario's whole lifetime (salesagent-1krl).
+    mock_post = env.mock.get("post")
+    assert mock_post is not None, (
+        f"{type(env).__name__} exposes no POST mock, so 'exactly one probe' cannot be counted. "
+        f"Available mocks: {sorted(env.mock)}"
+    )
+
+    # Count only the calls made while half-open — the delta across the When step that evaluated the
+    # breaker. The baseline read used to be ctx.get("pre_open_call_count", 0), a key nothing wrote,
+    # so the default would have made this the scenario's TOTAL POST count rather than the half-open
+    # delta.
+    pre_probe_calls = _require(
+        ctx,
+        "pre_probe_call_count",
+        hint="the When step that evaluates the circuit breaker must record the POST count before dispatching the probe",
+    )
+    if mock_post.call_count == 0:
+        # Nothing reached the HTTP layer for the WHOLE scenario, so the probe cannot be counted
+        # here at all — a deeper gap than the wrong mock key this step used to blame
+        # (salesagent-8uoy). Narrow on purpose: a non-zero-but-wrong count still fails loudly below.
+        pytest.xfail(
+            "HARNESS GAP(salesagent-8uoy): the half-open probe is logged as scheduled but never "
+            "reaches httpx post within this step, so 'exactly one probe' is unobservable here"
+        )
+
+    probe_dispatches = mock_post.call_count - pre_probe_calls
+    assert probe_dispatches == 1, (
+        f"Expected exactly 1 probe dispatch in half-open state, "
+        f"got {probe_dispatches} (total={mock_post.call_count}, pre-probe={pre_probe_calls})"
+    )
 
 
 @then("normal scheduled deliveries should resume")
