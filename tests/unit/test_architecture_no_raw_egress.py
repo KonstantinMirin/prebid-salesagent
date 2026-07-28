@@ -25,8 +25,9 @@ What does NOT count, deliberately:
   Matching bare names instead of calls would flag that file, which issues
   nothing. Match on construction and call.
 
-The allowlist is seeded at its maximum with the 17 modules in the #1589
-inventory and only ever shrinks. Each entry pairs a module with its current
+The allowlist was seeded at its maximum with the 17 modules in the #1589
+inventory and only ever shrinks — ``src/core/property_list_resolver.py`` is
+migrated, so it is 16 now. Each entry pairs a module with its current
 egress-call count, so adding a call to an already-allowlisted module fails too
 rather than hiding behind the entry.
 """
@@ -69,7 +70,6 @@ ALLOWLIST = {
     ("src/services/webhook_delivery_service.py", 1),
     ("src/services/order_approval_service.py", 1),
     ("src/core/creative_agent_registry.py", 1),
-    ("src/core/property_list_resolver.py", 1),
     ("src/services/protocol_webhook_service.py", 1),
     # Operator-configured vendor endpoints.
     ("src/adapters/base_workflow.py", 1),
