@@ -699,6 +699,208 @@ class TestDryRunMode:
             assert db_creative is None, "Dry run should not persist any creatives"
 
 
+def _sync_wire(slug: str, *, dry_run: bool, seed: list | tuple = (), **kwargs) -> list[dict]:
+    """Run ONE sync in its own tenant and return the wire dumps of its results.
+
+    ``seed`` is synced LIVE first (that is how a creative becomes persisted), then
+    the measured call runs with ``dry_run``. Comparison is on ``model_dump()``, not
+    object equality: ``internal_status``/``review_feedback`` are ``exclude=True``, so
+    the dump grades the WIRE result and cannot fail on an internal field a preview
+    legitimately cannot know for an entry that has no row.
+    """
+    tenant_id, principal_id = f"t_{slug}", f"p_{slug}"
+    with CreativeSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+        tenant = TenantFactory(tenant_id=tenant_id)
+        PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        if seed:
+            env.call_impl(creatives=list(seed))
+        response = env.call_impl(dry_run=dry_run, **kwargs)
+    return [r.model_dump(mode="json") for r in response.creatives]
+
+
+def _preview_and_live(slug: str, **kwargs) -> tuple[list[dict], list[dict]]:
+    """Run the SAME payload as a preview and as a live sync, in separate tenants."""
+    return (
+        _sync_wire(f"{slug}_dry", dry_run=True, **kwargs),
+        _sync_wire(f"{slug}_live", dry_run=False, **kwargs),
+    )
+
+
+def _actions(wire: list[dict]) -> list[str]:
+    return [entry.get("action") for entry in wire]
+
+
+def _assert_preview_matches_live(preview: list[dict], live: list[dict]) -> None:
+    """The live run is the oracle: the preview must be what a real run produces."""
+    assert preview == live, f"dry_run previewed a result a real run does not produce\n  DRY : {preview}\n  LIVE: {live}"
+
+
+def _persisted_creative_ids(slug: str) -> list[str]:
+    """Creative ids actually stored for the tenant/principal ``_sync_wire`` used."""
+    from src.core.database.repositories.uow import CreativeUoW
+
+    with CreativeUoW(f"t_{slug}") as uow:
+        assert uow.creatives is not None
+        return [c.creative_id for c in uow.creatives.list_by_principal(f"p_{slug}")]
+
+
+class TestDryRunPreviewMatchesLiveRun:
+    """A dry_run preview must describe an outcome a real run can produce.
+
+    Each case runs the SAME payload twice — once with ``dry_run=True``, once live,
+    in separate tenants — and grades the preview with the LIVE RUN AS THE ORACLE.
+    Nothing here hand-writes what the preview "should" say; a hand-written
+    expectation would merely re-encode today's behaviour as a contract.
+
+    Spec (adcp 6.6 / AdCP 3.1.1, dist/schemas/3.1.1/bundled/creative/
+    sync-creatives-request.json): ``dry_run`` — "When true, preview changes without
+    applying them. Returns what would be created/updated/deleted"; response
+    ``changes`` — "Field names that were modified (only present when
+    action=updated)". Conformance storyboard: UNGRADED (no dist/compliance/3.1.1
+    scenario references dry_run).
+
+    Pinned to the harness's DEFAULT no-render creative-agent stub
+    (``preview_creative`` -> ``{}``, tests/harness/creative_sync.py:88-89). The
+    override at :139-149 must NOT be used here: with a render-returning agent the
+    live update path appends url/width/height/duration a SECOND time
+    (_processing.py:383/396/399/402) on top of the unconditional five at :450, so
+    live ``changes`` carries duplicates no preview can reproduce. That residual
+    divergence is known and out of scope — it must not be "fixed" by weakening
+    this oracle.
+    """
+
+    def test_two_identical_entries_on_one_id_preview_the_live_outcome(self, integration_db):
+        """The reproduction: the preview has no memory of what entry 1 accounted for.
+
+        Live, entry 1 is created and FLUSHED (repositories/creative.py:229-230), so
+        entry 2's ``get_by_id`` finds that row and reports an update. The dry_run arm
+        appends and ``continue``s before any write (_sync.py:186-214), so entry 2's
+        lookup still misses and the preview claims ``created`` twice — an outcome a
+        real run cannot produce, and precisely the one a buyer previews to rule out.
+        """
+        payload = [
+            _make_creative_asset(creative_id="dup_c1", name="Dup Creative"),
+            _make_creative_asset(creative_id="dup_c1", name="Dup Creative"),
+        ]
+
+        preview, live = _preview_and_live("dup", creatives=payload)
+
+        assert _actions(live) == ["created", "updated"], (
+            f"precondition: the live path must resolve entry 2 against entry 1, got {_actions(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_two_entries_on_one_id_that_differ_preview_the_changed_fields(self, integration_db):
+        """A later entry that CHANGES a field must preview the fields it would change.
+
+        Remembering only WHICH ids were previewed is not enough: ``name`` and
+        ``format`` are appended by comparing against the PERSISTED row
+        (_processing.py:109-113, :119-128), and an in-request duplicate has no row.
+        Only carrying the previewed STATE forward and running the same comparison
+        against it reproduces the live ``changes`` list.
+        """
+        payload = [
+            _make_creative_asset(creative_id="diff_c1", name="First Name"),
+            _make_creative_asset(creative_id="diff_c1", name="Second Name"),
+        ]
+
+        preview, live = _preview_and_live("diff", creatives=payload)
+
+        assert _actions(live) == ["created", "updated"], (
+            f"precondition: the live path must apply entry 2's change, got {_actions(live)}"
+        )
+        assert "name" in (live[1].get("changes") or []), (
+            f"precondition: the live update must report the changed field, got {live[1].get('changes')}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_third_entry_resolves_against_what_the_second_left(self, integration_db):
+        """Entry 3 is resolved against entry 2's state, not entry 1's.
+
+        Live, each update mutates the row the next entry reads. A preview that
+        recorded only entry 1 would grade entry 3 against stale values — a case no
+        two-entry payload can expose.
+        """
+        payload = [
+            _make_creative_asset(creative_id="trip_c1", name="First Name"),
+            _make_creative_asset(creative_id="trip_c1", name="Second Name"),
+            _make_creative_asset(creative_id="trip_c1", name="Second Name"),
+        ]
+
+        preview, live = _preview_and_live("trip", creatives=payload)
+
+        assert _actions(live) == ["created", "updated", "updated"], (
+            f"precondition: live must process all three entries against one row, got {_actions(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_distinct_creative_ids_are_not_collapsed(self, integration_db):
+        """Two DIFFERENT ids stay two creations — the fix must not over-collapse."""
+        payload = [
+            _make_creative_asset(creative_id="sep_c1", name="One"),
+            _make_creative_asset(creative_id="sep_c2", name="Two"),
+        ]
+
+        preview, live = _preview_and_live("sep", creatives=payload)
+
+        assert _actions(live) == ["created", "created"], (
+            f"precondition: distinct ids are distinct creatives, got {_actions(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_single_entry_update_previews_the_changed_fields(self, integration_db):
+        """The second, independent divergence — it fires on EVERY update preview.
+
+        With no duplicates involved, against a creative that is already persisted,
+        the dry_run arm builds its ``SyncCreativeResult`` without ``changes`` at all
+        (_sync.py:196-203) while the live update arm returns the fields it modified.
+        The buyer sees no changed-field list in a preview and a full one in the real
+        run.
+        """
+        seed = [_make_creative_asset(creative_id="upd_c1", name="Original")]
+        payload = [_make_creative_asset(creative_id="upd_c1", name="Renamed")]
+
+        preview, live = _preview_and_live("upd", seed=seed, creatives=payload)
+
+        assert _actions(live) == ["updated"], f"precondition: live must update the seeded creative, got {live}"
+        assert live[0].get("changes"), (
+            f"precondition: the live update must report the fields it changed, got {live[0].get('changes')}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_duplicate_entry_preview_persists_nothing(self, integration_db):
+        """A preview that gains in-request memory must still write nothing."""
+        payload = [
+            _make_creative_asset(creative_id="nop_c1", name="Dup Creative"),
+            _make_creative_asset(creative_id="nop_c1", name="Dup Creative"),
+        ]
+
+        preview = _sync_wire("nop_dry", dry_run=True, creatives=payload)
+
+        assert len(preview) == 2
+        assert _persisted_creative_ids("nop_dry") == [], "dry_run must not persist any creative"
+
+    def test_delete_missing_preview_matches_live(self, integration_db):
+        """Regression pin on the one dry_run arm that is already correct today.
+
+        ``delete_missing`` under dry_run runs the block and appends ``deleted``
+        results, skipping only the ``status = 'archived'`` mutation
+        (_sync.py:365-388). This refactor must not silently break it.
+        """
+        seed = [
+            _make_creative_asset(creative_id="del_keep", name="Kept"),
+            _make_creative_asset(creative_id="del_orphan", name="Orphan"),
+        ]
+        payload = [_make_creative_asset(creative_id="del_new", name="New")]
+
+        preview, live = _preview_and_live("del", seed=seed, creatives=payload, delete_missing=True)
+
+        assert sorted(_actions(live)) == ["created", "deleted", "deleted"], (
+            f"precondition: live must create the new creative and archive both unlisted ones, got {live}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+
 class TestApprovalWorkflow:
     """Tenant approval_mode controls creative status."""
 

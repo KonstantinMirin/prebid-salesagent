@@ -18,7 +18,13 @@ from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
+from ._processing import (
+    PriorCreativeState,
+    _create_new_creative,
+    _failed_sync_result,
+    _update_existing_creative,
+    build_update_sync_result,
+)
 from ._validation import _get_field, _validate_creative_input, check_provenance_required
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
@@ -100,6 +106,11 @@ def _sync_creatives_impl(
     unchanged_count = 0
     failed_count = 0
     deleted_count = 0
+
+    # dry_run only: what each creative_id in THIS request has already been
+    # previewed as. Request-local, never module state — the live path's equivalent
+    # memory is the per-creative flush, which is likewise scoped to the request.
+    previewed: dict[str, PriorCreativeState] = {}
 
     # Legacy tracking (still used internally)
     synced_creatives = []
@@ -191,14 +202,28 @@ def _sync_creatives_impl(
                     if creative.creative_id:
                         existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
-                    if existing_creative:
+                    # A previous entry in THIS payload may already account for the id.
+                    # The live path gets that memory for free from the per-creative
+                    # flush (repositories/creative.py), so entry 2 resolves against
+                    # what entry 1 wrote; without `previewed` the preview reports a
+                    # second `created` for an id a real run would report as `updated`.
+                    prior = None
+                    if existing_creative is not None:
+                        prior = PriorCreativeState.from_row(existing_creative)
+                    elif creative_id in previewed:
+                        prior = previewed[creative_id]
+
+                    if prior is not None:
                         updated_count += 1
                         results.append(
-                            SyncCreativeResult(
-                                creative_id=creative_id,
-                                action=CreativeAction.updated,
-                                internal_status=existing_creative.status,
-                                review_feedback=None,
+                            build_update_sync_result(
+                                creative_id,
+                                creative=creative,
+                                prior=prior,
+                                format_value=format_value,
+                                # No agent call happens on this arm, so the
+                                # agent-derived entries are absent by construction.
+                                internal_status=existing_creative.status if existing_creative else None,
                             )
                         )
                     else:
@@ -210,6 +235,9 @@ def _sync_creatives_impl(
                                 review_feedback=None,
                             )
                         )
+                    # Refresh on BOTH arms: a third entry must compare against what
+                    # the second one left, exactly as the live path does.
+                    previewed[creative_id] = PriorCreativeState.from_asset(creative, format_value)
                     synced_creatives.append(creative)
                     continue
 
