@@ -80,9 +80,11 @@ def validate_agent_url(url: str | None) -> bool:
     during approval processing against URLs that are already stored in
     the database — not against live user-supplied input.
 
-    SSRF protection for user-supplied agent URLs is enforced at the admin
-    ingestion boundary in src/admin/blueprints/signals_agents.py using
-    check_url_ssrf(), which includes DNS resolution.
+    Egress policy for user-supplied agent URLs is enforced at the admin
+    ingestion boundary (src/admin/blueprints/signals_agents.py) via
+    src.admin.utils.url_policy, which applies the seam's validate_url —
+    address validation and DNS resolution belong to adcp.signing, reached
+    through src/core/security/outbound_http.py.
 
     Args:
         url: URL string to validate

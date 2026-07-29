@@ -1033,7 +1033,7 @@ class TestWebhookOutcomeMetrics:
         retried to exhaustion, booked as ``max_retries_exceeded`` with
         ``attempts == N``, and only reclassified once resolution moves ahead of
         the send. It never worked that way here — today's address policy already
-        resolves the hostname first (``check_url_ssrf`` ->
+        resolves the hostname first (the seam's address validation ->
         ``socket.gethostbyname`` -> "Cannot resolve hostname"), so a DNS-dead
         customer endpoint has ALWAYS read as a policy refusal at zero attempts.
         The seam refuses it at the same point for the same reason.

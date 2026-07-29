@@ -11,7 +11,6 @@ from adcp.types import TaskType
 from src.core.webhook_authenticator import WebhookAuthenticator
 from src.core.webhook_validator import (
     WEBHOOK_TASK_TYPE_FALLBACK,
-    WebhookURLValidator,
     validate_webhook_task_type,
 )
 
@@ -42,95 +41,6 @@ class TestValidateWebhookTaskType:
     def test_fallback_must_be_valid_caller_choice(self):
         """A valid label ignores the fallback entirely."""
         assert validate_webhook_task_type("sync_creatives", fallback="update_media_buy") == "sync_creatives"
-
-
-class TestWebhookURLValidator:
-    """Test SSRF protection in webhook URL validation."""
-
-    def test_valid_public_https_url(self):
-        """Valid public HTTPS URLs should pass."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://example.com/webhook")
-        assert is_valid
-        assert error == ""
-
-    def test_valid_public_http_url(self):
-        """Valid public HTTP URLs should pass (for testing)."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://example.com/webhook")
-        assert is_valid
-        assert error == ""
-
-    def test_blocks_localhost(self):
-        """Should block localhost."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://localhost:3000/webhook")
-        assert not is_valid
-        assert "blocked" in error.lower()
-
-    def test_blocks_127_0_0_1(self):
-        """Should block 127.0.0.1."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://127.0.0.1:8080/webhook")
-        assert not is_valid
-        assert "loopback" in error.lower() or "private" in error.lower() or "internal" in error.lower()
-
-    def test_blocks_private_network_10(self):
-        """Should block 10.0.0.0/8 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://10.0.0.5/webhook")
-        assert not is_valid
-        assert "private" in error.lower() or "internal" in error.lower()
-
-    def test_blocks_private_network_192(self):
-        """Should block 192.168.0.0/16 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://192.168.1.1/webhook")
-        assert not is_valid
-        assert "private" in error.lower() or "internal" in error.lower()
-
-    def test_blocks_private_network_172(self):
-        """Should block 172.16.0.0/12 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://172.16.0.1/webhook")
-        assert not is_valid
-        assert "private" in error.lower() or "internal" in error.lower()
-
-    def test_blocks_link_local(self):
-        """Should block 169.254.0.0/16 link-local (AWS metadata service)."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://169.254.169.254/latest/meta-data")
-        assert not is_valid
-        assert "link" in error.lower() or "private" in error.lower() or "blocked" in error.lower()
-
-    def test_blocks_metadata_hostname(self):
-        """Should block cloud metadata hostnames."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://metadata.google.internal/webhook")
-        assert not is_valid
-        assert "blocked" in error.lower()
-
-    def test_requires_http_or_https(self):
-        """Should reject non-HTTP protocols."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("ftp://example.com/webhook")
-        assert not is_valid
-        assert "http" in error.lower()
-
-    def test_requires_hostname(self):
-        """Should reject URLs without hostname."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http:///webhook")
-        assert not is_valid
-        assert "hostname" in error.lower()
-
-    def test_invalid_url_format(self):
-        """Should reject malformed URLs."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("not-a-url")
-        assert not is_valid
-        assert error != ""
-
-    def test_validate_for_testing_allows_localhost(self):
-        """Testing mode should allow localhost when enabled."""
-        is_valid, error = WebhookURLValidator.validate_for_testing(
-            "http://localhost:3001/webhook", allow_localhost=True
-        )
-        assert is_valid
-        assert error == ""
-
-    def test_validate_for_testing_blocks_private_networks(self):
-        """Testing mode should still block private networks even with allow_localhost."""
-        is_valid, error = WebhookURLValidator.validate_for_testing("http://192.168.1.1/webhook", allow_localhost=True)
-        assert not is_valid
 
 
 class TestWebhookAuthenticator:
