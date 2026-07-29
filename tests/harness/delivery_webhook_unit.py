@@ -15,8 +15,7 @@ Usage::
         assert result["status"] == "delivered"
 
 Available mocks via env.mock:
-    "sleep"       -- time.sleep mock (the retry schedule, not a transport)
-    "url_policy"  -- loopback allowance for the test origin
+    "sleep"       -- the seam's time.sleep (the retry schedule, not a transport)
     "db"          -- get_db_session mock
 """
 
@@ -26,7 +25,6 @@ from unittest.mock import MagicMock
 
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import WebhookMixin
-from tests.harness.delivery_webhook import _allow_the_local_test_origin
 
 
 class WebhookEnv(WebhookMixin, BaseTestEnv):
@@ -43,14 +41,12 @@ class WebhookEnv(WebhookMixin, BaseTestEnv):
 
     MODULE = "src.core.webhook_delivery"
     EXTERNAL_PATCHES = {
-        "sleep": f"{MODULE}.time.sleep",
-        "url_policy": f"{MODULE}.WebhookURLValidator.validate_webhook_url",
+        # The seam's clock, not this module's — delivery no longer sleeps here.
+        "sleep": "src.core.security.outbound_http.time.sleep",
         "db": f"{MODULE}.get_db_session",
     }
 
     def _configure_mocks(self) -> None:
-        self.mock["url_policy"].side_effect = _allow_the_local_test_origin
-
         # DB session: no-op context manager
         mock_ctx = MagicMock()
         mock_ctx.__enter__ = MagicMock(return_value=MagicMock())

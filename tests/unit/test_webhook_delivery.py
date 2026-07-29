@@ -54,7 +54,8 @@ class TestWebhookDelivery:
             assert env.delivery_attempts == 2
 
             # Should have backed off 1 second between attempts (2^0 = 1)
-            env.mock["sleep"].assert_called_once_with(1)
+            assert env.mock["sleep"].call_count == 1
+            assert_backoff_schedule([float(c.args[0]) for c in env.mock["sleep"].call_args_list], jitter=None)
 
     def test_retry_on_500_error(self):
         """Test that 5xx errors trigger retry."""
@@ -69,11 +70,16 @@ class TestWebhookDelivery:
             assert result["status"] == "failed"
             assert result["attempts"] == 3  # All 3 attempts used
             assert result["response_code"] == 500
-            assert "Internal Server Error" in result["error"]
+            # The origin's body no longer reaches the caller: the seam does not echo
+            # a counterparty response back to whoever supplied the URL. The status is
+            # named, the body is not — assert both halves so a regression re-adding
+            # the echo fails here.
+            assert "3 attempts" in result["error"]
+            assert "Internal Server Error" not in result["error"]
             assert env.delivery_attempts == 3
 
             # Exponential backoff: 1s + 2s (no sleep after the last attempt)
-            assert_backoff_schedule([float(c.args[0]) for c in env.mock["sleep"].call_args_list], jitter=0.0)
+            assert_backoff_schedule([float(c.args[0]) for c in env.mock["sleep"].call_args_list], jitter=None)
 
     def test_no_retry_on_400_error(self):
         """Test that 4xx client errors do NOT trigger retry."""
@@ -88,8 +94,8 @@ class TestWebhookDelivery:
             assert result["status"] == "failed"
             assert result["attempts"] == 1  # No retries
             assert result["response_code"] == 400
-            assert "Client error" in result["error"]
-            assert "Bad Request" in result["error"]
+            assert "Client error 400" in result["error"]
+            assert "Bad Request" not in result["error"], "the origin's body must not be echoed back"
             assert env.delivery_attempts == 1  # Only 1 attempt
 
     def test_no_retry_on_404_error(self):
@@ -122,11 +128,13 @@ class TestWebhookDelivery:
             assert success is False
             assert result["status"] == "failed"
             assert result["attempts"] == 3
-            assert "timeout" in result["error"].lower()
+            # The seam does not distinguish a timeout from a dropped connection.
+            # What it still reports, truthfully, is that nothing came back.
+            assert "no response received" in result["error"]
             assert env.delivery_attempts == 3
 
             # Exponential backoff: 1s + 2s (no sleep after the last attempt)
-            assert_backoff_schedule([float(c.args[0]) for c in env.mock["sleep"].call_args_list], jitter=0.0)
+            assert_backoff_schedule([float(c.args[0]) for c in env.mock["sleep"].call_args_list], jitter=None)
 
     def test_retry_on_connection_error(self):
         """Test that connection errors trigger retry."""
@@ -139,7 +147,7 @@ class TestWebhookDelivery:
 
             assert success is False
             assert result["attempts"] == 3
-            assert "Connection" in result["error"]
+            assert "no response received" in result["error"]
             assert env.delivery_attempts == 3
 
     def test_exponential_backoff_timing(self):
@@ -151,12 +159,12 @@ class TestWebhookDelivery:
 
             env.call_deliver(payload={"test": "data"}, max_retries=3, timeout=10)
 
-            # 2^0=1s after attempt 1, 2^1=2s after attempt 2 (no sleep after the last).
-            # jitter=0.0: this site adds no randomness — see the strict xfail on
-            # test_backoff_includes_jitter in tests/integration/test_delivery_webhook_behavioral.py.
+            # 1s after attempt 1, 2s after attempt 2 (no sleep after the last), each
+            # plus the seam's jitter — which is why jitter=None (grade the window and
+            # require randomisation) rather than an exact schedule.
             durations = [float(c.args[0]) for c in env.mock["sleep"].call_args_list]
             assert len(durations) == 2
-            assert_backoff_schedule(durations, jitter=0.0)
+            assert_backoff_schedule(durations, jitter=None)
 
     def test_max_retries_exceeded(self):
         """Test behavior when all retries are exhausted."""
@@ -294,7 +302,8 @@ class TestWebhookDelivery:
             update_args = mock_update.call_args.kwargs
             assert update_args["status"] == "failed"
             assert update_args["response_code"] == 400
-            assert "Bad Request" in update_args["last_error"]
+            assert "Client error 400" in update_args["last_error"]
+            assert "Bad Request" not in update_args["last_error"]
 
     def test_custom_timeout(self):
         """Test that a custom timeout value is honoured, not merely passed along.
@@ -311,7 +320,7 @@ class TestWebhookDelivery:
             success, result = env.call_deliver(payload={"test": "data"}, max_retries=1, timeout=1)
 
             assert success is False
-            assert result["error"] == "Request timeout after 1s"
+            assert result["error"] == "Delivery failed after 1 attempts (no response received)"
             assert env.delivery_attempts == 1
 
     def test_result_contains_duration(self):

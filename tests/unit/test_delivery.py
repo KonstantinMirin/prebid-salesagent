@@ -2047,28 +2047,32 @@ class TestDeliveryWebhookRetry:
         with 1 attempt.
         Covers: UC-004-EXT-G-06
         """
+
         from src.core.webhook_delivery import WebhookDelivery as WHDelivery
         from src.core.webhook_delivery import deliver_webhook_with_retry
+        from tests.harness.delivery_webhook_unit import WebhookEnv
 
         for status_code in [401, 403]:
-            delivery = WHDelivery(
-                webhook_url="https://example.com/webhook",
-                payload={"test": "data"},
-                headers={"Content-Type": "application/json"},
-                max_retries=3,
-                timeout=10,
-            )
+            # Repointed onto the real local origin (salesagent-4fya.11). This used to
+            # patch requests.post; delivery is on the egress seam now, so that patch
+            # would have gone inert and the test would have issued a genuine request
+            # to example.com — which is exactly what it did until this was fixed.
+            # deliver_webhook_with_retry is called directly so the graded production
+            # entry point is visible in the test body rather than behind a harness alias.
+            with WebhookEnv() as env:
+                env.set_http_status(status_code, "Unauthorized" if status_code == 401 else "Forbidden")
 
-            with (
-                patch("src.core.webhook_delivery.time.sleep"),
-                patch("requests.post") as mock_post,
-            ):
-                mock_response = MagicMock()
-                mock_response.status_code = status_code
-                mock_response.text = "Unauthorized" if status_code == 401 else "Forbidden"
-                mock_post.return_value = mock_response
+                success, result = deliver_webhook_with_retry(
+                    WHDelivery(
+                        webhook_url=env.webhook_url,
+                        payload={"test": "data"},
+                        headers={"Content-Type": "application/json"},
+                        max_retries=3,
+                        timeout=10,
+                    )
+                )
 
-                success, result = deliver_webhook_with_retry(delivery)
+                assert env.delivery_attempts == 1
 
             assert success is False, f"Expected failure for {status_code}"
             assert result["status"] == "failed"

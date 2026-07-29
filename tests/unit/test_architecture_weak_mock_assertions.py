@@ -221,7 +221,6 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/harness/test_harness_delivery_poll.py", "test_pricing_options"),
     ("tests/integration/test_auth_header_propagation.py", "test_auth_header_used_in_actual_request"),
     ("tests/integration/test_delivery_poll_behavioral.py", "test_adapter_failure_writes_audit_log"),
-    ("tests/integration/test_delivery_webhook_behavioral.py", "test_ssrf_validation_records_failure_metrics"),
     ("tests/integration/test_gam_tenant_setup.py", "test_admin_ui_network_detection_endpoint"),
 }
 
