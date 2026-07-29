@@ -79,10 +79,6 @@ Changelog = "https://github.com/prebid/salesagent/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
-    # Provides the `ast-grep` binary the ast-grep-bdd-guards pre-push hook shells
-    # out to (language: system). Without it the hook passes locally for whoever
-    # hand-installed ast-grep and fails in CI, where nothing installed it (#1600).
-    "ast-grep-cli>=0.41.1",
     "asgi-lifespan>=2.1.0",
     "factory-boy>=3.3.0",
     "mypy>=1.18.2",

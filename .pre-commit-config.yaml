@@ -107,14 +107,6 @@ repos:
         pass_filenames: true
         stages: [pre-push]
 
-      - id: ast-grep-bdd-guards
-        name: ast-grep BDD step guards (scaffold — no rules yet)
-        entry: ast-grep scan
-        language: system
-        files: '^tests/bdd/steps/.*\.py$'
-        pass_filenames: false
-        stages: [pre-push]
-
       - id: check-migration-completeness
         name: Check migration completeness (upgrade + downgrade)
         entry: uv run python .pre-commit-hooks/check_migration_completeness.py
