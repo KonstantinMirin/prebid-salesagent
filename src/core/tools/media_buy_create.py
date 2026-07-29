@@ -2229,7 +2229,9 @@ async def _create_media_buy_impl(
                 computed_start_time = computed_start_time.replace(tzinfo=UTC)
 
             if computed_start_time < now:
-                error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
+                # req.start_time is a StartTiming RootModel — interpolating it renders
+                # the repr (root=...); the buyer must see the value.
+                error_msg = f"Invalid start time: {computed_start_time}. Start time cannot be in the past."
                 raise AdCPInvalidRequestError(
                     error_msg,
                     suggestion="Use a future datetime or 'asap' for immediate start.",
@@ -2247,7 +2249,11 @@ async def _create_media_buy_impl(
             computed_end_time = computed_end_time.replace(tzinfo=UTC)
 
         if computed_end_time <= computed_start_time:
-            error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
+            # computed_* are the unwrapped, tz-normalized values; req.start_time is a
+            # StartTiming RootModel whose interpolation would render root=... instead.
+            error_msg = (
+                f"Invalid time range: end time ({computed_end_time}) must be after start time ({computed_start_time})."
+            )
             raise AdCPInvalidRequestError(
                 error_msg,
                 suggestion="Set end_time to a datetime after start_time.",
