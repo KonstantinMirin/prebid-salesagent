@@ -38,7 +38,7 @@
 # (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
 # --- uc004 invalid-input validation — accepted by live server (3) ---
-# GRADUATED 2 of the original 5 (salesagent-bhhz, in-network innet_280726_1823): the owner-mismatch BOUNDARY
+# GRADUATED 2 of the original 5 (build_rest_body fix, #1600; in-network innet_280726_1823): the owner-mismatch BOUNDARY
 # row and the out-of-enum sampling row. The live server was never given the chance to reject them —
 # the harness build_rest_body DROPPED raw field kwargs, so `ownership` and `sampling_method` never
 # reached the wire and a 200 came back. With the drop removed both are rejected and both XPASSed
@@ -66,7 +66,7 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_bou
 # --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---
 # Was: valid account rows referenced acc_acme_001 / acme-corp.com and no uc004
 # step seeded them -> honest ACCOUNT_NOT_FOUND. #1417's seeded-account Given
-# (salesagent-jr5b) now provisions the referenced accounts and the harness
+# now provisions the referenced accounts and the harness
 # realizes the seeding against the server DB; both rows XPASSed in-network
 # (innet_140726_1516) and are retired with the boundary siblings.
 
@@ -95,11 +95,11 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_bou
 # nodeid ledger (same mechanism as the other webhook-internal e2e scenarios).
 
 # --- uc004 rows unmasked by the build_rest_body fix (9) ---
-# Added innet_280726_1823 (salesagent-bhhz). These are NOT new regressions: every one of them was passing only
+# Added innet_280726_1823 (build_rest_body fix, #1600). These are NOT new regressions: every one of them was passing only
 # because the harness dropped the field before it reached the server, so the REST leg asserted
 # against a response to a payload it never sent. Two distinct causes, both already ticketed:
 #
-# sampling_method (6) + ownership (1) — salesagent-ex8m. The steps dispatch request fields named
+# sampling_method (6) + ownership (1) — #1756. The steps dispatch request fields named
 #   `sampling_method` and `ownership`. NEITHER EXISTS: not in GetMediaBuyDeliveryRequest, not in
 #   GetMediaBuyDeliveryBody, and nowhere in the pinned adcp v3.1.1 tree
 #   (`git grep sampling_method v3.1.1` returns nothing). The server now correctly answers
@@ -107,10 +107,10 @@ tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_bou
 #   are already ledgered in conftest; these are the e2e_rest twins. Retiring them means reconciling
 #   the generated scenario upstream, NOT implementing a non-spec field.
 #
-# daily_breakdown (2) — salesagent-76vn. media_buy_delivery.py:549 sets daily_breakdown=None
+# daily_breakdown (2) — #1711. media_buy_delivery.py:549 sets daily_breakdown=None
 #   ("not calculated in this implementation"), so include_package_daily_breakdown=true returns 200
 #   with no breakdown. The oracle previously read `daily`/`by_day` — field names that do not exist —
-#   behind a presence guard, so it could not fail; salesagent-oz4j made it derive its expectation
+#   behind a presence guard, so it could not fail; #1751 made it derive its expectation
 #   from the dispatched request. Retiring these means implementing the breakdown.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-random-random-valid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-stratified-stratified-valid]
@@ -157,7 +157,8 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
 # UC-004 set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
 # injected cross-principal creatives — none visible to the separate HTTP server.
-# Ledger: salesagent-5p68 / e2e_rest retirement epic salesagent-rlgl.
+# Ledger: #1739 (disposition: realize the setup or declare E2EUnsupportedSetup);
+# e2e_rest ledger retirement: #1418.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]
