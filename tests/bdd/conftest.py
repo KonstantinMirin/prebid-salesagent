@@ -1301,7 +1301,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            # NEWLY ROUTED (GH #1751, 2026-07-28) — only the explicit-true rows.
+            # NEWLY ROUTED (2026-07-28) — only the explicit-true rows.
+            # THE GAP that retires these: GH #1776 (include_package_daily_breakdown accepted and
+            # never honoured). GH #1751 is the vacuous-oracle defect CLASS that exposed it, and
+            # GH #1319 item C5 is the strict-marker debt bucket they sit in — neither is the gap.
             # These rows were passing vacuously: `_assert_valid_content` read
             # `getattr(pkg, "daily") or getattr(pkg, "by_day")`, and NEITHER attribute exists on
             # adcp.types.ByPackageItem (the field is `daily_breakdown`), so its `if daily is not
@@ -1315,14 +1318,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"explicit_true"},
                 "include_package_daily_breakdown=true is accepted but never honoured: "
                 "media_buy_delivery.py:549 hardcodes daily_breakdown=None ('not calculated in this "
-                "implementation'), so no package carries a daily breakdown. Production gap.",
+                "implementation'), so no package carries a daily breakdown. Production gap: GH #1776.",
             ),
             (
                 "T-UC-004-boundary-daily-breakdown",
                 {"true (explicit)"},
                 "include_package_daily_breakdown=true is accepted but never honoured: "
                 "media_buy_delivery.py:549 hardcodes daily_breakdown=None ('not calculated in this "
-                "implementation'), so no package carries a daily breakdown. Production gap.",
+                "implementation'), so no package carries a daily breakdown. Production gap: GH #1776.",
             ),
             # GRADUATED (removed): T-UC-004-partition-attribution — ALL FIVE invalid rows.
             # The attribution_window reference asserts the wire envelope (error
