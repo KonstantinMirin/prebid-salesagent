@@ -244,6 +244,9 @@
         "sync_audience"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -269,6 +272,9 @@
         "sync_available_actions_creative"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_media_buys",
@@ -337,6 +343,9 @@
         "sync_accounts"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -358,6 +367,9 @@
         "sync_accounts"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -373,6 +385,9 @@
         "submitted_arm_response"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy"
@@ -395,6 +410,9 @@
         "verify_creative_persists_post_cancel"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products",
@@ -434,6 +452,14 @@
         "viewability_delivery"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-catalog-driven/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-non-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -463,6 +489,9 @@
         "verify_impaired"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -503,6 +532,9 @@
         "verify_cardinality_zero"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -530,6 +562,9 @@
         "sync_event_sources"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -555,6 +590,9 @@
         "sync_accounts"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -596,6 +634,9 @@
         "sync_plans"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/governance-aware-seller/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products",
@@ -614,6 +655,9 @@
         "sync_plans"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/governance-aware-seller/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products",
@@ -632,6 +676,11 @@
         "sync_plans"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/brand-rights/index.yaml",
+        "specialisms/governance-aware-seller/index.yaml",
+        "specialisms/signal-marketplace/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products",
@@ -656,6 +705,9 @@
         "sync_plans"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/governance-aware-seller/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products",
@@ -683,6 +735,9 @@
         "verify_replacement"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_media_buys",
@@ -708,6 +763,14 @@
         "update_unknown_package"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-catalog-driven/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-non-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products",
@@ -722,6 +785,13 @@
         "no_match_attempt"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-non-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products"
@@ -740,6 +810,13 @@
         "verify_create_persisted"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-non-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products",
@@ -774,6 +851,12 @@
         "reject_terms"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products"
@@ -802,6 +885,14 @@
         "verify_transition"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-catalog-driven/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-non-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_media_buys",
@@ -831,6 +922,9 @@
         "sync_two_creatives"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -863,6 +957,9 @@
         "sync_event_sources"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -889,6 +986,9 @@
         "sync_event_sources"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -923,6 +1023,9 @@
         "verify_signal_groups_echo"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -950,6 +1053,10 @@
         "unknown_proposal_references"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products"
@@ -973,6 +1080,10 @@
         "sync_accounts"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products"
@@ -994,6 +1105,10 @@
         "unknown_proposal_refine"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-proposal-mode/index.yaml"
+      ],
       "required_tools": [
         "create_media_buy",
         "get_products"
@@ -1085,6 +1200,9 @@
         "sync_accounts"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "specialisms/sales-non-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "comply_test_controller",
         "create_media_buy",
@@ -1129,6 +1247,12 @@
         "sync_accounts"
       ],
       "protocol": "media-buy",
+      "required_by": [
+        "protocols/media-buy/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-catalog-driven/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml"
+      ],
       "required_tools": [
         "get_products"
       ]
@@ -1339,6 +1463,11 @@
         "sync_governance",
         "sync_plans"
       ],
+      "required_by": [
+        "specialisms/brand-rights/index.yaml",
+        "specialisms/governance-aware-seller/index.yaml",
+        "specialisms/signal-marketplace/index.yaml"
+      ],
       "required_tools": [
         "acquire_rights",
         "get_rights",
@@ -1529,6 +1658,14 @@
         "multi_agent_rejected",
         "sync_accounts",
         "sync_governance_two_agents"
+      ],
+      "required_by": [
+        "specialisms/governance-aware-seller/index.yaml",
+        "specialisms/sales-broadcast-tv/index.yaml",
+        "specialisms/sales-catalog-driven/index.yaml",
+        "specialisms/sales-guaranteed/index.yaml",
+        "specialisms/sales-non-guaranteed/index.yaml",
+        "specialisms/sales-social/index.yaml"
       ],
       "required_tools": [
         "sync_governance"
@@ -1810,6 +1947,11 @@
         "sync_accounts",
         "sync_governance",
         "sync_plans"
+      ],
+      "required_by": [
+        "specialisms/brand-rights/index.yaml",
+        "specialisms/governance-aware-seller/index.yaml",
+        "specialisms/signal-marketplace/index.yaml"
       ],
       "required_tools": [
         "activate_signal",

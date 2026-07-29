@@ -51,6 +51,19 @@ def build() -> dict[str, object]:
     if not dist.is_dir():
         raise SystemExit(f"pinned compliance tree not found: {dist}\nIs ~/projects/adcp cloned and current?")
 
+    # Which index.yaml pulls each scenario in. A scenario's directory does NOT
+    # determine its gate: governance_conditions sits under protocols/media-buy/
+    # but is required only by specialisms we may not declare.
+    required_by: dict[str, list[str]] = {}
+    for index in sorted(dist.rglob("index.yaml")):
+        rel_index = str(index.relative_to(dist))
+        if rel_index.startswith("domains/"):
+            continue
+        block = re.search(r"^requires_scenarios:\n((?:\s+-\s+\S+\n)+)", index.read_text("utf-8"), re.M)
+        if block:
+            for line in block.group(1).splitlines():
+                required_by.setdefault(line.strip().lstrip("- ").split("/")[-1], []).append(rel_index)
+
     storyboards: dict[str, dict[str, object]] = {}
     for yaml_file in sorted(dist.rglob("*.yaml")):
         rel = str(yaml_file.relative_to(dist))
@@ -63,6 +76,8 @@ def build() -> dict[str, object]:
             entry["requires_capability"] = {"path": capability.group(1), "equals": capability.group(2)}
         if tools := TOOLS_RE.search(text):
             entry["required_tools"] = sorted(line.strip().lstrip("- ") for line in tools.group(1).splitlines())
+        if owners := required_by.get(yaml_file.stem):
+            entry["required_by"] = sorted(owners)
         if rel.startswith("specialisms/"):
             entry["specialism"] = rel.split("/")[1]
         elif rel.startswith("protocols/"):

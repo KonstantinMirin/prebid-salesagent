@@ -102,6 +102,16 @@ def _declared() -> tuple[set[str], set[str]]:
     return specialisms, protocols
 
 
+def _index_reachable(rel_index: str, specialisms: set[str], protocols: set[str]) -> bool:
+    """Can we reach the index that pulls a scenario in, given what we declare?"""
+    parts = rel_index.split("/")
+    if parts[0] == "specialisms":
+        return parts[1] in specialisms
+    if parts[0] == "protocols":
+        return parts[1] in protocols
+    return True
+
+
 def _tagged_scenarios() -> list[tuple[str, str, str]]:
     """(identifier, feature name, comment block) for every @storyboard-v3.1 scenario."""
     found: list[tuple[str, str, str]] = []
@@ -145,6 +155,15 @@ def _violations() -> dict[str, str]:
         entry = storyboards.get(rel)
         if entry is None:
             bad[ident] = f"{feature}: cited storyboard {rel!r} does not exist at {version}"
+            continue
+
+        # Reachability before tier: a scenario's directory does not determine its
+        # gate. `governance_conditions` sits under `protocols/media-buy/scenarios/`
+        # but is pulled in only by specialisms we do not declare, so a path-prefix
+        # check reports it ungated.
+        owners: list[str] = entry.get("required_by", [])
+        if owners and not any(_index_reachable(o, specialisms, protocols) for o in owners):
+            bad[ident] = f"{feature}: only required by {owners} — all behind gates we do not declare"
             continue
 
         if (specialism := entry.get("specialism")) and specialism not in specialisms:

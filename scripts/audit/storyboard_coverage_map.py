@@ -14,9 +14,19 @@ A storyboard is on our path unless a gate the spec defines excludes it:
   * ``required_tools:``       — lenient any-of; only advertising NONE of the
                                 listed tools triggers a coverage-gap skip
 
-``requires_scenarios`` is NOT a whitelist. The storyboard schema defines it as
-composition — "scenario IDs that must pass alongside this storyboard" — so a
-scenario absent from it is still graded on its own applicability.
+``requires_scenarios`` plays exactly one role, and it is easy to get backwards.
+It is NOT a whitelist of what applies — the schema defines it as composition,
+"scenario IDs that must pass alongside this storyboard" — so a scenario absent
+from every list is still graded on its own applicability. But it IS the
+reachability edge: when a scenario appears ONLY in lists belonging to gates we
+fail, nothing can pull it in, and its own directory is irrelevant.
+`governance_conditions` lives under `protocols/media-buy/scenarios/` yet is
+required only by two specialisms we do not declare.
+
+UNRESOLVED: whether a scenario in no ``requires_scenarios`` list at all is
+reachable standalone on its own ``required_tools``, or is simply orphaned. This
+classifier assumes the former. ``provenance_enforcement`` is the case that
+decides it, and settling it needs the compliance runner's source.
 
 Uncovered on-path storyboards are conformance gaps with no test. Covered
 off-path scenarios are tests claiming a grading that does not apply to us.
@@ -73,7 +83,45 @@ ADVERTISED_TOOLS = {
 }
 
 
-def classify(rel: str, text: str, decl: dict[str, set[str]], tools: set[str]) -> tuple[str, str]:
+def requiring_indexes(dist: Path) -> dict[str, list[str]]:
+    """Map each scenario id to the index.yaml files that pull it in.
+
+    A scenario's directory does NOT determine its gate. `governance_conditions`
+    sits under `protocols/media-buy/scenarios/` but is required only by
+    `specialisms/governance-aware-seller` and `-spend-authority`, so classifying
+    it by path prefix reports it ungated when it is specialism-gated.
+    """
+    required_by: dict[str, list[str]] = {}
+    for index in sorted(dist.rglob("index.yaml")):
+        rel_index = str(index.relative_to(dist))
+        if rel_index.startswith("domains/"):
+            continue
+        block = re.search(r"^requires_scenarios:\n((?:\s+-\s+\S+\n)+)", index.read_text("utf-8"), re.M)
+        if not block:
+            continue
+        for line in block.group(1).splitlines():
+            scenario_id = line.strip().lstrip("- ").split("/")[-1]
+            required_by.setdefault(scenario_id, []).append(rel_index)
+    return required_by
+
+
+def index_is_satisfiable(rel_index: str, decl: dict[str, set[str]]) -> bool:
+    """Can we reach this index at all, given what we declare?"""
+    tier, name = rel_index.split("/")[0], rel_index.split("/")[1]
+    if tier == "specialisms":
+        return name in decl["specialisms"]
+    if tier == "protocols":
+        return name in decl["protocols"]
+    return True
+
+
+def classify(
+    rel: str,
+    text: str,
+    decl: dict[str, set[str]],
+    tools: set[str],
+    required_by: dict[str, list[str]] | None = None,
+) -> tuple[str, str]:
     """Return (status, reason) for one storyboard file.
 
     Applicability follows the gates the storyboard schema actually defines:
@@ -90,6 +138,12 @@ def classify(rel: str, text: str, decl: dict[str, set[str]], tools: set[str]) ->
     """
     if rel.startswith("universal/"):
         return "ON-PATH", "universal — applies to every agent"
+
+    # Reachability first: if every index that pulls this scenario in is behind a
+    # gate we fail, the scenario is unreachable regardless of its own directory.
+    owners = (required_by or {}).get(Path(rel).stem, [])
+    if owners and not any(index_is_satisfiable(o, decl) for o in owners):
+        return "OFF-PATH", f"only required by {sorted(owners)} — all behind gates we do not declare"
 
     def tool_gate() -> tuple[str, str] | None:
         block = re.search(r"^required_tools:\n((?:\s+-\s+\S+\n)+)", text, re.M)
@@ -155,6 +209,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
 
     decl = declared(repo)
     claims = covered_storyboards(repo)
+    required_by = requiring_indexes(dist)
 
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -166,7 +221,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         stem = storyboard_key(rel)
         if rel.startswith(("test-kits/", "test-vectors/")) or stem == "storyboard-schema":
             continue
-        status, reason = classify(rel, yaml_file.read_text("utf-8"), decl, ADVERTISED_TOOLS)
+        status, reason = classify(rel, yaml_file.read_text("utf-8"), decl, ADVERTISED_TOOLS, required_by)
         key = f"{rel}"
         if key in seen:
             continue

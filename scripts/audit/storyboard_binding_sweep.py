@@ -140,14 +140,19 @@ def phase_is_graded(text: str, phase: str) -> str | None:
     """
     if not phase:
         return None
-    if phase not in text:
+    anchor = re.search(rf"^(?P<indent>\s*)-\s*id:\s*{re.escape(phase)}\s*$", text, re.M)
+    if anchor is None:
         return "absent"
-    # Walk from the phase mention to the next step boundary, looking for a check:.
-    start = text.index(phase)
-    window = text[start : start + 6000]
-    next_step = window.find("\n      - id: ", 1)
-    if next_step > 0:
-        window = window[:next_step]
+
+    # Window runs to the next sibling id at the SAME indent, not to the next
+    # deeper one. Phases sit two spaces in and their steps six; truncating at
+    # the first six-space `- id:` stopped at the phase's first step and never
+    # reached `validations:`, reporting graded phases as prose.
+    indent = len(anchor.group("indent"))
+    sibling = re.compile(rf"^\s{{0,{indent}}}-\s*id:\s*\S+\s*$", re.M)
+    rest = text[anchor.end() :]
+    following = sibling.search(rest)
+    window = rest[: following.start()] if following else rest
     return "graded" if re.search(r"^\s*-\s*check:", window, re.M) else "prose"
 
 

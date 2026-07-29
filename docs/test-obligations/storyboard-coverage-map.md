@@ -3,9 +3,9 @@
 Declared protocols: `media-buy` · specialisms: `sales-non-guaranteed`
 
 - storyboards examined: **123**
-- on our conformance path: **72**
+- on our conformance path: **70**
 - **on-path with NO scenario: 58**
-- off-path/gated but claimed by a scenario: **8**
+- off-path/gated but claimed by a scenario: **10**
 
 ## On our conformance path
 
@@ -25,8 +25,6 @@ Declared protocols: `media-buy` · specialisms: `sales-non-guaranteed`
 | `protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml` | protocol 'media-buy', required_tools advertised | **— NOT COVERED —** |
 | `protocols/media-buy/scenarios/frequency_cap_enforcement.yaml` | protocol 'media-buy', required_tools advertised | **— NOT COVERED —** |
 | `protocols/media-buy/scenarios/get_products_async.yaml` | protocol 'media-buy', required_tools advertised | **— NOT COVERED —** |
-| `protocols/media-buy/scenarios/governance_approved.yaml` | protocol 'media-buy', required_tools advertised | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved` |
-| `protocols/media-buy/scenarios/governance_conditions.yaml` | protocol 'media-buy', required_tools advertised | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-with-conditions` |
 | `protocols/media-buy/scenarios/invalid_transitions.yaml` | protocol 'media-buy', required_tools advertised | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` |
 | `protocols/media-buy/scenarios/inventory_list_no_match.yaml` | protocol 'media-buy', required_tools advertised | `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-denied-recovery`, `T-UC-002-storyboard-governance-with-conditions`, `T-UC-002-storyboard-inventory-list-no-match` |
 | `protocols/media-buy/scenarios/inventory_list_targeting.yaml` | protocol 'media-buy', required_tools advertised | `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-denied-recovery`, `T-UC-002-storyboard-inventory-list-no-match`, `T-UC-002-storyboard-inventory-list-targeting-parity` |
@@ -89,11 +87,13 @@ Declared protocols: `media-buy` · specialisms: `sales-non-guaranteed`
 | Storyboard | Why off path | Claimed by |
 |---|---|---|
 | `protocols/creative/index.yaml` | protocol 'creative' not declared | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-provenance-claim-contradicted`, `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-018-storyboard-filter-by-format-id-object`, `T-UC-018-storyboard-list-all-creatives-after-sync` |
-| `protocols/media-buy/scenarios/governance_denied.yaml` | requires_capability media_buy.governance_aware == true | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-with-conditions` |
-| `protocols/media-buy/scenarios/governance_denied_recovery.yaml` | requires_capability media_buy.governance_aware == true | `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-denied-recovery`, `T-UC-002-storyboard-governance-with-conditions` |
+| `protocols/media-buy/scenarios/governance_approved.yaml` | only required by ['specialisms/governance-aware-seller/index.yaml'] — all behind gates we do not declare | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved` |
+| `protocols/media-buy/scenarios/governance_conditions.yaml` | only required by ['specialisms/governance-aware-seller/index.yaml'] — all behind gates we do not declare | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-with-conditions` |
+| `protocols/media-buy/scenarios/governance_denied.yaml` | only required by ['specialisms/brand-rights/index.yaml', 'specialisms/governance-aware-seller/index.yaml', 'specialisms/signal-marketplace/index.yaml'] — all behind gates we do not declare | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-with-conditions` |
+| `protocols/media-buy/scenarios/governance_denied_recovery.yaml` | only required by ['specialisms/governance-aware-seller/index.yaml'] — all behind gates we do not declare | `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-denied-recovery`, `T-UC-002-storyboard-governance-with-conditions` |
 | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | requires_capability media_buy.creative_approval_mode == auto_approve | `T-UC-002-storyboard-inventory-list-no-match`, `T-UC-002-storyboard-inventory-list-targeting-parity`, `T-UC-002-storyboard-measurement-terms-rejected`, `T-UC-002-storyboard-pending-creatives-state-transition` |
-| `protocols/media-buy/scenarios/proposal_finalize.yaml` | requires_capability media_buy.supports_proposals == true | `T-UC-001-storyboard-finalize-uses-refine-vocabulary`, `T-UC-001-storyboard-proposal-finalize-action` |
+| `protocols/media-buy/scenarios/proposal_finalize.yaml` | only required by ['specialisms/sales-guaranteed/index.yaml', 'specialisms/sales-proposal-mode/index.yaml'] — all behind gates we do not declare | `T-UC-001-storyboard-finalize-uses-refine-vocabulary`, `T-UC-001-storyboard-proposal-finalize-action` |
 | `protocols/signals/index.yaml` | protocol 'signals' not declared | `T-UC-008-storyboard-activate-agent-destination`, `T-UC-008-storyboard-baseline-end-to-end` |
-| `specialisms/brand-rights/scenarios/governance_denied.yaml` | specialism 'brand-rights' not declared | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-with-conditions` |
-| `specialisms/signal-marketplace/scenarios/governance_denied.yaml` | specialism 'signal-marketplace' not declared | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-with-conditions` |
+| `specialisms/brand-rights/scenarios/governance_denied.yaml` | only required by ['specialisms/brand-rights/index.yaml', 'specialisms/governance-aware-seller/index.yaml', 'specialisms/signal-marketplace/index.yaml'] — all behind gates we do not declare | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-with-conditions` |
+| `specialisms/signal-marketplace/scenarios/governance_denied.yaml` | only required by ['specialisms/brand-rights/index.yaml', 'specialisms/governance-aware-seller/index.yaml', 'specialisms/signal-marketplace/index.yaml'] — all behind gates we do not declare | `T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip`, `T-UC-002-storyboard-governance-approved`, `T-UC-002-storyboard-governance-denied`, `T-UC-002-storyboard-governance-with-conditions` |
 
