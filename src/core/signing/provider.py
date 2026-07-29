@@ -15,16 +15,47 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from adcp.signing import InMemorySigningProvider, load_private_key_pem, pem_to_adcp_jwk
 from adcp.signing.crypto import PrivateKey
-from adcp.signing.provider import SigningProvider
+from adcp.signing.provider import SigningAlgorithm, SigningProvider
 
 from src.core.database.models import SigningKey
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.exceptions import AdCPConfigurationError
 from src.core.signing.algorithms import REQUEST_SIGNING, narrow_alg, narrow_purpose
+
+
+class SigningMaterial(NamedTuple):
+    """The loaded private half of one signing key, plus how to name it on the wire.
+
+    Two consumers need the SAME three values and must not resolve them twice:
+    :func:`resolve_signing_provider` binds them into an
+    ``InMemorySigningProvider`` for the RFC 9421 REQUEST signer, and C1's
+    outbound webhook boundary (``src/core/signing/webhook_sender_factory``)
+    hands them to ``adcp.webhooks.WebhookSender``, whose RFC 9421 constructor
+    takes a raw ``PrivateKey`` rather than a provider.
+
+    Splitting them out is what keeps the PEM read, the passphrase and the
+    published-JWK tripwire in ONE place. The alternative — reaching into
+    ``InMemorySigningProvider._private_key`` — reads private SDK state, and a
+    second PEM loader beside this one is how the tripwire ends up bypassed on
+    one of the two paths.
+    """
+
+    private_key: PrivateKey
+    kid: str
+    alg: SigningAlgorithm
+
+
+class _CachedKey(NamedTuple):
+    """One cache entry: when it expires, and both views of the same key."""
+
+    expires_at: float
+    material: SigningMaterial
+    provider: SigningProvider
+
 
 # The cache holds the expensive, PURELY DERIVED part: PEM read + key parse +
 # tripwire. It deliberately does NOT cache the DB read — resolution keys on
@@ -37,7 +68,7 @@ from src.core.signing.algorithms import REQUEST_SIGNING, narrow_alg, narrow_purp
 # bounds the other drift this cache can hide — a PEM rotated behind an unchanged
 # ``private_key_ref``, which the tripwire only sees on a cache miss.
 _CACHE_TTL_SECONDS = 60.0
-_provider_cache: dict[tuple[str, str], tuple[float, SigningProvider]] = {}
+_provider_cache: dict[tuple[str, str], _CachedKey] = {}
 
 
 class _RefResolver(Protocol):
@@ -206,7 +237,7 @@ def _select_row(
     return row
 
 
-def _build_provider(row: SigningKey) -> SigningProvider:
+def _build_material(row: SigningKey) -> SigningMaterial:
     """Load the private half behind *row* and bind it to the row's published JWK.
 
     The tripwire is :func:`assert_pem_publishes_jwk` — the same function
@@ -227,15 +258,51 @@ def _build_provider(row: SigningKey) -> SigningProvider:
         passphrase=passphrase,
     )
 
-    return InMemorySigningProvider(
-        private_key=private_key,
-        key_id=row.kid,
-        algorithm=narrow_alg(row.alg),
+    return SigningMaterial(private_key=private_key, kid=row.kid, alg=narrow_alg(row.alg))
+
+
+def _resolve_cached(
+    repo: SigningKeyRepository,
+    *,
+    tenant_id: str,
+    purpose: str,
+    now: datetime,
+    kid: str | None,
+) -> _CachedKey:
+    """Row -> ref -> PEM -> tripwire -> both views, memoized for the TTL.
+
+    ONE resolution path for both public entry points below: a second one would
+    read the PEM twice per delivery and — worse — could apply the tripwire
+    differently on the two paths.
+    """
+    row = _select_row(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid)
+
+    cache_key = (tenant_id, row.kid)
+    cached = _provider_cache.get(cache_key)
+    if cached is not None and time.monotonic() < cached.expires_at:
+        return cached
+
+    material = _build_material(row)
+    entry = _CachedKey(
+        expires_at=time.monotonic() + _CACHE_TTL_SECONDS,
+        material=material,
+        provider=InMemorySigningProvider(
+            private_key=material.private_key,
+            key_id=material.kid,
+            algorithm=material.alg,
+        ),
     )
+    # Cache success, never errors — a transient resolution failure must not pin
+    # itself for the TTL.
+    _provider_cache[cache_key] = entry
+    return entry
 
 
-# FIXME(#1291): reached only from tests today — the outbound webhook signer (C1) is
-# its production caller and has not landed yet. Allowlisted in
+# FIXME(#1291): still reached only from tests. C1 (the outbound webhook boundary)
+# landed and consumes :func:`resolve_signing_material` instead, because
+# ``adcp.webhooks.WebhookSender``'s RFC 9421 constructor takes a raw ``PrivateKey``
+# rather than a ``SigningProvider``. Nothing in production needs the provider FORM
+# yet; retiring it (or lighting it up) is tracked on #1291. Allowlisted in
 # tests/unit/test_architecture_no_dark_signing_primitives.py; remove both together.
 def resolve_signing_provider(
     repo: SigningKeyRepository,
@@ -256,18 +323,30 @@ def resolve_signing_provider(
         AdCPConfigurationError: no key resolves, the key is revoked, its
             reference scheme is forbidden, or the tripwire fires.
     """
-    row = _select_row(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid)
+    return _resolve_cached(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid).provider
 
-    cache_key = (tenant_id, row.kid)
-    cached = _provider_cache.get(cache_key)
-    if cached is not None and time.monotonic() < cached[0]:
-        return cached[1]
 
-    provider = _build_provider(row)
-    # Cache success, never errors — a transient resolution failure must not pin
-    # itself for the TTL.
-    _provider_cache[cache_key] = (time.monotonic() + _CACHE_TTL_SECONDS, provider)
-    return provider
+def resolve_signing_material(
+    repo: SigningKeyRepository,
+    *,
+    tenant_id: str,
+    purpose: str = REQUEST_SIGNING,
+    now: datetime,
+    kid: str | None = None,
+) -> SigningMaterial:
+    """Return the loaded key *tenant_id* signs *purpose* with at *now*.
+
+    Same resolution, same cache and the same published-JWK tripwire as
+    :func:`resolve_signing_provider` — only the projection differs. This is the
+    form ``adcp.webhooks.WebhookSender`` needs (``private_key`` / ``key_id`` /
+    ``alg``), so C1's outbound webhook boundary calls it rather than unwrapping a
+    provider's private attribute.
+
+    Raises:
+        AdCPConfigurationError: no key resolves, the key is revoked, its
+            reference scheme is forbidden, or the tripwire fires.
+    """
+    return _resolve_cached(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid).material
 
 
 def clear_signing_provider_cache() -> None:

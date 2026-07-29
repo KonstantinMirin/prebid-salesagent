@@ -39,13 +39,26 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
+def _sent_payload(call: Any) -> dict[str, Any]:
+    """The body of one captured webhook POST, parsed from the BYTES that went out.
+
+    ``env.mock["post"]`` is the socket (``tests.helpers.webhook_wire``), so the
+    body arrives as ``content`` — the exact bytes the signature covers — rather
+    than as the dict a client was asked to serialize. Reading the bytes is what
+    lets a signature assertion be about what the receiver got (#1441).
+    """
+    content = call[1].get("content")
+    if not content:
+        return {}
+    return json.loads(content)
+
+
 def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
     """Extract the JSON payload from the most recent webhook POST call."""
     mock_post = ctx["env"].mock["post"]
     assert mock_post.called, "No webhook POST was made"
-    call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
-    payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
-    assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
+    payload = _sent_payload(mock_post.call_args_list[-1])
+    assert payload, f"Webhook POST had no JSON payload: {mock_post.call_args_list[-1]}"
     return payload
 
 
@@ -347,9 +360,12 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
 def _auth_scheme_to_db_fields(scheme: str | None, ctx: dict) -> dict[str, Any]:
     """Translate a Gherkin auth scheme to the PushNotificationConfig DB columns.
 
-    The ORM model exposes ``authentication_type`` (``"bearer"`` / ``"basic"`` /
-    ``None``) plus a separate ``webhook_secret`` column for HMAC. Each scheme
-    populates a different combination.
+    Every scheme lands on the SAME pair of columns — ``authentication_type`` plus
+    ``authentication_token`` — because the buyer's ``authentication`` block is the
+    one selector the spec defines (security.mdx @ v3.1.1 :1424, "Mode selection is
+    a switch, not both"). The HMAC arm used to seed a separate ``webhook_secret``
+    column instead, which production never wrote and which #1291 C1 retired: a
+    second selector is precisely the "signed two ways" shape :1425 forbids.
     """
     fields: dict[str, Any] = {}
     if scheme is None:
@@ -358,7 +374,8 @@ def _auth_scheme_to_db_fields(scheme: str | None, ctx: dict) -> dict[str, Any]:
     if normalized in {"hmac-sha256", "hmac_sha256", "hmac"}:
         secret = ctx.get("webhook_secret")
         if secret:
-            fields["webhook_secret"] = secret
+            fields["authentication_type"] = "HMAC-SHA256"
+            fields["authentication_token"] = secret
     elif normalized == "bearer":
         token = ctx.get("webhook_bearer_token")
         if token:
@@ -1612,7 +1629,7 @@ def then_sequence_ascending(ctx: dict) -> None:
     """Assert sequence numbers are strictly increasing across consecutive POST calls."""
     calls = ctx["env"].mock["post"].call_args_list
     assert len(calls) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(calls)}"
-    seq_nums = [call[1].get("json", {}).get("sequence_number") for call in calls]
+    seq_nums = [_sent_payload(call).get("sequence_number") for call in calls]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
         assert seq_nums[i] > seq_nums[i - 1], (
@@ -1625,7 +1642,7 @@ def then_first_sequence(ctx: dict) -> None:
     """Assert first webhook POST has sequence_number >= 1."""
     calls = ctx["env"].mock["post"].call_args_list
     assert calls, "No webhook POSTs were made"
-    first_payload = calls[0][1].get("json", {})
+    first_payload = _sent_payload(calls[0])
     seq = first_payload.get("sequence_number")
     assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
@@ -1910,37 +1927,47 @@ def then_hmac_header(ctx: dict, header: str) -> None:
     assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
 
 
-@then(parsers.parse('the request should include header "{header}" with ISO timestamp'))
+@then(parsers.parse('the request should include header "{header}" with a UNIX timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
-    """Assert timestamp header is present and contains a valid ISO 8601 datetime."""
-    from datetime import datetime as _dt
+    """Assert the replay-binding timestamp is the AdCP-legacy UNIX seconds form.
 
+    ``adcp.signing.webhook_hmac`` — the verifier a buyer runs against this scheme —
+    signs and checks ``f"{timestamp}.{body}"`` with ``timestamp = str(int(time.time()))``
+    and applies its skew window to that integer. An ISO string (which this scenario
+    asked for before #1291 C1 routed the sender through the SDK) is not accepted by
+    any conformant legacy verifier, so the seconds form is the contract.
+    """
     headers = _get_last_webhook_headers(ctx)
     assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
     value = headers[header]
-    try:
-        _dt.fromisoformat(value)
-    except (ValueError, TypeError) as exc:
-        raise AssertionError(f"Header {header!r} is not a valid ISO 8601 timestamp: {value!r}") from exc
+    assert value.isdigit(), f"Header {header!r} is not a UNIX-seconds timestamp: {value!r}"
+    # Sanity: seconds, not milliseconds — a ms value would silently blow every
+    # receiver's skew window.
+    assert 1_000_000_000 < int(value) < 10_000_000_000, f"Header {header!r} is not in seconds: {value!r}"
 
 
 @then('the HMAC should be computed over "timestamp.payload" concatenation')
 def then_hmac_computation(ctx: dict) -> None:
-    """Assert HMAC signature is reproduced by signing timestamp.payload with the secret."""
+    """Assert the HMAC verifies over the BYTES the receiver got.
+
+    Recomputed over ``content`` rather than over a re-serialization of the parsed
+    payload, so this is canonicalization-agnostic AND able to fail when the bytes
+    signed are not the bytes sent (#1441) — the whole point of the obligation.
+    """
     import hashlib
     import hmac as hmac_lib
-    import json as json_lib
 
-    headers = _get_last_webhook_headers(ctx)
-    payload = _get_last_webhook_payload(ctx)
-    timestamp = headers.get("X-ADCP-Timestamp") or headers.get("X-Webhook-Timestamp", "")
-    raw_sig = headers.get("X-ADCP-Signature") or headers.get("X-Webhook-Signature", "")
+    env = ctx["env"]
+    call = env.mock["post"].call_args_list[-1]
+    headers = call[1].get("headers", {})
+    body: bytes = call[1].get("content") or b""
+    timestamp = headers.get("X-AdCP-Timestamp") or headers.get("X-Webhook-Timestamp", "")
+    raw_sig = headers.get("X-AdCP-Signature") or headers.get("X-Webhook-Signature", "")
     signature = raw_sig.removeprefix("sha256=")
     assert signature, "Expected HMAC signature header to be present and non-empty"
     signing_secret: str = ctx.get("webhook_secret", "")
     assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
-    payload_str = json_lib.dumps(payload, sort_keys=True, separators=(",", ":"))
-    message = f"{timestamp}.{payload_str}".encode()
+    message = f"{timestamp}.".encode() + body
     expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
     assert signature == expected, f"HMAC signature mismatch: got {signature!r}, expected {expected!r}"
 
@@ -2077,9 +2104,7 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
     real_id = _resolve_media_buy_id(ctx, mb_id)
     post_mock = env.mock["post"]
     # Collect all media_buy_ids that received webhook POSTs
-    posted_mb_ids = [
-        call[1].get("json", {}).get("media_buy_id") for call in post_mock.call_args_list if call[1].get("json")
-    ]
+    posted_mb_ids = [_sent_payload(call).get("media_buy_id") for call in post_mock.call_args_list]
     assert real_id not in posted_mb_ids, (
         f"Webhook POST was made for '{real_id}' but it should have been skipped "
         f"(no webhook configured). All posted IDs: {posted_mb_ids}"
@@ -3316,7 +3341,7 @@ def _get_webhook_payload(ctx: dict) -> dict:
     env = ctx["env"]
     call_args = env.mock["post"].call_args
     assert call_args is not None, "No POST call recorded"
-    return call_args.kwargs.get("json") or call_args[1].get("json", {})
+    return _sent_payload(call_args)
 
 
 _DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [

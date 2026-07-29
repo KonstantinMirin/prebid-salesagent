@@ -1,7 +1,11 @@
 """Enhanced webhook delivery service for AdCP with security and reliability features.
 
-This service implements the AdCP webhook specification from PR #86:
-- HMAC-SHA256 signature generation with X-ADCP-Signature header
+Authentication is NOT this module's concern: the receiver's own
+``PushNotificationConfig`` registration selects exactly one mode at the single
+signing boundary (``src.core.signing.webhook_sender_factory``, #1291 C1), which
+serializes, authenticates and POSTs one delivery as a single act.
+
+What this service owns:
 - Circuit breaker pattern (CLOSED/OPEN/HALF_OPEN states) for fault tolerance
 - Exponential backoff with jitter for retry logic
 - Replay attack prevention with 5-minute timestamp window
@@ -11,9 +15,6 @@ This service implements the AdCP webhook specification from PR #86:
 """
 
 import atexit
-import hashlib
-import hmac
-import json
 import logging
 import random
 import threading
@@ -25,6 +26,9 @@ from typing import Any
 
 import httpx
 from adcp import get_adcp_spec_version
+from adcp.webhooks import generate_webhook_idempotency_key
+
+from src.core.signing.webhook_sender_factory import deliver_adcp_webhook_sync
 
 logger = logging.getLogger(__name__)
 
@@ -305,37 +309,6 @@ class WebhookDeliveryService:
             )
             return False
 
-    def _generate_hmac_signature(self, payload: dict[str, Any], secret: str, timestamp: str) -> str:
-        """Generate HMAC-SHA256 signature for webhook payload.
-
-        Args:
-            payload: Webhook payload
-            secret: Webhook secret (min 32 characters)
-            timestamp: ISO format timestamp
-
-        Returns:
-            HMAC signature as hex string
-        """
-        # Create signature input: timestamp + json payload
-        payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        message = f"{timestamp}.{payload_str}"
-
-        # Generate HMAC-SHA256
-        signature = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-
-        return signature
-
-    def _verify_secret_strength(self, secret: str) -> bool:
-        """Verify webhook secret meets minimum strength requirements.
-
-        Args:
-            secret: Webhook secret
-
-        Returns:
-            True if secret is strong enough
-        """
-        return len(secret) >= 32
-
     def _send_webhook_enhanced(
         self,
         tenant_id: str,
@@ -360,8 +333,14 @@ class WebhookDeliveryService:
 
             from src.core.database.database_session import get_db_session
             from src.core.database.models import PushNotificationConfig
+            from src.core.database.repositories.signing_key import SigningKeyRepository
 
             with get_db_session() as db:
+                # The signing boundary needs the tenant's key material. Building the
+                # repository on THIS session (rather than opening a second one per
+                # delivery) is why ``_deliver_with_backoff`` runs inside this block.
+                signing_repo = SigningKeyRepository(db, tenant_id)
+
                 stmt = select(PushNotificationConfig).filter_by(
                     tenant_id=tenant_id, principal_id=principal_id, is_active=True
                 )
@@ -397,11 +376,18 @@ class WebhookDeliveryService:
                         logger.warning(f"⚠️ Circuit breaker OPEN for {config.url}, skipping webhook delivery")
                         continue
 
-                    # Add to queue (bounded)
+                    # Add to queue (bounded). ``tenant_id`` and the signing repository
+                    # ride on the entry because ``_deliver_with_backoff`` is reached
+                    # through ``endpoint_key`` alone, and splitting that composite
+                    # string back apart to recover a tenant id is not a data path.
                     webhook_data = {
                         "config": config,
                         "payload": delivery_payload,
                         "timestamp": datetime.now(UTC),
+                        "tenant_id": tenant_id,
+                        "signing_repo": signing_repo,
+                        # ONE key per distinct event, reused across its retries.
+                        "idempotency_key": generate_webhook_idempotency_key(),
                     }
 
                     if not queue.enqueue(webhook_data):
@@ -448,26 +434,12 @@ class WebhookDeliveryService:
 
         config = webhook_data["config"]
         payload = webhook_data["payload"]
-        timestamp = webhook_data["timestamp"].isoformat()
 
-        # Generate HMAC signature if webhook secret is configured
-        webhook_secret = getattr(config, "webhook_secret", None)
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
-            "X-ADCP-Timestamp": timestamp,  # For replay prevention
-        }
-
-        if webhook_secret:
-            if not self._verify_secret_strength(webhook_secret):
-                logger.warning(f"⚠️ Webhook secret for {config.url} is too weak (min 32 characters required)")
-            else:
-                signature = self._generate_hmac_signature(payload, webhook_secret, timestamp)
-                headers["X-ADCP-Signature"] = signature
-
-        # Add authentication
-        if config.authentication_type == "bearer" and config.authentication_token:
-            headers["Authorization"] = f"Bearer {config.authentication_token}"
+        # Authentication is NOT decided here — the receiver's registration selects
+        # exactly one mode at the single boundary (#1291 C1). What stays local is the
+        # one header this service adds for operator telemetry; ``Content-Type`` and
+        # every auth/signature header belong to the sender that serialized the body.
+        headers = {"User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)"}
 
         # Exponential backoff with jitter
         for attempt in range(max_retries):
@@ -479,33 +451,36 @@ class WebhookDeliveryService:
                     logger.debug(f"Retrying webhook delivery after {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(delay)
 
-                # Send webhook
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.post(
-                        config.url,
-                        json=payload,
-                        headers=headers,
-                    )
+                # Send webhook — serialize, authenticate and POST as one act, so the
+                # bytes signed are the bytes sent (#1441).
+                delivery = deliver_adcp_webhook_sync(
+                    url=config.url,
+                    payload=payload,
+                    idempotency_key=webhook_data["idempotency_key"],
+                    config=config,
+                    tenant_id=webhook_data["tenant_id"],
+                    repo=webhook_data["signing_repo"],
+                    extra_headers=headers,
+                )
 
-                    if 200 <= response.status_code < 300:
-                        logger.debug(f"Webhook delivered to {config.url} (status: {response.status_code})")
-                        circuit_breaker.record_success()
-                        return True
+                if 200 <= delivery.status_code < 300:
+                    logger.debug(f"Webhook delivered to {config.url} (status: {delivery.status_code})")
+                    circuit_breaker.record_success()
+                    return True
 
-                    # Client errors (4xx): do NOT retry — the request is invalid
-                    if 400 <= response.status_code < 500:
-                        logger.warning(
-                            f"Webhook delivery to {config.url} returned "
-                            f"client error {response.status_code}, will not retry"
-                        )
-                        circuit_breaker.record_failure()
-                        return False
-
+                # Client errors (4xx): do NOT retry — the request is invalid
+                if 400 <= delivery.status_code < 500:
                     logger.warning(
-                        f"Webhook delivery to {config.url} returned "
-                        f"status {response.status_code} "
-                        f"(attempt: {attempt + 1}/{max_retries})"
+                        f"Webhook delivery to {config.url} returned client error {delivery.status_code}, will not retry"
                     )
+                    circuit_breaker.record_failure()
+                    return False
+
+                logger.warning(
+                    f"Webhook delivery to {config.url} returned "
+                    f"status {delivery.status_code} "
+                    f"(attempt: {attempt + 1}/{max_retries})"
+                )
 
             except httpx.TimeoutException:
                 logger.warning(f"Webhook delivery to {config.url} timed out (attempt: {attempt + 1}/{max_retries})")

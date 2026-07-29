@@ -185,8 +185,12 @@ def test_get_approval_status_not_found(mock_db_session):
 def test_webhook_notification_sent_on_success():
     """Test webhook notification is sent when approval succeeds."""
     from src.services.order_approval_service import _send_approval_webhook
+    from tests.helpers.webhook_wire import capture_outbound_webhooks
 
-    with patch("src.services.order_approval_service.get_db_session") as mock_db, patch("httpx.Client") as mock_httpx:
+    with (
+        patch("src.services.order_approval_service.get_db_session") as mock_db,
+        capture_outbound_webhooks() as captured,
+    ):
         # Mock push notification config
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
@@ -203,13 +207,6 @@ def test_webhook_notification_sent_on_success():
         )
         mock_db_instance.scalars.return_value.first.return_value = mock_config
 
-        # Mock HTTP client
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client_instance = MagicMock()
-        mock_client_instance.post.return_value = mock_response
-        mock_httpx.return_value.__enter__.return_value = mock_client_instance
-
         # Send webhook
         _send_approval_webhook(
             webhook_url="https://example.com/webhook",
@@ -222,59 +219,41 @@ def test_webhook_notification_sent_on_success():
             attempts=3,
         )
 
-        # Verify HTTP POST was made
-        mock_client_instance.post.assert_called_once()
-        call_args = mock_client_instance.post.call_args
+        # Verify HTTP POST was made — graded on the bytes and headers that would
+        # have gone on the socket, not on a mock's call args.
+        assert len(captured) == 1
+        request = captured[0]
 
         # Check webhook payload
-        assert call_args[0][0] == "https://example.com/webhook"
-        payload = call_args[1]["json"]
+        assert request.url == "https://example.com/webhook"
+        payload = request.payload
         assert payload["event"] == "order_approval_update"
         assert payload["media_buy_id"] == "mb_123"
         assert payload["status"] == "approved"
         assert payload["order_id"] == "12345"
         assert payload["attempts"] == 3
 
-        # Check authentication header
-        headers = call_args[1]["headers"]
-        assert headers["Authorization"] == "Bearer test_token"
+        # Check authentication header — the buyer registered `bearer`, so the
+        # boundary must select the legacy token mode and NOT sign (#1291 C1).
+        assert request.headers["authorization"] == "Bearer test_token"
+        assert "signature-input" not in request.headers
 
 
 @patch("src.services.order_approval_service.time.sleep")
 def test_webhook_retries_on_failure(mock_sleep):
     """Test webhook retries on HTTP failure."""
     import src.services.order_approval_service as service_module
+    from tests.helpers.webhook_wire import capture_outbound_webhooks
 
-    with patch.object(service_module, "get_db_session") as mock_db, patch("httpx.Client") as mock_httpx:
+    # The receiver fails twice, then accepts.
+    with (
+        patch.object(service_module, "get_db_session") as mock_db,
+        capture_outbound_webhooks(status_codes=(500, 500, 200)) as captured,
+    ):
         # Mock DB
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
         mock_db_instance.scalars.return_value.first.return_value = None  # No auth config
-
-        # Mock HTTP client - fails twice, succeeds third time
-        mock_response_fail = MagicMock()
-        mock_response_fail.status_code = 500
-        mock_response_success = MagicMock()
-        mock_response_success.status_code = 200
-
-        # Track calls explicitly with closure
-        call_counter = {"count": 0}
-        responses = [mock_response_fail, mock_response_fail, mock_response_success]
-
-        def post_side_effect(*args, **kwargs):
-            call_counter["count"] += 1
-            idx = min(call_counter["count"] - 1, len(responses) - 1)
-            return responses[idx]
-
-        # Create a fresh MagicMock for the client instance
-        mock_client_instance = MagicMock()
-        mock_client_instance.post.side_effect = post_side_effect
-
-        # Create a fresh context manager mock
-        mock_context = MagicMock()
-        mock_context.__enter__.return_value = mock_client_instance
-        mock_context.__exit__.return_value = None
-        mock_httpx.return_value = mock_context
 
         # Send webhook
         service_module._send_approval_webhook(
@@ -288,7 +267,9 @@ def test_webhook_retries_on_failure(mock_sleep):
 
         # Verify retry logic works - should be at least 3 attempts
         # Note: Due to test pollution in full suite, may see 4 calls, but minimum is 3
-        assert call_counter["count"] >= 3, f"Expected at least 3 retry attempts, got {call_counter['count']}"
-        assert call_counter["count"] <= 4, (
-            f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
-        )
+        assert len(captured) >= 3, f"Expected at least 3 retry attempts, got {len(captured)}"
+        assert len(captured) <= 4, f"Expected at most 4 retry attempts (3 + 1 pollution), got {len(captured)}"
+
+        # Every retry carries the SAME idempotency_key, so the receiver dedupes the
+        # event rather than processing it three times.
+        assert len({request.payload["idempotency_key"] for request in captured}) == 1

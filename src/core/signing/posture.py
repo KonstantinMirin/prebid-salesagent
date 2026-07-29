@@ -32,7 +32,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
+from adcp.signing.webhook_signer import WEBHOOK_TAG
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
 from pydantic import ConfigDict, RootModel, model_validator
 
 from src.core.enum_helpers import enum_value
@@ -212,6 +214,85 @@ def posture_for_tenant(tenant: dict[str, Any] | None) -> RequestSigningPosture:
     precedence still runs for real.
     """
     return UNSUPPORTED_POSTURE
+
+
+class WebhookSigningPosture(LibraryWebhookSigning):
+    """A tenant's ``webhook_signing`` block — what we advertise AND what we emit.
+
+    #1291 C1 (``salesagent-z6nr.18``), design step 5. The sibling of
+    :class:`RequestSigningPosture`, and frozen for the same reason: one posture is
+    resolved per delivery and then read twice — once to decide whether the RFC 9421
+    arm is reachable at all, once to check the algorithm we are about to sign with
+    is one we would declare. A posture that could change between those reads would
+    let a webhook be signed under one rule and advertised under another.
+
+    Two invariants are structural rather than remembered:
+
+    * ``profile`` defaults to the SDK's :data:`WEBHOOK_TAG` — the SAME constant
+      ``adcp.signing.webhook_signer.sign_webhook`` pins into the emitted
+      ``Signature-Input`` ``tag=`` parameter. The schema types the field as a closed
+      ``Literal``, so if the SDK constant ever drifts from the schema enum this
+      becomes a loud pydantic failure at construction instead of a silent
+      advertise/emit mismatch (``get-adcp-capabilities-response.json``
+      ``#/properties/webhook_signing/profile``: the value "MUST match the ``tag=``
+      parameter … so receivers can statically validate the declared profile against
+      the on-wire tag").
+    * ``algorithms`` is the set we WILL SIGN WITH (security.mdx @ v3.1.1 :1419), so
+      :func:`webhook_signing_posture` derives it from the tenant's ACTIVE key rows —
+      never from ``SIGNING_ALG_VALUES``, which is the ALLOWED set. A tenant holding
+      one ed25519 key that declared both algorithms would promise one it never emits.
+
+    D1 (``salesagent-z6nr.20``) is what puts this object on the
+    ``get_adcp_capabilities`` wire; ``webhook_signing`` is still in
+    ``_UNBACKED_BLOCKS`` until then, which is why
+    :func:`webhook_signing_is_declarable` exists beside it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _profile_defaults_to_the_emitted_tag(cls, data: Any) -> Any:
+        """Fill ``profile`` from the SDK constant the signer actually emits.
+
+        Done as a validator rather than by re-declaring the field so the schema's
+        own ``Literal`` annotation (and its description) stay the single definition
+        — the constant is CHECKED against the enum here instead of being copied
+        beside it.
+        """
+        if isinstance(data, dict) and data.get("profile") is None:
+            return {**data, "profile": WEBHOOK_TAG}
+        return data
+
+
+def webhook_signing_is_declarable() -> bool:
+    """Whether any tenant CAN declare a ``webhook_signing`` posture yet.
+
+    False today, for the same reason and off the same table as
+    :func:`request_signing_is_declarable`: D1 (``salesagent-z6nr.20``) removes the
+    ``_UNBACKED_BLOCKS`` entry and the block becomes declarable with no second flag.
+    """
+    return is_block_declarable("webhook_signing")
+
+
+def webhook_signing_posture(repo: SigningKeyRepository, *, now: datetime) -> WebhookSigningPosture:
+    """The posture *repo*'s tenant can HONESTLY hold at *now*.
+
+    Derived from key material, never from a constant: ``supported`` is
+    :func:`signing_key_backed`'s ``signs`` (the ONE key-presence derivation), and
+    ``algorithms`` is the algorithm of the key that would actually be used. A
+    keyless tenant gets ``supported=False`` and no profile — the schema's own
+    wording for "webhooks are delivered with legacy Bearer or HMAC-SHA256 auth only
+    and receivers MUST NOT expect a Signature header".
+    """
+    if not signing_key_backed(repo, now=now).signs:
+        return WebhookSigningPosture(supported=False, profile=None)
+
+    active = repo.active_at(now=now)
+    # ``signs`` is True, so ``active_at`` returned a row: the two read the same
+    # selector. Narrowed for mypy rather than re-derived (ADR-009).
+    assert active is not None
+    return WebhookSigningPosture(supported=True, algorithms=[active.alg])
 
 
 class KeyBacking(NamedTuple):

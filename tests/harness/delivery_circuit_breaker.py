@@ -1,6 +1,7 @@
 """CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
 
-Patches: httpx.Client, time.sleep, random.uniform (external/timing concerns).
+Patches: the outbound webhook SOCKET, time.sleep, random.uniform (external/timing
+concerns).
 Real: get_db_session for PushNotificationConfig queries (real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -19,7 +20,7 @@ Usage::
             result = service.send_delivery_webhook(...)
 
 Available mocks via env.mock:
-    "client"    -- httpx.Client mock
+    "post"      -- the outbound webhook socket; called (url, headers=, content=)
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
 """
@@ -27,6 +28,7 @@ Available mocks via env.mock:
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 from typing import Any
 
 from sqlalchemy import select
@@ -56,7 +58,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     MODULE = "src.services.webhook_delivery_service"
 
     EXTERNAL_PATCHES = {
-        "client": "src.services.webhook_delivery_service.httpx.Client",
         "sleep": "src.services.webhook_delivery_service.time.sleep",
         "random": "src.services.webhook_delivery_service.random.uniform",
     }
@@ -65,6 +66,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         super().__init__(**kwargs)
         self._service: WebhookDeliveryService | None = None
         self._log_handler: LogCaptureHandler | None = None
+        self._wire: ExitStack | None = None
         self.captured_logs: list[str] = []
 
     def __enter__(self) -> CircuitBreakerEnv:
@@ -82,17 +84,14 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
             webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
             webhook_logger.removeHandler(self._log_handler)
             self._log_handler = None
+        self.close_webhook_wire()
         return super().__exit__(*exc)
 
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
-        # httpx.Client: 200 OK by default
-        self.set_http_response(200)
-
-        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
-        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+        self.install_webhook_wire()
 
     def make_webhook_config(
         self,
@@ -113,13 +112,13 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
         ).first()
 
+        auth_type, auth_token = self.webhook_auth_fields(auth_type, auth_token, secret)
         return PushNotificationConfigFactory(
             tenant=tenant,
             principal=principal,
             url=url,
             authentication_type=auth_type,
             authentication_token=auth_token,
-            webhook_secret=secret,
             is_active=True,
         )
 

@@ -29,6 +29,17 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
 
     received_webhooks: list = []
 
+    #: Every request as the socket delivered it: ``(url, headers, body_bytes)``.
+    #: Class-level like ``received_webhooks``, and for the same reason — a subclass
+    #: that declares its own list keeps its captures to itself.
+    #:
+    #: #1291 C1 (``salesagent-z6nr.18``): RFC 9421 verification needs the exact
+    #: bytes AND the ``Signature`` / ``Signature-Input`` / ``Content-Digest``
+    #: headers, both of which :meth:`record` discards by design (it maps to a
+    #: parsed payload). Recording them here rather than adding a parallel receiver
+    #: keeps every e2e suite on one server.
+    received_raw: list = []
+
     def record(self, payload):
         """Map an inbound JSON payload to the entry appended to ``received_webhooks``.
 
@@ -37,12 +48,21 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
         """
         return payload
 
+    def record_raw(self, url: str, headers, body: bytes) -> None:
+        """Append the untouched request to ``received_raw``.
+
+        Runs BEFORE :meth:`record`, so a handler whose ``record`` rejects a
+        payload still leaves the raw request available to explain why.
+        """
+        self.received_raw.append((url, dict(headers.items()), body))
+
     def do_POST(self):
         """Handle POST requests (webhook notifications)."""
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
         try:
+            self.record_raw(self.path, self.headers, body)
             self.received_webhooks.append(self.record(json.loads(body.decode("utf-8"))))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -74,10 +94,14 @@ def run_webhook_capture_server(
     in-network (the runner's alias 'tests', left un-rewritten). Pass an explicit
     host (e.g. '127.0.0.1') when the receiver is only reachable on loopback.
 
-    Yields ``{"url", "server", "received"}``. ``received`` is cleared on entry
-    and exit so each test sees only its own captures.
+    Yields ``{"url", "server", "received", "received_raw"}``. Both lists are
+    cleared on entry and exit so each test sees only its own captures;
+    ``received_raw`` carries ``(path, headers, body_bytes)`` for assertions that
+    need the wire rather than the parsed payload (signature verification).
     """
     received.clear()
+    raw: list = getattr(handler_class, "received_raw", WebhookCaptureHandler.received_raw)
+    raw.clear()
 
     # Bind 0.0.0.0 (all interfaces), not 127.0.0.1: the in-network runner reaches
     # this receiver by its compose network alias, so a loopback-only bind would be
@@ -97,8 +121,10 @@ def run_webhook_capture_server(
             "url": f"http://{webhook_host}:{port}/webhook",
             "server": server,
             "received": received,
+            "received_raw": raw,
         }
     finally:
         server.shutdown()
         server.server_close()
         received.clear()
+        raw.clear()

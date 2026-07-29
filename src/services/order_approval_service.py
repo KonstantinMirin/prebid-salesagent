@@ -305,6 +305,15 @@ def _mark_approval_failed(
 ):
     """Mark approval as failed and send webhook notification."""
     try:
+        # Read the progress fields BEFORE the session closes. ``db.commit()``
+        # expires every attribute on ``approval_job``, so touching ``.progress``
+        # after the ``with`` block raises DetachedInstanceError — which the
+        # ``except`` below then swallowed, and the buyer was never told the order
+        # had failed at all (salesagent-98t2, reproduced by
+        # tests/integration/test_order_approval_webhook_signing.py).
+        order_id: str | None = None
+        attempts: int | None = None
+
         with get_db_session() as db:
             stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
             approval_job = db.scalars(stmt).first()
@@ -313,6 +322,10 @@ def _mark_approval_failed(
                 approval_job.completed_at = datetime.now(UTC)
                 approval_job.error_message = error_message
                 db.commit()
+
+                progress = approval_job.progress or {}
+                order_id = progress.get("order_id")
+                attempts = progress.get("attempts")
 
         # Send webhook notification
         if webhook_url:
@@ -323,8 +336,8 @@ def _mark_approval_failed(
                 media_buy_id=media_buy_id,
                 status="failed",
                 message=error_message,
-                order_id=approval_job.progress.get("order_id") if approval_job and approval_job.progress else None,
-                attempts=approval_job.progress.get("attempts") if approval_job and approval_job.progress else None,
+                order_id=order_id,
+                attempts=attempts,
             )
 
     except Exception as e:
@@ -355,6 +368,10 @@ def _send_approval_webhook(
     """
     try:
         import httpx
+        from adcp.webhooks import generate_webhook_idempotency_key
+
+        from src.core.database.repositories.signing_key import SigningKeyRepository
+        from src.core.signing.webhook_sender_factory import deliver_adcp_webhook_sync
 
         payload: dict[str, Any] = {
             "event": "order_approval_update",
@@ -371,7 +388,10 @@ def _send_approval_webhook(
         if attempts is not None:
             payload["attempts"] = attempts
 
-        # Get webhook authentication from push notification config
+        # Get the buyer's registration — the ONE selector for how this notification
+        # is authenticated (#1291 C1, salesagent-98t2). Before C1 this sender read
+        # the same row as its two siblings but honoured only bearer/basic, so a
+        # receiver registered as HMAC-SHA256 was told the outcome unauthenticated.
         from src.core.database.models import PushNotificationConfig
 
         with get_db_session() as db:
@@ -380,46 +400,50 @@ def _send_approval_webhook(
             )
             config = db.scalars(stmt).first()
 
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)",
-        }
-
-        # Add authentication if configured
-        if config:
-            if config.authentication_type == "bearer" and config.authentication_token:
-                headers["Authorization"] = f"Bearer {config.authentication_token}"
-            elif config.authentication_type == "basic" and config.authentication_token:
-                headers["Authorization"] = f"Basic {config.authentication_token}"
-
-            if config.validation_token:
+            headers = {"User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)"}
+            if config and config.validation_token:
                 headers["X-Webhook-Token"] = config.validation_token
 
-        # Send webhook with retries
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.post(webhook_url, json=payload, headers=headers)
+            signing_repo = SigningKeyRepository(db, tenant_id)
+            # ONE key per distinct event, reused across this event's retries.
+            idempotency_key = generate_webhook_idempotency_key()
 
-                    if 200 <= response.status_code < 300:
+            # Send webhook with retries
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    delivery = deliver_adcp_webhook_sync(
+                        url=webhook_url,
+                        payload=payload,
+                        idempotency_key=idempotency_key,
+                        config=config,
+                        tenant_id=tenant_id,
+                        repo=signing_repo,
+                        extra_headers=headers,
+                    )
+
+                    if 200 <= delivery.status_code < 300:
                         logger.info(
                             f"Approval webhook sent to {webhook_url} (status: {status}, attempt: {attempt + 1})"
                         )
                         return
 
                     logger.warning(
-                        f"Approval webhook to {webhook_url} returned status {response.status_code} (attempt: {attempt + 1}/{max_retries})"
+                        f"Approval webhook to {webhook_url} returned status {delivery.status_code} (attempt: {attempt + 1}/{max_retries})"
                     )
 
-            except httpx.TimeoutException:
-                logger.warning(f"Approval webhook to {webhook_url} timed out (attempt: {attempt + 1}/{max_retries})")
-            except httpx.RequestError as e:
-                logger.warning(f"Approval webhook to {webhook_url} failed: {e} (attempt: {attempt + 1}/{max_retries})")
+                except httpx.TimeoutException:
+                    logger.warning(
+                        f"Approval webhook to {webhook_url} timed out (attempt: {attempt + 1}/{max_retries})"
+                    )
+                except httpx.RequestError as e:
+                    logger.warning(
+                        f"Approval webhook to {webhook_url} failed: {e} (attempt: {attempt + 1}/{max_retries})"
+                    )
 
-            # Wait before retry (exponential backoff)
-            if attempt < max_retries - 1:
-                time.sleep(2**attempt)
+                # Wait before retry (exponential backoff)
+                if attempt < max_retries - 1:
+                    time.sleep(2**attempt)
 
         logger.error(f"Failed to send approval webhook to {webhook_url} after {max_retries} attempts")
 

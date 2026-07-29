@@ -10,6 +10,7 @@ Mixins may call ``self._commit_factory_data()`` which is a no-op in unit mode.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
@@ -33,6 +34,7 @@ from src.services.webhook_delivery_service import (
     WebhookDeliveryService,
 )
 from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.helpers.webhook_wire import stub_outbound_webhooks
 
 
 def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryResponse) -> Any:
@@ -363,6 +365,41 @@ class CircuitBreakerMixin:
     """Shared fluent API for circuit breaker / webhook delivery service testing."""
 
     _service: WebhookDeliveryService | None
+    _wire: ExitStack | None = None
+
+    def install_webhook_wire(self) -> None:
+        """Replace the outbound webhook socket and expose it as ``mock["post"]``.
+
+        Shared by the unit and integration envs: after #1291 C1 every AdCP sender
+        delivers through ``adcp.webhooks.WebhookSender``, so there is no
+        module-level ``httpx.Client`` left to patch — the stub sits under whichever
+        client the sender uses and hands the mock the real URL, headers and bytes.
+        """
+        self.mock["post"] = MagicMock()  # type: ignore[attr-defined]
+        self.set_http_response(200)
+        self._wire = ExitStack()
+        self._wire.enter_context(stub_outbound_webhooks(self.mock["post"]))  # type: ignore[attr-defined]
+
+    def close_webhook_wire(self) -> None:
+        """Undo :meth:`install_webhook_wire`. Idempotent."""
+        if self._wire is not None:
+            self._wire.close()
+            self._wire = None
+
+    @staticmethod
+    def webhook_auth_fields(
+        auth_type: str | None, auth_token: str | None, secret: str | None
+    ) -> tuple[str | None, str | None]:
+        """Fold a legacy HMAC ``secret`` onto the spec's ONE selector.
+
+        security.mdx @ v3.1.1 :1424 — the buyer's ``authentication`` block selects
+        the mode. #1291 C1 retired the second selector (the ``webhook_secret``
+        column, which production never wrote), so a test asking for an HMAC secret
+        gets an HMAC-SHA256 registration.
+        """
+        if secret:
+            return "HMAC-SHA256", secret
+        return auth_type, auth_token
 
     def get_service(self) -> WebhookDeliveryService:
         """Return a WebhookDeliveryService instance (cached per env)."""
@@ -375,24 +412,30 @@ class CircuitBreakerMixin:
         return CircuitBreaker(**kwargs)
 
     def set_http_response(self, status_code: int) -> None:
-        """Configure the httpx Client mock to return the given status code."""
+        """Answer every outbound webhook with *status_code*.
+
+        ``mock["post"]`` IS the socket: :func:`tests.helpers.webhook_wire.stub_outbound_webhooks`
+        calls it with ``(url, headers=..., content=...)`` for every delivery, so it
+        carries real wire bytes while keeping ``call_args`` / ``call_count`` /
+        ``side_effect`` available to the suites.
+        """
         mock_response = MagicMock()
         mock_response.status_code = status_code
-        self.mock["client"].return_value.__enter__.return_value.post.return_value = mock_response  # type: ignore[attr-defined]
+        self.mock["post"].return_value = mock_response  # type: ignore[attr-defined]
 
     def set_http_status(self, code: int, text: str = "") -> None:
         """Alias for set_http_response — BDD steps use this name consistently."""
         self.set_http_response(code)
 
     def set_http_sequence(self, responses: list[tuple[int, str]]) -> None:
-        """Configure httpx Client to return a sequence of responses."""
+        """Answer the Nth outbound webhook with the Nth ``(status, text)``."""
         mocks = []
         for code, text in responses:
             r = MagicMock()
             r.status_code = code
             r.text = text
             mocks.append(r)
-        self.mock["client"].return_value.__enter__.return_value.post.side_effect = mocks  # type: ignore[attr-defined]
+        self.mock["post"].side_effect = mocks  # type: ignore[attr-defined]
 
     def call_send(
         self,

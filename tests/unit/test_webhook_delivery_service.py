@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.webhook_delivery_service import CircuitState, WebhookDeliveryService
+from tests.helpers.webhook_wire import capture_outbound_webhooks
 
 
 @pytest.fixture
@@ -26,6 +27,10 @@ def mock_db_session(mocker):
     # Mock SQLAlchemy 2.0 pattern: session.scalars(stmt).all()
     mock_scalars = MagicMock()
     mock_scalars.all.return_value = []  # No webhooks configured by default
+    # ...and .first() is the SIGNING-KEY lookup the delivery boundary makes on the
+    # same session (#1291 C1). None = this tenant holds no key, so deliveries take
+    # the honest unsigned path instead of trying to sign with a MagicMock.
+    mock_scalars.first.return_value = None
     mock_session.scalars.return_value = mock_scalars
 
     # Mock the database session context manager
@@ -93,18 +98,14 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
     media_buy_id = "buy_adcp"
     start_time = datetime.now(UTC)
 
-    # Mock httpx to capture the payload
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
+    # Capture the real outbound request (only the socket is stubbed)
+    with capture_outbound_webhooks() as captured:
         # Mock webhook config
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
         mock_config.authentication_type = None
+        mock_config.authentication_token = None
         mock_config.validation_token = None
-        mock_config.webhook_secret = None  # No HMAC for this test
 
         # Update mock to return config for SQLAlchemy 2.0
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
@@ -124,15 +125,14 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
             next_expected_interval_seconds=60.0,
         )
 
-        # Verify httpx was called
-        assert mock_client.return_value.__enter__.return_value.post.called
-        call_args = mock_client.return_value.__enter__.return_value.post.call_args
+        # Verify the webhook went out
+        assert len(captured) == 1
 
         # Check new payload structure (PR #86 - no wrapper, direct payload)
         # Version should match what's reported by the adcp library
         from adcp import get_adcp_spec_version
 
-        payload = call_args.kwargs["json"]
+        payload = captured[0].payload
         assert payload["adcp_version"] == get_adcp_spec_version()
         assert payload["notification_type"] == "scheduled"
         assert payload["is_adjusted"] is False  # NEW in PR #86
@@ -157,16 +157,12 @@ def test_final_notification_type(webhook_service, mock_db_session):
     media_buy_id = "buy_final"
     start_time = datetime.now(UTC)
 
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
+    with capture_outbound_webhooks() as captured:
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
         mock_config.authentication_type = None
+        mock_config.authentication_token = None
         mock_config.validation_token = None
-        mock_config.webhook_secret = None
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
 
         # Send final webhook
@@ -183,7 +179,8 @@ def test_final_notification_type(webhook_service, mock_db_session):
         )
 
         # Check notification_type (direct payload structure in PR #86)
-        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        assert len(captured) == 1
+        payload = captured[0].payload
         assert payload["notification_type"] == "final"
         assert payload["is_adjusted"] is False
         assert "next_expected_at" not in payload
@@ -220,28 +217,14 @@ def test_failure_tracking(mock_sleep, webhook_service, mock_db_session):
     media_buy_id = "buy_fail"
     start_time = datetime.now(UTC)
 
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        # First call succeeds
-        mock_response_ok = MagicMock()
-        mock_response_ok.status_code = 200
-
-        # Second call fails (with retries)
-        mock_response_fail = MagicMock()
-        mock_response_fail.status_code = 500
-
-        # Mock will be called 3 times total (1 success, then 2 failure attempts with retries)
-        mock_client.return_value.__enter__.return_value.post.side_effect = [
-            mock_response_ok,  # First webhook succeeds
-            mock_response_fail,  # Second webhook attempt 1 fails
-            mock_response_fail,  # Second webhook attempt 2 fails (retry)
-            mock_response_fail,  # Second webhook attempt 3 fails (retry)
-        ]
-
+    # The receiver accepts the first webhook, then rejects every attempt of the
+    # second (1 success, then 3 failing attempts with retries).
+    with capture_outbound_webhooks(status_codes=(200, 500, 500, 500)) as captured:
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
         mock_config.authentication_type = None
+        mock_config.authentication_token = None
         mock_config.validation_token = None
-        mock_config.webhook_secret = None
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
 
         # First webhook - success
@@ -285,18 +268,13 @@ def test_authentication_headers(webhook_service, mock_db_session):
     media_buy_id = "buy_auth"
     start_time = datetime.now(UTC)
 
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
+    with capture_outbound_webhooks() as captured:
         # Test bearer auth
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
         mock_config.authentication_type = "bearer"
         mock_config.authentication_token = "secret_token"
         mock_config.validation_token = "validation_token"
-        mock_config.webhook_secret = None
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
 
         webhook_service.send_delivery_webhook(
@@ -309,11 +287,13 @@ def test_authentication_headers(webhook_service, mock_db_session):
             spend=100.0,
         )
 
-        # Verify headers (PR #86 added X-ADCP-Timestamp, no longer uses X-Webhook-Token)
-        call_args = mock_client.return_value.__enter__.return_value.post.call_args
-        headers = call_args.kwargs["headers"]
-        assert headers["Authorization"] == "Bearer secret_token"
-        assert "X-ADCP-Timestamp" in headers  # NEW in PR #86
+        # Verify headers. The registration says `bearer`, so the boundary must
+        # select the legacy token mode (#1291 C1) — the credential rides, and NO
+        # RFC 9421 signature does (security.mdx @ v3.1.1 :1425 forbids both ways).
+        assert len(captured) == 1
+        headers = captured[0].headers
+        assert headers["authorization"] == "Bearer secret_token"
+        assert "signature-input" not in headers
 
 
 def test_no_webhooks_configured(webhook_service, mock_db_session):
