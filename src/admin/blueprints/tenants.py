@@ -21,7 +21,6 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
-from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.domain_config import get_sales_agent_domain
 from src.core.security.outbound_http import OutboundError, send
 from src.core.validation import sanitize_form_data, validate_form_data
@@ -467,45 +466,6 @@ def update(tenant_id):
         flash("Error updating tenant", "error")
 
     return redirect(url_for("tenants.settings", tenant_id=tenant_id))
-
-
-@tenants_bp.route("/<tenant_id>/update_slack", methods=["POST"])
-@log_admin_action("update_slack")
-@require_tenant_access()
-def update_slack(tenant_id):
-    """Update tenant Slack settings."""
-    try:
-        from src.admin.utils.url_policy import redirect_if_url_blocked
-
-        # Sanitize form data
-        form_data = sanitize_form_data(request.form.to_dict())
-        webhook_url = form_data.get("slack_webhook_url", "").strip()
-
-        # Stored now, posted to later — graded by ingest-time egress policy.
-        # An empty value clears the webhook and has nothing to grade.
-        if webhook_url and (
-            blocked := redirect_if_url_blocked(
-                webhook_url,
-                "Slack webhook URL",
-                url_for("tenants.settings", tenant_id=tenant_id, section="slack"),
-            )
-        ):
-            return blocked
-
-        with get_db_session() as db_session:
-            repository = TenantConfigRepository(db_session, tenant_id)
-            if not repository.update_tenant(slack_webhook_url=webhook_url or None):
-                flash("Tenant not found", "error")
-                return redirect(url_for("core.index"))
-
-            db_session.commit()
-            flash("Slack settings updated successfully", "success")
-
-    except Exception as e:
-        logger.error(f"Error updating Slack settings: {e}", exc_info=True)
-        flash("Error updating Slack settings", "error")
-
-    return redirect(url_for("tenants.settings", tenant_id=tenant_id, section="slack"))
 
 
 @tenants_bp.route("/<tenant_id>/test_slack", methods=["POST"])
