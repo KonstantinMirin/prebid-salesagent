@@ -63,6 +63,25 @@ def _collect_all_packages(resp: Any) -> list[Any]:
     return [pkg for d in resp.media_buy_deliveries for pkg in d.by_package]
 
 
+def _wire_packages(ctx: dict) -> list[dict[str, Any]]:
+    """Collect every package across every delivery as the buyer sees it on the WIRE.
+
+    The wire-reading twin of :func:`_collect_all_packages`, and the one reader the
+    breakdown/truncation oracles go through. ``_collect_all_packages`` walks the
+    harness-reconstructed typed payload, whose fields are already coerced to their
+    declared types — so a wire value that coerces back to the right type is invisible
+    to it. A boolean truncation flag serialized as the string "true" is the concrete
+    case: it reconstructs to ``True`` and the typed oracle passes on a non-conformant
+    wire. (A field that is DROPPED is still caught by the typed reader, since it
+    reconstructs to None — the blind spot is coercion, not absence.)
+
+    Reads through ``wire_dict``, inheriting its loud guard: a real-wire transport that
+    stashed no body raises instead of silently degrading to the typed payload.
+    """
+    wire = wire_dict(ctx)
+    return [pkg for d in wire.get("media_buy_deliveries") or [] for pkg in d.get("by_package") or []]
+
+
 def _extract_webhook_success(ctx: dict) -> bool:
     """Extract the boolean success flag from ctx['webhook_result'].
 
@@ -2237,21 +2256,21 @@ def then_packages_limited(ctx: dict, field: str, n: int) -> None:
 
     Verifies the count constraint and that entries are properly typed (list
     of dicts/objects with at least one field populated).
+
+    Graded on the WIRE via :func:`_wire_packages` — the buyer's view, not the
+    coerced typed payload.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    packages = _collect_all_packages(resp)
+    packages = _wire_packages(ctx)
     checked = 0
     for pkg in packages:
-        value = getattr(pkg, field)
-        assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' as a list: {value!r}"
+        pkg_id = pkg.get("package_id")
+        value = pkg.get(field)
+        assert isinstance(value, list), f"Package {pkg_id!r} missing '{field}' as a list: {value!r}"
         actual_count = len(value)
-        assert actual_count <= n, (
-            f"Package {pkg.package_id!r} '{field}' has {actual_count} entries, expected at most {n}"
-        )
+        assert actual_count <= n, f"Package {pkg_id!r} '{field}' has {actual_count} entries, expected at most {n}"
         # Each entry must be a non-empty dict or object (not bare None)
         for entry in value:
-            assert entry is not None, f"Package {pkg.package_id!r} '{field}' contains a None entry"
+            assert entry is not None, f"Package {pkg_id!r} '{field}' contains a None entry"
         checked += 1
     assert checked >= 1, "Response has no packages to check"
 
@@ -2262,13 +2281,16 @@ def then_field_true(ctx: dict, field: str) -> None:
 
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
     PackageDelivery, not on the top-level response object.
+
+    Graded on the WIRE via :func:`_wire_packages`, and with ``is True`` — so a flag
+    serialized as the string "true" (which the typed payload would coerce back to a
+    boolean) fails here. Absence fails too, as it must: the response schema requires
+    by_*_truncated whenever the matching by_* array is present.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    packages = _collect_all_packages(resp)
+    packages = _wire_packages(ctx)
     assert packages, "Response has no packages to check"
     for pkg in packages:
-        value = getattr(pkg, field, None)
+        value = pkg.get(field)
         assert value is True, f"Expected response package.{field} to be True, got {value!r}"
 
 
@@ -2278,13 +2300,16 @@ def then_field_false(ctx: dict, field: str) -> None:
 
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
     PackageDelivery, not on the top-level response object.
+
+    Graded on the WIRE via :func:`_wire_packages`, and with ``is False`` — so a flag
+    serialized as the string "false" (which the typed payload would coerce back to a
+    boolean) fails here. Absence fails too, as it must: the response schema requires
+    by_*_truncated whenever the matching by_* array is present.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    packages = _collect_all_packages(resp)
+    packages = _wire_packages(ctx)
     assert packages, "Response has no packages to check"
     for pkg in packages:
-        value = getattr(pkg, field, None)
+        value = pkg.get(field)
         assert value is False, f"Expected response package.{field} to be False, got {value!r}"
 
 
