@@ -176,11 +176,12 @@ def create_principal(tenant_id):
             }
 
         with get_db_session() as db_session:
-            # Check if principal name already exists
-            existing = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id, name=principal_name)).first()
-            if existing:
-                flash(f"An advertiser named '{principal_name}' already exists", "error")
-                return redirect(request.url)
+            # No duplicate-name pre-check: advertiser names are human-readable
+            # labels, not keys. AdCP 3.1.1 attaches uniqueness only to ids
+            # (core/account.json: name is "Human-readable account name", e.g.
+            # "Acme c/o Pinnacle"), and no index backs the tenant+name pair, so a
+            # pre-check here read as a guarantee it could not hold under
+            # concurrency. Identity is (tenant_id, principal_id).
 
             # Create the principal
             principal = Principal(
