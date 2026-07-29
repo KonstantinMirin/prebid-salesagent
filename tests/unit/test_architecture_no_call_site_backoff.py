@@ -73,7 +73,7 @@ ALLOWLIST = {
     # Egress retry schedules that no migration ticket covered — found by the
     # salesagent-4fya.6 disease scan, filed as salesagent-zlwz and salesagent-fwid.
     ("src/core/utils/mcp_client.py", 1),
-    ("src/core/oauth_retry.py", 1),
+    # (salesagent-fwid deleted oauth_retry.py, removing its entry.)
     # Geometric, but not outbound HTTP — so the seam is not where they belong,
     # and they stay listed with the reason in writing rather than exempted by a
     # path rule the next reader has to reverse-engineer.
@@ -272,7 +272,8 @@ class TestGuardDetector:
     def test_would_be_missed_by_a_text_scan(self):
         """The AST catches forms a ``2\\*\\*`` text grep would not.
 
-        ``base * multiplier**attempt`` (src/core/oauth_retry.py:72) and
+        ``base * multiplier**attempt`` (the shape the deleted oauth_retry
+        module used) and
         ``time.sleep(pow(2, attempt))`` contain no literal ``2**``. A regex
         anchored on the common spelling would pass both; the guard reads shape.
         """
