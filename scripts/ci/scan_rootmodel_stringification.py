@@ -27,6 +27,7 @@ import json
 import pkgutil
 import sys
 import typing
+from dataclasses import dataclass
 from pathlib import Path
 
 import pydantic
@@ -93,6 +94,35 @@ def _terminal_attr(node: ast.AST) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class Site:
+    """One stringification site, with enough context to resolve the receiver's TYPE.
+
+    The name alone is not a type. ``start_time`` is ``StartTiming`` (a RootModel) on
+    ``CreateMediaBuyRequest`` and a plain ``datetime`` on ``UpdateMediaBuyRequest`` and
+    on the ORM model, so any consumer that wants a per-field rule needs to know WHAT
+    was stringified, not just which attribute name. ``receiver_expr`` (the expression
+    left of the dot), ``receiver_annotation`` (that receiver's declared type, when it
+    is a parameter of the enclosing function) and ``enclosing_class`` (for ``self``)
+    are what make that resolution possible in pure AST.
+
+    ``context`` and ``source`` back the CLI report only. The diagnostic/value split is
+    deliberately NOT a soundness signal: an inlined ``raise ValueError(f"...")`` reads
+    as diagnostic while the same defect written as ``msg = f"..."`` then ``raise`` reads
+    as value, so consumers that need certainty should ignore ``context``.
+    """
+
+    attr: str
+    form: str
+    lineno: int
+    receiver_expr: str
+    receiver_annotation: str | None
+    enclosing_function: str | None
+    enclosing_class: str | None
+    context: str
+    source: str
+
+
 _DIAGNOSTIC_CALLS = {"debug", "info", "warning", "warn", "error", "exception", "critical", "print"}
 
 
@@ -118,11 +148,30 @@ def _is_diagnostic_context(stack: list[ast.AST]) -> bool:
     return False
 
 
+def _unwraps_root(expr: ast.AST) -> bool:
+    """True when *expr* reads ``.root`` — the CORRECT unwrap, not the disease.
+
+    ``",".join(c.root for c in overlay.geo_countries)`` is the shape the fix for this
+    defect takes. Walking the whole join argument sees the ITERATOR
+    (``overlay.geo_countries``) and would flag the very fix the scan demands, so a
+    comprehension whose element unwraps via ``.root`` is exempt.
+    """
+    return any(isinstance(sub, ast.Attribute) and sub.attr == "root" for sub in ast.walk(expr))
+
+
+def _join_stringified_attributes(arg: ast.expr) -> list[ast.Attribute]:
+    """Attributes that ``str.join`` will actually stringify in *arg*."""
+    if isinstance(arg, ast.GeneratorExp | ast.ListComp | ast.SetComp) and _unwraps_root(arg.elt):
+        return []
+    return [sub for sub in ast.walk(arg) if isinstance(sub, ast.Attribute)]
+
+
 class _Visitor(ast.NodeVisitor):
-    def __init__(self, path: Path, field_names: set[str]) -> None:
-        self.path = path
+    """Collect stringification sites. ``field_names=None`` records every attribute."""
+
+    def __init__(self, field_names: set[str] | None = None) -> None:
         self.field_names = field_names
-        self.hits: list[dict[str, object]] = []
+        self.sites: list[Site] = []
         self._stack: list[ast.AST] = []
 
     def generic_visit(self, node: ast.AST) -> None:
@@ -130,19 +179,49 @@ class _Visitor(ast.NodeVisitor):
         super().generic_visit(node)
         self._stack.pop()
 
+    def _enclosing_function(self) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+        for parent in reversed(self._stack):
+            if isinstance(parent, ast.FunctionDef | ast.AsyncFunctionDef):
+                return parent
+        return None
+
+    def _enclosing_class(self) -> ast.ClassDef | None:
+        for parent in reversed(self._stack):
+            if isinstance(parent, ast.ClassDef):
+                return parent
+        return None
+
+    def _receiver_annotation(self, receiver_expr: str) -> str | None:
+        """Declared type of *receiver_expr* when it is a parameter of the enclosing function."""
+        func = self._enclosing_function()
+        if func is None:
+            return None
+        args = func.args
+        for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg]:
+            if arg is not None and arg.arg == receiver_expr and arg.annotation is not None:
+                return ast.unparse(arg.annotation).strip("\"'")
+        return None
+
     def _record(self, node: ast.AST, expr: ast.AST, form: str) -> None:
         attr = _terminal_attr(expr)
-        if attr in self.field_names:
-            self.hits.append(
-                {
-                    "file": str(self.path.relative_to(REPO_ROOT)),
-                    "line": node.lineno,
-                    "attr": attr,
-                    "form": form,
-                    "context": "diagnostic" if _is_diagnostic_context(self._stack) else "value",
-                    "source": ast.unparse(node)[:120],
-                }
+        if attr is None or (self.field_names is not None and attr not in self.field_names):
+            return
+        receiver_expr = ast.unparse(expr.value) if isinstance(expr, ast.Attribute) else ""
+        enclosing_function = self._enclosing_function()
+        enclosing_class = self._enclosing_class()
+        self.sites.append(
+            Site(
+                attr=attr,
+                form=form,
+                lineno=node.lineno,
+                receiver_expr=receiver_expr,
+                receiver_annotation=self._receiver_annotation(receiver_expr),
+                enclosing_function=enclosing_function.name if enclosing_function else None,
+                enclosing_class=enclosing_class.name if enclosing_class else None,
+                context="diagnostic" if _is_diagnostic_context(self._stack) else "value",
+                source=ast.unparse(node)[:120],
             )
+        )
 
     def visit_JoinedStr(self, node: ast.JoinedStr) -> None:
         for value in node.values:
@@ -155,9 +234,8 @@ class _Visitor(ast.NodeVisitor):
             self._record(node, node.args[0], "str()")
         if isinstance(node.func, ast.Attribute) and node.func.attr == "join":
             for arg in node.args:
-                for sub in ast.walk(arg):
-                    if isinstance(sub, ast.Attribute):
-                        self._record(node, sub, "join()")
+                for sub in _join_stringified_attributes(arg):
+                    self._record(node, sub, "join()")
         self.generic_visit(node)
 
     def visit_BinOp(self, node: ast.BinOp) -> None:
@@ -171,6 +249,18 @@ class _Visitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def find_stringification_sites(tree: ast.Module, *, field_names: set[str] | None = None) -> list[Site]:
+    """Every stringification site in *tree*, optionally narrowed to *field_names*.
+
+    The public entry point for consumers that need a narrower rule than the CLI's
+    type-derived sweep — notably the structural guard, which bans a curated set of
+    VERIFIED RootModel fields outright and resolves ``start_time`` by annotation.
+    """
+    visitor = _Visitor(field_names)
+    visitor.visit(tree)
+    return visitor.sites
+
+
 def scan(field_names: set[str]) -> list[dict[str, object]]:
     hits: list[dict[str, object]] = []
     for path in sorted(SRC.rglob("*.py")):
@@ -178,9 +268,17 @@ def scan(field_names: set[str]) -> list[dict[str, object]]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
-        visitor = _Visitor(path, field_names)
-        visitor.visit(tree)
-        hits.extend(visitor.hits)
+        for site in find_stringification_sites(tree, field_names=field_names):
+            hits.append(
+                {
+                    "file": str(path.relative_to(REPO_ROOT)),
+                    "line": site.lineno,
+                    "attr": site.attr,
+                    "form": site.form,
+                    "context": site.context,
+                    "source": site.source,
+                }
+            )
     return hits
 
 

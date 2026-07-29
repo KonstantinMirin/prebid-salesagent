@@ -675,15 +675,18 @@ class GAMTargetingManager:
             )
 
         # Postal code targeting not implemented in static mapping - fail loudly
+        # PostalArea is a RootModel — render the wrapped values, not the model reprs;
+        # this text reaches the buyer inside the create-media-buy error message.
         if targeting_overlay.geo_postal_areas:
             raise ValueError(
                 f"Postal code targeting requested but not implemented in GAM static mapping. "
-                f"Cannot fulfill buyer contract for postal areas: {targeting_overlay.geo_postal_areas}."
+                f"Cannot fulfill buyer contract for postal areas: {[a.root for a in targeting_overlay.geo_postal_areas]}."
             )
         if targeting_overlay.geo_postal_areas_exclude:
             raise ValueError(
                 f"Postal code exclusion requested but not implemented in GAM static mapping. "
-                f"Cannot fulfill buyer contract for excluded postal areas: {targeting_overlay.geo_postal_areas_exclude}."
+                f"Cannot fulfill buyer contract for excluded postal areas: "
+                f"{[a.root for a in targeting_overlay.geo_postal_areas_exclude]}."
             )
 
         # Build targeted locations
