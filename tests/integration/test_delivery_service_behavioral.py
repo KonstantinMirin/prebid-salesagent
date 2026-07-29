@@ -579,15 +579,14 @@ class TestDeliverWithBackoffRetry:
 class TestDeliverWithBackoffTransportFailure:
     """A transport-level failure -> retries with backoff, records failure.
 
-    The endpoint drops the connection instead of stalling: production builds its
-    httpx client with a hardcoded ``timeout=10.0``, so provoking a genuine
-    timeout would cost three ten-second waits, and faking one would put back the
-    transport mock this suite exists to remove. A dropped connection is a real
-    failure of the same class (``httpx.RequestError``) with the same
-    consequence — retry, then record one circuit-breaker failure. The timeout
-    path itself is graded against a real stalling origin in
-    ``tests/integration/test_outbound_http.py``, which is where it moves when
-    delivery lands on the egress seam.
+    Two distinct transport failures are graded here, because the seam collapses
+    them into one class and the consequence must be identical for both: a dropped
+    connection, and a genuine stall the caller's own clock gives up on.
+
+    The stall case is real, not simulated. It became affordable when delivery moved
+    onto the seam (salesagent-4fya.10) and its per-attempt timeout became
+    configurable (salesagent-c78m): the test shortens the timeout instead of
+    waiting three ten-second attempts, and no transport is patched to fake it.
 
     Covers: UC-004-EXT-G-01
     """
@@ -632,6 +631,47 @@ class TestDeliverWithBackoffTransportFailure:
             # Circuit breaker should record failure
             endpoint_key = env.endpoint_key("t1")
             state, failure_count = service.get_circuit_breaker_state(endpoint_key)
+            assert failure_count == 1
+
+    def test_a_stalled_endpoint_times_out_retries_and_records_failure(self, integration_db, monkeypatch):
+        """Every attempt stalls past the timeout -> retries exhaust, one failure recorded.
+
+        The origin ACCEPTS each request and then holds it, so the failure is the
+        caller's clock rather than a refused or dropped connection — the case
+        salesagent-c78m exists to put back. The endpoint provably received all three
+        attempts, which a mocked clock could not show.
+
+        Covers: UC-004-EXT-G-01
+        """
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        monkeypatch.setenv("ADCP_WEBHOOK_DELIVERY_TIMEOUT_SECONDS", "0.3")
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(tenant=tenant, principal=principal, url=env.webhook_url)
+
+            env.origin.delay(2.0)
+
+            service = env.get_service()
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_001",
+                delivery_payload={"impressions": 5000},
+            )
+
+            assert result is False
+            assert env.delivery_attempts == 3, "each attempt must reach the endpoint before the clock gives up"
+
+            endpoint_key = env.endpoint_key("t1")
+            _state, failure_count = service.get_circuit_breaker_state(endpoint_key)
             assert failure_count == 1
 
 

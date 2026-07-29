@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import threading
 from collections import deque
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,34 @@ from adcp import get_adcp_spec_version
 from src.core.security.outbound_http import OutboundError, send, terminal_client_error_status
 
 logger = logging.getLogger(__name__)
+
+
+# How long a single delivery attempt may take. Read at CALL time, not import, so a
+# test can shorten it without patching a transport — which is what lets the timeout
+# path be graded against an origin that really stalls, rather than against a mocked
+# clock. Production's value is unchanged.
+_DELIVERY_TIMEOUT_ENV = "ADCP_WEBHOOK_DELIVERY_TIMEOUT_SECONDS"
+_DEFAULT_DELIVERY_TIMEOUT_SECONDS = 10.0
+
+
+def _delivery_timeout_seconds() -> float:
+    """Seconds a single webhook delivery attempt may take before it is abandoned."""
+    raw = os.environ.get(_DELIVERY_TIMEOUT_ENV)
+    if not raw:
+        return _DEFAULT_DELIVERY_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s=%r is not a number — using %ss", _DELIVERY_TIMEOUT_ENV, raw, _DEFAULT_DELIVERY_TIMEOUT_SECONDS
+        )
+        return _DEFAULT_DELIVERY_TIMEOUT_SECONDS
+    if value <= 0:
+        logger.warning(
+            "%s=%r is not positive — using %ss", _DELIVERY_TIMEOUT_ENV, raw, _DEFAULT_DELIVERY_TIMEOUT_SECONDS
+        )
+        return _DEFAULT_DELIVERY_TIMEOUT_SECONDS
+    return value
 
 
 class CircuitState(Enum):
@@ -470,7 +499,13 @@ class WebhookDeliveryService:
         # statuses are worth trying again. No ``field=`` — this URL is read back
         # out of storage, not off a request document.
         try:
-            result = send(config.url, json=payload, headers=headers, timeout=10.0, max_attempts=3)
+            result = send(
+                config.url,
+                json=payload,
+                headers=headers,
+                timeout=_delivery_timeout_seconds(),
+                max_attempts=3,
+            )
         except OutboundError as exc:
             # The BASE class on purpose. A refused URL and a dead one both have to
             # reach record_failure(), or a misconfigured destination stays
