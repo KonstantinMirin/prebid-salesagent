@@ -41,11 +41,15 @@ it:
 
 - contains no ``raise``, AND
 - calls no ``.append(...)`` / ``.extend(...)`` / ``.add(...)``, AND
-- either contains ``continue`` (item explicitly skipped) or consists solely
-  of expression/``pass`` statements (log-only fall-through).
+- contains ``continue`` (item explicitly skipped), OR consists solely of
+  expression/``pass`` statements (log-only fall-through), OR LOGS while assigning
+  a fallback.
 
-Handlers that assign a fallback value and let the iteration proceed are fine —
-the item still reaches the response.
+Handlers that SILENTLY assign a fallback value and let the iteration proceed are
+fine — the item still reaches the response and nothing claims otherwise. Adding a
+log line to such a handler is the handler admitting the value it substituted is
+not the real one, and that admission must reach the buyer too: see
+``_handler_is_silent``.
 
 Allowlist can only SHRINK. Every entry has a FIXME(#gh-issue) at the source.
 """
@@ -102,6 +106,11 @@ SILENT_LOOP_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = {
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl", 0),
 }
 
+#: Logger method names. Used by BOTH rules: a handler that calls one is admitting
+#: something went wrong, which is what disqualifies the otherwise-exempt silent
+#: fallback assignment in each detector.
+_LOG_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "critical"})
+
 FIX_HINT = (
     "Surface the failure: append an advisory Error to the response errors[] list "
     "(see the SERVICE_UNAVAILABLE handler in _get_media_buy_delivery_impl), raise an "
@@ -112,6 +121,20 @@ FIX_HINT = (
 
 def _handler_is_silent(handler: ast.ExceptHandler) -> bool:
     """True when the handler swallows the failure without surfacing it.
+
+    Three swallowing shapes, all equivalent from the buyer's seat:
+
+    - ``continue`` — the item is explicitly skipped;
+    - log-only fall-through — the body is nothing but expression/``pass``;
+    - ASSIGN-A-FALLBACK-**AND**-LOG — the item reaches the response, but carrying a
+      value the seller never asserted, and the log line is the handler ADMITTING
+      that. This is the rule ``_handler_is_exempt_shape``'s docstring already
+      states for the straight-line detector — "A handler that LOGS is admitting
+      something went wrong and must still surface it; only the silent, deliberate
+      default is exempt" — applied here. A SILENT fallback assignment stays exempt
+      (the ``creative_formats`` event-loop retry and cursor reset), so this rule
+      adds no violations today; what it PINS is that a site which chose to log
+      cannot later drop its ``errors[]`` advisory and keep only the log.
 
     KNOWN OVER-APPROXIMATION: a handler is treated as *surfacing* if it raises OR
     calls any ``.append``/``.extend``/``.add`` — regardless of the target. A
@@ -125,6 +148,7 @@ def _handler_is_silent(handler: ast.ExceptHandler) -> bool:
     surfacing is still a human-review responsibility.
     """
     has_continue = False
+    has_log = False
     for node in ast.walk(handler):
         if isinstance(node, ast.Raise):
             return False
@@ -136,8 +160,10 @@ def _handler_is_silent(handler: ast.ExceptHandler) -> bool:
             return False
         if isinstance(node, ast.Continue):
             has_continue = True
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _LOG_METHODS:
+            has_log = True
     log_only = all(isinstance(stmt, ast.Expr | ast.Pass) for stmt in handler.body)
-    return has_continue or log_only
+    return has_continue or log_only or has_log
 
 
 def find_silent_loop_handlers(tree: ast.Module, relpath: str) -> list[tuple[str, str, int]]:
@@ -195,6 +221,21 @@ KNOWN_BAD_SNIPPETS = {
         "        except Exception:\n"
         "            pass\n"
     ),
+    # salesagent-zm5l: list_creatives substituted a CreativeStatus for an unparseable
+    # stored one, so the item DID reach the response — carrying a lifecycle claim the
+    # seller never made. The fix logs AND appends a CONFIGURATION_ERROR advisory; this
+    # snippet is the fix with the append removed, which must stay flagged or nothing
+    # pins the advisory.
+    "log-and-fallback-without-advisory": (
+        "def _qux_impl(req):\n"
+        "    for row in req.rows:\n"
+        "        try:\n"
+        "            status = Status(row.status)\n"
+        "        except ValueError:\n"
+        "            logger.warning('unreadable status %r on %s', row.status, row.id)\n"
+        "            status = Status.processing\n"
+        "        results.append(build(row, status))\n"
+    ),
 }
 
 KNOWN_GOOD_SNIPPETS = {
@@ -215,6 +256,9 @@ KNOWN_GOOD_SNIPPETS = {
         "        except AdCPError:\n"
         "            raise\n"
     ),
+    # A SILENT, deliberate default. Add a log line and it becomes
+    # "log-and-fallback-without-advisory" above, which is BAD — that pair is what
+    # keeps the salesagent-zm5l advisory pinned.
     "fallback-assignment": (
         "def _ok3_impl(req):\n"
         "    for item in req.items:\n"
@@ -223,6 +267,19 @@ KNOWN_GOOD_SNIPPETS = {
         "        except ValueError:\n"
         "            status = 'pending_review'\n"
         "        results.append(build(item, status))\n"
+    ),
+    # The salesagent-zm5l fix itself: assigns a placeholder, logs, AND surfaces an
+    # advisory the buyer reads. The append is what makes it good.
+    "log-and-fallback-with-advisory": (
+        "def _ok5_impl(req):\n"
+        "    for row in req.rows:\n"
+        "        try:\n"
+        "            status = Status(row.status)\n"
+        "        except ValueError:\n"
+        "            logger.warning('unreadable status %r on %s', row.status, row.id)\n"
+        "            advisories.append(Error(code='CONFIGURATION_ERROR', message=row.id))\n"
+        "            status = Status.processing\n"
+        "        results.append(build(row, status))\n"
     ),
     "cleanup-inside-handler-exempt": (
         "def _ok4_impl(req):\n"
@@ -395,8 +452,6 @@ SILENT_ADVISORY_HANDLER_ALLOWLIST: set[tuple[str, str, int]] = {
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 0),
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 1),
 }
-
-_LOG_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "critical"})
 
 
 def _advisory_list_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:

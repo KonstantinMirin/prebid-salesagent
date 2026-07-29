@@ -691,7 +691,12 @@ class Creative(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    # AdCP CreativeStatus member: the buyer-facing reader (list_creatives) parses this
+    # column through the closed spec enum, so a non-member default (this was "pending")
+    # makes every row written with the field omitted unreadable. No CHECK constraint or
+    # PG enum backs it — the spec enum widens over time and DDL would turn a spec bump
+    # into a boot-blocking migration.
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending_review")
 
     # Data field stores creative content and metadata as JSON
     data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)

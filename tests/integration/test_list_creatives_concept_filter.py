@@ -107,10 +107,9 @@ class TestNonScalarConceptValueDropped:
     numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
 
     def test_non_scalar_concept_value_is_dropped(self, integration_db):
-        import logging
 
         from tests.factories import CreativeFactory
-        from tests.helpers.log_capture import LogCaptureHandler
+        from tests.helpers.log_capture import capture_logs
 
         with CreativeListEnv() as env:
             tenant, principal = _seed_authenticated_principal(env)
@@ -121,16 +120,11 @@ class TestNonScalarConceptValueDropped:
                 status="approved",
                 data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
             )
-            # Capture at the producing module's logger, not via caplog: caplog's
-            # root-level handler is lost when suite-level code reconfigures root
-            # handlers, which made this assertion order-dependent in full runs.
-            handler = LogCaptureHandler()
-            listing_logger = logging.getLogger("src.core.tools.creatives.listing")
-            listing_logger.addHandler(handler)
-            try:
+            # capture_logs attaches to the producing module's logger rather than using
+            # caplog: caplog's root-level handler is lost when suite-level code
+            # reconfigures root handlers, which made this order-dependent in full runs.
+            with capture_logs("src.core.tools.creatives.listing") as handler:
                 result = env.call_via(Transport.REST)
-            finally:
-                listing_logger.removeHandler(handler)
 
             assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
             creative = result.wire_response["creatives"][0]
