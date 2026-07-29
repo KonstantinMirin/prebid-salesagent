@@ -416,14 +416,22 @@ def _sync_creatives_impl(
 
         # CreativeUoW auto-commits on clean exit — no explicit commit needed
 
-    # Process assignments (spec-compliant: creative_id → package_ids mapping)
-    assignment_list = _process_assignments(
-        assignments=assignments,
-        results=results,
-        tenant=tenant,
-        validation_mode=validation_mode,
-        principal_id=principal_id,
-    )
+    # Process assignments (spec-compliant: creative_id → package_ids mapping).
+    # A preview must not mutate: _process_assignments performs the
+    # creative_assignments upsert and media-buy status transitions in its OWN
+    # UoW, so under dry_run it must not run at all (sync-creatives-request.json
+    # #/properties/dry_run: "preview what would change without applying"). The
+    # preview consequently omits assigned_to echoes — a read-only preview arm is
+    # the tracked follow-up.
+    assignment_list = []
+    if not dry_run:
+        assignment_list = _process_assignments(
+            assignments=assignments,
+            results=results,
+            tenant=tenant,
+            validation_mode=validation_mode,
+            principal_id=principal_id,
+        )
 
     # Create workflow steps and send notifications for creatives requiring approval
     # Skip in dry_run mode — no side effects

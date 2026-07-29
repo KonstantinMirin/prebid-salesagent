@@ -698,6 +698,41 @@ class TestDryRunMode:
             ).first()
             assert db_creative is None, "Dry run should not persist any creatives"
 
+    def test_dry_run_does_not_write_assignments(self, integration_db):
+        """A dry_run payload carrying assignments for an EXISTING creative writes no rows.
+
+        _process_assignments runs outside the sync unit of work and used to be
+        called unconditionally — a preview that WRITES creative_assignments (and
+        transitions media-buy status) is strictly worse than a mislabelled one.
+        """
+        from src.core.database.repositories.creative import CreativeAssignmentRepository
+
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            pkg_id = pkg.package_id
+
+            # The creative exists for real (live sync, no assignments)...
+            env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_dry_assign", name="Existing")],
+                validation_mode="lenient",
+            )
+            # ...then a PREVIEW carries assignments for it.
+            response = env.call_impl(
+                creatives=[_make_creative_asset(creative_id="c_dry_assign", name="Existing")],
+                assignments={"c_dry_assign": [pkg_id]},
+                validation_mode="lenient",
+                dry_run=True,
+            )
+
+            assert response.dry_run is True
+            assert env._session is not None
+            repo = CreativeAssignmentRepository(env._session, "test_tenant")
+            rows = repo.get_by_creative("c_dry_assign")
+            assert rows == [], f"dry_run wrote {len(rows)} creative_assignments row(s) — a preview must not mutate"
+
 
 def _sync_wire(slug: str, *, dry_run: bool, seed: list | tuple = (), **kwargs) -> list[dict]:
     """Run ONE sync in its own tenant and return the wire dumps of its results.
