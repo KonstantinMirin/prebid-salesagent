@@ -13,7 +13,7 @@ and the 2 uc002 ext-o/ext-p entries (auto-approval seeding) — all 8 xpassed
 in-network (innet_050726_2030) — bringing it to **12**; the uc002 ext-q upload
 entry graduated (fail_on_upload mock fidelity + catalog format +
 `run_async_in_sync_context` format resolution) bringing it to **11**. The main
-merge then took it to **21** (the owner-approved union of 10 parallel-e2e_rest
+merge took it to **17** (the owner-approved union added 10 parallel-e2e_rest
 rows) and the `build_rest_body` reconciliation (#1600 — graduated 2 uc004
 invalid-input rows, unmasked 9 that had been passing only because the harness
 dropped the field before it reached the server) to **24**; graduating those 10

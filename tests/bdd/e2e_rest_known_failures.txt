@@ -42,11 +42,11 @@
 #   1  contested: the ownership PARTITION row is annotated below as a
 #      live-server-accepts validation gap, but it dispatches the same non-spec
 #      `ownership` field as the #1756 group. Classify it in #1756, not here.
-#   0  harness gaps — the last of those graduated with #1430.
-# History of the count: 11 before the main merge -> 17 at the merge (+10
-# parallel-e2e rows, owner-approved union) -> 24 at the build_rest_body
-# reconciliation (#1600: graduated 2, unmasked 9) -> 14 here, graduating the 10
-# parallel-e2e rows on in-network evidence (#1585 A4, block below).
+#   0  harness gaps — none of the 14 is a harness/observability gap today.
+# History of the count: 17 after the main merge (the owner-approved union added
+# the 10 parallel-e2e rows) -> 24 at the build_rest_body reconciliation (#1600:
+# graduated 2, unmasked 9) -> 14 here, graduating those 10 parallel-e2e rows on
+# in-network evidence (#1585 A4, block below).
 # The 4 uc004 date-range rows and the 2 uc004 account valid rows GRADUATED at the
 # #1417 merge and must never be re-added.
 
@@ -182,7 +182,9 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # Ledger xfails are xfail(strict=False) — an xpass is SILENT — so these had been
 # passing unnoticed. Evidence: bdd-in-network run innet_290726_1225 graded all 24
 # ledger rows: exactly these 10 xpassed, the other 14 still xfailed, 0 uncollected.
-# Confirmed on the tree that contains this graduation by run <CONFIRM_RUN_ID>.
+# Confirmed on the tree that CONTAINS this graduation by run innet_290726_1821
+# (full suite exit=0): all 10 now report plain PASS — not xpass — and all 14
+# remaining ledger rows still xfail, 0 uncollected, 0 failures in bdd_e2e.
 #
 # Inspected one scenario at a time per .claude/rules/workflows/xpass-graduation.md
 # (an xpass can also mean the scenario is too weak to fail). Per row:
