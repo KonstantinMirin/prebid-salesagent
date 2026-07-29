@@ -6892,6 +6892,18 @@ mappings:
       upstream_refs: ["BR-RULE-061"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-local-dryrun-delete-missing"
+      adcp_feature: "local-uc011-dry-run-preview-parity.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061", "BR-RULE-062"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-local-dryrun-repeat-key"
+      adcp_feature: "local-uc011-dry-run-preview-parity.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-062"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-ext-g-echo"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null

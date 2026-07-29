@@ -2475,37 +2475,81 @@ def then_account_shows_action(ctx: dict, domain: str, action: str) -> None:
     ctx["last_account"] = acct
 
 
-@then("no accounts were actually created or modified on the seller")
-def then_no_db_writes(ctx: dict) -> None:
-    """Assert dry_run didn't write to DB — query repo and verify no accounts exist."""
+@then(
+    parsers.parse(
+        'result {position:d} on the wire shows brand domain "{domain}" with action "{action}" and billing "{billing}"'
+    )
+)
+def then_positional_result_on_the_wire(ctx: dict, position: int, domain: str, action: str, billing: str) -> None:
+    """Assert the ``position``-th (1-based) result on the wire, by ORDER not by brand.
+
+    Positional deliberately: the scenarios this serves carry ONE natural key
+    TWICE, so both results echo the same brand and a lookup-by-domain step can
+    only ever see the first — it would grade the second vacuously. Reading the
+    wire rather than the typed payload because ``billing`` is the field a preview
+    got wrong by echoing the value the buyer was REPLACING, and only the wire
+    says what the buyer actually received.
+    """
+    accounts = wire_dict(ctx)["accounts"]
+    assert len(accounts) >= position, (
+        f"expected at least {position} results on the wire, got {len(accounts)}: {accounts}"
+    )
+    result = accounts[position - 1]
+    actual = (
+        (result.get("brand") or {}).get("domain"),
+        result.get("action"),
+        result.get("billing"),
+    )
+    assert actual == (domain, action, billing), (
+        f"result {position} on the wire is {actual}, expected {(domain, action, billing)} — full wire: {accounts}"
+    )
+
+
+def _persisted_accounts(ctx: dict, principal_id: str | None = None) -> list[dict[str, Any]]:
+    """The accounts an agent actually has on the seller, as plain values.
+
+    The ONE place this slice reaches the database. Six Then steps repeated the
+    same session/repository/``list_by_principal`` triple, each with its own idea
+    of which fields were worth looking at — and the weakest of them (status only)
+    is what let a dry_run that WROTE the row still pass. Returning plain values
+    also keeps callers off detached ORM instances once the session closes.
+
+    ``principal_id`` defaults to the scenario's own agent; the agent-scoping
+    steps pass another agent's id.
+    """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
-    tenant, principal = ctx["tenant"], ctx["principal"]
+    pid = principal_id or ctx["principal"].principal_id
     with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(principal.principal_id)
-        assert len(accounts) == 0, (
-            f"Expected 0 accounts after dry_run, but found {len(accounts)}: {[a.brand.domain for a in accounts]}"
-        )
+        repo = AccountRepository(session, ctx["tenant"].tenant_id)
+        return [
+            {
+                "account_id": row.account_id,
+                "status": _status_str(row.status),
+                "domain": row.brand.domain if row.brand else None,
+                "billing": row.billing,
+            }
+            for row in repo.list_by_principal(pid)
+        ]
+
+
+@then("no accounts were actually created or modified on the seller")
+def then_no_db_writes(ctx: dict) -> None:
+    """Assert dry_run didn't write to DB — query repo and verify no accounts exist."""
+    accounts = _persisted_accounts(ctx)
+    assert accounts == [], f"Expected 0 accounts after dry_run, but found {[a['domain'] for a in accounts]}"
 
 
 @then("the account was actually created on the seller")
 def then_account_in_db(ctx: dict) -> None:
     """Assert the sync actually wrote to DB — verify the response account_id is persisted."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
-    tenant, principal = ctx["tenant"], ctx["principal"]
     # The response should have the account that was just created
     resp = ctx.get("response")
     assert resp is not None, "Expected a response from the sync"
     expected_id = resp.accounts[0].account_id
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(principal.principal_id)
-        db_ids = {a.account_id for a in accounts}
-        assert expected_id in db_ids, f"Expected account '{expected_id}' in DB, found: {db_ids}"
+    db_ids = {a["account_id"] for a in _persisted_accounts(ctx)}
+    assert expected_id in db_ids, f"Expected account '{expected_id}' in DB, found: {db_ids}"
 
 
 # ── Then: delete_missing assertions ───────────────────────────────────
@@ -2539,19 +2583,12 @@ def then_account_unchanged_or_updated(ctx: dict, domain: str) -> None:
 @then(parsers.parse('agent B\'s account for brand domain "{domain}" is not affected'))
 def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
     """Assert agent B's account is still active (not deactivated by agent A)."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
-    tenant = ctx["tenant"]
-    agent_b = ctx["agents"]["B"]
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(agent_b.principal_id)
-        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
-        assert len(matching) == 1, f"Expected 1 account for agent B domain {domain}, got {len(matching)}"
-        assert matching[0].status != "closed", (
-            f"Agent B's account {domain} was deactivated (status={matching[0].status})"
-        )
+    accounts = _persisted_accounts(ctx, ctx["agents"]["B"].principal_id)
+    matching = [a for a in accounts if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected 1 account for agent B domain {domain}, got {len(matching)}"
+    assert matching[0]["status"] != "closed", (
+        f"Agent B's account {domain} was deactivated (status={matching[0]['status']})"
+    )
 
 
 @then("only agent A's absent accounts are deactivated")
@@ -2561,17 +2598,11 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
     Verifies production's agent-scoping: agent B's accounts must remain active
     (not closed) after agent A's delete_missing operation.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
     agent_b = ctx.get("agents", {}).get("B")
     assert agent_b is not None, "Test setup error: no agent B in context"
-    tenant = ctx["tenant"]
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        agent_b_accounts = repo.list_by_principal(agent_b.principal_id)
+    agent_b_accounts = _persisted_accounts(ctx, agent_b.principal_id)
     assert agent_b_accounts, "Test setup error: agent B should have at least one account"
-    statuses = {a.account_id: _status_str(a.status) for a in agent_b_accounts}
+    statuses = {a["account_id"]: a["status"] for a in agent_b_accounts}
     for acct_id, status in statuses.items():
         assert status != "closed", f"Agent A's delete_missing deactivated agent B's account {acct_id} (status={status})"
 
@@ -2579,19 +2610,28 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
 @then(parsers.parse('brand domain "{domain}" remains in its current state'))
 def then_brand_unchanged(ctx: dict, domain: str) -> None:
     """Assert the account for the given domain was NOT deactivated."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
+    matching = [a for a in _persisted_accounts(ctx) if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected account for {domain}, got {len(matching)}"
+    assert matching[0]["status"] != "closed", (
+        f"Account {domain} was deactivated (status={matching[0]['status']}) but should be unchanged"
+    )
 
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(principal.principal_id)
-        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
-        assert len(matching) == 1, f"Expected account for {domain}, got {len(matching)}"
-        assert matching[0].status != "closed", (
-            f"Account {domain} was deactivated (status={matching[0].status}) but should be unchanged"
-        )
+
+@then(parsers.parse('the persisted account for brand domain "{domain}" still has billing "{billing}"'))
+def then_persisted_billing_unchanged(ctx: dict, domain: str, billing: str) -> None:
+    """Assert a preview left the account's settable state alone, not just its status.
+
+    "Remains in its current state" checked only that the account was not CLOSED,
+    which a dry_run that mutated the loaded row and let the transaction commit
+    passes cleanly. This pins the field the preview reports on, so an outcome the
+    buyer was only shown cannot also have been applied.
+    """
+    matching = [a for a in _persisted_accounts(ctx) if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected exactly one persisted account for {domain}, got {matching}"
+    assert matching[0]["billing"] == billing, (
+        f"Expected persisted billing {billing!r} for {domain}, got {matching[0]['billing']!r} — "
+        "the run wrote a value it only promised to preview"
+    )
 
 
 @then("only the included accounts are processed")

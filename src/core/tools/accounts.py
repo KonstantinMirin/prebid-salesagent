@@ -1294,6 +1294,88 @@ def _new_account_row(
     )
 
 
+def _preview_state_from(
+    existing: DBAccount, *, mode: str, brand_domain: str, brand_id: str | None, operator: str
+) -> DBAccount:
+    """A request-local, never-persisted stand-in for an account already on file.
+
+    This is the POST-WRITE state object the dry_run arms have to read their
+    result fields off. The live arm gets that state for free — ``update_fields``
+    ``setattr``s the identity-mapped instance and flushes — so ``existing`` there
+    means "the row as the write LEFT it". Under dry_run nothing mutates the
+    loaded row, and mutating it would be written out at commit, so the preview
+    needs its own object to apply the resolved changes to.
+
+    The copied column set is DERIVED from :data:`_FIELD_POLICY` — every field
+    ``mode`` marks ``applied``, which is exactly the set the comparison can
+    change. Hand-listing it would make this seed the third field list this bug
+    is about. Raw ``getattr``, not :func:`_persisted_value`: the comparison
+    applies its own serialization on top, on both arms, so the seed must mirror
+    the raw COLUMN state the live arm's row carries.
+
+    Construction goes through :func:`_new_account_row` so accounts.py keeps ONE
+    row-construction site (tests/unit/test_guards_sync_accounts_row_builder.py).
+    Never ``copy``/``deepcopy``/``expunge`` the loaded row: the first two carry
+    ``_sa_instance_state`` and the last breaks the live arm's identity map.
+
+    ``mode`` is a parameter rather than a constant because the settings-update
+    arm needs the same state object under its own disposition column.
+
+    Note the row's identity comes from the caller's NATURAL KEY rather than off
+    ``existing``: the two agree by construction (``get_by_natural_key`` filtered
+    on exactly these, and all three are immutable at the repository), and the key
+    is the non-optional spelling. A consequence is that ``brand`` is REBUILT, so
+    any extra key in the persisted brand dict is dropped — safe on the
+    provisioning arm, where nothing reads ``state.brand`` (the result echoes
+    ``entry.brand`` and ``_FIELD_POLICY`` has no brand field), but do not hand
+    this object to code that does.
+    """
+    created_fields = {
+        field: getattr(existing, field) for field in _FIELD_POLICY if _disposition(field, mode).kind == "applied"
+    }
+    return _new_account_row(
+        tenant_id=existing.tenant_id,
+        account_id=existing.account_id,
+        name=existing.name,
+        status=existing.status,
+        brand_domain=brand_domain,
+        brand_id=brand_id,
+        operator=operator,
+        principal_id=existing.principal_id,
+        created_fields=created_fields,
+    )
+
+
+def _build_update_result(*, entry: Any, operator: str, state: Any, changes: dict[str, Any]) -> SyncResponseAccount:
+    """The ONE place a provisioning ``updated``/``unchanged`` result is built.
+
+    ``state`` MUST be the POST-WRITE row — the row as the write would leave it,
+    which is the loaded instance after ``repo.update_fields`` on the live arm and
+    the request-local preview object after the equivalent ``setattr`` loop on the
+    dry arm. Every reported value is read off it, so the two arms cannot describe
+    the same outcome differently.
+
+    Drift insurance, not a bug fix: before #1721 both arms already called one
+    builder with a byte-identical argument list and STILL diverged, because the
+    row they handed it meant different things. What this function adds is a
+    single, guarded place where "post-write" is stated as a precondition
+    (tests/unit/test_guards_sync_accounts_update_result_builder.py), so a future
+    edit cannot quietly reintroduce a pre-write read next to a post-write one.
+    """
+    return _build_sync_result(
+        brand=entry.brand,
+        operator=operator,
+        action="updated" if changes else "unchanged",
+        status=state.status,
+        account_id=state.account_id,
+        name=state.name,
+        billing=state.billing,
+        sandbox=state.sandbox,
+        notification_configs=state.notification_configs,
+        billing_entity=state.billing_entity,
+    )
+
+
 def _apply_to_existing_account(entry: Any, existing: Any, repo: Any, operator: str) -> SyncResponseAccount:
     """Apply a provisioning entry to the account that already holds its natural key.
 
@@ -1305,25 +1387,12 @@ def _apply_to_existing_account(entry: Any, existing: Any, repo: Any, operator: s
     """
     changes = _account_fields_changed(existing, entry)
     if changes:
+        # ``update_fields`` setattrs the identity-mapped instance and flushes, so
+        # ``existing`` is the POST-write row from here on — which is what
+        # _build_update_result requires.
         repo.update_fields(existing.account_id, **changes)
-        action = "updated"
-    else:
-        action = "unchanged"
 
-    return _build_sync_result(
-        brand=entry.brand,
-        operator=operator,
-        action=action,
-        status=existing.status,
-        account_id=existing.account_id,
-        name=existing.name,
-        billing=existing.billing,
-        sandbox=existing.sandbox,
-        # Post-write state: the applied array, which is the changed value when this
-        # sync touched it and the persisted one when it did not (omission preserves).
-        notification_configs=changes.get("notification_configs", existing.notification_configs),
-        billing_entity=changes.get("billing_entity", existing.billing_entity),
-    )
+    return _build_update_result(entry=entry, operator=operator, state=existing, changes=changes)
 
 
 def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
@@ -1388,8 +1457,10 @@ async def _sync_accounts_impl(
     results: list[SyncResponseAccount] = []
     # Track natural keys in the payload for delete_missing
     seen_account_ids: set[str] = set()
-    #: dry_run only — natural key -> the row that key's earlier entry WOULD have
-    #: created. Stands in for the flush the live arm gets from repo.create().
+    #: dry_run only — natural key -> the POST-WRITE state this request has left on
+    #: that key: the row an earlier entry WOULD have created, or a never-persisted
+    #: stand-in for the row already on file. Stands in for the state the live arm
+    #: gets for free from repo.create()'s flush and repo.update_fields()' setattr.
     previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount] = {}
 
     # Activation proof runs BEFORE the write transaction opens (see
@@ -1500,42 +1571,43 @@ async def _sync_accounts_impl(
             # would collapse accounts that differ only by brand_id or sandbox, which
             # are legitimately distinct.
             natural_key = (brand_domain, brand_id, operator, bool(sandbox))
-            previewed = previewed_by_key.get(natural_key) if dry_run else None
-            if existing is None and previewed is not None:
-                existing = previewed
+            if dry_run:
+                # The state this request has already left on the key — seeded from
+                # the persisted row on first touch, so a key that ALSO has a row
+                # gains the same in-request memory a previewed CREATE has. Without
+                # the seed every entry on that key is graded against the same
+                # unmutated row, and the result echoes the value the buyer is
+                # REPLACING rather than the one they would get (#1721).
+                state = previewed_by_key.get(natural_key)
+                if state is None and existing is not None:
+                    state = _preview_state_from(
+                        existing,
+                        mode="provisioning",
+                        brand_domain=brand_domain,
+                        brand_id=brand_id,
+                        operator=operator,
+                    )
+                    previewed_by_key[natural_key] = state
+                if state is not None:
+                    # Everything downstream — the create/update decision, the
+                    # comparison, and every reported field — reads the state, never
+                    # the loaded row.
+                    existing = state
 
             if existing is not None:
                 seen_account_ids.add(existing.account_id)
 
                 if dry_run:
-                    # Check if fields would change
                     changes = _account_fields_changed(existing, entry)
-                    action = "updated" if changes else "unchanged"
-                    if previewed is not None and changes:
-                        # Carry the change forward exactly as the live arm does by
-                        # UPDATING the row: a third entry on this key must be
-                        # resolved against the state the second one left, not the
-                        # first. Only ever mutates the unpersisted preview object —
-                        # mutating a real loaded row here would be written out at
-                        # commit, which a dry_run must never do.
-                        for field, value in changes.items():
-                            setattr(previewed, field, value)
+                    # The write the live arm performs, in memory only: `existing` is
+                    # the request-local state seeded above, never a persisted row,
+                    # so this can reach no session. Applied UNFILTERED, exactly as
+                    # the live arm hands `changes` to repo.update_fields — filtering
+                    # here would let the preview report a change no real run makes.
+                    for field, value in changes.items():
+                        setattr(existing, field, value)
                     results.append(
-                        _build_sync_result(
-                            brand=entry.brand,
-                            operator=operator,
-                            action=action,
-                            status=existing.status,
-                            account_id=existing.account_id,
-                            name=existing.name,
-                            billing=existing.billing,
-                            sandbox=existing.sandbox,
-                            # Preview the array the write WOULD apply, not the
-                            # persisted one -- a dry_run that echoed the old set
-                            # would misreport what the buyer is about to change.
-                            notification_configs=changes.get("notification_configs", existing.notification_configs),
-                            billing_entity=changes.get("billing_entity", existing.billing_entity),
-                        )
+                        _build_update_result(entry=entry, operator=operator, state=existing, changes=changes)
                     )
                     continue
 
@@ -1655,12 +1727,19 @@ async def _sync_accounts_impl(
                     )
                 )
 
-        # BR-RULE-061: delete_missing — close accounts not in payload
-        if delete_missing and not dry_run:
+        # BR-RULE-061: delete_missing — close accounts not in payload.
+        # The block runs under dry_run too, and ONLY the mutation is skipped:
+        # deactivation is the sole effect delete_missing has, and dry_run "returns
+        # what would be created/updated/deactivated" (v3.1.1
+        # sync-accounts-request.json#/properties/dry_run), so a preview that walks
+        # nothing tells the buyer none of their accounts would close. Building the
+        # result outside the guard is what makes the two arms byte-identical here.
+        if delete_missing:
             agent_accounts = repo.list_by_principal(principal_id)
             for db_acct in agent_accounts:
                 if db_acct.account_id not in seen_account_ids:
-                    repo.update_status(db_acct.account_id, "closed")
+                    if not dry_run:
+                        repo.update_status(db_acct.account_id, "closed")
                     results.append(
                         _build_sync_result(
                             brand=db_acct.brand,

@@ -1017,3 +1017,236 @@ class TestSyncAccountsBrandIdRoundTrip:
         assert account.name == "acme.com:brand_one c/o example.com", (
             f"the echoed name must carry the plain brand_id on {transport.value}, got {account.name!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# dry_run preview vs live run — the LIVE RUN IS THE ORACLE
+# ---------------------------------------------------------------------------
+
+
+def _entry(domain: str, *, operator: str = "example.com", billing: str = "operator") -> dict:
+    """One provisioning-mode sync entry keyed by the natural key."""
+    return {"brand": {"domain": domain}, "operator": operator, "billing": billing}
+
+
+def _canonical(results: list) -> list[dict]:
+    """Wire dumps with seller-generated account_ids canonicalised by first use.
+
+    ``_generate_account_id`` is a uuid4, so two runs of the same payload in two
+    tenants can never produce equal ids — but WHICH results share an id is
+    exactly what a preview must get right (two entries on one natural key must
+    not preview two different accounts). Mapping each distinct id to the ordinal
+    of its first appearance keeps that relationship gradable while dropping the
+    randomness.
+    """
+    seen: dict[str, str] = {}
+    out: list[dict] = []
+    for r in results:
+        d = r.model_dump(mode="json")
+        aid = d.get("account_id")
+        if aid is not None:
+            d["account_id"] = seen.setdefault(aid, f"acc#{len(seen)}")
+        out.append(d)
+    return out
+
+
+async def _sync_wire(slug: str, *, dry_run: bool, seed: list | tuple = (), **req_kwargs) -> list[dict]:
+    """Run ONE sync in its own tenant and return the canonicalised wire results.
+
+    ``seed`` is synced LIVE first (that is how an account becomes persisted),
+    then the measured call runs with ``dry_run``.
+    """
+    tenant_id, principal_id = f"dro_{slug}", f"ag_dro_{slug}"
+    with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+        env.setup_default_data()
+        if seed:
+            await env.call_impl_async(req=SyncAccountsRequest(accounts=list(seed)))
+        response = await env.call_impl_async(req=SyncAccountsRequest(dry_run=dry_run, **req_kwargs))
+    return _canonical(response.accounts)
+
+
+async def _preview_and_live(slug: str, **kwargs) -> tuple[list[dict], list[dict]]:
+    """Run the SAME payload as a preview and as a live sync, in separate tenants."""
+    preview = await _sync_wire(f"{slug}d", dry_run=True, **kwargs)
+    live = await _sync_wire(f"{slug}l", dry_run=False, **kwargs)
+    return preview, live
+
+
+def _assert_preview_matches_live(preview: list[dict], live: list[dict]) -> None:
+    """The live run is the oracle: the preview must be what a real run produces."""
+    assert preview == live, (
+        "dry_run previewed a result a real run does not produce\n"
+        f"  DRY  ({len(preview)} entries): {preview}\n"
+        f"  LIVE ({len(live)} entries): {live}"
+    )
+
+
+def _summary(wire: list[dict]) -> list[tuple]:
+    """(brand domain, action, status) per result — the readable divergence."""
+    return [((e.get("brand") or {}).get("domain"), e.get("action"), e.get("status")) for e in wire]
+
+
+def _persisted_applied_state(tenant_id: str) -> list[dict]:
+    """Every persisted account's status plus each field a provisioning re-sync can apply.
+
+    The field set is DERIVED from ``_FIELD_POLICY`` rather than named: naming it
+    would make this the third hand-maintained field list, which is the shape of
+    the bug these tests grade.
+    """
+    from src.core.database.repositories.uow import AccountUoW
+    from src.core.tools.accounts import _FIELD_POLICY, _disposition
+
+    applied = [f for f in _FIELD_POLICY if _disposition(f, "provisioning").kind == "applied"]
+    with AccountUoW(tenant_id) as uow:
+        assert uow.accounts is not None
+        return [
+            {"account_id": row.account_id, "status": row.status, **{f: getattr(row, f) for f in applied}}
+            for row in uow.accounts.list_all()
+        ]
+
+
+class TestDryRunPreviewMatchesLiveRun:
+    """BR-RULE-062: a dry_run preview must describe an outcome a real run produces.
+
+    Each case runs the SAME payload twice — once with ``dry_run=True``, once live,
+    in separate tenants — and grades the preview with the LIVE RUN AS THE ORACLE.
+    Nothing here hand-writes what the preview "should" say; a hand-written
+    expectation would merely re-encode today's behaviour as a contract.
+
+    Spec (adcp 6.6 / AdCP 3.1.1): ``dist/schemas/3.1.1/account/
+    sync-accounts-request.json#/properties/dry_run`` — "When true, preview what
+    would change without applying. Returns what would be created/updated/
+    **deactivated**"; ``#/properties/delete_missing`` — "accounts previously
+    synced by this agent but not included in this request will be deactivated".
+    Deactivation is the ONLY thing ``delete_missing`` does, so a preview that
+    omits it does not return "what would be deactivated".
+    Conformance storyboard: UNGRADED — neither ``dry_run`` nor ``delete_missing``
+    appears anywhere in ``dist/compliance/3.1.1`` (198 scenario files scanned).
+    """
+
+    @pytest.mark.asyncio
+    async def test_delete_missing_previews_the_closures(self, integration_db):
+        """(a) The reproduction: the whole delete_missing block is skipped under dry_run.
+
+        ``accounts.py`` guards it with ``if delete_missing and not dry_run:``, so a
+        buyer who runs delete_missing=true with dry_run=true — precisely to see
+        WHICH of their accounts would close before doing it for real — gets a
+        response that mentions none of them.
+        """
+        seed = [_entry("acme.com"), _entry("beta.com")]
+        payload = [_entry("acme.com")]
+
+        preview, live = await _preview_and_live("dm", seed=seed, accounts=payload, delete_missing=True)
+
+        # Precondition: a real run closes beta.com and says so.
+        assert ("beta.com", "updated", "closed") in _summary(live), (
+            f"precondition: the live run must report the closure, got {_summary(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    @pytest.mark.asyncio
+    async def test_delete_missing_preview_closes_nothing(self, integration_db):
+        """A preview that gains the closure entries must still write nothing."""
+        from src.core.database.repositories.uow import AccountUoW
+
+        with AccountSyncEnv(tenant_id="dro_dmp", principal_id="ag_dro_dmp") as env:
+            env.setup_default_data()
+            await env.call_impl_async(req=SyncAccountsRequest(accounts=[_entry("acme.com"), _entry("beta.com")]))
+            await env.call_impl_async(
+                req=SyncAccountsRequest(accounts=[_entry("acme.com")], delete_missing=True, dry_run=True)
+            )
+
+        with AccountUoW("dro_dmp") as uow:
+            assert uow.accounts is not None
+            statuses = {a.brand.domain: a.status for a in uow.accounts.list_all()}
+        assert statuses == {"acme.com": "active", "beta.com": "active"}, (
+            f"dry_run must not close anything, got {statuses}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_repeated_update_of_existing_account_previews_the_live_outcome(self, integration_db):
+        """(b) A second entry on a PRE-EXISTING key resolves against stale state.
+
+        Live, entry 1's write lands on the row entry 2 then reads, so entry 2 has
+        nothing left to change. The preview compares BOTH entries against the same
+        persisted row — the in-request memory added for previewed CREATES is never
+        populated for a key that already has a row — so it reports the change twice.
+        """
+        seed = [_entry("acme.com", billing="operator")]
+        payload = [_entry("acme.com", billing="advertiser"), _entry("acme.com", billing="advertiser")]
+
+        preview, live = await _preview_and_live("ru", seed=seed, accounts=payload)
+
+        assert [a for _, a, _ in _summary(live)] == ["updated", "unchanged"], (
+            f"precondition: live must resolve entry 2 against entry 1's write, got {_summary(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    @pytest.mark.asyncio
+    async def test_third_entry_resolves_against_what_the_second_left(self, integration_db):
+        """Entry 3 must be graded against entry 2's state, not the seeded row."""
+        seed = [_entry("acme.com", billing="operator")]
+        payload = [
+            _entry("acme.com", billing="advertiser"),
+            _entry("acme.com", billing="operator"),
+            _entry("acme.com", billing="operator"),
+        ]
+
+        preview, live = await _preview_and_live("th", seed=seed, accounts=payload)
+
+        assert [a for _, a, _ in _summary(live)] == ["updated", "updated", "unchanged"], (
+            f"precondition: live must chain all three entries onto one row, got {_summary(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    @pytest.mark.asyncio
+    async def test_single_entry_update_previews_the_state_it_would_leave(self, integration_db):
+        """The narrowest case: ONE entry updating ONE persisted account.
+
+        No duplicates, no delete_missing — this isolates whether the preview echoes
+        the state the write WOULD leave or the state that is persisted now.
+        """
+        seed = [_entry("acme.com", billing="operator")]
+        payload = [_entry("acme.com", billing="advertiser")]
+
+        preview, live = await _preview_and_live("se", seed=seed, accounts=payload)
+
+        assert [a for _, a, _ in _summary(live)] == ["updated"], (
+            f"precondition: live must update the seeded account, got {_summary(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    @pytest.mark.asyncio
+    async def test_update_preview_persists_nothing(self, integration_db):
+        """The update preview builds a SECOND kind of ORM row — pin that none of it lands.
+
+        Two ways this path could write, and both surface as a changed persisted
+        account: the never-added seed row reaching a flush, or the in-memory
+        "apply the changes" loop landing on the LOADED row, which the UoW commits
+        on clean exit. Companion to ``test_duplicate_key_dry_run_persists_nothing``,
+        which pins the same thing for the CREATE preview.
+        """
+        with AccountSyncEnv(tenant_id="dro_upn", principal_id="ag_dro_upn") as env:
+            env.setup_default_data()
+            await env.call_impl_async(req=SyncAccountsRequest(accounts=[_entry("acme.com", billing="operator")]))
+            before = _persisted_applied_state("dro_upn")
+
+            await env.call_impl_async(
+                req=SyncAccountsRequest(accounts=[_entry("acme.com", billing="advertiser")], dry_run=True)
+            )
+            after = _persisted_applied_state("dro_upn")
+
+        assert before, "precondition: the seed sync must have persisted an account to preview against"
+        assert after == before, f"dry_run changed persisted state:\n  BEFORE {before}\n  AFTER  {after}"
+
+    @pytest.mark.asyncio
+    async def test_distinct_natural_keys_are_not_collapsed(self, integration_db):
+        """Control: the fix must not over-collapse two genuinely distinct accounts."""
+        payload = [_entry("one.com"), _entry("two.com")]
+
+        preview, live = await _preview_and_live("dk", accounts=payload)
+
+        assert [a for _, a, _ in _summary(live)] == ["created", "created"], (
+            f"precondition: distinct natural keys are distinct accounts, got {_summary(live)}"
+        )
+        _assert_preview_matches_live(preview, live)
