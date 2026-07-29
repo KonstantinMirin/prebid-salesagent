@@ -87,12 +87,22 @@ class E2EConfig:
     """Configuration for E2E transport dispatch.
 
     Attributes:
-        base_url: Docker stack URL (e.g., ``http://localhost:8092``).
+        base_url: Docker stack URL (e.g., ``http://localhost:8092``). Stays
+            PLAINTEXT — 487 bdd_e2e and 95 e2e tests target it and do not move.
         postgres_url: Docker PostgreSQL URL for factory data writes.
+        tls_base_url: The SECOND origin the same stack serves, over real TLS at a
+            dotted host (e.g. ``https://proxy.adcp.test:8443``). ``None`` when the
+            stack publishes no TLS listener. Additive: only scenarios that need a
+            real handshake read it (salesagent-tgzb).
+        ca_bundle: ABSOLUTE path to the CA that signed the stack's leaf. Absolute
+            because pytest does not always run from the repo root. ``None`` when
+            there is no TLS listener to verify.
     """
 
     base_url: str
     postgres_url: str
+    tls_base_url: str | None = None
+    ca_bundle: str | None = None
 
 
 @dataclass(frozen=True)

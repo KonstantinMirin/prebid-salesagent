@@ -149,6 +149,45 @@ services:
       timeout: 5s
       retries: 5
 
+  # ─── TLS listener (salesagent-tgzb) ────────────────────────────────────────
+  # ADDITIVE, never a migration: `proxy` above keeps its plaintext :8000 exactly
+  # as it is, and E2E_BASE_URL still points there. This is a SECOND listener, on
+  # a SECOND port, at a DOTTED name — the one thing the plaintext stack cannot
+  # provide. `_get_protocol_for_domain` answers https for `proxy.adcp.test:8443`
+  # because the name has a dot and is not loopback; this service is what makes
+  # that answer true rather than merely asserted.
+  #
+  # Stock nginx:stable — the entrypoint renders /etc/nginx/templates/*.template
+  # into conf.d with envsubst, so ${TLS_UPSTREAM} is per-instance and no custom
+  # image is needed. Per-worker bdd_e2e sidecars run this same service with their
+  # own upstream (see run_all_tests.sh).
+  #
+  # The certificate must exist BEFORE `up`: every entry point calls
+  # scripts/dev/ensure-test-tls.sh first (test-stack.sh, run_all_tests.sh,
+  # tests/e2e/conftest.py). Without it the bind mount below would materialise an
+  # empty directory and nginx would fail to start.
+  tls-proxy:
+    image: nginx:stable
+    environment:
+      TLS_UPSTREAM: ${TLS_UPSTREAM:-adcp-server:8080}
+    volumes:
+      - ./config/nginx/nginx-tls-test.conf.template:/etc/nginx/templates/tls-test.conf.template:ro
+      - ./.test-tls:/app/.test-tls:ro
+    depends_on:
+      - adcp-server
+    networks:
+      default:
+        # A dotted alias is the whole mechanism for the SHARED stack. (The
+        # per-worker sidecars cannot use one — `docker compose run` has no
+        # --network-alias — so they carry a dotted CONTAINER NAME instead.)
+        aliases:
+          - proxy.adcp.test
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://proxy.adcp.test:8443/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # In-network test runner (Option 1). Reaches Postgres/the server by SERVICE
   # NAME on the compose network — postgres:5432, proxy:8000 — so it needs NO
   # published host ports. Each `docker compose -p <project>` gets its own
@@ -180,6 +219,14 @@ services:
       BDD_E2E_ENABLED: "${BDD_E2E_ENABLED:-true}"
       E2E_BASE_URL: http://proxy:8000
       E2E_POSTGRES_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      # The TLS listener is ADDITIVE: E2E_BASE_URL above keeps its plaintext
+      # value (487 bdd_e2e + 95 e2e tests target it), and these two name the
+      # SECOND origin for the scenarios that need a real handshake. The CA path
+      # is ABSOLUTE — pytest does not always run from the repo root, and /app IS
+      # the repo root here (the `.:/app` bind mount), so the runner reads the
+      # very file the generator wrote on the host.
+      E2E_TLS_BASE_URL: ${E2E_TLS_BASE_URL:-https://proxy.adcp.test:8443}
+      E2E_CA_BUNDLE: /app/.test-tls/ca.pem
       # Suites that hit the running server reach it in-network (no host port).
       ADCP_SERVER_URL: http://proxy:8000
       ADCP_SALES_PORT: "8000"
