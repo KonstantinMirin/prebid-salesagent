@@ -83,6 +83,7 @@ from tests.helpers.idempotency_seeds import (
     seed_media_buy,
     seed_principal,
 )
+from tests.helpers.race_window import concurrent_commit_in_write_window, operator_answer
 
 __all__ = [
     # Auth helpers
@@ -90,6 +91,9 @@ __all__ = [
     # Envelope assertions
     "assert_envelope_shape",
     "assert_no_raw_validation_leak",
+    # Concurrency harness
+    "concurrent_commit_in_write_window",
+    "operator_answer",
     # Idempotency cache seeding
     "make_active_cached_success",
     "seed_cached_success",

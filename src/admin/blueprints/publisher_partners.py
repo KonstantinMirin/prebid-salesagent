@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from src.core.config import get_config
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PublisherPartner, Tenant
 from src.core.domain_config import get_tenant_url
 
@@ -115,11 +116,17 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
             is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
             should_auto_verify = is_dev or is_mock
 
-            # Check if already exists
-            stmt = select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain=publisher_domain)
-            existing = session.scalars(stmt).first()
-            if existing:
-                return jsonify({"error": "Publisher already exists"}), 409
+            # Check if already exists. The unique index is the authority, so this
+            # same answer serves the loser of a concurrent create (see
+            # resolve_or_write) rather than a 500 carrying the driver's message.
+            existing_partner_stmt = select(PublisherPartner).filter_by(
+                tenant_id=tenant_id, publisher_domain=publisher_domain
+            )
+
+            def already_exists() -> tuple[Response, int] | None:
+                if session.scalars(existing_partner_stmt).first():
+                    return jsonify({"error": "Publisher already exists"}), 409
+                return None
 
             # Create new partner
             # Auto-verify for dev environment or mock adapters (no real adagents.json to check)
@@ -131,7 +138,14 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
                 is_verified=should_auto_verify,
                 last_synced_at=datetime.now(UTC) if should_auto_verify else None,
             )
-            session.add(partner)
+            conflict = resolve_or_write(
+                session,
+                conflict=already_exists,
+                write=lambda: session.add(partner),
+                constraint="uq_tenant_publisher",
+            )
+            if conflict is not None:
+                return conflict
             session.commit()
 
             # Build message

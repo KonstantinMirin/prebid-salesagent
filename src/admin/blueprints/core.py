@@ -24,7 +24,9 @@ from sqlalchemy import select, text
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
+from src.core.database.repositories import TenantLookupRepository
 from src.core.domain_config import (
     extract_subdomain_from_host,
     is_sales_agent_domain,
@@ -408,6 +410,23 @@ def metrics():
     return get_metrics_text(), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
+def _tenant_already_exists(db_session, tenant_id: str, subdomain: str):
+    """The create-tenant page's answer when either tenants index is taken, else None.
+
+    Both keys have to be checked, not just ``tenant_id``: this route derives
+    ``tenant_id`` from the submitted subdomain, but the tenant management API mints
+    a uuid-derived one, so a tenant created there holding this subdomain leaves a
+    tenant_id-only check clean and the INSERT trips ``tenants_subdomain_key``
+    instead. ``resolve_or_write`` names both indexes, and it re-invokes this on the
+    race path — so anything it narrows on has to be visible here, or the re-resolve
+    finds nothing and re-raises.
+    """
+    if TenantLookupRepository(db_session).find_by_id_or_subdomain(tenant_id, subdomain):
+        flash(f"Tenant with ID {tenant_id} already exists", "error")
+        return render_template("create_tenant.html")
+    return None
+
+
 @core_bp.route("/create_tenant", methods=["GET", "POST"])
 @require_auth(admin_only=True)
 @log_admin_action("create_tenant")
@@ -439,12 +458,6 @@ def create_tenant():
         admin_token = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
 
         with get_db_session() as db_session:
-            # Check if tenant already exists
-            existing = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if existing:
-                flash(f"Tenant with ID {tenant_id} already exists", "error")
-                return render_template("create_tenant.html")
-
             # Create new tenant
             new_tenant = Tenant(
                 tenant_id=tenant_id,
@@ -488,7 +501,14 @@ def create_tenant():
                     [d.strip() for d in authorized_domains.split(",") if d.strip()]
                 )
 
-            db_session.add(new_tenant)
+            conflict = resolve_or_write(
+                db_session,
+                conflict=lambda: _tenant_already_exists(db_session, tenant_id, subdomain),
+                write=lambda: db_session.add(new_tenant),
+                constraint=("tenants_pkey", "tenants_subdomain_key"),
+            )
+            if conflict is not None:
+                return conflict
             db_session.commit()
 
             # Note: No default principal created - principals must be added manually

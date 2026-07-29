@@ -11,6 +11,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from sqlalchemy import or_, select
 
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, CurrencyLimit, Principal, Tenant, User
 from src.core.domain_config import extract_subdomain_from_host, get_sales_agent_domain, is_sales_agent_domain
 
@@ -222,44 +223,41 @@ def provision_tenant():
             # Create or update admin user
             import uuid
 
-            from sqlalchemy.exc import IntegrityError
+            # Adopt an existing user for this tenant rather than inserting.
+            # uq_users_tenant_email is the authority, so the same adoption serves
+            # the loser of a concurrent signup — and the savepoint keeps the
+            # recovery from discarding the tenant, adapter config and currency
+            # limit staged above (a session-wide rollback here would, and the
+            # default principal added below carries an FK to the tenant).
+            existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=user_email.lower())
 
-            # Check if user already exists for this tenant
-            stmt = select(User).filter_by(tenant_id=tenant_id, email=user_email.lower())
-            existing_user = db_session.scalars(stmt).first()
+            def adopt_existing_user():
+                existing_user = db_session.scalars(existing_user_stmt).first()
+                if existing_user:
+                    existing_user.last_login = now
+                    existing_user.is_active = True
+                    logger.info(f"User {user_email} already exists for tenant {tenant_id}, updating last_login")
+                    return existing_user
+                return None
 
-            if existing_user:
-                # Update existing user's last login
-                existing_user.last_login = now
-                existing_user.is_active = True
-                logger.info(f"User {user_email} already exists for tenant {tenant_id}, updating last_login")
-            else:
-                # Create new user record for this tenant
-                admin_user = User(
-                    user_id=str(uuid.uuid4()),
-                    tenant_id=tenant_id,
-                    email=user_email.lower(),
-                    name=user_name,
-                    role="admin",
-                    is_active=True,
-                    created_at=now,
-                    last_login=now,
-                )
-                db_session.add(admin_user)
-                try:
-                    db_session.flush()  # Flush to detect constraint violations before full commit
-                    logger.info(f"Created new user {user_email} for tenant {tenant_id}")
-                except IntegrityError:  # structural-guard: integrity-narrowing - FIXME(#1721): unnarrowed, and rolls back a session carrying other pending work
-                    # Race condition: another request created the user simultaneously
-                    db_session.rollback()
-                    logger.warning(
-                        f"User {user_email} was created concurrently for tenant {tenant_id}, updating instead"
-                    )
-                    stmt = select(User).filter_by(tenant_id=tenant_id, email=user_email.lower())
-                    existing_user = db_session.scalars(stmt).first()
-                    if existing_user:
-                        existing_user.last_login = now
-                        existing_user.is_active = True
+            admin_user = User(
+                user_id=str(uuid.uuid4()),
+                tenant_id=tenant_id,
+                email=user_email.lower(),
+                name=user_name,
+                role="admin",
+                is_active=True,
+                created_at=now,
+                last_login=now,
+            )
+            adopted = resolve_or_write(
+                db_session,
+                conflict=adopt_existing_user,
+                write=lambda: db_session.add(admin_user),
+                constraint="uq_users_tenant_email",
+            )
+            if adopted is None:
+                logger.info(f"Created new user {user_email} for tenant {tenant_id}")
 
             # Create default principal (for testing/demo purposes)
             default_principal = Principal(

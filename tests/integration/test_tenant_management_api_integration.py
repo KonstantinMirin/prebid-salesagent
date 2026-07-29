@@ -173,6 +173,35 @@ class TestTenantManagementAPIIntegration:
         assert data["name"] == "Test News Publisher"
         assert data["subdomain"] == "test-news"
 
+    def test_duplicate_subdomain_returns_409(self, client, mock_api_key_auth):
+        """A subdomain that is already taken answers 409, not 500.
+
+        This route had no pre-check at all: its only duplicate branch matched
+        ``"UNIQUE constraint failed: tenants.subdomain"``, which is SQLite
+        wording. This project is PostgreSQL-exclusive, so that branch was dead
+        and EVERY duplicate subdomain returned ``500 {"error": "Failed to create
+        tenant"}`` — race or no race. No race harness here: asserting a race
+        against a defect that is not a race would grade nothing.
+        """
+        tenant_data = {
+            "name": "First Claimant",
+            "subdomain": "contested-subdomain",
+            "ad_server": "mock",
+            "creator_email": "first@example.com",
+        }
+        headers = {"X-Tenant-Management-API-Key": mock_api_key_auth}
+
+        assert client.post("/api/v1/tenant-management/tenants", headers=headers, json=tenant_data).status_code == 201
+
+        response = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers=headers,
+            json={**tenant_data, "name": "Second Claimant", "creator_email": "second@example.com"},
+        )
+
+        assert response.status_code == 409
+        assert response.json == {"error": "Subdomain already exists"}
+
     def test_list_tenants(self, client, mock_api_key_auth, test_tenant):
         """Test listing all tenants."""
         response = client.get(

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User
 
 logger = logging.getLogger(__name__)
@@ -90,11 +91,16 @@ def add_user(tenant_id):
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
         with get_db_session() as db_session:
-            # Check if user already exists
-            existing = db_session.scalars(select(User).filter_by(tenant_id=tenant_id, email=email)).first()
-            if existing:
-                flash(f"User {email} already exists", "error")
-                return redirect(url_for("users.list_users", tenant_id=tenant_id))
+            # Check if user already exists. uq_users_tenant_email is the authority,
+            # so this same answer serves the loser of a concurrent add.
+            existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=email)
+
+            def already_exists():
+                existing = db_session.scalars(existing_user_stmt).first()
+                if existing:
+                    flash(f"User {email} already exists", "error")
+                    return redirect(url_for("users.list_users", tenant_id=tenant_id))
+                return None
 
             # Create new user
             import uuid
@@ -112,7 +118,14 @@ def add_user(tenant_id):
                 created_at=datetime.now(UTC),
             )
 
-            db_session.add(user)
+            conflict = resolve_or_write(
+                db_session,
+                conflict=already_exists,
+                write=lambda: db_session.add(user),
+                constraint="uq_users_tenant_email",
+            )
+            if conflict is not None:
+                return conflict
             db_session.commit()
 
             flash(f"User {email} added successfully", "success")

@@ -19,7 +19,9 @@ from sqlalchemy import select
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
+from src.core.database.repositories import TenantLookupRepository
 from src.services.ai.config import uses_legacy_gemini_api_key
 
 logger = logging.getLogger(__name__)
@@ -190,13 +192,32 @@ def update_general(tenant_id):
                         )
                         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
-                    # Check if virtual host is already in use by another tenant
-                    existing_tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=virtual_host)).first()
-                    if existing_tenant and existing_tenant.tenant_id != tenant_id:
-                        flash("This virtual host is already in use by another tenant", "error")
-                        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                    # Check if virtual host is already in use by another tenant.
+                    # The predicate depends on the winner's identity, so the race
+                    # arm re-runs it rather than repeating a canned message.
+                    def taken_by_another_tenant():
+                        existing_tenant = TenantLookupRepository(db_session).find_by_virtual_host(virtual_host)
+                        if existing_tenant and existing_tenant.tenant_id != tenant_id:
+                            flash("This virtual host is already in use by another tenant", "error")
+                            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                        return None
 
-                tenant.virtual_host = virtual_host or None
+                    def claim_virtual_host():
+                        tenant.virtual_host = virtual_host
+
+                    # On conflict this returns before the trailing commit, so the
+                    # other form fields dirtied above are never written — exactly
+                    # what the pre-check arm has always done.
+                    conflict = resolve_or_write(
+                        db_session,
+                        conflict=taken_by_another_tenant,
+                        write=claim_virtual_host,
+                        constraint="ix_tenants_virtual_host",
+                    )
+                    if conflict is not None:
+                        return conflict
+                else:
+                    tenant.virtual_host = None
 
             # Update currency limits
             from decimal import Decimal, InvalidOperation

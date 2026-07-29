@@ -15,8 +15,10 @@ import pytest
 from sqlalchemy import select
 
 from src.admin.app import create_app
+from src.admin.blueprints import users as users_module
 from src.core.database.models import Tenant, TenantAuthConfig, User
 from tests.factories import TenantAuthConfigFactory, TenantFactory, UserFactory
+from tests.helpers import concurrent_commit_in_write_window, operator_answer
 
 app = create_app()
 
@@ -281,3 +283,41 @@ class TestCrossBlueprintGuardrails:
         # Smoke check the factory-created client id is non-empty.
         assert refreshed.oidc_client_id
         assert cfg.oidc_client_id == refreshed.oidc_client_id
+
+
+class TestAddUserDuplicateEmail:
+    """POST /tenant/<id>/users/add — duplicate (tenant_id, email).
+
+    ``uq_users_tenant_email`` is the authority, and the pre-check cannot see a
+    concurrent transaction's uncommitted row. Winner and loser must therefore get
+    the SAME answer — the loser's used to be a 302 carrying raw psycopg2 text in
+    the flash, which a "not a 500" assertion would have called a pass.
+
+    The loser runs FIRST so its pre-check is genuinely clean; the winner then
+    re-posts against the row the race left behind, on the same tenant, so the two
+    answers are directly comparable.
+    """
+
+    FORM = {"email": "contested@example.com", "role": "viewer", "name": "Contested"}
+
+    def _post_add(self, client, tenant_id):
+        return client.post(f"/tenant/{tenant_id}/users/add", data=self.FORM, follow_redirects=False)
+
+    def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
+        tenant = TenantFactory()
+        _auth_session(client, tenant.tenant_id)
+
+        def commit_conflicting_row():
+            UserFactory(tenant=tenant, email=self.FORM["email"])
+
+        with concurrent_commit_in_write_window(users_module, commit_conflicting_row):
+            loser = operator_answer(client, self._post_add(client, tenant.tenant_id))
+
+        winner = operator_answer(client, self._post_add(client, tenant.tenant_id))
+
+        assert winner == (
+            302,
+            f"/tenant/{tenant.tenant_id}/users",
+            [("error", f"User {self.FORM['email']} already exists")],
+        )
+        assert loser == winner

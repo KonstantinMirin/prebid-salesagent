@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, select
 
 from src.admin.auth_helpers import require_api_key_auth
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
     AdapterConfig,
     AuditLog,
@@ -21,6 +22,7 @@ from src.core.database.models import (
     Tenant,
     User,
 )
+from src.core.database.repositories import TenantLookupRepository
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +180,28 @@ def create_tenant():
                 # Set default measurement provider (Publisher Ad Server)
                 measurement_providers={"providers": ["Publisher Ad Server"], "default": "Publisher Ad Server"},
             )
-            db_session.add(new_tenant)
+
+            # This route had no duplicate-subdomain pre-check at all, so every
+            # collision — race or not — fell through to the 500 below. The
+            # helper invokes `conflict` on both paths, so the check has to be a
+            # real query: a callable that unconditionally answered 409 would
+            # answer 409 before ever writing.
+            def subdomain_taken():
+                if TenantLookupRepository(db_session).find_by_subdomain(data["subdomain"]):
+                    return jsonify({"error": "Subdomain already exists"}), 409
+                return None
+
+            # Only the tenant INSERT is contested. The adapter config and default
+            # principal are added after, so a conflict returns 409 before they
+            # are ever staged.
+            conflict = resolve_or_write(
+                db_session,
+                conflict=subdomain_taken,
+                write=lambda: db_session.add(new_tenant),
+                constraint="tenants_subdomain_key",
+            )
+            if conflict is not None:
+                return conflict
 
             # Create adapter config
             adapter_type = data["ad_server"]
@@ -275,8 +298,6 @@ def create_tenant():
 
         except Exception as e:
             db_session.rollback()
-            if "UNIQUE constraint failed: tenants.subdomain" in str(e):
-                return jsonify({"error": "Subdomain already exists"}), 409
             logger.error(f"Error creating tenant: {str(e)}")
             return jsonify({"error": "Failed to create tenant"}), 500
 

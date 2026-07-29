@@ -128,7 +128,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/authorized_properties.py", "list_property_tags"),
     ("src/admin/blueprints/authorized_properties.py", "sync_properties_from_adagents"),
     ("src/admin/blueprints/authorized_properties.py", "upload_authorized_properties"),
-    ("src/admin/blueprints/core.py", "create_tenant"),
+    # create_tenant fixed — its duplicate check goes through TenantLookupRepository
     ("src/admin/blueprints/core.py", "get_tenant_from_hostname"),
     ("src/admin/blueprints/core.py", "index"),
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
