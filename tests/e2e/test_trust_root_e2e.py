@@ -41,6 +41,12 @@ the verifier actually runs).
 
 from __future__ import annotations
 
+import contextlib
+import os
+import ssl
+from collections.abc import Iterator
+from pathlib import Path
+
 import httpx
 import pytest
 from sqlalchemy import delete
@@ -49,6 +55,13 @@ from tests.e2e.utils import live_db_env
 
 _SLUG = "trustroot_e2e"
 _TENANT_ID = "tr_e2e"
+
+# The TLS sibling gets its OWN tenant id and slug. Both fixtures delete by tenant
+# id at setup AND teardown, and ``virtual_host`` is host-routing state shared by
+# the whole e2e session — a shared id would have the two tests stomping each
+# other's routing.
+_TLS_SLUG = "trustroot_e2e_tls"
+_TLS_TENANT_ID = "tr_e2e_tls"
 
 
 def _netloc(url: str) -> str:
@@ -74,8 +87,8 @@ def _seeded_capabilities_factory(body: dict):
     return factory
 
 
-def _drop_tenant(live_server: dict) -> None:
-    """Remove this test's tenant and its children from the shared e2e database.
+def _drop_tenant(live_server: dict, tenant_id: str) -> None:
+    """Remove a test tenant and its children from the shared e2e database.
 
     Children go first, explicitly: the ORM ``backref`` relationships carry no
     delete cascade, so an ORM ``session.delete(tenant)`` tries to NULL a child's
@@ -87,36 +100,121 @@ def _drop_tenant(live_server: dict) -> None:
     with live_db_env(live_server) as env:
         session = env.get_session()
         for model in (SigningKey, AuthorizedProperty, Tenant):
-            session.execute(delete(model).where(model.tenant_id == _TENANT_ID))
+            session.execute(delete(model).where(model.tenant_id == tenant_id))
         session.commit()
+
+
+@contextlib.contextmanager
+def _provisioned_trust_root_tenant(live_server: dict, *, tenant_id: str, slug: str, host: str) -> Iterator[tuple]:
+    """The tenant seam, shared by the plaintext and TLS fixtures.
+
+    ``virtual_host`` is set to the stack's own host:port so that
+    ``canonical_agent_url`` resolves to somewhere a resolver can actually reach —
+    otherwise the hops below would be pointed at a domain that does not exist and
+    the test would grade nothing. That is not hypothetical: 635 of 638
+    ``TenantFactory`` sites leave ``virtual_host`` NULL, which makes the server
+    derive ``<subdomain>.sales-agent.example.com`` — already dotted, so already
+    https, at a host that serves no JWKS. A test written against one of those
+    passes vacuously.
+
+    ``get_tenant_by_virtual_host`` (``src/core/config_loader.py``:252) is an
+    EXACT string match against the Host header, so *host* must carry the port
+    whenever the client will send one.
+
+    The row is removed at both ends: ``virtual_host`` is host-routing state
+    shared by the whole e2e session.
+    """
+    from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory, TenantFactory
+
+    _drop_tenant(live_server, tenant_id)
+    try:
+        with live_db_env(live_server) as env:
+            tenant = TenantFactory(
+                tenant_id=tenant_id,
+                subdomain=f"seller-{slug}".replace("_", "-"),
+                virtual_host=host,
+            )
+            key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{slug}-key")
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=host, tags=["premium_news"])
+            env._commit_factory_data()
+            yield tenant, key
+    finally:
+        _drop_tenant(live_server, tenant_id)
 
 
 @pytest.fixture
 def trust_root_tenant(live_server):
-    """A tenant whose canonical agent URL IS the live stack, plus one signing key.
+    """A tenant whose canonical agent URL IS the live PLAINTEXT stack, plus one key."""
+    with _provisioned_trust_root_tenant(
+        live_server,
+        tenant_id=_TENANT_ID,
+        slug=_SLUG,
+        host=_netloc(live_server["mcp"]),
+    ) as provisioned:
+        yield provisioned
 
-    ``virtual_host`` is set to the stack's own host:port so that
-    ``canonical_agent_url`` resolves to somewhere the resolver can actually reach —
-    otherwise hops 2 and 3 would be pointed at a domain that does not exist and the
-    test would grade nothing. The row is removed afterwards: ``virtual_host`` is
-    host-routing state shared by the whole e2e session.
+
+@pytest.fixture
+def tls_trust_root_tenant(live_server):
+    """Provision the TLS sibling at a caller-supplied netloc; drop it afterwards.
+
+    A factory rather than a plain fixture so the assertions about *where* the TLS
+    listener is — which are the point of the test — happen in the test body and
+    fail as failures, not as fixture-setup errors. The tenant seam itself is the
+    same context manager the plaintext fixture uses; nothing is duplicated.
     """
-    from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory, TenantFactory
+    stack = contextlib.ExitStack()
 
-    _drop_tenant(live_server)
-    host = _netloc(live_server["mcp"])
-    with live_db_env(live_server) as env:
-        tenant = TenantFactory(
-            tenant_id=_TENANT_ID,
-            subdomain=f"seller-{_SLUG}".replace("_", "-"),
-            virtual_host=host,
+    def provision(host: str):
+        return stack.enter_context(
+            _provisioned_trust_root_tenant(
+                live_server,
+                tenant_id=_TLS_TENANT_ID,
+                slug=_TLS_SLUG,
+                host=host,
+            )
         )
-        key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{_SLUG}-key")
-        AuthorizedPropertyFactory(tenant=tenant, publisher_domain=host, tags=["premium_news"])
-        env._commit_factory_data()
-        yield tenant, key
 
-    _drop_tenant(live_server)
+    with stack:
+        yield provision
+
+
+def _tls_base_url(live_server: dict) -> str:
+    """The origin the stack serves TLS on, as the stack itself reports it.
+
+    salesagent-tgzb makes the https branch SERVABLE: a tls-proxy sidecar
+    terminating TLS at a dotted name with a generated CA. Until it does, there is
+    nothing here — and that absence must read as a failure, never as a skip: a
+    skipped https test and a passing http one are the same green.
+    """
+    url = live_server.get("tls") or os.environ.get("E2E_TLS_BASE_URL")
+    assert url, (
+        "the e2e stack publishes no TLS listener: neither live_server['tls'] nor E2E_TLS_BASE_URL is set. "
+        "salesagent-tgzb must serve TLS at a dotted host alongside the existing plaintext port, and export "
+        "its origin, or hop 1 of the discovery chain can only ever be graded over http"
+    )
+    assert url.startswith("https://"), f"the TLS base URL must be an https origin; got {url!r}"
+    return url.rstrip("/")
+
+
+def _ca_bundle() -> str:
+    """The CA that signed the test stack's leaf certificate.
+
+    A private CA is not "publicly trusted" — the exact wording of
+    ``_get_protocol_for_domain``'s rationale. That rationale is about
+    reachability BY A COUNTERPARTY; here the counterparty is our own client,
+    which trusts this CA explicitly. The production predicate needs no change.
+    """
+    path = os.environ.get("E2E_CA_BUNDLE")
+    assert path, (
+        "E2E_CA_BUNDLE is not set, so this test cannot verify the stack's certificate. Trusting it "
+        "unconditionally instead (verify=False) would make the TLS leg prove nothing"
+    )
+    assert os.path.isabs(path), (
+        f"E2E_CA_BUNDLE must be absolute — pytest does not always run from the repo root; got {path!r}"
+    )
+    assert Path(path).is_file(), f"E2E_CA_BUNDLE points at no file: {path!r}"
+    return path
 
 
 @pytest.mark.asyncio
@@ -139,8 +237,8 @@ async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
     * the key that comes back is the key we stored.
     """
     from adcp.signing import async_resolve_agent
-    from src.core.agent_identity import brand_json_url, canonical_agent_url, jwks_origin, jwks_uri
 
+    from src.core.agent_identity import brand_json_url, canonical_agent_url, jwks_origin, jwks_uri
     from src.core.validation import normalize_agent_url
 
     tenant, key = trust_root_tenant
@@ -221,4 +319,87 @@ async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
     assert all(normalize_agent_url(url) == normalize_agent_url(agent_url) for url in adagents_urls), (
         "every adagents authorized_agents[].url must canonicalize to the same agent as the brand.json "
         f"entry; got {sorted(adagents_urls)} vs {agent_url!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, live_server, tls_trust_root_tenant):
+    """canonical_agent_url -> brand.json -> jwks_uri -> JWKS, all over a real handshake.
+
+    The sibling above walks the same chain over plaintext and stays exactly as it
+    is; this one is additive. What it adds is the ONE thing plaintext cannot
+    grade: that a host for which ``_get_protocol_for_domain`` answers ``https``
+    can actually complete a TLS handshake and serve its own JWKS at that exact
+    ``host:port``. A test host earns https by serving it, never by being told to.
+
+    Why the last leg is a real fetch and not a string check: a tenant whose
+    ``virtual_host`` merely happens to contain a dot ALREADY derives an https URL
+    today. Asserting ``startswith("https://")`` on such a tenant is satisfied by
+    a host that serves nothing — the vacuity this whole ticket exists to remove.
+    So the scheme assertion is only the first line; the JWKS coming back over the
+    CA-verified connection is the assertion that has content.
+
+    Scope: this grades hop 1 being SERVABLE. It does NOT grade a DECLARED signing
+    posture — ``identity`` is still in ``capability_declarations._UNBACKED_BLOCKS``
+    and un-gating it is D1's (salesagent-z6nr.20), which depends on this.
+    """
+    from src.core.agent_identity import BRAND_JSON_PATH, JWKS_PATH, canonical_agent_url, jwks_uri
+
+    tls_base_url = _tls_base_url(live_server)
+    ca_bundle = _ca_bundle()
+
+    # The netloc INCLUDES the port: get_tenant_by_virtual_host (config_loader.py:252)
+    # matches the Host header as an exact string, and httpx only omits the port
+    # when it is the scheme default.
+    tenant, key = tls_trust_root_tenant(_netloc(tls_base_url))
+
+    # 1. The scheme we publish is derived from the stored host by the unchanged
+    #    production predicate — nothing here forces it.
+    published = canonical_agent_url(tenant)
+    assert published.startswith("https://"), (
+        f"a tenant whose virtual_host is the TLS netloc must publish an https origin; got {published!r}. "
+        f"If this fails, _get_protocol_for_domain was weakened or the TLS host is not dotted"
+    )
+    assert published == tls_base_url, (
+        f"the URL we publish must be the URL we are reachable at; published {published!r}, "
+        f"TLS listener at {tls_base_url!r}"
+    )
+
+    # 2. Hop 1, for real: brand.json fetched over TLS, verified against the CA the
+    #    stack's leaf was signed with. A plaintext listener at this address fails
+    #    the handshake here — which is exactly what makes the scheme assertion
+    #    above non-vacuous.
+    verify = ssl.create_default_context(cafile=ca_bundle)
+    async with httpx.AsyncClient(base_url=published, verify=verify, timeout=15.0) as client:
+        brand_response = await client.get(BRAND_JSON_PATH)
+        assert brand_response.status_code == 200, (
+            f"brand.json must be served over TLS at {published + BRAND_JSON_PATH!r}; "
+            f"got HTTP {brand_response.status_code}"
+        )
+        brand = brand_response.json()
+
+        # 3. Follow the jwks_uri the SERVED document advertises — not one we built.
+        advertised = {entry["jwks_uri"] for entry in brand["agents"]}
+        assert advertised == {jwks_uri(tenant)}, (
+            f"every agents[] entry must advertise this tenant's jwks_uri; served {sorted(advertised)}, "
+            f"helper says {jwks_uri(tenant)!r}"
+        )
+        advertised_jwks_uri = advertised.pop()
+        assert advertised_jwks_uri == published + JWKS_PATH, (
+            f"the advertised JWKS must live on the origin we published, or a verifier raises "
+            f"request_signature_key_origin_mismatch; got {advertised_jwks_uri!r} vs origin {published!r}"
+        )
+
+        jwks_response = await client.get(advertised_jwks_uri)
+        assert jwks_response.status_code == 200, (
+            f"the advertised JWKS must resolve over TLS at {advertised_jwks_uri!r}; "
+            f"got HTTP {jwks_response.status_code}"
+        )
+        jwks = jwks_response.json()
+
+    # 4. The key that comes back over TLS is the key this tenant was provisioned
+    #    with — so the chain resolved OUR trust root, not some other tenant's.
+    assert {jwk["kid"] for jwk in jwks["keys"]} == {key.kid}, (
+        f"the JWKS served over TLS must carry exactly this tenant's stored key; got "
+        f"{sorted(jwk['kid'] for jwk in jwks['keys'])}, provisioned {key.kid!r}"
     )

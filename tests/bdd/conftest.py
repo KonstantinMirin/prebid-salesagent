@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+import ssl
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
@@ -3218,6 +3219,35 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
 
 
+def _ssl_failure(exc: BaseException | None, depth: int = 0) -> ssl.SSLError | None:
+    """The ``ssl.SSLError`` reachable from *exc*, walking the exception chain.
+
+    httpx does not surface a certificate failure as an ``ssl`` exception: it
+    raises ``httpx.ConnectError`` **wrapping** one, which is indistinguishable
+    from "connection refused" by type alone. The chain is where the difference
+    lives, so that is where the probe looks. Depth-bounded — a malformed chain
+    must not hang the probe.
+    """
+    if exc is None or depth > 20:
+        return None
+    if isinstance(exc, ssl.SSLError):
+        return exc
+    return _ssl_failure(exc.__cause__ or exc.__context__, depth + 1)
+
+
+def _probe_verify(base_url: str, ca_bundle: str | None) -> dict[str, object]:
+    """``verify=`` kwargs for the health probe: the generated CA, when there is one.
+
+    Only for an https base URL, and only when the bundle is really on disk — a
+    missing file must reach the handshake and be reported as the TLS failure it
+    is, not raise a ``FileNotFoundError`` from context construction that would
+    read as a probe bug.
+    """
+    if not base_url.startswith("https://") or not ca_bundle or not Path(ca_bundle).is_file():
+        return {}
+    return {"verify": ssl.create_default_context(cafile=ca_bundle)}
+
+
 @pytest.fixture(scope="session")
 def e2e_stack():
     """Detect the live E2E stack; return an E2EConfig or None (never skips here).
@@ -3242,6 +3272,8 @@ def e2e_stack():
     # (network alias "server-gwN", port 8080) and its OWN database (adcp_gwN),
     # provisioned by run_all_tests.sh — so e2e_rest runs in parallel with no
     # shared-server/shared-DB contention. Falls back to the shared stack when off.
+    ca_bundle = os.environ.get("E2E_CA_BUNDLE")
+    tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
         import re
@@ -3252,22 +3284,52 @@ def e2e_stack():
         proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
         prefix = f"{proj}-" if proj else ""
         base_url = f"http://{prefix}server-{worker}:8080"
+        # Each worker's TLS sidecar carries its own DOTTED CONTAINER NAME for the
+        # same reason — `docker compose run` cannot give it a network alias.
+        if tls_base_url:
+            tls_base_url = f"https://{prefix}tls-{worker}.adcp.test:8443"
         if postgres_url:
             # swap the database name in the URL path -> adcp_<worker>
             postgres_url = re.sub(r"/[^/?]+(\?|$)", rf"/adcp_{worker}\1", postgres_url, count=1)
 
     if not base_url:
         return None
+
+    probe_url = f"{base_url}/health"
     try:
-        resp = httpx.get(f"{base_url}/health", timeout=5)
+        resp = httpx.get(probe_url, timeout=5, **_probe_verify(base_url, ca_bundle))
         resp.raise_for_status()
-    except Exception:
-        return None
+    except Exception as exc:
+        # THREE outcomes, and collapsing any two of them is a defect:
+        #   * a TLS/certificate failure is a BROKEN RIG -> raise. Reporting it as
+        #     "absent" would hand back the plaintext config below and let an https
+        #     scenario grade the http branch while reporting green — the exact
+        #     vacuity salesagent-tgzb exists to remove.
+        #   * a transport/HTTP failure means nothing is listening -> None, so the
+        #     in-process transports still run on a machine with no Docker stack.
+        #   * anything else is a bug in this probe or in httpx -> propagate. A
+        #     bare `except Exception: return None` classified those as "no stack".
+        if _ssl_failure(exc) is not None:
+            raise RuntimeError(
+                f"TLS verification FAILED probing the e2e stack at {probe_url} "
+                f"(E2E_CA_BUNDLE={ca_bundle!r}). A certificate failure is a broken test rig, not an "
+                f"absent stack: reporting it as absent would silently fall back to the plaintext "
+                f"config and grade an https scenario on the http branch."
+            ) from exc
+        if isinstance(exc, httpx.TransportError | httpx.HTTPStatusError):
+            return None
+        raise
+
     if not postgres_url:
         postgres_url = (
             f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
         )
-    return E2EConfig(base_url=base_url, postgres_url=postgres_url)
+    return E2EConfig(
+        base_url=base_url,
+        postgres_url=postgres_url,
+        tls_base_url=tls_base_url,
+        ca_bundle=ca_bundle,
+    )
 
 
 def _reset_e2e_db(e2e_config) -> None:

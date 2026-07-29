@@ -103,9 +103,13 @@ mkdir -p "$RESULTS_DIR"
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
 cleanup() {
-    # Per-worker e2e servers are `docker compose run` containers (not `up`), so
-    # `dc down` won't remove them — do it explicitly.
-    docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}-server-gw" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    # Per-worker e2e servers AND their TLS sidecars are `docker compose run`
+    # containers (not `up`), so `dc down` won't remove them — do it explicitly.
+    # The sidecars MUST be matched too: a leaked `-tls-gwN.adcp.test` container
+    # keeps its dotted DNS name registered and poisons the next run's lookups.
+    for _stray in server-gw tls-gw; do
+        docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}-${_stray}" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    done
     dc down -v >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -119,9 +123,21 @@ scripts/creative-agent-stack.sh build
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
 dc build postgres adcp-server proxy tests
 
-# Bring up Postgres + the app server + proxy + the pinned creative-agent (and its
-# own registry Postgres). None publish host ports — all reached by service name.
-dc up -d postgres adcp-server proxy creative-pg creative-agent
+# TLS material for the tls-proxy service and the per-worker sidecars below. It
+# must exist before `up`: the service bind-mounts .test-tls/, and an absent
+# directory would materialise empty and nginx would refuse to start. The host
+# wrapper needs a Python with `cryptography`; the in-network CI job has neither
+# uv nor the project venv on the host, so fall back to the runner image (which
+# writes through the same `.:/app` bind mount).
+echo "Ensuring the test stack's TLS material..."
+scripts/dev/ensure-test-tls.sh || dc run --rm --no-deps -T tests python scripts/dev/gen_test_tls.py
+
+# Bring up Postgres + the app server + proxy + the TLS listener + the pinned
+# creative-agent (and its own registry Postgres). None publish host ports — all
+# reached by service name. tls-proxy is in this explicit list deliberately: it is
+# a normal `up` service, and omitting it would leave E2E_TLS_BASE_URL pointing at
+# nothing while every https scenario reported green on the http branch.
+dc up -d postgres adcp-server proxy tls-proxy creative-pg creative-agent
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))
@@ -164,6 +180,16 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
         psql_admin "CREATE DATABASE adcp_gw$i TEMPLATE adcp_e2e_template"
         dc run -d --no-deps --name "${COMPOSE_PROJECT_NAME}-server-gw$i" \
             -e DATABASE_URL="$_admin/adcp_gw$i?sslmode=disable" adcp-server >/dev/null
+        # Per-worker TLS sidecar (salesagent-tgzb). The DOTTED CONTAINER NAME is
+        # the entire mechanism: `docker compose run` has no --network-alias, so
+        # the container's own name is the only DNS label we control. Docker's
+        # embedded DNS resolving a dotted container name is OBSERVED behaviour,
+        # not a documented contract — if a future Docker release breaks it, the
+        # handshake probe below is what turns it into a diagnosable failure
+        # instead of a mystery. COMPOSE_PROJECT_NAME never contains a dot, so the
+        # name is exactly one label under the leaf's `*.adcp.test` SAN.
+        dc run -d --no-deps --name "${COMPOSE_PROJECT_NAME}-tls-gw$i.adcp.test" \
+            -e TLS_UPSTREAM="${COMPOSE_PROJECT_NAME}-server-gw$i:8080" tls-proxy >/dev/null
     done
     echo "  waiting for $N per-worker servers to become healthy..."
     for i in $(seq 0 $((N - 1))); do
@@ -173,6 +199,28 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
             sleep 2
         done
         [ "$ok" = true ] && echo "    server-gw$i ready" || echo "    server-gw$i NOT ready (continuing)"
+    done
+    # TLS readiness — a REAL handshake at the dotted name, verified against the
+    # generated CA, and a HARD FAILURE on timeout. Deliberately NOT the shape of
+    # the plaintext probe above, which prints "NOT ready (continuing)" and carries
+    # on: a TLS listener that half-starts and is skipped past is precisely the
+    # vacuity salesagent-tgzb exists to remove — every https scenario would then
+    # silently grade the http branch. (Making the plaintext probe fail too is a
+    # separate, deliberate change, not a side effect of this one.)
+    echo "  waiting for $N per-worker TLS sidecars to complete a verified handshake..."
+    for i in $(seq 0 $((N - 1))); do
+        name="${COMPOSE_PROJECT_NAME}-tls-gw$i.adcp.test"
+        wd=$(( $(date +%s) + 120 )); ok=false
+        while [ "$(date +%s)" -lt "$wd" ]; do
+            docker exec "$name" curl -sf --cacert /app/.test-tls/ca.pem "https://$name:8443/health" >/dev/null 2>&1 && ok=true && break
+            sleep 2
+        done
+        if [ "$ok" != true ]; then
+            echo "ERROR: TLS sidecar $name never completed a verified handshake at https://$name:8443/health" >&2
+            docker logs "$name" 2>&1 | tail -30 >&2 || true
+            exit 1
+        fi
+        echo "    tls-gw$i ready ($name)"
     done
     # COMPOSE_PROJECT_NAME must reach pytest so conftest e2e_stack builds the FULL
     # server name "<project>-server-gwN" (short "server-gwN" doesn't resolve).
