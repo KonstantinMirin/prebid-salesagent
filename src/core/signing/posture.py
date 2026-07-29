@@ -28,7 +28,8 @@ object to the wire.
 
 from __future__ import annotations
 
-from typing import Any, Literal, cast
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
@@ -36,6 +37,9 @@ from pydantic import ConfigDict, RootModel, model_validator
 
 from src.core.enum_helpers import enum_value
 from src.core.schemas.capability_declarations import is_block_declarable
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, keeps this module free of DB imports
+    from src.core.database.repositories.signing_key import SigningKeyRepository
 
 #: The four outcomes the middleware branches on. ``none`` means "signatures are
 #: ignored (requests are bearer-authenticated only)" — the schema's own words for
@@ -208,3 +212,57 @@ def posture_for_tenant(tenant: dict[str, Any] | None) -> RequestSigningPosture:
     precedence still runs for real.
     """
     return UNSUPPORTED_POSTURE
+
+
+class KeyBacking(NamedTuple):
+    """What this tenant's own signing keys let it honestly declare.
+
+    THE single key-presence derivation. Both C1's outbound signer
+    (``salesagent-z6nr.18``) and D1's declaration builder (``salesagent-z6nr.20``)
+    consume this one — a second derivation of "does this tenant have a key" is
+    how the advertised posture and the enforced one drift apart, which is the
+    whole reason this module exists.
+
+    Two fields rather than one, because the facts they back sit on opposite sides
+    of a distinction the repository calls load-bearing
+    (``SigningKeyRepository.active_at`` vs ``publishable_at``):
+
+    ======================================  ===============================  ================
+    field                                   means                            selector
+    ======================================  ===============================  ================
+    ``signs`` -> ``webhook_signing``        this agent SIGNS                 ``active_at``
+    ``publishes`` -> ``identity``           this agent PUBLISHES             ``publishable_at``
+    ======================================  ===============================  ================
+
+    A key inside its revocation grace window, or one with a future
+    ``not_before``, is publishable but not active. Collapsing the two would push
+    the choice down a layer into whichever consumer guessed first.
+    """
+
+    signs: bool
+    publishes: bool
+
+
+def signing_key_backed(repo: SigningKeyRepository, *, now: datetime) -> KeyBacking:
+    """Whether *repo*'s tenant has key material backing each declared fact.
+
+    Takes a repository and opens NO session: the transport (the admin blueprint,
+    the setup checklist, D1's capabilities builder) already owns one, and a
+    per-call unit of work inside this module would add a second session to a
+    capabilities request that already holds one.
+
+    It does NOT back ``request_signing``. That block declares whether this agent
+    VERIFIES signatures on INCOMING requests, which uses the COUNTERPARTY's keys
+    — it is backed by ``SigningConfig.verifier_enabled`` plus the mounted
+    ``RequestSignatureMiddleware``, and is completely independent of whether this
+    tenant owns a key of its own. The asymmetry is the spec's: v3.1.1
+    ``get-adcp-capabilities-response.json`` defines ``request_signing.supported``
+    as "Whether this agent VERIFIES RFC 9421 signatures on incoming requests" and
+    ``webhook_signing.supported`` as "Whether this agent SIGNS outbound webhooks".
+    """
+    from src.core.config import get_config
+
+    return KeyBacking(
+        signs=repo.active_at(now=now) is not None,
+        publishes=bool(repo.publishable_at(now=now, grace_seconds=get_config().signing.grace_seconds)),
+    )

@@ -62,6 +62,11 @@ class SigningKeyFactory(factory.alchemy.SQLAlchemyModelFactory):
     purpose = "request-signing"
     public_jwk = LazyAttribute(_public_jwk_for)
     private_key_ref = Sequence(lambda n: f"env:ADCP_SIGNING_TEST_KEY_{n:04d}")
+    # NULL by default, matching the dropped private half above: an env: row's
+    # material lives outside the database. Rows that need resolvable ciphertext
+    # are minted by provision_signing_key, which is the only thing that may write
+    # this column in production.
+    private_key_pem_encrypted = None
     not_before = LazyFunction(lambda: datetime.now(UTC) - timedelta(days=1))
     not_after = None
     revoked_at = None

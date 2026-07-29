@@ -5,7 +5,7 @@ until ``src/core/signing/{keys,provider,algorithms}.py``, the ``SigningKey``
 model and its migration exist.
 
 This file grades the KEY-MATERIAL half of A2's core invariant: that the key we
-sign with, the key we publish, and the key material on disk can never silently
+sign with, the key we publish, and the key material we hold can never silently
 disagree. Concretely —
 
 * Two overlapping active ``request-signing`` keys, distinguished only by ``kid``,
@@ -16,8 +16,11 @@ disagree. Concretely —
   Resolution goes through ``resolve_signing_provider(..., kid=...)`` — a test
   that hand-constructs ``InMemorySigningProvider`` grades nothing, and skips the
   tripwire it is supposed to be exercising.
-* The private-key PEM is written 0600 and with ``O_EXCL`` — a second write to the
-  same path fails rather than clobbering live key material.
+* The private half never leaves the row: it is stored as the PKCS#8
+  ``BEGIN ENCRYPTED PRIVATE KEY`` PEM the SDK returned, under the deployment KEK,
+  and provisioning refuses outright when no KEK is configured. Provisioning over
+  a live ``kid`` fails rather than clobbering key material every counterparty
+  already holds the public half of.
 * The init tripwire (security.mdx:951) fires on a GENUINE mismatch and — the
   failure mode actually worth guarding — does NOT false-alarm on a healthy
   passphrase-encrypted PEM.
@@ -30,17 +33,17 @@ is how ``<bound method ...>`` ends up in a ``keyid`` header.
 from __future__ import annotations
 
 import asyncio
-import os
-import stat
 from datetime import UTC, datetime
 
 import pytest
 from adcp.signing import alg_for_jwk, public_key_from_jwk, verify_signature
+from sqlalchemy.exc import IntegrityError
 
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.signing import (
     REQUEST_SIGNING,
     SIGNATURE_BASE,
+    deployment_kek,
     just_after_provisioning,
     provision_key,
     resolve_provider,
@@ -48,6 +51,23 @@ from tests.helpers.signing import (
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+#: The ciphertext ``generate_signing_keypair(passphrase=...)`` returns verbatim.
+_ENCRYPTED_PEM_HEADER = b"-----BEGIN ENCRYPTED PRIVATE KEY-----"
+
+
+@pytest.fixture(autouse=True)
+def _kek(monkeypatch):
+    """Every provisioning call in this module needs the deployment KEK.
+
+    ``db:`` is the scheme this agent mints and it REFUSES without a KEK — there is
+    no plaintext fallback — so a suite that provisions through production has to
+    configure one. Autouse because the alternative is the same three lines in
+    every test.
+    """
+    with deployment_kek(monkeypatch):
+        yield
+
 
 # NULL not_after means open-ended, so a key provisioned today must still resolve
 # at an arbitrarily distant instant.
@@ -72,7 +92,7 @@ def _verifies(row, signature: bytes) -> bool:
 class TestOverlappingActiveKeys:
     """Two active request-signing keys under one tenant, distinguished by kid."""
 
-    def test_both_keys_resolve_and_both_signatures_verify(self, integration_db, tmp_path):
+    def test_both_keys_resolve_and_both_signatures_verify(self, integration_db):
         from tests.factories import TenantFactory
 
         tenant_id = "sk_two_t1"
@@ -80,8 +100,8 @@ class TestOverlappingActiveKeys:
             TenantFactory(tenant_id=tenant_id)
             repo = signing_key_repo(env, tenant_id)
 
-            row_a = provision_key(repo, tenant_id, "adcp-key-a", tmp_path / "a.pem")
-            row_b = provision_key(repo, tenant_id, "adcp-key-b", tmp_path / "b.pem", alg="ecdsa-p256-sha256")
+            row_a = provision_key(repo, tenant_id, "adcp-key-a")
+            row_b = provision_key(repo, tenant_id, "adcp-key-b", alg="ecdsa-p256-sha256")
             now = just_after_provisioning()
 
             # Distinct rows, distinct published material, same purpose.
@@ -114,7 +134,7 @@ class TestOverlappingActiveKeys:
             assert not _verifies(row_b, signatures["adcp-key-a"])
             assert not _verifies(row_a, signatures["adcp-key-b"])
 
-    def test_open_ended_key_resolves_without_an_explicit_kid(self, integration_db, tmp_path):
+    def test_open_ended_key_resolves_without_an_explicit_kid(self, integration_db):
         """not_after IS NULL is open-ended: the sole active key still resolves.
 
         Without an explicit kid the resolver falls back to ``active_at``, and the
@@ -127,7 +147,7 @@ class TestOverlappingActiveKeys:
         with BareIntegrationEnv() as env:
             TenantFactory(tenant_id=tenant_id)
             repo = signing_key_repo(env, tenant_id)
-            row = provision_key(repo, tenant_id, "adcp-only-key", tmp_path / "only.pem")
+            row = provision_key(repo, tenant_id, "adcp-only-key")
 
             assert row.not_after is None, "provisioning must mint the current key open-ended"
 
@@ -137,63 +157,78 @@ class TestOverlappingActiveKeys:
             assert _verifies(row, asyncio.run(provider.sign(SIGNATURE_BASE)))
 
 
-class TestPrivateKeyFileHandling:
-    """The PEM is written 0600 and O_EXCL — no umask leak, no silent clobber."""
+class TestPrivateKeyStorage:
+    """The private half lives on the row as ciphertext — nowhere else, once only.
 
-    def test_pem_is_written_mode_0600(self, integration_db, tmp_path):
-        """0644 is what ``Path.write_bytes`` produces under the usual umask.
+    Rewritten from ``TestPrivateKeyFileHandling`` when the storage design changed
+    (salesagent-7x8t): the application writes key material to no filesystem, so
+    the 0600/``O_EXCL`` contract those tests graded no longer exists. The
+    PROPERTIES they protected do: the row still carries a reference and never
+    plaintext, and provisioning still refuses to overwrite live key material.
+    ``tests/integration/test_signing_key_provisioning.py`` grades the "no file is
+    created anywhere" half positively, with a filesystem snapshot.
+    """
 
-        A world-readable private key is the failure this asserts against, so the
-        mode is compared exactly rather than masked for the owner bits.
+    def test_the_row_carries_encrypted_ciphertext_and_a_reference_never_material(self, integration_db):
+        """The ref locates; the ciphertext is what a reader has to decrypt.
+
+        The ref is asserted to be ``db:<kid>`` — its own row's kid — because that
+        is what makes a ref copied onto another row detectable at resolve time.
         """
         from tests.factories import TenantFactory
 
         tenant_id = "sk_mode_t1"
-        key_path = tmp_path / "mode.pem"
         with BareIntegrationEnv() as env:
             TenantFactory(tenant_id=tenant_id)
             repo = signing_key_repo(env, tenant_id)
-            row = provision_key(repo, tenant_id, "adcp-mode-key", key_path)
+            row = provision_key(repo, tenant_id, "adcp-mode-key")
 
-            assert stat.S_IMODE(os.stat(key_path).st_mode) == 0o600
-            assert key_path.read_bytes().startswith(b"-----BEGIN PRIVATE KEY-----")
-
-            # The row holds a REFERENCE, never the material itself.
-            assert row.private_key_ref.startswith("file:")
-            assert str(key_path) in row.private_key_ref
+            assert row.private_key_ref == "db:adcp-mode-key"
             assert "PRIVATE KEY" not in row.private_key_ref
 
-    def test_second_provision_to_the_same_path_raises_and_preserves_the_key(self, integration_db, tmp_path):
-        """O_EXCL: provisioning over a live key must fail, not overwrite it.
+            # Encrypted under the deployment KEK, verbatim as the SDK returned it.
+            assert bytes(row.private_key_pem_encrypted).startswith(_ENCRYPTED_PEM_HEADER)
+
+    def test_second_provision_of_the_same_kid_raises_and_preserves_the_key(self, integration_db):
+        """Provisioning over a live key must fail, not overwrite it.
 
         Overwriting would strand every counterparty holding the published public
         half, with no local signal until signatures start being rejected.
+        ``UNIQUE(tenant_id, kid)`` is what enforces it now that the key material
+        lives on the row rather than at a path.
         """
         from tests.factories import TenantFactory
 
         tenant_id = "sk_excl_t1"
-        key_path = tmp_path / "excl.pem"
         with BareIntegrationEnv() as env:
             TenantFactory(tenant_id=tenant_id)
             repo = signing_key_repo(env, tenant_id)
-            provision_key(repo, tenant_id, "adcp-first", key_path)
-            original = key_path.read_bytes()
+            provision_key(repo, tenant_id, "adcp-first")
 
-            with pytest.raises(FileExistsError):
-                provision_key(repo, tenant_id, "adcp-second", key_path)
+            # Commit the first key, so the collision below is against material
+            # that is really persisted and the rollback cannot take it with it.
+            session = env.get_session()
+            original = bytes(repo.get_by_kid("adcp-first").private_key_pem_encrypted)
 
-            assert key_path.read_bytes() == original
+            with pytest.raises(IntegrityError):
+                provision_key(repo, tenant_id, "adcp-first")
+            session.rollback()
+
+            assert bytes(repo.get_by_kid("adcp-first").private_key_pem_encrypted) == original
 
 
 class TestInitTripwire:
     """security.mdx:951 — assert the public key at signer init, fail loudly on drift."""
 
-    def test_mismatched_pem_behind_an_unchanged_ref_raises(self, integration_db, tmp_path):
+    def test_mismatched_pem_behind_an_unchanged_ref_raises(self, integration_db):
         """The row's stored JWK and the PEM the ref resolves to must agree.
 
-        This is the silent failure the tripwire exists for: rotate the file behind
-        an unchanged ``private_key_ref`` and every signature is rejected by every
-        counterparty, with nothing wrong locally to look at.
+        This is the silent failure the tripwire exists for: change the key
+        material behind an unchanged ``private_key_ref`` and every signature is
+        rejected by every counterparty, with nothing wrong locally to look at.
+        The ``db:`` scheme narrows the ways that can happen but does not remove
+        them — the ciphertext and the ``public_jwk`` are two columns on one row,
+        and a rotation that writes one without the other lands exactly here.
         """
         from src.core.exceptions import AdCPConfigurationError
         from tests.factories import SigningKeyFactory, TenantFactory
@@ -203,17 +238,20 @@ class TestInitTripwire:
             tenant = TenantFactory(tenant_id=tenant_id)
             repo = signing_key_repo(env, tenant_id)
 
-            row_a = provision_key(repo, tenant_id, "adcp-real-a", tmp_path / "real_a.pem")
-            row_b = provision_key(repo, tenant_id, "adcp-real-b", tmp_path / "real_b.pem")
+            row_a = provision_key(repo, tenant_id, "adcp-real-a")
+            row_b = provision_key(repo, tenant_id, "adcp-real-b")
 
-            # A row pointing at A's PEM while publishing B's public half — exactly
-            # the state a file rotated behind an unchanged ref leaves behind.
+            # A row holding A's key material while publishing B's public half —
+            # exactly the state a half-completed rotation leaves behind. The ref
+            # is the row's OWN kid, so this is a genuine material/JWK mismatch and
+            # not the copied-ref case the locator check catches earlier.
             SigningKeyFactory(
                 tenant=tenant,
                 kid="adcp-drifted",
                 alg=row_b.alg,
                 public_jwk={**row_b.public_jwk, "kid": "adcp-drifted"},
-                private_key_ref=row_a.private_key_ref,
+                private_key_ref="db:adcp-drifted",
+                private_key_pem_encrypted=row_a.private_key_pem_encrypted,
             )
             now = just_after_provisioning()
 
@@ -224,7 +262,7 @@ class TestInitTripwire:
             # discriminating between drifted and healthy, not failing everything.
             assert resolve_provider(repo, tenant_id, now=now, kid="adcp-real-a").key_id() == "adcp-real-a"
 
-    def test_passphrase_encrypted_pem_passes_the_tripwire(self, integration_db, tmp_path, monkeypatch):
+    def test_passphrase_encrypted_pem_passes_the_tripwire(self, integration_db):
         """A healthy ENCRYPTED PEM must pass — the guarded failure is a FALSE alarm.
 
         ``pem_to_adcp_jwk`` takes ``password``; omitting it means that the moment
@@ -232,23 +270,21 @@ class TestInitTripwire:
         perfectly healthy key at provider init — reading exactly like a genuine key
         mismatch. The passphrase must be resolved once and threaded into both
         ``load_private_key_pem`` and ``pem_to_adcp_jwk``.
+
+        Every key in this module is now encrypted (``db:`` refuses to mint without
+        a KEK), so the ``_kek`` fixture supplies what this test used to configure
+        for itself.
         """
         from tests.factories import TenantFactory
 
-        monkeypatch.setenv("ADCP_SIGNING_KEY_PASSPHRASE_ENV", "SIGNING_TEST_PASSPHRASE")
-        monkeypatch.setenv("SIGNING_TEST_PASSPHRASE", "correct-horse-battery-staple")
-        # Drop the cached AppConfig so SigningConfig re-reads the env above.
-        monkeypatch.setattr("src.core.config._config", None, raising=False)
-
         tenant_id = "sk_pass_t1"
-        key_path = tmp_path / "encrypted.pem"
         with BareIntegrationEnv() as env:
             TenantFactory(tenant_id=tenant_id)
             repo = signing_key_repo(env, tenant_id)
-            row = provision_key(repo, tenant_id, "adcp-encrypted", key_path)
+            row = provision_key(repo, tenant_id, "adcp-encrypted")
 
             # Non-vacuity: the PEM really is encrypted, so the passphrase path ran.
-            assert key_path.read_bytes().startswith(b"-----BEGIN ENCRYPTED PRIVATE KEY-----")
+            assert bytes(row.private_key_pem_encrypted).startswith(_ENCRYPTED_PEM_HEADER)
 
             provider = resolve_provider(repo, tenant_id, now=just_after_provisioning(), kid=row.kid)
 

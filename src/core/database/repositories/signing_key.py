@@ -146,13 +146,22 @@ class SigningKeyRepository:
         private_key_ref: str,
         not_before: datetime,
         not_after: datetime | None = None,
+        private_key_pem_encrypted: bytes | None = None,
     ) -> SigningKey:
         """Persist a freshly minted keypair's public half and private-key reference.
 
         The SOLE construction site for ``SigningKey`` — no ORM kwargs are
         assembled at a call site. ``private_key_ref`` is a scheme-prefixed
-        reference (``env:NAME`` / ``file:/abs/path``); passing key material here
-        is what this repository exists to prevent.
+        reference (``db:<kid>`` / ``env:NAME`` / ``file:/abs/path``), never key
+        material itself.
+
+        ``private_key_pem_encrypted`` accompanies a ``db:`` ref and is the ONE
+        thing this repository does accept in cipher form: the PKCS#8
+        ``BEGIN ENCRYPTED PRIVATE KEY`` PEM the SDK emitted under the deployment
+        KEK. NULL for every other scheme, whose material this process never sees.
+        The gate that keeps it from ever holding plaintext lives at the single
+        mint site (``src.core.signing.keys.provision_signing_key``), which
+        refuses a ``db:`` mint outright when no KEK is configured.
 
         ``not_after`` defaults to NULL: a newly provisioned key is the current
         key and the current key is open-ended. Retirement is a later ``revoke``
@@ -166,6 +175,7 @@ class SigningKeyRepository:
             purpose=purpose,
             public_jwk=public_jwk,
             private_key_ref=private_key_ref,
+            private_key_pem_encrypted=private_key_pem_encrypted,
             not_before=not_before,
             not_after=not_after,
         )

@@ -123,8 +123,13 @@ class SigningConfig(BaseSettings):
         default="in_memory", description="SigningProvider implementation: in_memory (default) or kms"
     )
     allowed_key_ref_schemes: str = Field(
-        default="env,file",
-        description="Comma-separated private_key_ref schemes this deployment will resolve (env, file)",
+        default="db,env,file",
+        description=(
+            "Comma-separated private_key_ref schemes this deployment will resolve. "
+            "db: the encrypted PEM on the signing_keys row — the only scheme this agent MINTS. "
+            "env: a PEM handed to the process by the orchestrator, for single-tenant deployments. "
+            "file: read-only, for material someone else provisioned onto a mounted secret"
+        ),
     )
     key_passphrase_env: str | None = Field(
         default=None,

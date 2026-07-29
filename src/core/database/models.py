@@ -26,12 +26,13 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
@@ -2327,10 +2328,21 @@ class SigningKey(Base):
     stores — so the key we sign with, the key we publish, and the key material on
     disk cannot silently disagree.
 
-    ``private_key_ref`` is a scheme-prefixed opaque reference (``env:NAME``,
-    ``file:/abs/path``), never key material. Which schemes resolve is an
-    agent-level posture (``SigningConfig.allowed_key_ref_schemes``), so a
+    ``private_key_ref`` is a scheme-prefixed opaque reference (``db:<kid>``,
+    ``env:NAME``, ``file:/abs/path``), never key material. Which schemes resolve
+    is an agent-level posture (``SigningConfig.allowed_key_ref_schemes``), so a
     deployment can forbid ``file:`` without touching tenant rows.
+
+    ``db:`` is the scheme this agent MINTS, and ``private_key_pem_encrypted`` is
+    where its private half lives: the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
+    exactly as ``adcp.signing.generate_signing_keypair(passphrase=...)`` returned
+    it, encrypted under the deployment KEK
+    (``SigningConfig.key_passphrase_env``). No envelope format and no encryption
+    code of ours sits between the two — the ciphertext IS the PEM. The column is
+    nullable because ``env:``/``file:`` rows point at material this process did
+    not write and must not copy; provisioning refuses ``db:`` outright when no
+    KEK is configured, so a NULL here can never mean "plaintext key in the
+    database".
 
     ``not_before`` / ``not_after`` are OURS, not the spec's — the published
     ``agent-signing-key`` schema carries only ``revoked_at`` plus JWK members.
@@ -2357,6 +2369,7 @@ class SigningKey(Base):
     purpose: Mapped[str] = mapped_column(String(50), nullable=False, default=REQUEST_SIGNING)
     public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
     private_key_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    private_key_pem_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -2366,7 +2379,11 @@ class SigningKey(Base):
     )
 
     # Relationships
-    tenant = relationship("Tenant", backref="signing_keys")
+    # passive_deletes=True defers to the database's ON DELETE CASCADE below.
+    # Without it, deleting a Tenant through the ORM makes SQLAlchemy load the
+    # children and NULL their tenant_id instead — which the NOT NULL column
+    # rejects, so an ORM tenant delete fails outright once the tenant owns a key.
+    tenant = relationship("Tenant", backref=backref("signing_keys", passive_deletes=True))
 
     __table_args__ = (
         ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),

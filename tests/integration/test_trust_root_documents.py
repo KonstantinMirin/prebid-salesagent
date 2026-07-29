@@ -70,6 +70,8 @@ import pytest
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 from tests.helpers.signing import REQUEST_SIGNING
+from tests.helpers.signing import get_trust_root_document as _get_document
+from tests.helpers.signing import published_kids as _kids
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -139,24 +141,6 @@ def _served_endpoint_paths(client) -> dict[str, str]:
         else:
             paths[name] = candidate
     return paths
-
-
-def _get_document(client, path: str, tenant) -> dict[str, Any]:
-    """GET a trust-root document for *tenant*'s host, failing loudly on non-200.
-
-    One home for the fetch so a missing route reports itself as a missing route
-    rather than as a ``KeyError`` or a schema violation three assertions later.
-    """
-    response = client.get(path, headers={"Host": tenant.virtual_host})
-    assert response.status_code == 200, (
-        f"GET {path} with Host {tenant.virtual_host!r} must return 200; got "
-        f"{response.status_code} {response.text[:200]!r}"
-    )
-    return response.json()
-
-
-def _kids(entries: list[dict[str, Any]]) -> set[str]:
-    return {entry["kid"] for entry in entries}
 
 
 def _pinned_kids(adagents: dict[str, Any]) -> set[str]:

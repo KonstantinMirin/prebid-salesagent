@@ -3,8 +3,19 @@
 Per-tenant RFC 9421 signing key material (#1291 A2, salesagent-z6nr.8).
 
 One row binds a unique ``kid`` to the public JWK we publish and to a
-scheme-prefixed REFERENCE (``env:NAME`` / ``file:/abs/path``) the process
-resolves for the private half. Private key material never reaches a column.
+scheme-prefixed REFERENCE (``db:<kid>`` / ``env:NAME`` / ``file:/abs/path``) the
+process resolves for the private half.
+
+For the ``db:`` scheme — the only one this agent MINTS (salesagent-7x8t) —
+``private_key_pem_encrypted`` holds that private half as the PKCS#8
+``BEGIN ENCRYPTED PRIVATE KEY`` PEM the SDK returned, encrypted under the
+deployment KEK. The application writes key material to no filesystem, so the row
+is the only place it can live; provisioning refuses ``db:`` when no KEK is
+configured, which is what keeps this column from ever holding plaintext. The
+column is folded into THIS migration rather than added by a second one: A2 is
+unmerged and no environment has applied it, so there is no deployed schema to
+preserve and a two-step migration would exist only to record a decision git
+already records.
 
 The two CHECK constraints are DERIVED from ``src.core.signing.algorithms`` and
 rendered by the same helper the ORM model uses, so the migration DDL and the ORM
@@ -43,6 +54,8 @@ def upgrade() -> None:
         sa.Column("purpose", sa.String(50), nullable=False),
         sa.Column("public_jwk", JSONType, nullable=False),
         sa.Column("private_key_ref", sa.Text, nullable=False),
+        # NULL for env:/file: rows, whose material this process did not write.
+        sa.Column("private_key_pem_encrypted", sa.LargeBinary, nullable=True),
         sa.Column("not_before", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         # NULL not_after means open-ended (+infinity) — the current key always is.
         sa.Column("not_after", sa.DateTime(timezone=True), nullable=True),

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Protocol
 
 from adcp.signing import InMemorySigningProvider, load_private_key_pem, pem_to_adcp_jwk
+from adcp.signing.crypto import PrivateKey
 from adcp.signing.provider import SigningProvider
 
 from src.core.database.models import SigningKey
@@ -57,34 +58,123 @@ def _read_env_ref(locator: str) -> bytes:
     return value.encode()
 
 
-# Every scheme this process knows how to resolve. Which of them a DEPLOYMENT will
-# actually resolve is the agent-level ``SigningConfig.allowed_key_ref_schemes``
-# gate below, so production can forbid ``file:`` without touching tenant rows.
+# Every EXTERNAL scheme this process knows how to resolve — locator in, bytes
+# out. ``db:`` is deliberately absent: its material lives on the row the caller
+# already holds, so a resolver for it would need the row and widening this
+# protocol for every scheme to carry one is the wrong trade. It is handled in
+# :func:`_row_private_key_pem` instead, leaving this contract untouched.
+#
+# Which schemes a DEPLOYMENT will actually resolve is the agent-level
+# ``SigningConfig.allowed_key_ref_schemes`` gate below, so production can forbid
+# ``file:`` without touching tenant rows.
 _REF_RESOLVERS: dict[str, _RefResolver] = {
     "file": _read_file_ref,
     "env": _read_env_ref,
 }
 
+#: The scheme this agent MINTS: the private half is the encrypted PEM on the row
+#: itself, under a locator that is the row's own ``kid``.
+DB_SCHEME = "db"
 
-def _resolve_key_ref(private_key_ref: str) -> bytes:
-    """Resolve a scheme-prefixed reference to PEM bytes."""
-    from src.core.config import get_config
 
+def parse_key_ref(private_key_ref: str) -> tuple[str, str]:
+    """Split a scheme-prefixed reference into ``(scheme, locator)``."""
     scheme, separator, locator = private_key_ref.partition(":")
     if not separator or not locator:
         raise AdCPConfigurationError(
-            f"private_key_ref {private_key_ref!r} is not scheme-prefixed (expected 'env:NAME' or 'file:/path')"
+            f"private_key_ref {private_key_ref!r} is not scheme-prefixed "
+            "(expected 'db:<kid>', 'env:NAME' or 'file:/path')"
         )
+    return scheme, locator
+
+
+def assert_ref_scheme_allowed(scheme: str) -> None:
+    """Refuse a ``private_key_ref`` scheme this deployment will not resolve.
+
+    Called on BOTH sides of the key's life — before minting
+    (``src.core.signing.keys``) and before resolving (below). Read-time-only
+    enforcement is what let a deployment persist and PUBLISH a row whose private
+    half the resolver would later refuse to load: a published key nobody can sign
+    with, detected only once counterparties start rejecting signatures.
+    """
+    from src.core.config import get_config
 
     allowed = get_config().signing.key_ref_scheme_list
     if scheme not in allowed:
         raise AdCPConfigurationError(
             f"private_key_ref scheme {scheme!r} is not permitted by this deployment (allowed: {allowed})"
         )
+
+
+def _row_private_key_pem(row: SigningKey) -> bytes:
+    """The PEM bytes behind *row*'s ``private_key_ref``.
+
+    ``db:`` is served from the row's own ciphertext; every other scheme goes
+    through :data:`_REF_RESOLVERS`. The locator of a ``db:`` ref is asserted to be
+    the row's ``kid``: that is what makes the ref self-describing in a log line,
+    and a mismatch means a ref was copied from one row onto another.
+    """
+    scheme, locator = parse_key_ref(row.private_key_ref)
+    assert_ref_scheme_allowed(scheme)
+
+    if scheme == DB_SCHEME:
+        if locator != row.kid:
+            raise AdCPConfigurationError(
+                f"Signing key {row.kid!r} for tenant {row.tenant_id!r} carries private_key_ref "
+                f"{row.private_key_ref!r}, which locates another row's key material"
+            )
+        if not row.private_key_pem_encrypted:
+            raise AdCPConfigurationError(
+                f"Signing key {row.kid!r} for tenant {row.tenant_id!r} references its own encrypted "
+                "PEM but the row carries none — the private half of a published key is missing"
+            )
+        return bytes(row.private_key_pem_encrypted)
+
     resolver = _REF_RESOLVERS.get(scheme)
     if resolver is None:
         raise AdCPConfigurationError(f"private_key_ref scheme {scheme!r} has no resolver")
     return resolver(locator)
+
+
+def assert_pem_publishes_jwk(
+    pem: bytes,
+    *,
+    kid: str,
+    purpose: str,
+    public_jwk: dict,
+    tenant_id: str,
+    passphrase: bytes | None,
+) -> PrivateKey:
+    """Load *pem* and assert it re-derives *public_jwk*; return the private key.
+
+    The tripwire security.mdx calls "assert public key at init", in ONE place so
+    the mint path and the resolve path cannot check it differently — a second
+    hand-rolled copy is how the canonical check ends up bypassed on one of them.
+
+    Re-deriving the public JWK from the private half and comparing it to what the
+    row publishes is what catches key material that changed behind an unchanged
+    ``private_key_ref``: signatures every counterparty rejects, with nothing
+    wrong locally to look at. At MINT time the same call proves the KEK
+    round-trips before anything is published.
+
+    The passphrase is threaded into both ``load_private_key_pem`` and
+    ``pem_to_adcp_jwk``: omitting it from the second is a false alarm the moment a
+    passphrase is configured, and it reads exactly like a real mismatch.
+    """
+    private_key = load_private_key_pem(pem, password=passphrase)
+    derived_jwk = pem_to_adcp_jwk(
+        pem,
+        kid=kid,
+        purpose=narrow_purpose(purpose),
+        password=passphrase,
+    )
+    if derived_jwk != public_jwk:
+        raise AdCPConfigurationError(
+            f"Signing key {kid!r} for tenant {tenant_id!r} does not match the public JWK it "
+            "publishes — the key material behind its private_key_ref has changed. Signatures made with "
+            "it would be rejected by every counterparty."
+        )
+    return private_key
 
 
 def _select_row(
@@ -119,35 +209,23 @@ def _select_row(
 def _build_provider(row: SigningKey) -> SigningProvider:
     """Load the private half behind *row* and bind it to the row's published JWK.
 
-    The tripwire (security.mdx "assert public key at init") is the middle step:
-    re-derive the public JWK from the PEM the reference resolves to and compare
-    it against the JWK the row publishes. A file rotated behind an unchanged
-    ``private_key_ref`` otherwise yields signatures every counterparty rejects,
-    with nothing wrong locally to look at — so a mismatch fails loudly here
-    rather than silently on every signed call.
-
-    The passphrase is resolved ONCE and threaded into both ``load_private_key_pem``
-    and ``pem_to_adcp_jwk``: omitting it from the second is a false alarm the
-    moment a passphrase is configured, and it reads exactly like a real mismatch.
+    The tripwire is :func:`assert_pem_publishes_jwk` — the same function
+    provisioning runs before it commits a row, so a key can never be published
+    unless it round-tripped on the way in and keeps round-tripping on the way out.
     """
     from src.core.config import get_config
 
     passphrase = get_config().signing.key_passphrase
-    pem = _resolve_key_ref(row.private_key_ref)
+    pem = _row_private_key_pem(row)
 
-    private_key = load_private_key_pem(pem, password=passphrase)
-    derived_jwk = pem_to_adcp_jwk(
+    private_key = assert_pem_publishes_jwk(
         pem,
         kid=row.kid,
-        purpose=narrow_purpose(row.purpose),
-        password=passphrase,
+        purpose=row.purpose,
+        public_jwk=row.public_jwk,
+        tenant_id=row.tenant_id,
+        passphrase=passphrase,
     )
-    if derived_jwk != row.public_jwk:
-        raise AdCPConfigurationError(
-            f"Signing key {row.kid!r} for tenant {row.tenant_id!r} does not match the public JWK it "
-            "publishes — the key material behind its private_key_ref has changed. Signatures made with "
-            "it would be rejected by every counterparty."
-        )
 
     return InMemorySigningProvider(
         private_key=private_key,
@@ -156,6 +234,9 @@ def _build_provider(row: SigningKey) -> SigningProvider:
     )
 
 
+# FIXME(#1291): reached only from tests today — the outbound webhook signer (C1) is
+# its production caller and has not landed yet. Allowlisted in
+# tests/unit/test_architecture_no_dark_signing_primitives.py; remove both together.
 def resolve_signing_provider(
     repo: SigningKeyRepository,
     *,

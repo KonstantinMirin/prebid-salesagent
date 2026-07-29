@@ -58,12 +58,28 @@ from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
-# webhook_signing / request_signing: agent-level facts (no RFC 9421 request/webhook
-# signing implemented today), not tenant config -- declared identically on every
-# response, in-process and no-tenant alike (salesagent-3s5a). The
-# must_equal_when(webhook emission -> supported=true) x-adcp-validation invariant is
-# satisfied vacuously today because production emits no webhook-triggering fields
-# either; RFC 9421 signing support is tracked as follow-up work, not this task's scope.
+# webhook_signing / request_signing: declared identically on every response,
+# in-process and no-tenant alike (salesagent-3s5a).
+#
+# These are literals, and `supported: false` is the HONEST value for a tenant with
+# no signing key of its own — never omission, which the v3.1.1 schema also permits
+# and which is the dishonest declaration the epic's STRICT policy exists to
+# prevent. tests/integration/test_signing_key_provisioning.py::TestKeylessWire pins
+# that.
+#
+# What they are NOT is a statement that no signing exists: src/app.py mounts
+# RequestSignatureMiddleware with SigningConfig.verifier_enabled defaulting True
+# (#1291 B1), and the trust root publishes this tenant's JWKS (A3). So while a key
+# is provisioned (salesagent-7x8t) these two fields UNDER-declare what the agent
+# does. Making them tenant-derived is D1's scope (salesagent-z6nr.20) --
+# `request_signing` is still refused by name in `_UNBACKED_BLOCKS`, so no tenant can
+# declare one yet. When D1 lands, BOTH construction sites below (the no-tenant
+# response and the tenant-resolved one) must go through ONE _build_signing_blocks()
+# in the exact shape of _build_adcp_block: two independent literals for one wire
+# field is the drift bug that extraction already exists to prevent (salesagent-rldj).
+#
+# The must_equal_when(webhook emission -> supported=true) x-adcp-validation invariant
+# is satisfied vacuously today because production emits no webhook-triggering fields.
 _WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
 _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
 

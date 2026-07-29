@@ -33,6 +33,8 @@ RFC 9421 name, use ``adcp.signing.alg_for_jwk``.
 
 from __future__ import annotations
 
+import secrets
+from datetime import datetime
 from typing import Literal, cast
 
 from adcp.signing.crypto import ALG_ED25519, ALG_ES256, ALLOWED_ALGS
@@ -103,6 +105,35 @@ def narrow_purpose(purpose: str) -> Literal["request-signing", "webhook-signing"
     if purpose not in MINTABLE_PURPOSES:
         raise AdCPConfigurationError(f"Signing purpose {purpose!r} is not mintable by this agent {MINTABLE_PURPOSES!r}")
     return cast(Literal["request-signing", "webhook-signing"], purpose)
+
+
+#: Bytes of randomness in a minted ``kid``. 64 bits of entropy makes a collision
+#: with a key minted in the same second for the same tenant unreachable in
+#: practice, which is what lets the UNIQUE constraint stay a backstop rather than
+#: a retry loop.
+_KID_ENTROPY_BYTES = 8
+
+
+def mint_kid(tenant_id: str, now: datetime) -> str:
+    """Mint the ``kid`` a freshly provisioned key is published under.
+
+    ONE generator, here with the other signing value-sets, so the admin route and
+    the ops script cannot grow two kid shapes.
+
+    security.mdx @ v3.1.1 (Agent key publication) requires a ``kid`` "Unique
+    within the JWKS. MUST NOT collide with any other entry's kid regardless of
+    ``adcp_use``". ``UNIQUE(tenant_id, kid)`` is the backstop for that, not the
+    generator — and the SDK's own default kid documents itself as
+    "collision-resistant within a single process" and tells callers managing
+    rotation to supply their own. We manage rotation, so we supply our own.
+
+    The timestamp is in the name because a kid is what an operator reads in a
+    ``keyid`` header and in a published JWKS while deciding which key a rotation
+    retired; the random suffix is what makes it unique.
+    """
+    if not tenant_id:
+        raise AdCPConfigurationError("A signing key kid cannot be minted for an empty tenant_id")
+    return f"{tenant_id}-{now.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(_KID_ENTROPY_BYTES)}"
 
 
 def sql_value_list(values: tuple[str, ...]) -> str:

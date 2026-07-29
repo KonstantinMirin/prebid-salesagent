@@ -23,7 +23,6 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -110,12 +109,16 @@ def provision_key(
     repo: Any,
     tenant_id: str,
     kid: str,
-    key_path: Path,
     *,
     alg: str = "ed25519",
     purpose: str = REQUEST_SIGNING,
 ) -> Any:
-    """Mint a keypair through production and return the persisted SigningKey row."""
+    """Mint a keypair through production and return the persisted SigningKey row.
+
+    Returns the ROW, not the whole ``ProvisionedKey``: a ``db:`` mint hands back no
+    PEM (the ciphertext is on the row), which is the only shape this helper is used
+    for.
+    """
     from src.core.signing.keys import provision_signing_key
 
     return provision_signing_key(
@@ -124,8 +127,46 @@ def provision_key(
         alg=alg,
         kid=kid,
         purpose=purpose,
-        key_path=key_path,
+    ).row
+
+
+@contextmanager
+def deployment_kek(monkeypatch: Any, name: str = "SALESAGENT_TEST_SIGNING_KEK") -> Iterator[None]:
+    """Configure the one deployment-wide KEK for the duration of a test.
+
+    ``db:`` minting REFUSES without it — there is no plaintext fallback — so every
+    suite that provisions a key through production needs this. ``key_passphrase``
+    is resolved from the environment on every use (deliberately uncached), but the
+    ``AppConfig`` carrying ``key_passphrase_env`` is a process global, so the
+    cached config is dropped too.
+    """
+    monkeypatch.setenv("ADCP_SIGNING_KEY_PASSPHRASE_ENV", name)
+    monkeypatch.setenv(name, "correct-horse-battery-staple")
+    monkeypatch.setattr("src.core.config._config", None, raising=False)
+    yield
+
+
+def get_trust_root_document(client: Any, path: str, tenant: Any) -> dict[str, Any]:
+    """GET a trust-root document for *tenant*'s host, failing loudly on non-200.
+
+    One home for the Host-scoped fetch so a missing route reports itself as a
+    missing route rather than as a ``KeyError`` or a schema violation three
+    assertions later — and so the A3 publication suite and the A-provisioning
+    suite cannot drift into two fetches. It lives here rather than in either
+    module because a module whose job is to BE a test must not also be a helper
+    library (``tests/unit/test_architecture_no_cross_test_module_imports.py``).
+    """
+    response = client.get(path, headers={"Host": tenant.virtual_host})
+    assert response.status_code == 200, (
+        f"GET {path} with Host {tenant.virtual_host!r} must return 200; got "
+        f"{response.status_code} {response.text[:200]!r}"
     )
+    return response.json()
+
+
+def published_kids(entries: list[dict[str, Any]]) -> set[str]:
+    """The ``kid`` set of a published JWK/signing-key list."""
+    return {entry["kid"] for entry in entries}
 
 
 def resolve_provider(
