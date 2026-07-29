@@ -20,16 +20,22 @@ ext-c contract (validation failure → VALIDATION_ERROR + suggestion).
 
 This module also hosts the list_creatives untyped-``data``-blob coercion guards: a
 malformed ``concept_id``/``concept_name`` (``TestNumericConceptCoercion`` /
-``TestNonScalarConceptValueDropped``, #1407) or ``tags`` (``TestMalformedTagsBlobCoerced``,
-#1508) value in the blob must be coerced or dropped-and-logged, never crash the whole
-listing on one bad row.
-"""
+``TestNonScalarConceptValueDropped``, #1407), ``tags`` (``TestMalformedTagsBlobCoerced``)
+or ``assets`` (``TestMalformedAssetsBlobCoerced``) value (#1508) in the blob must be
+coerced or dropped-and-logged, never crash the whole listing on one bad row. Each guard
+runs on every wire transport (a2a/mcp/rest): "the key is omitted" / "never null" is a
+per-transport serialization claim, so REST-only would leave the MCP/A2A wire unproven.
 
-from typing import Any
+Spec (coercion targets): pinned AdCP 3.1.1 (``adcp==6.6.0``, per docs/adcp-spec-version.md)
+``creative/list-creatives-response.json`` types ``creatives[].tags`` as a non-nullable
+``array<string>`` and ``creatives[].assets`` as an ``object`` — both optional (not in
+``required``), so omission is conformant while ``null`` is not. Dropping corrupt internal
+blob data to absent keeps the response conformant; it is robustness, not a contract change.
+"""
 
 import pytest
 
-from tests.harness import CreativeListEnv
+from tests.harness import CreativeListEnv, TransportResult
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
 
@@ -50,9 +56,9 @@ def _seed_authenticated_principal(env: CreativeListEnv):
     return tenant, principal
 
 
-def _list_single_creative_with_data(data: dict) -> tuple[Any, str]:
-    """Seed one approved creative carrying *data* in its blob, list via REST, assert the
-    listing did not error, and return ``(result, warnings_text)``.
+def _list_single_creative_with_data(data: dict, transport: Transport) -> tuple[TransportResult, str]:
+    """Seed one approved creative carrying *data* in its blob, list via *transport*, assert
+    the listing did not error, and return ``(result, warnings_text)``.
 
     Collapses the seed-one-creative-and-list scaffold shared by the untyped-blob coercion
     guards (CLAUDE.md DRY): across those tests only the ``data`` literal and the per-test
@@ -62,8 +68,11 @@ def _list_single_creative_with_data(data: dict) -> tuple[Any, str]:
     capture-based approaches. ``warnings_text`` is the ``logger.warning`` calls rendered
     to their final messages (``fmt % args``) so callers assert on the substituted text
     (the coercers pass the field label as a ``%s`` arg, not baked into the format string).
-    REST-only, matching the sibling concept guards: the coercion runs in the shared reader
-    (transport-independent) and ``exclude_none`` omission is asserted on one wire.
+
+    Runs on any wire transport (callers parametrize over ``_ALL_WIRE``): ``"key" not in
+    creative`` and stringify-not-null are per-transport serialization claims — omission
+    survives MCP only via ``NestedModelSerializerMixin``, so a REST-only guard would leave
+    the MCP/A2A wire unproven.
     """
     from unittest.mock import patch
 
@@ -79,10 +88,19 @@ def _list_single_creative_with_data(data: dict) -> tuple[Any, str]:
             data=data,
         )
         with patch("src.core.tools.creatives.listing.logger") as mock_logger:
-            result = env.call_via(Transport.REST)
-        warnings_text = " ".join(c.args[0] % c.args[1:] for c in mock_logger.warning.call_args_list)
+            result = env.call_via(transport)
 
-    assert not result.is_error, f"listing errored on data={data!r}: {result.error!r}"
+    # Assert the listing survived the bad row BEFORE rendering the captured warnings: a
+    # real coercion regression must surface as this is-error failure (the listing crash the
+    # guards exist to catch), not as a format-string error from the renderer below.
+    assert not result.is_error, f"{transport}: listing errored on data={data!r}: {result.error!r}"
+    # Render each warning to its final message. Guard the ``%`` substitution on presence of
+    # format args (stdlib LogRecord.getMessage does the same via ``if self.args``) so a
+    # legal zero/one-arg warning carrying a literal ``%`` cannot raise and mask the signal.
+    warnings_text = " ".join(
+        (call.args[0] % call.args[1:]) if len(call.args) > 1 else call.args[0]
+        for call in mock_logger.warning.call_args_list
+    )
     return result, warnings_text
 
 
@@ -125,30 +143,40 @@ class TestNumericConceptCoercion:
     coerced to the spec's string type, not crashed on. Regression guard for the #1
     fix: reverting the str()-coercion reddens this (the listing raises mid-build)."""
 
-    def test_numeric_concept_id_is_coerced_to_string(self, integration_db):
-        result, _ = _list_single_creative_with_data({"assets": {}, "concept_id": 12345, "concept_name": 678})
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_numeric_concept_id_is_coerced_to_string(self, integration_db, transport):
+        result, warnings = _list_single_creative_with_data(
+            {"assets": {}, "concept_id": 12345, "concept_name": 678}, transport
+        )
         creative = result.wire_response["creatives"][0]
         assert creative["concept_id"] == "12345"
         assert creative["concept_name"] == "678"
+        # Clean scalar input coerces silently — a coercer that logged a drop on a good row
+        # (No Quiet Failures inverted into spurious noise) must redden here.
+        assert warnings == "", f"{transport}: unexpected coercion warning on valid input: {warnings!r}"
 
 
 class TestNonScalarConceptValueDropped:
     """A non-scalar concept_id/concept_name (corrupt external value) is dropped to
     null and logged, not projected as a repr and not crashed on — regression guard
-    for the _coerce_concept_value non-scalar branch (the symmetric half of the
+    for the _coerce_blob_scalar non-scalar branch (the symmetric half of the
     numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
 
-    def test_non_scalar_concept_value_is_dropped(self, integration_db):
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_non_scalar_concept_value_is_dropped(self, integration_db, transport):
         result, warnings = _list_single_creative_with_data(
-            {"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}}
+            {"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}}, transport
         )
         creative = result.wire_response["creatives"][0]
         # Dropped to None → exclude_none omits the keys from the wire entirely.
         assert "concept_id" not in creative
         assert "concept_name" not in creative
         # Observability (No Quiet Failures): the drop is surfaced via the patched module
-        # logger (see _list_single_creative_with_data on why not caplog).
-        assert "Dropping non-scalar concept value" in warnings
+        # logger (see _list_single_creative_with_data on why not caplog), and each drop
+        # names its OWN field — the wrapper that emitted a shared "concept" label for both
+        # is retired, so a corrupt concept_id and concept_name are distinguishable (D1).
+        assert "Dropping non-scalar concept_id value" in warnings
+        assert "Dropping non-scalar concept_name value" in warnings
 
 
 class TestSellerConceptEnrichmentIsFilterable:
@@ -221,32 +249,73 @@ class TestMalformedTagsBlobCoerced:
     ``_coerce_blob_str_list`` call at the ``tags=`` site back to the raw
     ``data.get("tags")`` reddens these tests (the listing raises mid-build)."""
 
-    def test_non_list_tags_value_is_dropped(self, integration_db):
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_non_list_tags_value_is_dropped(self, integration_db, transport):
         """A non-list tags blob (a bare string) is dropped to absent, not crashed on."""
-        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": "premium"})
+        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": "premium"}, transport)
         creative = result.wire_response["creatives"][0]
         # Dropped to None → exclude_none omits the key from the wire entirely.
         assert "tags" not in creative
         # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
         assert "Dropping non-list tags value" in warnings
 
-    def test_non_string_tags_elements_are_coerced_or_dropped(self, integration_db):
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_non_string_tags_elements_are_coerced_or_dropped(self, integration_db, transport):
         """Scalar elements are stringified (bool included: ``str(True) == "True"``),
         non-scalar elements dropped+logged, order preserved."""
-        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": [1, "keep", {"k": "v"}, True]})
+        result, warnings = _list_single_creative_with_data(
+            {"assets": {}, "tags": [1, "keep", {"k": "v"}, True]}, transport
+        )
         creative = result.wire_response["creatives"][0]
         # 1 -> "1", "keep" kept, {"k": "v"} dropped, True -> "True" (bool is an int
         # subclass); order preserved.
         assert creative["tags"] == ["1", "keep", "True"]
         assert "Dropping non-scalar tags value" in warnings
 
-    def test_empty_tags_list_collapses_to_absent(self, integration_db):
-        """A stored empty tags list collapses to absent on the wire (the ``coerced or None``
-        collapse): ``exclude_none`` omits the key rather than emitting ``"tags": []``.
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_null_tags_element_is_dropped(self, integration_db, transport):
+        """A JSON ``null`` element is corrupt for an ``items:{type:string}`` list (a null is
+        not an absent value here) — dropped with a warning, the surviving elements kept,
+        never silently swallowed. Removing the ``el is None`` drop branch leaves the element
+        silently discarded (``["keep", null] -> ["keep"]`` with no log), reddening the log
+        assertion."""
+        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": ["keep", None]}, transport)
+        creative = result.wire_response["creatives"][0]
+        assert creative["tags"] == ["keep"]
+        assert "Dropping null tags element" in warnings
 
-        The pinned list-creatives-response schema permits both ``[]`` and omission; this
-        pins the omission choice production made so it cannot silently drift back to ``[]``
-        (mutating ``return coerced or None`` to ``return coerced`` reddens this test)."""
-        result, _ = _list_single_creative_with_data({"assets": {}, "tags": []})
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_empty_tags_list_collapses_to_absent(self, integration_db, transport):
+        """A stored empty tags list collapses to absent on the wire: ``exclude_none`` omits
+        the key rather than emitting ``"tags": []``.
+
+        The pinned 3.1.1 list-creatives-response schema permits both ``[]`` and omission;
+        this pins the omission choice production made so it cannot silently drift back to
+        ``[]`` (mutating the empty-list ``return None`` collapse to ``return coerced``
+        reddens this test). The collapse is a valid-input serialization choice, not a
+        corruption drop, so it must NOT emit a drop-warning — it logs at debug instead."""
+        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": []}, transport)
         creative = result.wire_response["creatives"][0]
         assert "tags" not in creative
+        assert warnings == "", f"{transport}: empty-tags collapse must not warn: {warnings!r}"
+
+
+class TestMalformedAssetsBlobCoerced:
+    """A malformed ``assets`` value in the untyped ``data`` blob is dropped to absent and
+    logged, never crashing the whole listing — #1508, the object-field sibling of the tags
+    and concept coercion guards above.
+
+    ``Creative.assets`` is typed ``dict[str, Any] | None`` but read straight from the same
+    blob, so a stored non-dict (a list/string written by the same out-of-band producer)
+    would 500 the entire listing during response construction. Reverting the
+    ``_coerce_blob_dict`` call at the ``assets=`` site back to the raw ``assets_dict``
+    reddens this (the listing raises mid-build)."""
+
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_non_dict_assets_value_is_dropped(self, integration_db, transport):
+        result, warnings = _list_single_creative_with_data({"assets": ["not", "a", "dict"]}, transport)
+        creative = result.wire_response["creatives"][0]
+        # Dropped to None → exclude_none omits the key from the wire entirely.
+        assert "assets" not in creative
+        # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
+        assert "Dropping non-dict assets value" in warnings

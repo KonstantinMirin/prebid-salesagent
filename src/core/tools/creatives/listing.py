@@ -44,6 +44,9 @@ def _coerce_blob_scalar(value: Any, field_label: str) -> str | None:
     stringified. A non-scalar (list/dict) is corrupt for a string field, so it is
     dropped with a warning — surfaced in logs (No Quiet Failures) rather than projected
     as a Python repr — instead of crashing the whole listing on one bad row.
+
+    ``field_label`` is required (never defaulted) so a dropped value names its own field
+    in the log rather than borrowing a sibling's attribution.
     """
     if value is None or isinstance(value, str):
         return value
@@ -53,9 +56,20 @@ def _coerce_blob_scalar(value: Any, field_label: str) -> str | None:
     return None
 
 
-def _coerce_concept_value(value: Any) -> str | None:
-    """Coerce an untyped ``concept_id``/``concept_name`` blob value to its spec string type."""
-    return _coerce_blob_scalar(value, "concept")
+def _coerce_blob_dict(value: Any, field_label: str) -> dict[str, Any] | None:
+    """Coerce an untyped JSON-blob value to a spec object (dict) field.
+
+    ``Creative.assets`` is typed ``dict[str, Any] | None`` but is read from the untyped
+    ``data`` blob, where the same out-of-band producer that can corrupt the scalar and
+    list fields may write a non-object value. A non-dict is corrupt for an object field
+    and dropped to ``None`` with a warning (No Quiet Failures) instead of failing
+    Creative validation and crashing the whole listing on one bad row — the object-field
+    sibling of :func:`_coerce_blob_scalar` / :func:`_coerce_blob_str_list`.
+    """
+    if value is None or isinstance(value, dict):
+        return value
+    logger.warning("Dropping non-dict %s value of type %s from creative listing", field_label, type(value).__name__)
+    return None
 
 
 def _coerce_blob_str_list(value: Any, field_label: str) -> list[str] | None:
@@ -63,22 +77,38 @@ def _coerce_blob_str_list(value: Any, field_label: str) -> list[str] | None:
 
     ``Creative.tags`` is typed ``list[str] | None`` but is read from the untyped
     ``data`` blob, where a malformed value (a bare string, or a list with numeric /
-    object elements) would fail Creative validation and crash the whole listing on one
-    bad row — the same untyped-blob hazard :func:`_coerce_blob_scalar` handles for the
-    scalar concept fields. A non-list value is corrupt for a list field and dropped to
-    ``None`` with a warning; within a list each element is coerced via
-    :func:`_coerce_blob_scalar` (scalars stringified, non-scalars dropped+logged), so
-    ``[1, 2] -> ["1", "2"]`` and ``[{...}]`` drops the bad element. An emptied (or
-    already-empty) list collapses to ``None`` so ``exclude_none`` omits the key,
-    mirroring the concept fields' drop-to-absent behavior.
+    object / null elements) would fail Creative validation and crash the whole listing
+    on one bad row — the same untyped-blob hazard :func:`_coerce_blob_scalar` handles for
+    the scalar concept fields. A non-list value is corrupt for a list field and dropped
+    to ``None`` with a warning. Within a list a ``null`` element is corrupt for an
+    ``items: {type: string}`` list (a JSON ``null`` is not an absent value here) and is
+    dropped with a warning; every other element is coerced via :func:`_coerce_blob_scalar`
+    (scalars stringified, non-scalars dropped+logged), so ``[1, 2] -> ["1", "2"]`` and
+    ``[{...}]`` drops the bad element.
+
+    Finally an empty (or fully-emptied) list collapses to ``None`` so ``exclude_none``
+    omits the key: the pinned 3.1.1 ``creative/list-creatives-response`` schema permits
+    both ``[]`` and omission and we standardize on omission. That collapse is a
+    valid-input serialization choice, not a corruption drop, so — unlike the drops above
+    — it is logged at ``debug`` (traceability), never ``warning``.
     """
     if value is None:
         return None
     if not isinstance(value, list):
         logger.warning("Dropping non-list %s value of type %s from creative listing", field_label, type(value).__name__)
         return None
-    coerced = [c for el in value if (c := _coerce_blob_scalar(el, field_label)) is not None]
-    return coerced or None
+    coerced: list[str] = []
+    for element in value:
+        if element is None:
+            logger.warning("Dropping null %s element from creative listing", field_label)
+            continue
+        scalar = _coerce_blob_scalar(element, field_label)
+        if scalar is not None:
+            coerced.append(scalar)
+    if not coerced:
+        logger.debug("Collapsing empty %s list to absent in creative listing", field_label)
+        return None
+    return coerced
 
 
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
@@ -376,15 +406,20 @@ def _list_creatives_impl(
             # creative groups -> these fields is a separate enrichment/fallback
             # follow-up (#1506), not the authoritative buyer-side concept.) The blob is
             # untyped and an external producer may write numeric group ids, so coerce
-            # to the spec's string type via _coerce_concept_value rather than letting a
-            # non-string value fail Creative validation and crash the whole listing.
+            # each field to the spec's string type via _coerce_blob_scalar (with the
+            # field's own label) rather than letting a non-string value fail Creative
+            # validation and crash the whole listing.
             data_blob = db_creative.data or {}
 
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
                 format_id=format_obj,
-                assets=assets_dict,
+                # assets is read from the same untyped blob; a stored non-dict value
+                # would fail Creative validation and crash the whole listing, so coerce
+                # it (drop+log a non-dict) — the object-field sibling of the tags/concept
+                # coercion (#1508).
+                assets=_coerce_blob_dict(assets_dict, "assets"),
                 # tags is typed list[str] but read from the untyped blob, where an
                 # external producer may write a malformed value (a bare string, or
                 # [1, 2]) that would fail Creative validation and crash the whole
@@ -395,8 +430,8 @@ def _list_creatives_impl(
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,
-                concept_id=_coerce_concept_value(data_blob.get("concept_id")),
-                concept_name=_coerce_concept_value(data_blob.get("concept_name")),
+                concept_id=_coerce_blob_scalar(data_blob.get("concept_id"), "concept_id"),
+                concept_name=_coerce_blob_scalar(data_blob.get("concept_name"), "concept_name"),
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )
