@@ -63,13 +63,50 @@ the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`; #6 and
 | 6 | **Canonicalization.** `adcp.signing.canonical._canon_authority` (canonical.py:128-150) never calls the SDK's OWN `adcp.signing._idna_canonicalize.canonicalize_host` (four sibling SDK modules do), performs **no** malformed-authority rejection, and `canonicalize_target_uri` drops a trailing empty query. MEASURED: **8 of the 31 shipped `canonicalization.json` cases fail** against `adcp==6.6.0` — the 2 IDN cases, `trailing-empty-query-preserved`, and all 6 `reject: true` cases (5 accepted outright, `malformed-ipv6-missing-closing-bracket` refused with a bare `ValueError` carrying no code). The same root cause makes the SDK answer request vector `negative/026` with `request_signature_invalid` instead of `request_signature_header_malformed`. | `src/core/signing/canonical.py` is the thin seam: it DELEGATES every canonical form to the SDK and adds ONLY the spec's rejection set (url-canonicalization.mdx steps 2-3), so we never carry a second canonicalizer. 28 of 31 cases run as conformance through it; the 2 IDN mapping cases and `trailing-empty-query-preserved` are **not implementable at a verifier boundary** (the first are signer-side — a comparer MUST reject, not re-normalize; the third is destroyed by ASGI, which hands `query_string=b""` for both `/p` and `/p?`) and run as named our-obligation tests. **0 skipped, 0 xfailed.** |
 | 7 | **`request_target_uri_malformed` is now GRADED, and the constant still does not exist.** Cross-reference #2, which flagged the constant's absence but recorded that no vector graded it. That is no longer true: `canonicalization.json`'s 6 `reject: true` cases expect exactly this string, grounded at url-canonicalization.mdx ("Malformed authorities are rejected with `request_target_uri_malformed` on the signing path"). NOTE the vector README's worked example is **stale** and shows `request_signature_header_malformed`; the shipped DATA wins. | Defined in our layer as `src.core.signing.canonical.REQUEST_TARGET_URI_MALFORMED`, per #2's own instruction. **Keep it apart from `request_signature_header_malformed`**: request vector `negative/026` legitimately expects the latter (a checklist step-1 wire rejection), the canonicalization reject set expects the former. Collapsing the two loses a graded artifact in each direction. |
 
-**Upstream filing status (B3, `salesagent-z6nr.14`).** #6 and #7 are ONE upstream issue against
-`adcontextprotocol/adcp` — they share a root cause (`_canon_authority` implements steps 4-6 of
-url-canonicalization.mdx and none of steps 2-3's MUST-rejects) and one of them is the missing
-constant that rejection needs. The issue body is the divergence rows above plus the three cases
-that are not implementable at a verifier boundary. **Not yet filed — opening an issue on the
-upstream public repo is the owner's call, not an agent's.** Nothing in this repo waits on it: the
-seam implements the spec locally and 31 of 31 cases are accounted for.
+**Upstream filing status (B3, `salesagent-z6nr.14`) — FILED, as four issues, not one.**
+
+#6 and #7 are filed against `adcontextprotocol/adcp-client-python`, decomposed by root cause rather
+than bundled as originally planned. All four are OPEN and UNFIXED:
+
+| Upstream | Covers |
+|---|---|
+| [#976](https://github.com/adcontextprotocol/adcp-client-python/issues/976) | Verifier does not reject malformed structured-field input at step 1 (wrong code; covered-component smuggling) — what our `_strict_header_precheck` closes |
+| [#977](https://github.com/adcontextprotocol/adcp-client-python/issues/977) | No IDNA A-label conversion; raw U-labels not rejected — #6's 2 IDN cases |
+| [#978](https://github.com/adcontextprotocol/adcp-client-python/issues/978) | Five malformed authority shapes accepted; `request_target_uri_malformed` unimplemented — #6's reject set **and** #7 |
+| [#979](https://github.com/adcontextprotocol/adcp-client-python/issues/979) | Trailing empty query dropped, so `/p?` and `/p` produce the same signature base — #6 |
+
+Related, same repo: [#975](https://github.com/adcontextprotocol/adcp-client-python/issues/975)
+(vendored vectors incomplete and the loaders cannot detect it) with PR #980 approved — the SAME
+defect class our `MANIFEST.json` + `test_adcp_conformance_vectors_pin.py` close locally.
+
+And in `adcontextprotocol/adcp`: [#6071](https://github.com/adcontextprotocol/adcp/issues/6071)
+(stale vector counts — the 28-vs-40 correction A1 made, now PRs #6073/#6074),
+[#6076](https://github.com/adcontextprotocol/adcp/issues/6076) (seven documented signing error codes
+that do not exist, PR #6078), and
+[#6075](https://github.com/adcontextprotocol/adcp/issues/6075) (docs restate machine-readable spec
+facts by hand with nothing checking they agree).
+
+**Consequence for this repo: none of it changes what we vendor or how we grade, and that is by
+design.** We vendor byte-verbatim from tag `v3.1.1` with a sha256 manifest; every upstream fix above
+targets `main`, not the tag. When a new version is cut and the `adcp` pin moves, the drift guard
+fires — which is exactly its job — and the vectors get re-vendored then.
+
+**What it does change: `src/core/signing/canonical.py` is load-bearing for longer than a workaround
+should be.** All four SDK bugs are open and unfixed, so the seam IS the implementation, not a
+stopgap. When #976–#979 land and we bump the SDK, the seam must SHRINK to whatever remains
+un-implemented upstream — otherwise it silently becomes a permanent second canonicalizer, which is
+the exact thing divergence #6's consequence column forbids. That shrink is a condition of the next
+`adcp` bump, not optional cleanup.
+
+**Corroboration worth recording** (from PR #6078, which fixed #6076): the invented doc table was not
+merely wrong on seven names — it was silently incomplete on a whole discovery path, omitting the
+`request_signature_brand_*` and `request_signature_key_origin_*` families entirely. Two lessons land
+on us. First, the mechanism the PR states — *"a rejection that is correct in substance still fails
+its vector if the code string differs; take the code from the taxonomy rather than from memory"* —
+is precisely why B3 took `request_target_uri_malformed` from the shipped vector DATA over the
+README's stale worked example (#7). Second, those eight brand/key-origin constants DO exist in
+`adcp.signing` and our middleware wires the resolvers that raise them, but **no conformance vector
+exercises them**, so B3 grades none of that path. Filed as a gap, not a bug.
 
 ---
 
