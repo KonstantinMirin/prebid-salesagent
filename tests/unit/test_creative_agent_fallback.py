@@ -2,13 +2,12 @@
 
 Tests the fallback path when the adcp SDK 3.6.0 rejects TextContent
 responses from creative agents that don't return structuredContent.
-
-Fixes: salesagent-c6i
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import AdCPAdapterError, AdCPRateLimitError, AdCPServiceUnavailableError
@@ -128,7 +127,7 @@ class TestFetchFormatsRawMcp:
     async def test_unexpected_format_raises_runtime_error(self, registry, agent):
         """Raw HTTP returns unexpected format (no 'result' key) → raises AdCPAdapterError.
 
-        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        A silent ``return []`` here used to mask failures as 'no formats'.
         """
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
@@ -264,7 +263,7 @@ class TestParseMcpToolResult:
     def test_no_text_content_raises(self, registry):
         """Content with no text items → raises AdCPAdapterError.
 
-        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        A silent ``return []`` here used to mask failures as 'no formats'.
         """
         import logging
 
@@ -275,7 +274,7 @@ class TestParseMcpToolResult:
     def test_empty_content_raises(self, registry):
         """Empty content list → raises AdCPAdapterError.
 
-        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        A silent ``return []`` here used to mask failures as 'no formats'.
         """
         import logging
 
@@ -291,6 +290,13 @@ def _mcp_text_result(payload: dict) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(payload)}]}
 
 
+def _warnings(caplog) -> list[str]:
+    """Rendered WARNING-or-worse messages captured so far."""
+    import logging
+
+    return [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
+
+
 # Two fully-known formats the pinned adcp library understands completely.
 _KNOWN_FORMAT_A = {
     "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
@@ -304,7 +310,7 @@ _KNOWN_FORMAT_B = {
 }
 # AdCP-additive asset_type the canonical reference agent serves but the pinned
 # (and latest) adcp closed Literal union does NOT model. This is the exact
-# production defect class from salesagent-w8yn.
+# production defect class the tolerant-ingestion path exists for.
 _ADDITIVE_FORMAT = {
     "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "tracking_pixel"},
     "name": "Tracking Pixel",
@@ -313,13 +319,16 @@ _ADDITIVE_FORMAT = {
 
 
 class TestTolerantPerFormatIngestion:
-    """Hermetic regression for salesagent-w8yn (Postel / asymmetric strictness).
+    """Hermetic regression for Postel / asymmetric strictness in format ingestion.
 
     One unknown AdCP-additive asset_type must NOT nuke the whole
     list_creative_formats response. Fully-understood formats are returned;
     formats whose ONLY problem is an unrecognized additive asset_type are
-    passed through (the unknown additive asset_type is tolerated) with ONE
-    aggregated WARNING; genuinely malformed formats still fail LOUD.
+    passed through (the pinned adcp SDK models them as UnknownFormatAsset, so
+    they validate rather than being dropped — no format is lost and
+    ``_validate_formats_tolerant``'s aggregated skip WARNING never fires);
+    genuinely malformed formats still fail LOUD with a pydantic ValidationError
+    naming the offending field.
     """
 
     def test_unknown_additive_asset_type_passes_through(self, registry, caplog):
@@ -342,17 +351,30 @@ class TestTolerantPerFormatIngestion:
             "display_728x90_image",
             "tracking_pixel",
         ], "All formats including additive-asset_type should pass through"
+        assert _warnings(caplog) == [], (
+            "Nothing was dropped, so _validate_formats_tolerant's aggregated "
+            "'Skipped N creative format(s)' WARNING must not fire"
+        )
 
-    def test_all_known_formats_pass_through_unchanged(self, registry):
+    def test_all_known_formats_pass_through_unchanged(self, registry, caplog):
         """No additive types → all formats returned, zero warnings (no behavior change)."""
         import logging
 
         result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, _KNOWN_FORMAT_B]})
-        formats = registry._parse_mcp_tool_result(result, logging.getLogger())
+        with caplog.at_level(logging.WARNING):
+            formats = registry._parse_mcp_tool_result(result, logging.getLogger())
         assert sorted(f.format_id.id for f in formats) == ["display_300x250_image", "display_728x90_image"]
+        assert _warnings(caplog) == []
 
     def test_genuinely_malformed_format_still_fails_loud(self, registry):
-        """A real schema bug (not an additive enum) must NOT be masked — fail loud."""
+        """A real schema bug (not an additive enum) must NOT be masked — fail loud.
+
+        Grades the exact defect, not "something went wrong": the pydantic
+        ValidationError from ``Format.model_validate`` must name ``name`` as the
+        offending field with a string-type violation. Matching only on the word
+        "valid" in a message would also pass on the word "invalid" in an
+        unrelated infrastructure failure, so it cannot tell the two apart.
+        """
         import logging
 
         malformed = {
@@ -361,11 +383,19 @@ class TestTolerantPerFormatIngestion:
             "assets": [{"item_type": "individual", "asset_id": "primary", "asset_type": "image", "required": True}],
         }
         result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, malformed]})
-        with pytest.raises(Exception, match="(?i)valid"):
+        with pytest.raises(ValidationError) as exc_info:
             registry._parse_mcp_tool_result(result, logging.getLogger())
 
+        assert [(err["loc"], err["type"]) for err in exc_info.value.errors()] == [(("name",), "string_type")]
+
     def test_additive_type_with_structurally_broken_asset_fails_loud(self, registry):
-        """Unknown asset_type AND a structurally broken asset → not purely additive → fail loud."""
+        """Unknown asset_type AND a structurally broken asset → not purely additive → fail loud.
+
+        The offending fields are the asset's missing ``asset_id`` and
+        ``required`` — pinned so the test cannot pass on some other error that
+        merely mentions validity. The unknown ``asset_type`` alone is tolerated
+        (see the pass-through tests above), so it must NOT appear as a defect.
+        """
         import logging
 
         broken_additive = {
@@ -376,11 +406,18 @@ class TestTolerantPerFormatIngestion:
             "assets": [{"item_type": "individual", "asset_type": "pixel_tracker"}],
         }
         result = _mcp_text_result({"formats": [_KNOWN_FORMAT_A, broken_additive]})
-        with pytest.raises(Exception, match="(?i)valid"):
+        with pytest.raises(ValidationError) as exc_info:
             registry._parse_mcp_tool_result(result, logging.getLogger())
 
+        errors = exc_info.value.errors()
+        assert {err["loc"][0] for err in errors} == {"assets"}
+        assert {(err["loc"][-1], err["type"]) for err in errors} == {
+            ("asset_id", "missing"),
+            ("required", "missing"),
+        }
+
     def test_all_formats_additive_passes_through(self, registry, caplog):
-        """SDK 5.7 accepts additive-only batch via UnknownFormatAsset — returns the format."""
+        """Additive-only batch validates via UnknownFormatAsset — returns the format."""
         import logging
 
         result = _mcp_text_result({"formats": [_ADDITIVE_FORMAT]})
@@ -388,10 +425,11 @@ class TestTolerantPerFormatIngestion:
             formats = registry._parse_mcp_tool_result(result, logging.getLogger())
         assert len(formats) == 1
         assert formats[0].format_id.id == "tracking_pixel"
+        assert _warnings(caplog) == [], "The format validated, so nothing was skipped and nothing is warned about"
 
 
 class TestSchemaValidationFailureTriggersFallback:
-    """salesagent-w8yn: a wholesale schema-parse FAILED from the adcp client must
+    """A wholesale schema-parse FAILED from the adcp client must
     fall back to the raw-MCP path (where per-format tolerance applies), not only
     transport-class errors."""
 

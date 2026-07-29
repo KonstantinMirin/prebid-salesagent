@@ -45,7 +45,14 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a Seller Agent is operational and accepting requests
 
 
-  @T-UC-010-main-mcp @main-flow @mcp @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s18 @partition @boundary
+  # RECONCILED (#1600, local edit — mirror upstream in adcp-req): @mcp dropped so
+  # this rich scenario parametrizes across ALL wire transports (a2a/mcp/rest);
+  # previously the tag suppressed parametrization and the When pinned MCP, so the
+  # eleven-assert capability body never executed on the REST wire. No Then here is
+  # transport-shaped (every one reads the serialized body via wire_path/wire_field)
+  # and the When uses ctx.setdefault, so the parametrized transport wins. Same
+  # reconciliation as the UC-009 success scenarios.
+  @T-UC-010-main-mcp @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s18 @partition @boundary
   Scenario: not_provided — Not provided (no protocol filter), discover complete capabilities via MCP
     Given a tenant is resolvable from the request context
     And the tenant has an adapter with channels "display, social, ctv"
@@ -88,7 +95,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # POST-S18: Buyer knows reporting delivery methods
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
 
-  @T-UC-010-main-rest @main-flow @a2a @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s18
+  # RECONCILED (#1600, local edit — mirror upstream in adcp-req): @a2a dropped for
+  # the same reason as the sibling above — the tag suppressed parametrization and
+  # the When pinned A2A, so this scenario's eleven asserts never ran on REST either.
+  @T-UC-010-main-rest @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s18
   Scenario: Discover complete capabilities via A2A
     Given a tenant is resolvable from the request context
     And the tenant has an adapter with channels "display, social, ctv"

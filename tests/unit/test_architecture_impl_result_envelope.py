@@ -9,8 +9,6 @@ This guard ensures:
 1. _update_media_buy_impl has return annotation UpdateMediaBuyResult
 2. No direct `return UpdateMediaBuySuccess(...)` or `return UpdateMediaBuyError(...)`
    exists inside _update_media_buy_impl (only wrapped inside UpdateMediaBuyResult(response=...))
-
-beads: salesagent-egnl
 """
 
 import ast

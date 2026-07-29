@@ -109,7 +109,7 @@ def live_db_env(live_server: dict):
 
 def set_live_adapter_behavior(
     live_server: dict, *, tenant_subdomain: str = "ci-test", replace: bool = False, **behavior
-):
+) -> None:
     """Upsert adapter test-behavior on the live e2e DB via the shared factory helper.
 
     Single e2e entry point for what used to be five copy-pasted psycopg2
@@ -121,6 +121,12 @@ def set_live_adapter_behavior(
 
     Tests call this only to opt INTO non-default behavior; resetting back to the
     baseline is the autouse fixture's job (:func:`reset_adapter_baseline_if_live`).
+
+    Returns None on purpose. ``set_adapter_test_behavior`` hands back the
+    AdapterConfig ORM row, but this helper's session dies with the
+    :func:`live_db_env` block, so that row would reach the caller DETACHED —
+    touching any attribute raises DetachedInstanceError. The persisted state is
+    the whole product here; re-read it from the DB if a test ever needs it.
     """
     from src.core.database.models import Tenant
     from tests.factories.core import set_adapter_test_behavior
@@ -132,10 +138,10 @@ def set_live_adapter_behavior(
                 f"Tenant with subdomain {tenant_subdomain!r} not found in the live e2e DB — "
                 "did the stack's init_database_ci.py seed run?"
             )
-        return set_adapter_test_behavior(env, tenant.tenant_id, replace=replace, **behavior)
+        set_adapter_test_behavior(env, tenant.tenant_id, replace=replace, **behavior)
 
 
-def reset_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-test"):
+def reset_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-test") -> None:
     """Reset the live tenant's adapter test-behavior to the default baseline.
 
     ``replace=True`` (not a merged ``manual_approval_required=False``) because the
@@ -148,7 +154,7 @@ def reset_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "c
     Kept tenant-scoped: run_all_tests.sh runs suites in parallel, so a global reset
     would race bdd_e2e's per-scenario tenants.
     """
-    return set_live_adapter_behavior(
+    set_live_adapter_behavior(
         live_server,
         tenant_subdomain=tenant_subdomain,
         replace=True,

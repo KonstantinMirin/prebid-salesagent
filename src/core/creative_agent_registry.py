@@ -169,7 +169,7 @@ class FormatFetchResult:
     errors: list[AdCPResponseError]
 
 
-from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
+from src.core.utils.mcp_client import create_mcp_client  # raw-MCP path for preview_creative / build_creative
 
 
 def _get_reference_formats() -> list[Format]:
@@ -197,7 +197,7 @@ PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
 def _connection_agent_url(agent_url: str) -> str:
-    """Resolve the TRANSPORT url for an agent reference (salesagent-9qe2).
+    """Resolve the TRANSPORT url for an agent reference.
 
     When CREATIVE_AGENT_URL is set (test/CI stacks run a pinned container
     serving the standard catalog), references to the PUBLIC default agent
@@ -474,7 +474,7 @@ class CreativeAgentRegistry:
                 # expected schema ListCreativeFormatsResponse" with thousands of
                 # errors). Route to the raw-MCP path where per-format tolerant
                 # ingestion can salvage the compatible formats instead of
-                # discarding the entire catalog. (salesagent-w8yn)
+                # discarding the entire catalog.
                 schema_validation_failure = any(
                     marker in error_text.lower() for marker in _SCHEMA_VALIDATION_FAILURE_MARKERS
                 )
@@ -914,19 +914,25 @@ class CreativeAgentRegistry:
                 }]
             }
         """
-        # Use custom MCP client for non-standard tools (preview_creative not in AdCP spec)
+        # preview_creative IS an AdCP tool — spec 3.1.1 (the version this repo
+        # pins via adcp==6.6.0) defines it at
+        # dist/schemas/3.1.1/creative/preview-creative-request.json. It is called
+        # over a raw MCP client rather than the adcp SDK proxy so the request
+        # below reaches the agent verbatim, unmediated by the SDK request model.
         async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
             result = await client.call_tool(
                 "preview_creative",
                 {
-                    # The pinned reference agent's schema takes format_id as the
-                    # federation-identity OBJECT {agent_url, id} — the live public
-                    # host tolerated a bare string, which masked this mismatch
-                    # until connections were pinned in-network (salesagent-9qe2).
+                    # format_id in that request schema $refs
+                    # dist/schemas/3.1.1/core/format-id.json — the federation-identity
+                    # OBJECT {agent_url, id}, "never a plain string ... Using a plain
+                    # string here is a schema violation". The live public host
+                    # tolerated a bare string, which masked the mismatch until
+                    # connections were pinned in-network.
                     # The identity keeps the CANONICAL agent_url, not the
                     # connection alias. AnyUrl serialization yields the
                     # trailing-slash form for path-less URLs — verified tolerated
-                    # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
+                    # by the pinned reference agent (probe 2026-07-13).
                     "format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json"),
                     "creative_manifest": creative_manifest,
                 },
@@ -978,7 +984,13 @@ class CreativeAgentRegistry:
             - status: "draft" or "finalized"
             - creative_output: Generated creative manifest with output_format
         """
-        # Use custom MCP client for non-standard tools (build_creative not in AdCP spec)
+        # build_creative IS an AdCP tool — spec 3.1.1 defines it at
+        # dist/schemas/3.1.1/media-buy/build-creative-request.json. The raw MCP
+        # client (not the adcp SDK proxy) is what lets the pinned reference
+        # agent's parameter shape go out verbatim: the spec names the target
+        # format `target_format_id` and defines none of `gemini_api_key`,
+        # `promoted_offerings`, or `finalize` — they ride on that schema's
+        # `additionalProperties: true`.
         async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
             params = {
                 "message": message,

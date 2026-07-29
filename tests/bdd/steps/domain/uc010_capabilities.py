@@ -5,6 +5,12 @@ wire transports on CapabilitiesEnv. Only the adapter is mocked (channels +
 targeting capabilities are adapter facts); publisher partners are real DB
 rows, and the wrappers (MCP tool / A2A skill / REST GET) are production code.
 
+Scenario texts are transport-flavored ("MCP tool", "A2A skill") because the
+storyboard narrates one transport per scenario, but the two rich main
+scenarios (main-mcp, main-rest) carry no transport tag and parametrize across
+a2a/mcp/rest (#1600) — both When texts dispatch through ctx["transport"]
+identically, and every Then reads the serialized wire body.
+
 Assertions read the REAL serialized wire body via ``wire_path``. The
 "all 4 flags" features assert is reconciled with the pinned spec v3.1.1
 (core/media-buy-features.json declares exactly 4 properties) — see the
@@ -117,7 +123,9 @@ def when_get_capabilities_mcp(ctx: dict) -> None:
 
 @when("the Buyer Agent sends a get_adcp_capabilities skill request")
 def when_get_capabilities_skill(ctx: dict) -> None:
-    """A2A-flavored storyboard text (tagged @a2a upstream)."""
+    """A2A-flavored storyboard text. Same setdefault contract as the MCP text
+    above: untagged scenarios use the parametrized transport, @a2a-tagged ones
+    pin A2A here."""
     from tests.harness.transport import Transport
 
     ctx.setdefault("transport", Transport.A2A)
