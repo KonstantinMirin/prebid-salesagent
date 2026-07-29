@@ -21,7 +21,12 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import (
+    reset_to_revision,
+    run_alembic_downgrade,
+    run_alembic_upgrade,
+    seed_account,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -36,38 +41,23 @@ _TENANT = "mig_nk_tenant"
 def at_previous(migration_db):
     """Put the module-scoped database at the revision BEFORE this one, with no rows.
 
-    ``migration_db`` is module-scoped and test order is randomized, so a test that
-    assumed a starting revision or an empty table would pass or fail depending on
-    what ran before it — and the abort test in particular leaves colliding rows
-    behind that would poison any later upgrade.
+    The abort test here leaves colliding rows behind that would poison any later
+    upgrade, so every test starts from a clean tenant — see ``reset_to_revision``.
+    The downgrade also drops the index when a previous test left the DB above this
+    revision.
     """
-    engine, db_url = migration_db
-    run_alembic_upgrade(db_url, _PREVIOUS)  # creates the schema on first use
-    run_alembic_downgrade(db_url, _PREVIOUS)  # no-op if already there, drops the index if above
-    with engine.begin() as conn:
-        conn.execute(text("DELETE FROM accounts"))
-        conn.execute(text("DELETE FROM tenants"))
-        conn.execute(
-            text(
-                "INSERT INTO tenants (tenant_id, name, subdomain, ad_server, is_active) "
-                "VALUES (:tid, 'Migration NK', 'mig-nk', 'mock', true)"
-            ),
-            {"tid": _TENANT},
-        )
-    return engine, db_url
+    return reset_to_revision(
+        migration_db,
+        revision=_PREVIOUS,
+        tenant_id=_TENANT,
+        tenant_name="Migration NK",
+        subdomain="mig-nk",
+    )
 
 
 def _seed_account(engine, *, account_id: str, domain: str | None, operator: str | None) -> None:
-    """Insert an account directly — the migration's subject is rows, not callers."""
-    brand = "null" if domain is None else f'\'{{"domain": "{domain}"}}\''
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "INSERT INTO accounts (tenant_id, account_id, name, status, operator, brand) "
-                f"VALUES (:tid, :aid, :name, 'active', :operator, {brand}::jsonb)"
-            ),
-            {"tid": _TENANT, "aid": account_id, "name": account_id, "operator": operator},
-        )
+    """Seed into this module's tenant — the shared helper carries the SQL."""
+    seed_account(engine, tenant_id=_TENANT, account_id=account_id, domain=domain, operator=operator)
 
 
 def _index_def(engine) -> str | None:

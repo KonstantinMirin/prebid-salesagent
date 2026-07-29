@@ -54,7 +54,7 @@ def root_model_field_names() -> set[str]:
 
     roots.append(adcp)
     try:
-        import src.core.schemas as schemas
+        from src.core import schemas
 
         roots.append(schemas)
     except Exception:  # pragma: no cover - schemas import is best-effort
