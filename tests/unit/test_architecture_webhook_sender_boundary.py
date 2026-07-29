@@ -28,6 +28,16 @@ not fakeable by adding a call somewhere in the module: the raw POST has to go.
 which must carry a ``FIXME(#1291)`` at its source location so the debt is visible
 where the code is, not only in this table. Per the repository's allowlist rule,
 it can only shrink.
+
+Known blind spots, measured by mutation rather than assumed (#1291 sweep):
+a destination written as an INTERPOLATED f-string (``client.post(f"{config.url}",
+...)``) is skipped as a "fixed API path", and a POST issued as
+``client.send(client.build_request("POST", config.url, ...))`` is not a ``.post``
+call at all. Both slip this detector. Closing the f-string case means classifying
+the 15 adapter call sites that legitimately build a path under their own base URL,
+which is a deliberate decision rather than a typo fix — so it is tracked, not done
+here. The bare-name and ``requests.request`` shapes ARE caught; see
+:class:`TestSenderDetector`.
 """
 
 from __future__ import annotations
@@ -109,16 +119,20 @@ def _destination(call: ast.Call) -> ast.expr | None:
     return None
 
 
-def _dynamic_post_sites() -> list[tuple[str, str, int]]:
+def _dynamic_post_sites(tree_root: Path = SRC, *, relative_to: Path = ROOT) -> list[tuple[str, str, int]]:
     """(relative path, destination expression, line) for every dynamic-URL POST in src/.
 
     A literal or f-string destination is a fixed endpoint this agent calls; only a
     bare name or attribute can be a URL someone else registered, which is what makes
     a call site a candidate webhook sender.
+
+    ``tree_root`` is a parameter so the meta-tests below can run the detector over a
+    synthetic tree: a guard whose detector is only ever pointed at the real ``src/``
+    is asserted to be green, never asserted to be able to go red.
     """
     sites: list[tuple[str, str, int]] = []
-    for path in sorted(SRC.rglob("*.py")):
-        rel = path.relative_to(ROOT).as_posix()
+    for path in sorted(tree_root.rglob("*.py")):
+        rel = path.relative_to(relative_to).as_posix()
         if "/tests/" in f"/{rel}":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), rel)
@@ -217,3 +231,83 @@ class TestOutboundWebhookSenderBoundary:
             f"Allowlisted webhook senders with no {FIXME_MARKER} comment in the sending function:\n"
             + "\n".join(f"  {rel}:{lineno}  ->  {expr}" for rel, expr, lineno in missing)
         )
+
+
+#: A re-introduced sender: it POSTs to a destination somebody else supplied, so the
+#: detector must surface it for classification.
+_REINTRODUCED_SENDER = """
+import httpx
+
+def send(config, payload):
+    with httpx.Client() as client:
+        return client.post(config.url, json=payload)
+"""
+
+#: The same disease reached through ``requests.request``, whose URL is the SECOND
+#: positional argument. An off-by-one in :func:`_destination` would read ``"POST"``
+#: as the destination and classify it as a literal — i.e. silently pass.
+_REINTRODUCED_SENDER_VIA_REQUEST = """
+import requests
+
+def send(config, payload):
+    return requests.request("POST", config.url, json=payload)
+"""
+
+#: A sender routed through the boundary: serialization, signing and the POST all
+#: happen inside the SDK sender, so there is no raw POST left to discover. This is
+#: what a FIXED sender looks like, and the detector must stay silent about it.
+_ROUTED_SENDER = """
+from src.core.signing.webhook_sender_factory import deliver_adcp_webhook_sync
+
+def send(config, payload, tenant_id, repo):
+    return deliver_adcp_webhook_sync(
+        url=config.url,
+        payload=payload,
+        idempotency_key="k",
+        config=config,
+        tenant_id=tenant_id,
+        repo=repo,
+    )
+"""
+
+#: A fixed endpoint this agent calls. Nothing about webhook signing applies, and a
+#: detector that flagged it would make the guard cost more than it catches.
+_FIXED_ENDPOINT_CALL = """
+import requests
+
+def send(payload):
+    return requests.post("https://api.example.com/v1/things", json=payload)
+"""
+
+
+@pytest.mark.arch_guard
+class TestSenderDetector:
+    """Meta-tests: the detector can actually go red, and does not cry wolf.
+
+    Without these, every assertion above is only ever evaluated against a tree that
+    already satisfies it — which proves the tree is clean, not that the guard would
+    notice if it stopped being.
+    """
+
+    @staticmethod
+    def _probe(tmp_path: Path, source: str) -> list[tuple[str, str, int]]:
+        probe = tmp_path / "src" / "probe.py"
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text(source, encoding="utf-8")
+        return _dynamic_post_sites(tmp_path / "src", relative_to=tmp_path)
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            (_REINTRODUCED_SENDER, "config.url"),
+            (_REINTRODUCED_SENDER_VIA_REQUEST, "config.url"),
+        ],
+    )
+    def test_detector_finds_a_reintroduced_sender(self, tmp_path, source, expected):
+        """POSITIVE: a hand-rolled POST to a caller-supplied URL is discovered."""
+        assert [expr for _, expr, _ in self._probe(tmp_path, source)] == [expected]
+
+    @pytest.mark.parametrize("source", [_ROUTED_SENDER, _FIXED_ENDPOINT_CALL])
+    def test_detector_ignores_routed_and_fixed_destinations(self, tmp_path, source):
+        """NEGATIVE: a routed sender and a fixed endpoint are not reported."""
+        assert self._probe(tmp_path, source) == []
