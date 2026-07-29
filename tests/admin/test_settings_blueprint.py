@@ -277,13 +277,14 @@ class TestApproximatedToken:
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
-        # Patch the settings module's own seam helper: the Approximated calls go
-        # through _approximated() now, which returns an OutboundResult and raises on
-        # a non-2xx instead of handing back a status_code to branch on.
+        # Patch the SEAM, not _approximated: the api-key header is built inside
+        # _approximated now, and the security assertion below is precisely that the
+        # key travels as a header. Doubling _approximated would patch out the code
+        # under test and the assertion would grade nothing.
         mock_result = MagicMock()
         mock_result.json.return_value = {"token": "opaque-widget-token-123"}
 
-        with patch("src.admin.blueprints.settings._approximated", return_value=mock_result) as mock_get:
+        with patch("src.admin.blueprints.settings.send", return_value=mock_result) as mock_get:
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
 
         assert response.status_code == 200

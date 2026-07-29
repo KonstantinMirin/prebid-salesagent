@@ -14,7 +14,7 @@ from typing import Any
 
 # The Approximated vhost API host, in ONE place. It was repeated at all four call
 # sites, which made the ticket's own "drive it at a local origin" gate unreachable.
-from src.core.security.outbound_http import OutboundError, OutboundResult
+from src.core.security.outbound_http import OutboundError, OutboundResult, send
 
 APPROXIMATED_BASE_URL = os.environ.get("APPROXIMATED_BASE_URL", "https://cloud.approximated.app")
 
@@ -26,8 +26,6 @@ def _approximated(method: str, path: str, api_key: str, *, json_body: Any = None
     retried before — turning one failed vhost create into three is exactly the
     drift this migration must not introduce.
     """
-    from src.core.security.outbound_http import send
-
     return send(
         f"{APPROXIMATED_BASE_URL}{path}",
         method=method,
