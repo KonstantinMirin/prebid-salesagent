@@ -2149,28 +2149,58 @@ def then_packages_include_breakdown(ctx: dict, field: str) -> None:
                 entry.get("impressions") if isinstance(entry, dict) else getattr(entry, "impressions", None)
             )
             assert entry_impressions is not None, f"Breakdown entry in {pkg.package_id!r}.{field} missing 'impressions'"
-            # Dimension identifier: proves data is actually segmented
+            # Dimension identifier: proves data is actually segmented.
+            # Hard assert, never an imperative xfail: a server that returned one
+            # unsegmented aggregate row must FAIL here. This scenario is graduated
+            # off the e2e_rest ledger, so an xfail hatch would let a regression
+            # keep the bdd-in-network job green — exactly the ratchet graduation installs.
             dim_value = entry.get(dimension_key) if isinstance(entry, dict) else getattr(entry, dimension_key, None)
-            if dim_value is None:
-                pytest.xfail(
-                    f"PRODUCTION GAP: breakdown entry in {pkg.package_id!r}.{field} "
-                    f"missing dimension identifier '{dimension_key}' — "
-                    f"entries are not segmented by dimension"
-                )
             assert dim_value, (
-                f"Breakdown entry in {pkg.package_id!r}.{field} has empty "
-                f"dimension identifier '{dimension_key}': {dim_value!r}"
+                f"Breakdown entry in {pkg.package_id!r}.{field} has no "
+                f"dimension identifier '{dimension_key}' ({dim_value!r}) — "
+                f"entries are not segmented by dimension"
             )
             identifiers_seen.add(str(dim_value))
-        # With multiple entries, dimension identifiers should be distinct
-        if len(value) > 1:
-            assert len(identifiers_seen) > 1, (
-                f"Package {pkg.package_id!r}.{field} has {len(value)} entries "
-                f"but only 1 distinct '{dimension_key}' value: {identifiers_seen} — "
-                f"not truly segmented by dimension"
-            )
+        # Every entry must carry its OWN dimension value — armed at any length, so a
+        # single-row (unsegmented) response cannot skip the segmentation check.
+        assert len(identifiers_seen) == len(value), (
+            f"Package {pkg.package_id!r}.{field} has {len(value)} entries but "
+            f"{len(identifiers_seen)} distinct '{dimension_key}' values: {sorted(identifiers_seen)} — "
+            f"not truly segmented by dimension"
+        )
         checked += 1
     assert checked >= 1, "Response has no packages to check"
+
+
+@then(parsers.parse('the "{field}" breakdown should segment into exactly "{expected}"'))
+def then_breakdown_segments_into(ctx: dict, field: str, expected: str) -> None:
+    """Assert the breakdown's dimension values are exactly the named set, per package.
+
+    Pins the expected rows in the scenario rather than leaving "is it segmented?"
+    to the step definition: the seeded adapter data (``simulate_breakdowns``,
+    src/adapters/mock_ad_server.py) supplies mobile/desktop/tablet for device_type
+    on every transport — in-process via the adapter mock, over e2e via the
+    ``DeliverySimulationConfig`` row the live server reads back. A response that
+    collapsed the dimension into one aggregate row fails here.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    dimension_key = field[3:] if field.startswith("by_") else field
+    # Validate the SCENARIO's own parameter before parsing it, so a malformed
+    # step text fails loudly here instead of silently comparing against an
+    # empty set below.
+    assert expected.strip(), f"Scenario named no expected {dimension_key} values: {expected!r}"
+    expected_values = {v.strip() for v in expected.split(",") if v.strip()}
+    packages = _collect_all_packages(resp)
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        entries = getattr(pkg, field, None)
+        assert isinstance(entries, list), f"Package {pkg.package_id!r} missing '{field}' breakdown array: {entries!r}"
+        seen = {str(e.get(dimension_key) if isinstance(e, dict) else getattr(e, dimension_key, None)) for e in entries}
+        assert seen == expected_values, (
+            f"Package {pkg.package_id!r}.{field} segmented into {sorted(seen)}, "
+            f"expected exactly {sorted(expected_values)}"
+        )
 
 
 @then(parsers.parse('the response packages should NOT include "{field}" breakdown arrays'))
@@ -2207,6 +2237,9 @@ def then_packages_limited(ctx: dict, field: str, n: int) -> None:
     for pkg in packages:
         value = getattr(pkg, field)
         assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' as a list: {value!r}"
+        # "should include" means the breakdown is present, not merely bounded: an
+        # empty array would satisfy "at most N" vacuously while returning no data.
+        assert value, f"Package {pkg.package_id!r} has empty '{field}' breakdown"
         actual_count = len(value)
         assert actual_count <= n, (
             f"Package {pkg.package_id!r} '{field}' has {actual_count} entries, expected at most {n}"

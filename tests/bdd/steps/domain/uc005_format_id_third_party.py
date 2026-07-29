@@ -18,6 +18,16 @@ observation. Both the production filter fix and the REST harness fix
 (``build_rest_body`` now transmits ``format_ids``) are required for this to hold on
 all three transports.
 
+The scenario's expected outcome is otherwise entirely NEGATIVE, so it carries a
+POSITIVE CONTROL (third Given): the same call on the same transport with the
+SELLER's ``(agent_url, id)`` must resolve to exactly that pair. Without it the
+scenario passes on an empty ``formats[]`` for any reason at all — unreachable
+creative agent, catalog drift, a 200 carrying an errors array — and cannot tell
+"correctly returned nothing" from "returns nothing". Local scenario edit; mirror
+upstream (#1600, follows #1585). Assertions read the serialized wire
+(``_serialized_formats`` + ``wire_format_id_identity``), matching the two sibling
+UC-005 format_id scenarios.
+
 @source repo=adcp ref=v3.1.0-beta.3
   path=static/compliance/source/protocols/media-buy/index.yaml
   (step list_formats, refs_resolve: match_keys [agent_url, id], scope.equals $agent_url, on_out_of_scope: warn)
@@ -29,8 +39,10 @@ from pytest_bdd import given, then, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest, format_id_identity
 from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.domain.uc005_format_id_shape import _assert_formats_non_empty, _serialized_formats
 from tests.bdd.steps.generic.when_request import _call
 from tests.factories import FormatFactory
+from tests.helpers.format_assertions import wire_format_id_identity
 
 # The seller's own creative agent — matches the agent_url the CreativeFormatsEnv
 # mock catalog uses, so a seeded format reads as "hosted by this seller".
@@ -61,6 +73,50 @@ def given_seller_has_no_local_copy(ctx: dict) -> None:
     ctx["env"].set_registry_formats([local])
 
 
+@given("list_creative_formats resolves the seller's own agent_url plus that same id to exactly that format")
+def given_seller_own_format_resolves(ctx: dict) -> None:
+    """POSITIVE CONTROL: prove the id collision is live on THIS transport, THIS run.
+
+    Issues the SAME ``list_creative_formats`` call on the SAME transport with the
+    SELLER's ``(agent_url, id)`` and requires it to resolve to exactly that pair.
+    Without this control the scenario's outcome is entirely negative — no fabricated
+    entry — and an empty ``formats[]`` satisfies it for ANY reason (creative agent
+    unreachable, catalog drift, a 200 carrying an errors array). With it, the empty
+    third-party result is evidence of ``(agent_url, id)`` discrimination rather than
+    evidence of nothing. Local scenario edit, mirror upstream (#1600, follows #1585).
+
+    Reads the serialized WIRE (``_serialized_formats``), like the two sibling UC-005
+    format_id scenarios, and clears the control's response so a later transport error
+    cannot leave stale control data for the Then steps to assert against.
+    """
+    seller_format_id = FormatId(agent_url=SELLER_AGENT_URL, id=COLLIDING_FORMAT_ID)
+    _call(ctx, req=ListCreativeFormatsRequest(format_ids=[seller_format_id]))
+
+    assert ctx.get("error") is None, (
+        f"positive control failed: resolving the seller's OWN format {format_id_identity(seller_format_id)} "
+        f"raised {ctx.get('error')!r}. The third-party empty result would prove nothing."
+    )
+    formats = _assert_formats_non_empty(
+        ctx,
+        f"positive control failed: the seller's OWN {format_id_identity(seller_format_id)} resolved to an "
+        "empty formats[]. The id collision this scenario relies on does not exist for this run, so an "
+        "empty third-party result is evidence of nothing (catalog drift or an unreachable creative agent).",
+    )
+    assert len(formats) == 1, (
+        f"positive control: expected exactly the seller's own format for {format_id_identity(seller_format_id)}, "
+        f"got {[f['format_id'] for f in formats]}"
+    )
+    assert wire_format_id_identity(formats[0]["format_id"]) == format_id_identity(seller_format_id), (
+        f"positive control: formats[0].format_id is {formats[0]['format_id']!r}, expected the seller pair "
+        f"{format_id_identity(seller_format_id)}"
+    )
+
+    # The control's own result must not leak into the Then steps: they assert on the
+    # third-party dispatch, and a failed dispatch would otherwise read this response.
+    ctx.pop("response", None)
+    ctx.pop("wire_response", None)
+
+
 @when("the Buyer Agent sends list_creative_formats with that third-party format_id")
 def when_send_list_with_third_party_format_id(ctx: dict) -> None:
     """Dispatch list_creative_formats filtered by the third-party format_id (all transports)."""
@@ -70,9 +126,15 @@ def when_send_list_with_third_party_format_id(ctx: dict) -> None:
 
 @then("the seller should NOT fabricate a local format entry to satisfy the third-party reference")
 def then_no_fabricated_local_entry(ctx: dict) -> None:
-    """No returned format is the third-party reference, nor a substituted local same-id format."""
-    response = _require_response(ctx)
-    returned = {format_id_identity(f.format_id) for f in response.formats}
+    """No returned format is the third-party reference, nor a substituted local same-id format.
+
+    Reads the serialized WIRE (``_serialized_formats``) like the two sibling UC-005
+    format_id scenarios — the typed payload cannot observe a serialization regression.
+    ``_require_response`` first, so a dispatch that errored surfaces its recorded error
+    instead of a bare missing-wire assertion.
+    """
+    _require_response(ctx)
+    returned = {wire_format_id_identity(entry["format_id"]) for entry in _serialized_formats(ctx)}
 
     third_party = format_id_identity(ctx["third_party_format_id"])
     assert third_party not in returned, (
@@ -94,9 +156,12 @@ def then_reported_as_observation(ctx: dict) -> None:
     assert ctx.get("error") is None, (
         f"out-of-scope third-party reference raised an error instead of an observation: {ctx.get('error')!r}"
     )
-    response = _require_response(ctx)
+    _require_response(ctx)
     # The foreign reference resolves to nothing locally — that empty match is the
     # observation (on_out_of_scope: warn), distinct from a graded failure/error.
+    # Read on the wire, the buyer-facing surface (siblings do the same).
     third_party = format_id_identity(ctx["third_party_format_id"])
-    returned = {format_id_identity(f.format_id) for f in response.formats}
-    assert third_party not in returned
+    returned = {wire_format_id_identity(entry["format_id"]) for entry in _serialized_formats(ctx)}
+    assert third_party not in returned, (
+        f"the foreign reference {third_party} came back as a resolved format on the wire: {sorted(returned)}"
+    )

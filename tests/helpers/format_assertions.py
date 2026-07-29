@@ -37,6 +37,28 @@ def assert_wire_format_id_is_object(fid: Any) -> None:
     assert "id" in fid, f"format_id missing id: {fid!r}"
 
 
+def wire_format_id_identity(fid: Any) -> tuple[str, str]:
+    """Return the ``(canonical agent_url, id)`` federation identity of a WIRE ``format_id``.
+
+    The wire analogue of :func:`src.core.schemas.format_id_identity`: asserts the
+    object shape first (a flattened bare-string regression fails loudly instead of
+    silently comparing unequal), then routes the value through the SAME production
+    identity function used by the ``format_ids`` filter — so a wire value and a typed
+    ``FormatId`` compare on the same key under ``agent_url`` normalization (trailing
+    slash, transport suffixes).
+
+    Args:
+        fid: A single ``format_id`` value as it appears on the serialized wire.
+
+    Returns:
+        ``(canonical_agent_url, id)`` — the federation comparison key.
+    """
+    from src.core.schemas import FormatId, format_id_identity
+
+    assert_wire_format_id_is_object(fid)
+    return format_id_identity(FormatId(agent_url=fid["agent_url"], id=fid["id"]))
+
+
 def capture_advertised_format_id(env, *, product_id=None, brief="format_id roundtrip"):
     """Capture the seller's advertised ``format_id`` via a real get_products call.
 

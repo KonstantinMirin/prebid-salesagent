@@ -36,6 +36,18 @@ def _serialized_formats(ctx: dict) -> list[dict[str, Any]]:
     return wire_field(ctx, "formats")
 
 
+def _assert_formats_non_empty(ctx: dict, failure_message: str) -> list[dict[str, Any]]:
+    """Shared non-empty floor over the serialized formats array.
+
+    Lives beside :func:`_serialized_formats` because every UC-005 format_id sibling
+    that reads the wire needs the same anti-vacuity floor: an assertion about the
+    CONTENT of formats[] says nothing when formats[] is empty.
+    """
+    formats = _serialized_formats(ctx)
+    assert formats, failure_message
+    return formats
+
+
 @when("the response returns a non-empty formats array")
 def when_response_returns_non_empty_formats(ctx: dict) -> None:
     # Precondition guard (phrased as a When by the storyboard): the Given's

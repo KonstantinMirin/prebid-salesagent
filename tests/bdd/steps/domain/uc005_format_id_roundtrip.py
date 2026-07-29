@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pytest_bdd import given, then, when
 
-from tests.bdd.steps.domain.uc005_format_id_shape import _serialized_formats
+from tests.bdd.steps.domain.uc005_format_id_shape import _assert_formats_non_empty, _serialized_formats
 from tests.helpers.format_assertions import assert_wire_format_id_is_object, capture_advertised_format_id
 
 # Shared by ProductFactory defaults and the reference-format registry (_get_reference_formats).
@@ -74,13 +74,6 @@ def when_send_list_creative_formats_with_captured_format_id(ctx: dict) -> None:
     fid = FormatId(agent_url=captured["agent_url"], id=captured["id"])
     req = ListCreativeFormatsRequest(format_ids=[fid])
     _call_via(ctx, ctx["transport"], req=req)
-
-
-def _assert_formats_non_empty(ctx: dict, failure_message: str) -> list[dict]:
-    """Shared non-empty check for the two storyboard steps that assert the same predicate."""
-    formats = _serialized_formats(ctx)
-    assert formats, failure_message
-    return formats
 
 
 @then("the response should be schema-valid against list-creative-formats-response.json")

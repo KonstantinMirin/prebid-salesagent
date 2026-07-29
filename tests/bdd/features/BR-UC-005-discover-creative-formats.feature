@@ -1086,9 +1086,18 @@ Feature: BR-UC-005 Discover Creative Formats
   Scenario: Format ID with agent_url pointing at a third-party creative agent is reported as observation, not failure
     Given a product advertises a format_id whose agent_url points at a third-party creative agent
     And the seller has no local copy of that format in its own catalog
+    And list_creative_formats resolves the seller's own agent_url plus that same id to exactly that format
     When the Buyer Agent sends list_creative_formats with that third-party format_id
     Then the seller should NOT fabricate a local format entry to satisfy the third-party reference
     And the verification result should be reported as an observation rather than a graded failure
+    # LOCAL EDIT (#1600, follows #1585): the third Given is a POSITIVE CONTROL added
+    # locally and NOT yet upstream — mirror it into adcp-req. Without it the scenario's
+    # outcome is entirely negative (no fabricated entry) and therefore passes on an
+    # empty formats[] for ANY reason: creative agent unreachable, catalog drift, a 200
+    # carrying an errors array. The control issues the SAME list_creative_formats call
+    # on the SAME transport with the SELLER's (agent_url, id) and requires it to resolve
+    # to exactly that pair, so the empty third-party result is evidence of (agent_url, id)
+    # discrimination rather than evidence of nothing.
     # media-buy/index.yaml list_formats_integrity: when products[].format_ids[].agent_url
     # points at a creative agent different from this seller's agent, the seller cannot
     # verify it without calling that agent. The runner reports such references as

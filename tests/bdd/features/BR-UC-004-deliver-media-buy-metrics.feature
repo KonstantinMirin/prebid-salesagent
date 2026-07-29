@@ -506,7 +506,10 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"device_type": {}}
     Then the response packages should include "by_device_type" breakdown arrays
+    And the "by_device_type" breakdown should segment into exactly "mobile, desktop, tablet"
     # BR-RULE-091 INV-1: buyer includes dimension key -> seller returns corresponding by_* array
+    # The expected rows are the seeded adapter delivery data (mobile/desktop/tablet), pinned
+    # in the scenario so "returned a breakdown" cannot be satisfied by one unsegmented row.
 
   @T-UC-004-dim-unsupported @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Buyer requests unsupported dimension - silently omitted

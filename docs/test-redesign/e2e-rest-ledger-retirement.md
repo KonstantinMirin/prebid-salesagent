@@ -12,12 +12,18 @@ the 6 uc011 read-back entries (`_db_scope_for` repoint + agent auth_token fix)
 and the 2 uc002 ext-o/ext-p entries (auto-approval seeding) — all 8 xpassed
 in-network (innet_050726_2030) — bringing it to **12**; the uc002 ext-q upload
 entry graduated (fail_on_upload mock fidelity + catalog format +
-`run_async_in_sync_context` format resolution) bringing it to **11**. Tracked
+`run_async_in_sync_context` format resolution) bringing it to **11**. The main
+merge then took it to **21** (the owner-approved union of 10 parallel-e2e_rest
+rows) and the `build_rest_body` reconciliation (#1600 — graduated 2 uc004
+invalid-input rows, unmasked 9 that had been passing only because the harness
+dropped the field before it reached the server) to **24**; graduating those 10
+parallel-e2e_rest rows on in-network evidence (#1585 A4, all 10 xpassed in
+`innet_290726_1225`) brings it to **14**. Tracked
 publicly as **#1423**; the in-network Docker CI runner that recovered e2e_rest
 as the 5th BDD transport landed on main as **#1420**.
 (Internal epic `salesagent-x0nl`; the per-mechanism sub-task ids below roll up
 to #1423.)
-**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (11 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`).
+**Live ledger:** [`tests/bdd/e2e_rest_known_failures.txt`](../../tests/bdd/e2e_rest_known_failures.txt) (14 nodeids, loaded by `tests/bdd/conftest.py` to `xfail(strict=False)`; pinned by `tests/unit/test_e2e_rest_ledger_state.py`). The file's header carries the current per-category composition — it is **not** production gaps only: 7 of the 14 are upstream scenario defects (#1756).
 
 ## Wave 3 outcome (#1418) — read this first
 

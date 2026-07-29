@@ -1,13 +1,16 @@
-# Known-failing e2e_rest BDD scenarios — GENUINE production / harness gaps only.
+# Known-failing e2e_rest BDD scenarios — entries that genuinely fail against the
+# live server, in three categories (production gap / harness gap / upstream
+# scenario defect). NOT a "production gaps only" list: see the composition below.
 #
 # These dispatch through the real server over HTTP. After Wave 3 triage (#1418)
 # every mock-injection-only entry was either graduated (it now passes in-network)
 # or moved to an env-level E2EUnsupportedSetup declaration (raised during harness
 # realization in tests/harness/, surfaced as xfail by the conftest report hook —
-# NOT listed here). What remains below are scenarios that fail for a real reason:
-# a production behaviour gap, an unseeded server-side billing/account state, or a
-# harness observability/seeding gap that needs a code change to fix. Each block is
-# annotated with the gap it represents.
+# NOT listed here). An entry leaves this file on POSITIVE in-network evidence only:
+# it xpasses in the bdd-in-network job (graduation), or its setup method provably
+# has no live-server surface (route 3, E2EUnsupportedSetup declared at the method
+# and pinned in tests/unit/test_architecture_e2e_rest_escape_hatches.py). Never on
+# assertion alone. Each block below is annotated with the reason it stays.
 #
 # Loaded by tests/bdd/conftest.py to xfail(strict=False) exactly these nodeids.
 # Locked by tests/unit/test_e2e_rest_ledger_state.py — keep that test in sync.
@@ -23,13 +26,27 @@
 #
 # Wave-3 graduation (#1418, against the in-network wave2 report): removed 163
 # now-passing entries, 4 stale (renamed by #1370), and 98 format-injection
-# entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
-# entries remain, grouped by gap below.
+# entries now owned by the env E2EUnsupportedSetup declaration. That wave left
+# 47 entries; the count has moved since — the CURRENT composition is below.
 #
-# FINAL SET AFTER THE main MERGE: 17 entries =
-#   5  uc004 invalid-input rows the live server still accepts (spec-production gap)
-#   2  explicit inline-xfail production gaps (attribution default, push-notification ack)
-#   10 parallel-e2e_rest mock-injection artifacts (E2E_PER_WORKER, owner-approved)
+# CURRENT SET: 14 entries, by category —
+#   7  upstream SCENARIO defects (#1756): the dispatched request field exists
+#      nowhere in pinned adcp v3.1.1 and the live server correctly answers
+#      INVALID_REQUEST. sampling_method x6 + the ownership BOUNDARY row.
+#      Retiring these means reconciling the generated scenario upstream, NOT
+#      implementing a non-spec field.
+#   6  production gaps: include_package_daily_breakdown not computed (#1711, x2),
+#      two uc004 invalid inputs the live server still accepts (string "true"
+#      daily-breakdown, geo metro without system), and the 2 inline-xfail rows
+#      (seller attribution default, push-notification ack).
+#   1  contested: the ownership PARTITION row is annotated below as a
+#      live-server-accepts validation gap, but it dispatches the same non-spec
+#      `ownership` field as the #1756 group. Classify it in #1756, not here.
+#   0  harness gaps — the last of those graduated with #1430.
+# History of the count: 11 before the main merge -> 17 at the merge (+10
+# parallel-e2e rows, owner-approved union) -> 24 at the build_rest_body
+# reconciliation (#1600: graduated 2, unmasked 9) -> 14 here, graduating the 10
+# parallel-e2e rows on in-network evidence (#1585 A4, block below).
 # The 4 uc004 date-range rows and the 2 uc004 account valid rows GRADUATED at the
 # #1417 merge and must never be re-added.
 
@@ -152,20 +169,51 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # failed with 'asyncio.run() cannot be called from a running event loop').
 # Verified in-network: all 4 transports pass incl. e2e_rest.
 
-# --- parallel e2e_rest mock-injection artifacts (10) ---
-# Added 2026-07-09: surfaced when perf/parallelize-test-suite enabled parallel
-# e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
-# UC-004 set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
-# injected cross-principal creatives — none visible to the separate HTTP server.
-# Ledger: #1739 (disposition: realize the setup or declare E2EUnsupportedSetup);
-# e2e_rest ledger retirement: #1418.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]
-tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]
-tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]
-tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]
-tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]
+# --- parallel e2e_rest rows (10) — GRADUATED (#1585 A4) ---
+# Added 2026-07-09 when perf/parallelize-test-suite enabled parallel e2e_rest
+# (E2E_PER_WORKER), annotated "mock-injection artifacts" (#1739). That annotation
+# named THREE causes (mock-injection invisible, auth/tenant-context, wire not
+# stashed) and all three had fixes land AFTER the failures were observed:
+# set_adapter_response gained the _persist_simulation_config e2e realization the
+# live Mock adapter reads back (src/adapters/mock_ad_server.py _load_delivery_
+# simulation, under ADCP_TESTING); RestE2EDispatcher started stashing the real
+# HTTP body as wire_response (9ac08dad3); and the uc018 Givens became per-scenario
+# tenant + get_or_create + re-authenticated (6b1334ac7, d1e69d717 / #1430).
+# Ledger xfails are xfail(strict=False) — an xpass is SILENT — so these had been
+# passing unnoticed. Evidence: bdd-in-network run innet_290726_1225 graded all 24
+# ledger rows: exactly these 10 xpassed, the other 14 still xfailed, 0 uncollected.
+# Confirmed on the tree that contains this graduation by run <CONFIRM_RUN_ID>.
+#
+# Inspected one scenario at a time per .claude/rules/workflows/xpass-graduation.md
+# (an xpass can also mean the scenario is too weak to fail). Per row:
+#  uc004 dim rows (4) — T-UC-004-dim-supported/-truncated/-complete/-multi. Given
+#    goes through the shared harness (env.set_adapter_response), never a transport
+#    branch. dim-supported was STRENGTHENED FIRST in this change: its Then step held
+#    an imperative pytest.xfail() where the segmentation claim belongs, and armed
+#    the distinctness check only for >1 entries — so one unsegmented aggregate row
+#    reported xfail, never fail. Now a hard assert, distinctness armed at any
+#    length, and the expected rows (mobile/desktop/tablet) pinned IN the scenario;
+#    mutation-verified (collapsing the mock to one row fails the scenario). The
+#    truncation row gained a non-empty floor so "at most 5" cannot pass on [].
+#  uc005 format_id rows (3) — baseline shape / roundtrip-from-products /
+#    third-party agent_url. Baseline and roundtrip assert on the real HTTP body
+#    (wire_response) with a >=1 non-empty floor and verbatim (agent_url, id)
+#    equality. Third-party asserts the seller does not substitute its own same-id
+#    format; the falsifier is live over e2e because the reference catalog really
+#    does serve display_300x250_image under the seller agent_url — an id-only
+#    filter would return it and fail the step. Third-party was STRENGTHENED FIRST
+#    in this change: its expected outcome was entirely negative, so it passed on an
+#    empty formats[] for ANY reason (creative agent down, catalog drift, a 200
+#    carrying errors). The scenario now carries a POSITIVE CONTROL Given — the same
+#    call on the same transport with the SELLER's (agent_url, id) must resolve to
+#    exactly that pair — and reads the wire like its two siblings. Mutation-verified
+#    (production returning [] whenever format_ids is set fails it on a2a/mcp/rest;
+#    before the control, that mutation passed).
+#  uc018 rows (3) — BR-RULE-034 INV-1 + counter + concept_ids filter. All read the
+#    wire creatives array (loud guard if a wire transport failed to stash), assert
+#    exact set equality against self-seeded ids under a fresh per-scenario tenant,
+#    and carry explicit anti-vacuity guards on the empty response.
+# Route 3 (E2EUnsupportedSetup) was considered and REJECTED: it asserts a setup
+# METHOD has no live-server surface, which these xpasses prove false, and it would
+# mis-declare set_adapter_response / set_registry_formats for every other scenario
+# that seeds through them. 3 of the 10 have no setup method to declare on at all.
