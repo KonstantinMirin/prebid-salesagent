@@ -114,3 +114,34 @@ class TestAddPublisherPartnerDuplicate:
 
         assert (response.status_code, response.get_json()) != (409, {"error": "Publisher already exists"})
         assert response.status_code == 500
+
+
+class TestUnexpectedDbErrorDoesNotLeakDriverInternals:
+    """A non-duplicate DB error must answer with a generic message, not the driver dump.
+
+    The handler's blanket ``except Exception`` puts ``str(e)`` into the 500 body,
+    so any database error the duplicate-narrowing does not cover shows the
+    operator raw psycopg2 text — the failing statement and its parameter values
+    included (parameter values in a DETAIL line can carry tenant data).
+    """
+
+    def test_data_error_500_carries_no_driver_internals(self, client, factory_session):
+        """Deterministic non-duplicate DB error: a value the column cannot hold.
+
+        ``publisher_domain`` is String(255); an oversized value passes every
+        handler check and dies at flush with a DataError the handler does not
+        narrow. The operator may be told the write failed — but never shown the
+        driver name, the SQL statement, or the bound parameters.
+        """
+        tenant = TenantFactory()
+        oversized = ("a" * 300) + ".example.com"
+
+        response = client.post(
+            f"/tenant/{tenant.tenant_id}/publisher-partners",
+            json={"publisher_domain": oversized, "display_name": "Oversized"},
+        )
+
+        assert response.status_code == 500
+        body = response.get_data(as_text=True)
+        for marker in ("psycopg2", "INSERT INTO", "[SQL", "[parameters", "DETAIL:"):
+            assert marker not in body, f"500 body leaks driver internals ({marker!r}): {body[:300]}"

@@ -14,6 +14,7 @@ from adcp.exceptions import AdagentsNotFoundError, AdagentsTimeoutError, Adagent
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import select
 
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.config import get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -82,7 +83,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error listing publisher partners: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
@@ -174,7 +175,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error adding publisher partner: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>", methods=["DELETE"])
@@ -195,7 +196,7 @@ def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
 
     except Exception as e:
         logger.error(f"Error deleting publisher partner: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
@@ -416,7 +417,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                         {
                             "status": "error",
                             "is_verified": False,
-                            "error": f"Unexpected error: {str(e)}",
+                            "error": f"Unexpected error: {safe_error_message(e)}",
                             "context": None,
                         },
                     )
@@ -483,7 +484,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error syncing publisher partners: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/properties", methods=["GET"])
@@ -560,4 +561,4 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
 
     except Exception as e:
         logger.error(f"Error fetching publisher properties: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500

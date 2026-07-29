@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy import delete, func, select
 
 from src.admin.auth_helpers import require_api_key_auth
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
@@ -500,7 +501,7 @@ def update_tenant(tenant_id):
         except Exception as e:
             db_session.rollback()
             logger.error(f"Error updating tenant {tenant_id}: {str(e)}")
-            return jsonify({"error": f"Failed to update tenant: {str(e)}"}), 500
+            return jsonify({"error": f"Failed to update tenant: {safe_error_message(e)}"}), 500
 
 
 @tenant_management_api.route("/tenants/<tenant_id>", methods=["DELETE"])
@@ -547,4 +548,4 @@ def delete_tenant(tenant_id):
         except Exception as e:
             db_session.rollback()
             logger.error(f"Error deleting tenant {tenant_id}: {str(e)}")
-            return jsonify({"error": f"Failed to delete tenant: {str(e)}"}), 500
+            return jsonify({"error": f"Failed to delete tenant: {safe_error_message(e)}"}), 500

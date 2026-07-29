@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User
@@ -132,7 +133,7 @@ def add_user(tenant_id):
 
     except Exception as e:
         logger.error(f"Error adding user: {e}", exc_info=True)
-        flash(f"Error adding user: {str(e)}", "error")
+        flash(f"Error adding user: {safe_error_message(e)}", "error")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -157,7 +158,7 @@ def toggle_user(tenant_id, user_id):
 
     except Exception as e:
         logger.error(f"Error toggling user: {e}", exc_info=True)
-        flash(f"Error toggling user: {str(e)}", "error")
+        flash(f"Error toggling user: {safe_error_message(e)}", "error")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -186,7 +187,7 @@ def update_role(tenant_id, user_id):
 
     except Exception as e:
         logger.error(f"Error updating user role: {e}", exc_info=True)
-        flash(f"Error updating role: {str(e)}", "error")
+        flash(f"Error updating role: {safe_error_message(e)}", "error")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -231,7 +232,7 @@ def add_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error adding domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @users_bp.route("/domains", methods=["DELETE"])
@@ -267,7 +268,7 @@ def remove_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error removing domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @users_bp.route("/disable-setup-mode", methods=["POST"])
@@ -320,7 +321,7 @@ def disable_setup_mode(tenant_id):
 
     except Exception as e:
         logger.error(f"Error disabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @users_bp.route("/enable-setup-mode", methods=["POST"])
@@ -345,4 +346,4 @@ def enable_setup_mode(tenant_id):
 
     except Exception as e:
         logger.error(f"Error enabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500

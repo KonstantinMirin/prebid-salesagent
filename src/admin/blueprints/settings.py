@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
@@ -308,7 +309,7 @@ def update_general(tenant_id):
 
     except Exception as e:
         logger.error(f"Error updating general settings: {e}", exc_info=True)
-        flash(f"Error updating settings: {str(e)}", "error")
+        flash(f"Error updating settings: {safe_error_message(e)}", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
@@ -494,9 +495,9 @@ def update_adapter(tenant_id):
         logger.error(f"Error updating adapter: {e}", exc_info=True)
 
         if request.is_json:
-            return jsonify({"success": False, "error": str(e)}), 400
+            return jsonify({"success": False, "error": safe_error_message(e)}), 400
 
-        flash(f"Error updating adapter: {str(e)}", "error")
+        flash(f"Error updating adapter: {safe_error_message(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
 
 
@@ -543,7 +544,7 @@ def update_slack(tenant_id):
 
     except Exception as e:
         logger.error(f"Error updating Slack settings: {e}", exc_info=True)
-        flash(f"Error updating Slack settings: {str(e)}", "error")
+        flash(f"Error updating Slack settings: {safe_error_message(e)}", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
 
@@ -610,7 +611,7 @@ def update_ai(tenant_id):
 
     except Exception as e:
         logger.error(f"Error updating AI settings: {e}", exc_info=True)
-        flash(f"Error updating AI settings: {str(e)}", "error")
+        flash(f"Error updating AI settings: {safe_error_message(e)}", "error")
 
     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="integrations"))
 
@@ -754,7 +755,7 @@ def test_logfire_connection(tenant_id):
         return jsonify({"success": False, "error": "Logfire package not installed"}), 400
     except Exception as e:
         logger.error(f"Logfire test connection failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 400
+        return jsonify({"success": False, "error": safe_error_message(e)}), 400
 
 
 @settings_bp.route("/ai/models", methods=["GET"])
@@ -1262,9 +1263,9 @@ def update_business_rules(tenant_id):
         logger.error(f"Error updating business rules: {e}", exc_info=True)
 
         if request.is_json:
-            return jsonify({"success": False, "error": str(e)}), 500
+            return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
-        flash(f"Error updating business rules: {str(e)}", "error")
+        flash(f"Error updating business rules: {safe_error_message(e)}", "error")
         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="business-rules"))
 
 
@@ -1318,7 +1319,7 @@ def check_approximated_domain_status(tenant_id):
 
     except Exception as e:
         logger.error(f"Error checking domain status: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @settings_bp.route("/approximated-register-domain", methods=["POST"])
@@ -1378,7 +1379,7 @@ def register_approximated_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error registering domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @settings_bp.route("/approximated-unregister-domain", methods=["POST"])
@@ -1423,7 +1424,7 @@ def unregister_approximated_domain(tenant_id):
 
     except Exception as e:
         logger.error(f"Error unregistering domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @settings_bp.route("/approximated-token", methods=["POST"])
@@ -1465,4 +1466,4 @@ def get_approximated_token(tenant_id):
 
     except Exception as e:
         logger.error(f"Error generating Approximated token: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500

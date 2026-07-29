@@ -23,6 +23,7 @@ from sqlalchemy import select, text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
@@ -397,7 +398,14 @@ def health_config():
     except Exception as e:
         logger.error(f"Configuration health check failed: {e}")
         return (
-            jsonify({"status": "unhealthy", "service": "admin-ui", "component": "configuration", "error": str(e)}),
+            jsonify(
+                {
+                    "status": "unhealthy",
+                    "service": "admin-ui",
+                    "component": "configuration",
+                    "error": safe_error_message(e),
+                }
+            ),
             500,
         )
 
@@ -519,7 +527,7 @@ def create_tenant():
 
     except Exception as e:
         logger.error(f"Error creating tenant: {e}", exc_info=True)
-        flash(f"Error creating tenant: {str(e)}", "error")
+        flash(f"Error creating tenant: {safe_error_message(e)}", "error")
         return render_template("create_tenant.html")
 
 
@@ -566,5 +574,5 @@ def reactivate_tenant(tenant_id):
 
     except Exception as e:
         logger.error(f"Error reactivating tenant {tenant_id}: {e}", exc_info=True)
-        flash(f"Error reactivating sales agent: {str(e)}", "error")
+        flash(f"Error reactivating sales agent: {safe_error_message(e)}", "error")
         return redirect(url_for("core.index"))
