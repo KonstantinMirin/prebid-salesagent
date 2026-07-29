@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference, BrandReference, ContextObject, MediaBuyStatus, ReportingWebhook
+from adcp.types import FormatId as LibraryFormatId
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
@@ -941,7 +942,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
 
                     # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
                     # Only business validation remains: agent_url must be HTTP(S).
-                    format_ids_list: list[FormatId] = list(product.format_ids or [])
+                    format_ids_list: list[LibraryFormatId] = list(product.format_ids or [])
                     for idx, fmt in enumerate(format_ids_list):
                         url_str = str(fmt.agent_url)
                         if not url_str.startswith(("http://", "https://")):
@@ -972,7 +973,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         delivery_type=delivery_type_str,
                         cpm=cpm,
                         impressions=impressions,
-                        format_ids=cast(list[Any], format_ids_list),
+                        format_ids=format_ids_list,
                         targeting_overlay=targeting_overlay,
                         product_id=product_id,
                         budget=budget,
@@ -2664,14 +2665,16 @@ async def _create_media_buy_impl(
                 )
             try:
                 logger.info("[INLINE_CREATIVE_DEBUG] Calling process_and_upload_package_creatives")
-                # Cast packages to local PackageRequest type (runtime compatible, mypy list invariance)
+                # CreateMediaBuyRequest.packages is already overridden to the LOCAL
+                # list[PackageRequest] (schemas/_base.py), so no conversion is needed in
+                # either direction here — the types already line up (#1600).
                 updated_packages, uploaded_ids = process_and_upload_package_creatives(
-                    packages=cast(list[PackageRequest], req.packages),
+                    packages=req.packages,
                     context=identity,
                     testing_ctx=testing_ctx,
                 )
                 # Replace packages with updated versions (functional approach)
-                req.packages = cast(list[AdcpPackageRequest], updated_packages)  # type: ignore[assignment]
+                req.packages = updated_packages
                 logger.info("[INLINE_CREATIVE_DEBUG] Updated req.packages with creative_ids")
                 if uploaded_ids:
                     logger.info(f"Successfully uploaded creatives for {len(uploaded_ids)} packages: {uploaded_ids}")
@@ -3252,7 +3255,7 @@ async def _create_media_buy_impl(
                 raise AdCPProductNotFoundError(error_msg)
 
             # Determine format_ids to use
-            format_ids_to_use: list[FormatId] = []
+            format_ids_to_use: list[LibraryFormatId] = []
 
             # Use format_ids from request package if provided
             matching_package = pkg  # The package we're iterating over
@@ -3339,10 +3342,14 @@ async def _create_media_buy_impl(
                             )
 
             # Fallback to product's formats if no request format_ids.
-            # Product.format_ids is typed list[FormatId] end-to-end (Pydantic-coerced
-            # schema field + typed DB column, #1172) — no legacy string/dict shapes.
+            # Product.format_ids is typed end-to-end (Pydantic-coerced schema field +
+            # typed DB column, #1172) — no legacy string/dict shapes. Note the two halves
+            # carry DIFFERENT types: the DB column is list[FormatId] (our local subclass,
+            # via JSONType(model=FormatId)), while the Product schema inherits
+            # list[LibraryFormatId] from the adcp library. This variable is annotated to
+            # the library supertype so both flow in without an unchecked cast (#1600).
             if not format_ids_to_use:
-                format_ids_to_use = cast(list[FormatId], list(pkg_product.format_ids or []))
+                format_ids_to_use = list(pkg_product.format_ids or [])
 
             # Get CPM from pricing_options
             cpm = 10.0  # Default
@@ -3389,7 +3396,7 @@ async def _create_media_buy_impl(
                     delivery_type=delivery_type_value,
                     cpm=cpm,
                     impressions=int(float(total_budget) / cpm * 1000),
-                    format_ids=cast(list[Any], format_ids_to_use),
+                    format_ids=format_ids_to_use,
                     targeting_overlay=cast(
                         "Targeting | None",
                         matching_package.targeting_overlay if matching_package else None,
