@@ -56,10 +56,20 @@ def declared(repo: Path) -> dict[str, set[str]]:
 
 
 ADVERTISED_TOOLS = {
-    "activate_signal", "create_media_buy", "get_adcp_capabilities", "get_media_buy_delivery",
-    "get_media_buys", "get_products", "get_signals", "list_accounts",
-    "list_authorized_properties", "list_creative_formats", "list_creatives",
-    "sync_accounts", "sync_creatives", "update_media_buy",
+    "activate_signal",
+    "create_media_buy",
+    "get_adcp_capabilities",
+    "get_media_buy_delivery",
+    "get_media_buys",
+    "get_products",
+    "get_signals",
+    "list_accounts",
+    "list_authorized_properties",
+    "list_creative_formats",
+    "list_creatives",
+    "sync_accounts",
+    "sync_creatives",
+    "update_media_buy",
 }
 
 
@@ -180,9 +190,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "storyboards": len(rows),
             "on_path": len(on_path),
             "on_path_uncovered": len([r for r in on_path if not r["covered_by"]]),
-            "off_path_but_claimed": len(
-                [r for r in rows if r["status"] in {"OFF-PATH", "GATED"} and r["covered_by"]]
-            ),
+            "off_path_but_claimed": len([r for r in rows if r["status"] in {"OFF-PATH", "GATED"} and r["covered_by"]]),
         },
         "storyboards": rows,
     }
@@ -210,7 +218,13 @@ def render(result: dict[str, Any]) -> str:
             continue
         covered = ", ".join(f"`{c}`" for c in r["covered_by"]) or "**— NOT COVERED —**"
         out.append(f"| `{r['storyboard']}` | {r['reason']} | {covered} |")
-    out += ["", "## Off path or gated, but a scenario claims them", "", "| Storyboard | Why off path | Claimed by |", "|---|---|---|"]
+    out += [
+        "",
+        "## Off path or gated, but a scenario claims them",
+        "",
+        "| Storyboard | Why off path | Claimed by |",
+        "|---|---|---|",
+    ]
     for r in result["storyboards"]:
         if r["status"] == "ON-PATH" or not r["covered_by"]:
             continue

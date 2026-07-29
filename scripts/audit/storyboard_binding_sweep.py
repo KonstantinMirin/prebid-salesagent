@@ -204,7 +204,11 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
         if declared_names and cited_stems and not (declared_names & cited_stems):
             # Only a finding when the declared name is a real storyboard/phase id.
             real = {n for n in declared_names if n in phases or any(Path(f).stem == n for f in phases.get(n, []))}
-            real |= {n for n in declared_names if any((dist / f).exists() for f in [f"protocols/media-buy/scenarios/{n}.yaml"])}
+            real |= {
+                n
+                for n in declared_names
+                if any((dist / f).exists() for f in [f"protocols/media-buy/scenarios/{n}.yaml"])
+            }
             if real:
                 binding.findings.append(
                     f"self-declared storyboard {sorted(real)} does not match cited file {sorted(cited_stems)} "
@@ -216,8 +220,7 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
             owners = phases[phase]
             if cited_files and not (cited_files & set(owners)):
                 binding.findings.append(
-                    f"names phase {phase!r} but cites {sorted(cited_files)} — "
-                    f"that phase lives in {owners}"
+                    f"names phase {phase!r} but cites {sorted(cited_files)} — that phase lives in {owners}"
                 )
                 binding.bucket = "B"
 
@@ -258,17 +261,13 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
                     binding.findings.append(f"phase {phase!r} not in cited file at {version}")
                     binding.bucket = "B"
                 elif grading == "prose":
-                    binding.findings.append(
-                        f"phase {phase!r} is narrative (expected:) not graded (validations:)"
-                    )
+                    binding.findings.append(f"phase {phase!r} is narrative (expected:) not graded (validations:)")
                     binding.bucket = "C"
 
             if tier == "specialisms":
                 name = rel.split("/")[1].replace("-", "_")
                 if name not in declared["specialisms"]:
-                    binding.findings.append(
-                        f"gated by specialism {name!r} which we do NOT declare — tag is wrong"
-                    )
+                    binding.findings.append(f"gated by specialism {name!r} which we do NOT declare — tag is wrong")
                     binding.bucket = "C"
 
     buckets: dict[str, int] = {}

@@ -114,7 +114,10 @@ def parse(proposal: Path) -> dict[str, Any]:
     if name in PRE_BRIEF_VERDICTS:
         status, action, verdict = PRE_BRIEF_VERDICTS[name]
         return {
-            "scenario": name, "status": status, "action": action, "verdict": verdict,
+            "scenario": name,
+            "status": status,
+            "action": action,
+            "verdict": verdict,
             "ticket_items": len(__import__("re").findall(r"^\*\*(?:T|TM|\d+\.)[-\w. ]*—", text, __import__("re").M)),
             "proposal": proposal.name,
         }
@@ -177,9 +180,7 @@ def render(result: dict[str, Any]) -> str:
         "|---|---|---|---|",
     ]
     for row in result["rows"]:
-        out.append(
-            f"| `{row['scenario']}` | {row['status']} | **{row['action']}** | {row['verdict']} |"
-        )
+        out.append(f"| `{row['scenario']}` | {row['status']} | **{row['action']}** | {row['verdict']} |")
     return "\n".join(out) + "\n"
 
 
