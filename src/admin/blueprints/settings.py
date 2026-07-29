@@ -1423,11 +1423,17 @@ def get_approximated_token(tenant_id):
             if not tenant:
                 return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            # Request token from Approximated API
-            response = _approximated("GET", "/api/dns/token", approximated_api_key)
+            # Request token from Approximated API. The seam raises on a non-2xx
+            # rather than returning it, so the upstream status is propagated from the
+            # typed failure — an operator with bad Approximated credentials must still
+            # see 401 here, not a blanket 500.
+            try:
+                response = _approximated("GET", "/api/dns/token", approximated_api_key)
+            except OutboundError as exc:
+                upstream = getattr(exc, "last_status", None)
+                logger.error(f"Approximated API error requesting a DNS token: {exc}")
+                return jsonify({"success": False, "error": "Approximated API error"}), upstream or 502
 
-            # A non-2xx raises out of _approximated into the handler below, which
-            # already returns a 500 — the old else-branch is unreachable now.
             token_data = response.json()
             logger.info(f"Approximated API response: {token_data}")
             return jsonify({"success": True, "token": token_data.get("token"), "proxy_ip": approximated_proxy_ip})

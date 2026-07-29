@@ -71,14 +71,20 @@ class TestWebhookEnvContract:
             assert env.delivery_attempts == 4
 
     def test_http_error_is_a_real_transport_failure(self):
-        """set_http_error drops the connection, so the client raises its own error."""
+        """set_http_error drops the connection, so delivery reports a transport failure.
+
+        The seam collapses a dropped connection and a timeout into one class on
+        purpose — a refusal must not become a side channel — so what production can
+        still say truthfully is that the endpoint never answered. That is what this
+        asserts now, rather than the requests-era "Connection error" wording.
+        """
         with WebhookEnv() as env:
             env.set_http_error()
 
             success, result = env.call_deliver(max_retries=1)
 
             assert success is False
-            assert "Connection error" in result["error"]
+            assert "no response received" in result["error"]
             assert env.delivery_attempts == 1
 
     def test_stalled_response_trips_the_callers_timeout(self):

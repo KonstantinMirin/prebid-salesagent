@@ -277,12 +277,13 @@ class TestApproximatedToken:
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
-        # Mock requests.get inside the settings module's import scope.
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"token": "opaque-widget-token-123"}
+        # Patch the settings module's own seam helper: the Approximated calls go
+        # through _approximated() now, which returns an OutboundResult and raises on
+        # a non-2xx instead of handing back a status_code to branch on.
+        mock_result = MagicMock()
+        mock_result.json.return_value = {"token": "opaque-widget-token-123"}
 
-        with patch("requests.get", return_value=mock_response) as mock_get:
+        with patch("src.admin.blueprints.settings._approximated", return_value=mock_result) as mock_get:
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
 
         assert response.status_code == 200
@@ -302,11 +303,14 @@ class TestApproximatedToken:
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.text = "Unauthorized"
+        # The seam raises on a non-2xx and discards the response, so the upstream
+        # status now arrives on the typed failure rather than on a returned object.
+        from src.core.security.outbound_http import OutboundDeliveryFailed
 
-        with patch("requests.get", return_value=mock_response):
+        with patch(
+            "src.admin.blueprints.settings._approximated",
+            side_effect=OutboundDeliveryFailed(attempts=1, last_status=401),
+        ):
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
 
         assert response.status_code == 401

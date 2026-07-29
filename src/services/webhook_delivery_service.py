@@ -519,7 +519,14 @@ class WebhookDeliveryService:
                     f"Webhook delivery to {config.url} returned client error {terminal_status}, will not retry"
                 )
             else:
-                logger.warning(f"Webhook delivery to {config.url} failed: {exc}")
+                # Name the status and the attempt count. The seam's own message is a
+                # fixed constant by design, so interpolating only the exception tells
+                # an operator nothing about WHY — a rate limit, a 5xx and a dead
+                # socket would read identically.
+                attempts = getattr(exc, "attempts", None)
+                last_status = getattr(exc, "last_status", None)
+                cause = f"status {last_status}" if last_status is not None else "no response"
+                logger.warning(f"Webhook delivery to {config.url} failed after {attempts} attempts ({cause})")
             circuit_breaker.record_failure()
             return False
         except Exception as e:
