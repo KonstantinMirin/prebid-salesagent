@@ -8,11 +8,9 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import requests
 from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
-from src.core.retry_utils import api_retry
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     CreateMediaBuyRequest,
@@ -25,6 +23,7 @@ from src.core.schemas import (
     UpdateMediaBuyResponse,
     url,
 )
+from src.core.security.outbound_http import OutboundError, send
 
 # NOTE: Xandr adapter needs full refactor - it's using old schemas and patterns
 # The other methods (get_media_buy_status, get_media_buy_delivery, etc.) still use old schemas
@@ -232,7 +231,6 @@ class XandrAdapter(AdServerAdapter):
 
         logger.info(f"Initialized Xandr adapter for principal {principal.name}")
 
-    @api_retry
     def _authenticate(self):
         """Authenticate with Xandr API and get session token."""
         if self.token and self.token_expiry and datetime.now(UTC) < self.token_expiry:
@@ -242,11 +240,14 @@ class XandrAdapter(AdServerAdapter):
         auth_data = {"auth": {"username": self.username, "password": self.password}}
 
         try:
-            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-            response = requests.post(auth_url, json=auth_data)
-            response.raise_for_status()
+            # max_attempts=1: this call did not retry by intent — it retried because
+            # @api_retry wrapped it, and because _make_request carried the same
+            # decorator the two multiplied, costing 9 authentication POSTs against a
+            # down Xandr with a cold token. Both decorators are gone; the seam is the
+            # only thing that decides attempts here now.
+            result = send(auth_url, json=auth_data, timeout=30.0, max_attempts=1)
 
-            data = response.json()
+            data = result.json()
             if data.get("response", {}).get("status") == "OK":
                 self.token = data["response"]["token"]
                 # Xandr tokens typically last 2 hours
@@ -259,7 +260,6 @@ class XandrAdapter(AdServerAdapter):
             logger.error(f"Xandr authentication error: {e}")
             raise
 
-    @api_retry
     def _make_request(self, method: str, endpoint: str, data: dict | None = None) -> dict:
         """Make authenticated request to Xandr API."""
         self._authenticate()
@@ -268,22 +268,25 @@ class XandrAdapter(AdServerAdapter):
 
         url = f"{self.api_endpoint}{endpoint}"
 
+        if method not in ("GET", "POST", "PUT", "DELETE"):
+            raise ValueError(f"Unsupported method: {method}")
+
         try:
-            if method == "GET":
-                response = requests.get(url, headers=headers, params=data)
-            elif method == "POST":
-                response = requests.post(url, headers=headers, json=data)
-            elif method == "PUT":
-                response = requests.put(url, headers=headers, json=data)
-            elif method == "DELETE":
-                response = requests.delete(url, headers=headers)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
+            # The verb branch is gone: the seam already takes method=, and a GET
+            # carries its dict as params while the others carry it as a body.
+            # max_attempts=1 preserves this site's real behaviour — see _authenticate.
+            result = send(
+                url,
+                method=method,
+                headers=headers,
+                params=data if method == "GET" else None,
+                json=data if method != "GET" and data is not None else None,
+                timeout=30.0,
+                max_attempts=1,
+            )
+            return result.json()
 
-            response.raise_for_status()
-            return response.json()
-
-        except requests.exceptions.RequestException as e:
+        except OutboundError as e:
             logger.error(f"Xandr API request failed: {e}")
             raise
 

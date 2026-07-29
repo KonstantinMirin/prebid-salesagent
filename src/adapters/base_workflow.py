@@ -18,6 +18,7 @@ from src.core.config_loader import get_tenant_config
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.schemas import MediaPackage
+from src.core.security.outbound_http import send
 
 logger = logging.getLogger(__name__)
 
@@ -171,14 +172,17 @@ class BaseWorkflowManager:
             action_details: Details about the workflow step
         """
         try:
-            tenant_config = get_tenant_config(self.tenant_id)
-            slack_webhook_url = tenant_config.get("slack", {}).get("webhook_url")
+            # get_tenant_config takes a config KEY, not a tenant id. Passing
+            # self.tenant_id returned None, and the .get("slack", {}) that followed
+            # raised AttributeError into the broad handler below — so this
+            # notification never fired, for any tenant, including the four GAM
+            # workflow callers that inherit this method. The column is a per-field
+            # tenant column (models.py:68), read by key like every other caller.
+            slack_webhook_url = get_tenant_config("slack_webhook_url")
 
             if not slack_webhook_url:
                 self.log("[yellow]No Slack webhook configured - skipping notification[/yellow]")
                 return
-
-            import requests
 
             # Get notification styling based on action type
             notification = self._get_notification_details(step_id, action_details)
@@ -215,20 +219,17 @@ class BaseWorkflowManager:
             }
 
             # Send notification
-            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-            response = requests.post(
+            send(
                 slack_webhook_url,
                 json=slack_payload,
-                timeout=10,
                 headers={"Content-Type": "application/json"},
+                timeout=10.0,
+                max_attempts=1,
             )
 
-            if response.status_code == 200:
-                self.log(f"Sent Slack notification for workflow step {step_id}")
-                if self.audit_logger:
-                    self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
-            else:
-                self.log(f"[yellow]Slack notification failed with status {response.status_code}[/yellow]")
+            self.log(f"Sent Slack notification for workflow step {step_id}")
+            if self.audit_logger:
+                self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
 
         except Exception as e:
             self.log(f"[yellow]Failed to send Slack notification: {str(e)}[/yellow]")

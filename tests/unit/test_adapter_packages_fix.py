@@ -128,21 +128,21 @@ class TestKevelAdapterPackages:
             tenant_id="tenant_123",
         )
 
-        # Mock requests.post to simulate campaign and flight creation
-        with patch("src.adapters.kevel.requests.post") as mock_post:
+        # Patch the adapter's own seam helper: production no longer calls
+        # requests.post, and the helper returns an OutboundResult whose .json()
+        # is the only thing these paths read. What this test grades is unchanged —
+        # every returned package must carry a package_id.
+        with patch.object(type(adapter), "_api", autospec=True) as mock_post:
             # Mock campaign creation
             campaign_response = Mock()
             campaign_response.json.return_value = {"Id": 999}
-            campaign_response.raise_for_status = Mock()
 
             # Mock flight creation (one per package)
             flight_response_1 = Mock()
             flight_response_1.json.return_value = {"Id": 111}
-            flight_response_1.raise_for_status = Mock()
 
             flight_response_2 = Mock()
             flight_response_2.json.return_value = {"Id": 222}
-            flight_response_2.raise_for_status = Mock()
 
             # Return campaign response first, then flight responses
             mock_post.side_effect = [campaign_response, flight_response_1, flight_response_2]
@@ -223,21 +223,21 @@ class TestTritonAdapterPackages:
             tenant_id="tenant_123",
         )
 
-        # Mock requests.post to simulate campaign and flight creation
-        with patch("src.adapters.triton_digital.requests.post") as mock_post:
+        # Patch the adapter's own seam helper: production no longer calls
+        # requests.post, and the helper returns an OutboundResult whose .json()
+        # is the only thing these paths read. What this test grades is unchanged —
+        # every returned package must carry a package_id.
+        with patch.object(type(adapter), "_api", autospec=True) as mock_post:
             # Mock campaign creation
             campaign_response = Mock()
             campaign_response.json.return_value = {"id": 888}
-            campaign_response.raise_for_status = Mock()
 
             # Mock flight creation (one per package)
             flight_response_1 = Mock()
             flight_response_1.json.return_value = {"id": 333}
-            flight_response_1.raise_for_status = Mock()
 
             flight_response_2 = Mock()
             flight_response_2.json.return_value = {"id": 444}
-            flight_response_2.raise_for_status = Mock()
 
             # Return campaign response first, then flight responses
             mock_post.side_effect = [campaign_response, flight_response_1, flight_response_2]

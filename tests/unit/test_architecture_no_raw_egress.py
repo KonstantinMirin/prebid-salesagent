@@ -25,12 +25,17 @@ What does NOT count, deliberately:
   Matching bare names instead of calls would flag that file, which issues
   nothing. Match on construction and call.
 
-The allowlist was seeded at its maximum with the 17 modules in the #1589
-inventory and only ever shrinks — ``src/core/property_list_resolver.py`` and
-``src/services/order_approval_service.py`` and ``src/core/creative_agent_registry.py``
-and ``src/services/webhook_delivery_service.py`` are migrated, so it is 11 now. Each entry pairs a module with its current
-egress-call count, so adding a call to an already-allowlisted module fails too
-rather than hiding behind the entry.
+The allowlist is EMPTY. It was seeded at its maximum with the 17 modules in the
+#1589 inventory and only ever shrank; salesagent-gstl migrated the last ten.
+An empty allowlist means the scan itself is the proof: any raw
+``requests``/``httpx``/``aiohttp``/``urlopen`` call anywhere under ``src/`` now
+fails this test outright, with nothing to add it to.
+
+Scope, stated because an empty list invites over-reading: this guard proves there
+is no RAW egress. SDK/MCP clients that dial a URL are a different shape and are
+graded by the second scan below (``SDK_EGRESS_ALLOWLIST``), which is permanently
+non-empty by design — see salesagent-jl08 and the amended definition of done on
+salesagent-4fya.
 
 SDK/MCP client egress — a SECOND scan, a SECOND allowlist
 ---------------------------------------------------------
@@ -86,23 +91,7 @@ EGRESS_FUNCTIONS = frozenset({"urlopen"})
 # Seeded at the maximum from the #1589 call-site inventory. It only shrinks —
 # salesagent-c5b6 / cnkq / gstl empty it. Every entry has a FIXME(#1589) at the
 # source location.
-ALLOWLIST = {
-    # Counterparty-supplied URL — the actual SSRF surface.
-    # Operator-configured vendor endpoints.
-    ("src/adapters/base_workflow.py", 1),
-    ("src/adapters/gam_reporting_service.py", 1),
-    ("src/adapters/kevel.py", 12),
-    ("src/adapters/triton_digital.py", 14),
-    ("src/adapters/xandr.py", 5),
-    ("src/adapters/mock_ad_server.py", 1),
-    ("src/adapters/broadstreet/client.py", 1),
-    ("src/admin/blueprints/settings.py", 4),
-    ("src/admin/blueprints/tenants.py", 1),
-    # Operator OAuth to Google.
-    ("src/admin/blueprints/auth.py", 1),
-    # aiohttp import only (exception types) — the dependency itself is doomed.
-    ("src/core/retry_utils.py", 1),
-}
+ALLOWLIST: set[tuple[str, int]] = set()
 
 EXPECTED_VIOLATION_COUNT = len(ALLOWLIST)
 

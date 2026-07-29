@@ -7,9 +7,6 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 from typing import TypeVar
 
-# FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-import aiohttp
-
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -108,13 +105,6 @@ def async_retry_on_exception(
 
 
 # Common retry configurations
-http_retry = async_retry_on_exception(
-    max_attempts=3,
-    delay=1.0,
-    backoff_factor=2.0,
-    exceptions=(aiohttp.ClientError, asyncio.TimeoutError, ConnectionError),
-)
-
 api_retry = retry_on_exception(
     max_attempts=3, delay=0.5, backoff_factor=1.5, exceptions=(ConnectionError, TimeoutError, Exception)
 )

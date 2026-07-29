@@ -121,11 +121,19 @@ class TestBroadstreetWorkflowManager:
 
     @patch("src.adapters.base_workflow.get_db_session")
     @patch("src.adapters.base_workflow.get_tenant_config")
-    @patch("requests.post")
-    def test_slack_notification_sent(self, mock_post, mock_get_config, mock_db_session, manager, sample_packages):
-        """Test that Slack notification is sent when configured."""
-        mock_get_config.return_value = {"slack": {"webhook_url": "https://hooks.slack.com/test"}}
-        mock_post.return_value.status_code = 200
+    @patch("src.adapters.base_workflow.send")
+    def test_slack_notification_sent(self, mock_send, mock_get_config, mock_db_session, manager, sample_packages):
+        """Test that Slack notification is sent when configured.
+
+        The mock return value used to be {"slack": {"webhook_url": ...}}, which is a
+        shape get_tenant_config never produces — it takes a config KEY and returns
+        that field. Production read it as get_tenant_config(self.tenant_id), got
+        None, and raised AttributeError into a broad handler, so this notification
+        had never fired for any tenant. The mock made the dead path look alive.
+        Both sides are fixed here: production reads the key, and the mock returns
+        what that key actually holds.
+        """
+        mock_get_config.return_value = "https://hooks.slack.com/test"
         mock_session = MagicMock()
         mock_db_session.return_value.__enter__.return_value = mock_session
 
@@ -134,9 +142,9 @@ class TestBroadstreetWorkflowManager:
             packages=sample_packages,
         )
 
-        # Verify Slack was called
-        assert mock_post.called
-        call_kwargs = mock_post.call_args[1]
+        # Verify Slack was called through the egress seam
+        assert mock_send.called
+        call_kwargs = mock_send.call_args[1]
         assert "json" in call_kwargs
         assert "attachments" in call_kwargs["json"]
 

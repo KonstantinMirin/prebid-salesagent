@@ -755,9 +755,9 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
 
     The second half pins the default: a caller that supplies no ``field`` gets
     no ``field`` KEY, not a null. That default is what almost every call site
-    wants — the 11 unmigrated ``# FIXME(#1589)`` sites, and the migrated ones
-    that fetch stored operator config, have no request-payload path to name at
-    all. Only a caller whose URL arrived in the caller's own request document
+    wants: there are no unmigrated sites left, and the migrated ones that fetch
+    stored operator config or a registered vendor endpoint have no
+    request-payload path to name at all. Only a caller whose URL arrived in the caller's own request document
     passes one (``src/core/property_list_resolver.py`` is the first). Emitting
     a path for the others would invent one the buyer never sent, which Level 2
     makes worse than silence (``error-handling.mdx:16`` — ``field`` exists so an

@@ -43,6 +43,7 @@ from src.core.schemas import (
     UpdateMediaBuyResponse,
     UpdateMediaBuySuccess,
 )
+from src.core.security.outbound_http import send
 
 
 def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict]]:
@@ -492,8 +493,6 @@ class MockAdServer(AdServerAdapter):
 
         from datetime import UTC, datetime
 
-        import requests
-
         payload = {
             "event": "task_completed",
             "step_id": step_id,
@@ -505,11 +504,13 @@ class MockAdServer(AdServerAdapter):
         }
 
         try:
-            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-            response = requests.post(
-                self.async_webhook_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10
+            send(
+                self.async_webhook_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=10.0,
+                max_attempts=1,
             )
-            response.raise_for_status()
             self.log(f"📤 Sent webhook notification for {step_id}")
         except Exception as e:
             self.log(f"⚠️ Webhook failed for {step_id}: {e}")

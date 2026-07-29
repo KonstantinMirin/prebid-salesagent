@@ -23,6 +23,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.domain_config import get_sales_agent_domain
+from src.core.security.outbound_http import OutboundError, send
 from src.core.validation import sanitize_form_data, validate_form_data
 from src.services.setup_checklist_service import SetupChecklistService
 
@@ -522,10 +523,9 @@ def test_slack(tenant_id):
                 return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
 
             # Send test message
-            import requests
-
-            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-            response = requests.post(
+            # max_attempts=1: a test notification that silently sends three times is
+            # worse than one that fails visibly. This call did not retry before.
+            send(
                 tenant.slack_webhook_url,
                 json={
                     "text": f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
@@ -548,22 +548,18 @@ def test_slack(tenant_id):
                         },
                     ],
                 },
-                timeout=5,
+                timeout=5.0,
+                max_attempts=1,
             )
 
-            if response.status_code == 200:
-                return jsonify({"success": True, "message": "Test message sent successfully"})
-            else:
-                return (
-                    jsonify(
-                        {"success": False, "error": f"Slack returned status {response.status_code}: {response.text}"}
-                    ),
-                    400,
-                )
+            return jsonify({"success": True, "message": "Test message sent successfully"})
 
-    except requests.exceptions.RequestException as e:
+    except OutboundError as e:
+        # The seam raises on a non-2xx, so the old status branch is this arm. Slack's
+        # response body is not echoed back: it is a counterparty response and the seam
+        # discards it by design.
         logger.error(f"Error testing Slack webhook: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
     except Exception as e:
         logger.error(f"Unexpected error testing Slack: {e}", exc_info=True)
         return jsonify({"success": False, "error": "Internal server error"}), 500

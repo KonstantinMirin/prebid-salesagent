@@ -8,8 +8,7 @@ Auth: Access token passed as query parameter.
 import logging
 from typing import Any
 
-import requests
-from requests.exceptions import RequestException
+from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundError, send
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,19 @@ class BroadstreetAPIError(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
+
+
+def _broadstreet_error_for_status(status: int | None) -> BroadstreetAPIError:
+    """Rebuild the status-specific API error the seam's typed failure replaced."""
+    if status == 403:
+        return BroadstreetAPIError("Broadstreet API Auth Denied (HTTP 403)", status_code=403)
+    if status == 404:
+        return BroadstreetAPIError("Resource not found (HTTP 404)", status_code=404)
+    if status is not None and status >= 500:
+        return BroadstreetAPIError(f"Broadstreet API server error (HTTP {status})", status_code=status)
+    if status is not None:
+        return BroadstreetAPIError(f"Broadstreet API error (HTTP {status})", status_code=status)
+    return BroadstreetAPIError("Broadstreet API request was not delivered")
 
 
 class BroadstreetClient:
@@ -77,53 +89,6 @@ class BroadstreetClient:
         query_string = urlencode({k: v for k, v in params.items() if v is not None})
         return f"{url}?{query_string}"
 
-    def _handle_response(self, response: requests.Response) -> Any:
-        """Handle API response and raise errors if needed.
-
-        Args:
-            response: Requests response object
-
-        Returns:
-            Parsed JSON response body
-
-        Raises:
-            BroadstreetAPIError: If response indicates an error
-        """
-        try:
-            body = response.json() if response.content else None
-        except ValueError:
-            body = response.text
-
-        if response.status_code == 403:
-            raise BroadstreetAPIError(
-                "Broadstreet API Auth Denied (HTTP 403)",
-                status_code=403,
-                response_body=body,
-            )
-
-        if response.status_code == 404:
-            raise BroadstreetAPIError(
-                "Resource not found (HTTP 404)",
-                status_code=404,
-                response_body=body,
-            )
-
-        if response.status_code >= 500:
-            raise BroadstreetAPIError(
-                f"Broadstreet API server error (HTTP {response.status_code})",
-                status_code=response.status_code,
-                response_body=body,
-            )
-
-        if response.status_code >= 400:
-            raise BroadstreetAPIError(
-                f"Broadstreet API error (HTTP {response.status_code}): {body}",
-                status_code=response.status_code,
-                response_body=body,
-            )
-
-        return body
-
     def _request(
         self,
         method: str,
@@ -148,16 +113,28 @@ class BroadstreetClient:
         url = self._build_url(path, query_params)
 
         try:
-            # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-            response = requests.request(
+            # max_attempts=1: these are ad-server mutations and reads that did not
+            # retry before; turning one failed create into three is the drift this
+            # migration must not introduce.
+            result = send(
+                url,
                 method=method,
-                url=url,
                 json=data if data else None,
-                timeout=self.timeout,
+                timeout=float(self.timeout),
+                max_attempts=1,
             )
-            return self._handle_response(response)
-        except RequestException as e:
+        except OutboundDeliveryFailed as e:
+            # The seam raises on a non-2xx and discards the response, so the
+            # status-specific errors below are rebuilt from the typed failure.
+            # response_body is now None: a counterparty's error body is exactly what
+            # the seam declines to carry back. Operators keep the status; they lose
+            # the vendor's message text.
+            raise _broadstreet_error_for_status(e.last_status) from e
+        except OutboundError as e:
             raise BroadstreetAPIError(f"Request failed: {e}") from e
+
+        body = result.json() if result.response.content else None
+        return body
 
     def get(self, path: str, query_params: dict[str, Any] | None = None) -> Any:
         """Make a GET request."""

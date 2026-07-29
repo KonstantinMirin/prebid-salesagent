@@ -18,7 +18,8 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import pytz
-import requests
+
+from src.core.security.outbound_http import OutboundError, send
 
 logger = logging.getLogger(__name__)
 
@@ -360,24 +361,25 @@ class GAMReportingService:
 
             # Download the report using requests with proper timeout and error handling
             try:
-                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-                response = requests.get(
+                # The ALLOWED_DOMAINS provenance check above stays: it asserts the URL
+                # came from GAM, which is a different question from whether the address
+                # is safe to dial. max_attempts=1 — this download did not retry.
+                # The seam caps the body, which is what `stream=True` was reaching for.
+                response = send(
                     download_url,
-                    timeout=(ReportingConfig.HTTP_CONNECT_TIMEOUT, ReportingConfig.HTTP_READ_TIMEOUT),
+                    method="GET",
                     headers={"User-Agent": ReportingConfig.USER_AGENT},
-                    stream=True,  # For better memory handling of large files
+                    timeout=float(ReportingConfig.HTTP_READ_TIMEOUT),
+                    max_attempts=1,
                 )
-                response.raise_for_status()
-            except requests.exceptions.Timeout as e:
-                raise Exception(f"GAM report download timed out: {str(e)}") from e
-            except requests.exceptions.RequestException as e:
+            except OutboundError as e:
                 raise Exception(f"Failed to download GAM report: {str(e)}") from e
 
             # Parse the CSV data directly from the response with memory limits
             try:
                 data = []
 
-                with gzip.open(io.BytesIO(response.content), "rt") as gz_file:
+                with gzip.open(io.BytesIO(response.response.content), "rt") as gz_file:
                     csv_reader = csv.DictReader(gz_file)
                     for i, row in enumerate(csv_reader):
                         if i >= ReportingConfig.MAX_ROWS_PER_REPORT:
