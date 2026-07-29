@@ -196,6 +196,22 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
             for s in binding.sources
             if "schemas" not in s["path"]
         }
+        # Scenarios name their own storyboard in a summary line ("# <name>: <claim>")
+        # immediately above the @source footer. When that self-declared name does not
+        # match the cited file, the footer points somewhere the scenario never claimed.
+        declared_names = set(re.findall(r"^\s*#\s*([a-z][a-z0-9_]{3,}):\s", binding.comment_block, re.M))
+        cited_stems = {Path(p).stem for p in cited_files}
+        if declared_names and cited_stems and not (declared_names & cited_stems):
+            # Only a finding when the declared name is a real storyboard/phase id.
+            real = {n for n in declared_names if n in phases or any(Path(f).stem == n for f in phases.get(n, []))}
+            real |= {n for n in declared_names if any((dist / f).exists() for f in [f"protocols/media-buy/scenarios/{n}.yaml"])}
+            if real:
+                binding.findings.append(
+                    f"self-declared storyboard {sorted(real)} does not match cited file {sorted(cited_stems)} "
+                    "— footer points at a storyboard this scenario never claims"
+                )
+                binding.bucket = "B"
+
         for phase in named:
             owners = phases[phase]
             if cited_files and not (cited_files & set(owners)):
