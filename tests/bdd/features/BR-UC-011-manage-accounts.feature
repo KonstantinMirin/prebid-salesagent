@@ -868,6 +868,23 @@ Feature: BR-UC-011 Manage Accounts
     And no accounts were actually created or modified on the seller
     # POST-S10: Buyer receives dry-run preview
 
+  @T-UC-011-ext-e-preview-settings-update @sync @dry-run @settings-update @partition @boundary
+  Scenario: dry_run_true with a settings-update entry previews without persisting
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with dry_run true and a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the response is a success variant
+    And the response includes dry_run true
+    And the account for brand domain "acme-corp.com" has action "updated"
+    And the persisted account for brand domain "acme-corp.com" has no payment_terms set
+    # Locally added (GH: settings-update entries ignored dry_run and persisted the write).
+    # The provisioning-trio preview scenario above never reaches the settings-update
+    # dispatch, which routes BEFORE any dry_run branch — this grades that arm.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/dry_run
+    # ("When true, preview what would change without applying. Returns what would be
+    # created/updated/deactivated.") Conformance storyboard: UNGRADED (dry_run absent
+    # from dist/compliance/3.1.1 at v3.1.1).
+
   @T-UC-011-ext-e-normal @sync @dry-run @partition @boundary
   Scenario: dry_run_false -- normal sync applies changes (dry_run = false)
     Given the Buyer Agent has an authenticated connection
@@ -896,6 +913,24 @@ Feature: BR-UC-011 Manage Accounts
     Then the response includes a result for brand domain "old-brand.com" showing deactivation
     And the account for brand domain "acme-corp.com" has action "unchanged" or "updated"
     # POST-S9: Buyer knows which accounts were deactivated
+
+  @T-UC-011-ext-f-settings-update @sync @delete-missing @settings-update @partition @boundary
+  Scenario: delete_missing_true does not deactivate an account included via a settings-update entry
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with delete_missing true and a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the response is a success variant
+    And the response contains an accounts array with 1 items
+    And the account payment_terms is "net_45"
+    And brand domain "acme-corp.com" remains in its current state
+    # Locally added (GH: seen_account_ids is only populated on the provisioning path,
+    # so a settings-update entry's target counted as "missing" and was CLOSED by the
+    # very request that successfully updated it — the response carried both the update
+    # result and an action=updated/status=closed result for the same account).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/delete_missing
+    # ("accounts previously synced by this agent but not included in this request will
+    # be deactivated" — the settings-update target IS included in this request.)
+    # Conformance storyboard: UNGRADED (delete_missing absent from dist/compliance/3.1.1 at v3.1.1).
 
   @T-UC-011-ext-f-scoped @sync @delete-missing @agent-scoped
   Scenario: Delete missing scoped to authenticated agent only

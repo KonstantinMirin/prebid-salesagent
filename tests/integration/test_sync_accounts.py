@@ -250,6 +250,80 @@ class TestSyncAccountsDeleteMissing:
         statuses = {a.brand.domain: _status_value(a.status) for a in response.accounts}
         assert statuses["beta.com"] == "closed"
 
+    @pytest.mark.asyncio
+    async def test_delete_missing_spares_settings_update_target(self, integration_db):
+        """An account named by a settings-update entry IS included in the request.
+
+        delete_missing may deactivate only accounts "not included in this
+        request" (sync-accounts-request.json#/properties/delete_missing).
+        seen_account_ids used to be populated on the provisioning path only, so
+        the very request that successfully updated an account also closed it and
+        the response carried both results for the same account.
+        """
+        with AccountSyncEnv(tenant_id="sync_dm_su", principal_id="agent_dmsu") as env:
+            env.setup_default_data()
+
+            created = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[
+                        {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                        {"brand": {"domain": "beta.com"}, "operator": "example.com", "billing": "operator"},
+                    ],
+                )
+            )
+            target_id = next(a.account_id for a in created.accounts if a.brand.domain == "acme.com")
+
+            response = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[{"account": {"account_id": target_id}, "payment_terms": "net_45"}],
+                    delete_missing=True,
+                )
+            )
+
+        results_for_target = [a for a in response.accounts if a.account_id == target_id]
+        assert len(results_for_target) == 1, (
+            f"expected exactly one result for the settings-update target, got "
+            f"{[(_action_value(a.action), _status_value(a.status)) for a in results_for_target]}"
+        )
+        assert _action_value(results_for_target[0].action) == "updated"
+        assert _status_value(results_for_target[0].status) != "closed"
+        # beta.com was genuinely absent from the request and is deactivated.
+        beta = [a for a in response.accounts if a.brand and a.brand.domain == "beta.com"]
+        assert len(beta) == 1 and _status_value(beta[0].status) == "closed"
+
+    @pytest.mark.asyncio
+    async def test_delete_missing_closes_target_of_failed_settings_update(self, integration_db):
+        """Boundary: a FAILED settings-update entry does not shield its account.
+
+        Same boundary as failed provisioning entries, which never reach
+        seen_account_ids either — and structurally forced here because a failed
+        result carries no account_id. The entry fails via ``sandbox``, which the
+        field policy marks rejected on the settings-update arm.
+        """
+        with AccountSyncEnv(tenant_id="sync_dm_suf", principal_id="agent_dmsuf") as env:
+            env.setup_default_data()
+
+            created = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
+                )
+            )
+            target_id = created.accounts[0].account_id
+
+            response = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[{"account": {"account_id": target_id}, "sandbox": True}],
+                    delete_missing=True,
+                )
+            )
+
+        actions = [(_action_value(a.action), _status_value(a.status)) for a in response.accounts]
+        assert ("failed", "rejected") in actions, f"expected the settings-update entry to fail, got {actions}"
+        closed = [a for a in response.accounts if a.account_id == target_id and _status_value(a.status) == "closed"]
+        assert len(closed) == 1, (
+            f"a failed settings-update entry must not shield its account from delete_missing; got {actions}"
+        )
+
 
 class TestSyncAccountsDryRun:
     """BR-RULE-062: dry_run returns preview without applying changes."""
@@ -300,6 +374,53 @@ class TestSyncAccountsDryRun:
             assert uow.accounts is not None
             all_accounts = uow.accounts.list_all()
             assert len(all_accounts) == 0
+
+    @pytest.mark.asyncio
+    async def test_settings_update_dry_run_matches_live_and_persists_nothing(self, integration_db):
+        """Live-run-as-oracle for the settings-update arm under dry_run.
+
+        The settings-update dispatch used to route before any dry_run branch and
+        call repo.update_fields unconditionally, so a preview PERSISTED the
+        update. The preview must describe exactly what the live run does
+        (action=updated, the new payment_terms echoed) while writing nothing
+        (sync-accounts-request.json#/properties/dry_run).
+        """
+        from src.core.database.repositories.uow import AccountUoW
+
+        provision = {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}
+
+        async def run(tenant_id: str, principal_id: str, *, dry_run: bool):
+            with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+                env.setup_default_data()
+                created = await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(provision)]))
+                account_id = created.accounts[0].account_id
+                update_entry = {"account": {"account_id": account_id}, "payment_terms": "net_45"}
+                update_req = SyncAccountsRequest(accounts=[update_entry], **({"dry_run": True} if dry_run else {}))
+                resp = await env.call_impl_async(req=update_req)
+            return account_id, resp
+
+        live_id, live = await run("sync_su_live", "agent_sul", dry_run=False)
+        preview_id, preview = await run("sync_su_dry", "agent_sud", dry_run=True)
+
+        # Oracle: the preview describes exactly the outcome the live run produces.
+        assert _action_value(live.accounts[0].action) == "updated"
+        assert _action_value(preview.accounts[0].action) == "updated"
+        assert preview.accounts[0].payment_terms == live.accounts[0].payment_terms
+        assert preview.accounts[0].account_id == preview_id
+        assert preview.dry_run is True
+
+        # Persistence: the live run wrote, the preview wrote nothing.
+        with AccountUoW("sync_su_live") as uow:
+            assert uow.accounts is not None
+            live_row = uow.accounts.get_by_id(live_id)
+            assert live_row is not None and live_row.payment_terms == "net_45"
+        with AccountUoW("sync_su_dry") as uow:
+            assert uow.accounts is not None
+            preview_row = uow.accounts.get_by_id(preview_id)
+            assert preview_row is not None and preview_row.payment_terms is None, (
+                f"dry_run persisted payment_terms={preview_row.payment_terms!r} — "
+                "the preview wrote a value it only promised to preview"
+            )
 
     @pytest.mark.asyncio
     async def test_dry_run_credit_review_previews_pending_approval(self, integration_db):

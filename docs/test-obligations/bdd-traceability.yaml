@@ -6850,6 +6850,12 @@ mappings:
       upstream_refs: ["BR-UC-011-ext-e", "BR-RULE-062"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-ext-e-preview-settings-update"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-e", "BR-RULE-062"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-ext-e-normal"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
@@ -6866,6 +6872,12 @@ mappings:
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-011-ext-f", "BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-f-settings-update"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-011-ext-f-scoped"

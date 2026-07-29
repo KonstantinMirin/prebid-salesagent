@@ -1190,12 +1190,55 @@ def when_sync_settings_update_by_account_id(ctx: dict, pt: str) -> None:
     Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf/1
     (SettingsUpdateMode requires ``account``; trio fields MUST be absent).
     """
+    _dispatch_settings_update_payment_terms(ctx, pt)
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with dry_run true and a settings-update entry "
+        'keyed by the existing account\'s account_id setting payment_terms "{pt}"'
+    )
+)
+def when_sync_settings_update_dry_run(ctx: dict, pt: str) -> None:
+    """Dispatch the same SettingsUpdateMode entry under dry_run=true.
+
+    Spec: account/sync-accounts-request.json#/properties/dry_run — "When true,
+    preview what would change without applying."
+    """
+    _dispatch_settings_update_payment_terms(ctx, pt, dry_run=True)
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with delete_missing true and a settings-update entry "
+        'keyed by the existing account\'s account_id setting payment_terms "{pt}"'
+    )
+)
+def when_sync_settings_update_delete_missing(ctx: dict, pt: str) -> None:
+    """Dispatch the same SettingsUpdateMode entry with delete_missing=true.
+
+    Spec: account/sync-accounts-request.json#/properties/delete_missing — only
+    accounts "not included in this request" may be deactivated; the entry's
+    target account IS included.
+    """
+    _dispatch_settings_update_payment_terms(ctx, pt, delete_missing=True)
+
+
+def _dispatch_settings_update_payment_terms(
+    ctx: dict, pt: str, dry_run: bool | None = None, delete_missing: bool | None = None
+) -> None:
+    """Shared dispatch for the settings-update-by-account_id Whens (live/dry_run/delete_missing)."""
     from src.core.schemas.account import SyncAccountsRequest
 
     account_id = ctx.get("original_field_values", {}).get("account_id")
     assert account_id, "Given must pre-create an account and capture its account_id in original_field_values"
+    kwargs: dict[str, Any] = {"accounts": [{"account": {"account_id": account_id}, "payment_terms": pt}]}
+    if dry_run is not None:
+        kwargs["dry_run"] = dry_run
+    if delete_missing is not None:
+        kwargs["delete_missing"] = delete_missing
     try:
-        req = SyncAccountsRequest(accounts=[{"account": {"account_id": account_id}, "payment_terms": pt}])
+        req = SyncAccountsRequest(**kwargs)
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -2529,6 +2572,7 @@ def _persisted_accounts(ctx: dict, principal_id: str | None = None) -> list[dict
                 "status": _status_str(row.status),
                 "domain": row.brand.domain if row.brand else None,
                 "billing": row.billing,
+                "payment_terms": row.payment_terms,
             }
             for row in repo.list_by_principal(pid)
         ]
@@ -2631,6 +2675,22 @@ def then_persisted_billing_unchanged(ctx: dict, domain: str, billing: str) -> No
     assert matching[0]["billing"] == billing, (
         f"Expected persisted billing {billing!r} for {domain}, got {matching[0]['billing']!r} — "
         "the run wrote a value it only promised to preview"
+    )
+
+
+@then(parsers.parse('the persisted account for brand domain "{domain}" has no payment_terms set'))
+def then_persisted_payment_terms_unset(ctx: dict, domain: str) -> None:
+    """Assert a settings-update preview left payment_terms unpersisted.
+
+    The dry_run settings-update scenario targets payment_terms specifically:
+    asserting only billing (which the entry never touches) would pass even when
+    the preview wrote the row. This pins the exact field the preview reports on.
+    """
+    matching = [a for a in _persisted_accounts(ctx) if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected exactly one persisted account for {domain}, got {matching}"
+    assert matching[0]["payment_terms"] is None, (
+        f"Expected no persisted payment_terms for {domain}, got {matching[0]['payment_terms']!r} — "
+        "the dry_run settings-update wrote a value it only promised to preview"
     )
 
 

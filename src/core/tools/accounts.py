@@ -996,8 +996,100 @@ def _validate_notification_configs(configs: Any) -> list[Any] | None:
     return None
 
 
+def _settings_update_preview_state(
+    existing: DBAccount | None, ref: Any, previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount]
+) -> DBAccount | None:
+    """The request-local stand-in a dry_run settings-update reads and writes.
+
+    Mirrors the provisioning arm's seeding: first touch of a persisted row on a
+    key registers a never-persisted copy, so the entry's in-memory "write" can
+    not reach the session and later entries on the same key grade against the
+    previewed state. Seeded with the PROVISIONING superset of applied fields —
+    the settings-update set is a strict subset, and a later provisioning entry
+    on the same key must read real values off this object.
+
+    With no persisted row, a natural-key reference (AccountReference2) may still
+    target an account an EARLIER entry in this same preview would create — the
+    live arm finds that row because ``repo.create()`` flushed it, so the preview
+    must consult ``previewed_by_key`` for parity. An ``account_id`` reference
+    cannot name a not-yet-created account (ids are server-generated), so a repo
+    miss there stays unmatched, exactly as on the live arm.
+    """
+    if existing is not None:
+        brand_domain, brand_id = brand_key_parts(existing.brand)
+        key = (brand_domain, brand_id, existing.operator or "", bool(existing.sandbox))
+        state = previewed_by_key.get(key)
+        if state is None:
+            state = _preview_state_from(
+                existing,
+                mode="provisioning",
+                brand_domain=brand_domain or "",
+                brand_id=brand_id,
+                operator=existing.operator or "",
+            )
+            previewed_by_key[key] = state
+        return state
+    if isinstance(ref, AccountReference1):
+        return None
+    brand_domain, brand_id = brand_key_parts(ref.brand)
+    return previewed_by_key.get((brand_domain, brand_id, ref.operator or "", bool(ref.sandbox)))
+
+
+def _resolve_settings_update_target(ref: Any, repo: Any) -> DBAccount | None:
+    """Resolve a settings-update AccountReference to its persisted row, if any."""
+    if isinstance(ref, AccountReference1):
+        return repo.get_by_id(ref.account_id)
+    brand_domain, brand_id = brand_key_parts(ref.brand)
+    return repo.get_by_natural_key(
+        operator=ref.operator,
+        brand_domain=brand_domain,
+        brand_id=brand_id,
+        sandbox=ref.sandbox,
+    )
+
+
+def _unmatched_settings_update_result(ref: Any) -> SyncResponseAccount:
+    """The UNSUPPORTED_PROVISIONING failure for an unmatched account reference.
+
+    brand/operator are REQUIRED on SyncResponseAccount. A natural-key reference
+    (AccountReference2) still carries brand/operator to echo even when unmatched;
+    an account_id reference (AccountReference1) carries none -- "unknown" is the
+    established placeholder convention in this file for exactly that situation
+    (cf. the publisher-domain placeholder above), not a fabricated real value.
+    """
+    from adcp.types import Error
+
+    if isinstance(ref, AccountReference1):
+        fail_brand: Any = {"domain": "unknown"}
+        fail_operator = "unknown"
+    else:
+        fail_brand = ref.brand if ref.brand else {"domain": "unknown"}
+        fail_operator = ref.operator or "unknown"
+    return _build_failed_result(
+        brand=fail_brand,
+        operator=fail_operator,
+        billing=None,
+        sandbox=None,
+        errors=[
+            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                code="UNSUPPORTED_PROVISIONING",
+                message="No existing account matches the provided account reference; "
+                "a settings-update entry never provisions a new account.",
+                suggestion="Provide 'brand', 'operator', and 'billing' to provision a new account instead.",
+                recovery="correctable",
+            )
+        ],
+    )
+
+
 def _process_settings_update_entry(
-    entry: Any, repo: Any, proof_errors: list[Any] | None = None, index: int = 0
+    entry: Any,
+    repo: Any,
+    proof_errors: list[Any] | None = None,
+    index: int = 0,
+    *,
+    dry_run: bool = False,
+    previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount] | None = None,
 ) -> SyncResponseAccount:
     """Handle a settings-update entry (keyed by AccountReference) -- update an
     EXISTING account's settable fields, NEVER provision (F1b/F1c).
@@ -1008,48 +1100,29 @@ def _process_settings_update_entry(
     ``sandbox``). An unmatched reference is rejected with
     UNSUPPORTED_PROVISIONING -- a settings-update entry MUST NOT provision a
     new account under any circumstance.
-    """
-    from adcp.types import Error
 
+    Under ``dry_run`` the entry is graded identically but writes nothing: the
+    resolved changes are applied to a request-local preview state (the same
+    ``previewed_by_key`` mechanism the provisioning arm uses) instead of
+    ``repo.update_fields`` (sync-accounts-request.json#/properties/dry_run:
+    "preview what would change without applying").
+    """
     ref = entry.account.root
-    if isinstance(ref, AccountReference1):
-        existing = repo.get_by_id(ref.account_id)
-    else:
-        brand_domain, brand_id = brand_key_parts(ref.brand)
-        existing = repo.get_by_natural_key(
-            operator=ref.operator,
-            brand_domain=brand_domain,
-            brand_id=brand_id,
-            sandbox=ref.sandbox,
-        )
+    existing = _resolve_settings_update_target(ref, repo)
+
+    # Echo brand/operator from the persisted row when there is one — the preview
+    # state's brand dict is REBUILT by _new_account_row and may drop extra keys.
+    persisted = existing
+    if dry_run:
+        if previewed_by_key is None:
+            previewed_by_key = {}
+        existing = _settings_update_preview_state(existing, ref, previewed_by_key)
 
     if existing is None:
-        # brand/operator are REQUIRED on SyncResponseAccount. A natural-key reference
-        # (AccountReference2) still carries brand/operator to echo even when unmatched;
-        # an account_id reference (AccountReference1) carries none -- "unknown" is the
-        # established placeholder convention in this file for exactly that situation
-        # (cf. the publisher-domain placeholder above), not a fabricated real value.
-        if isinstance(ref, AccountReference1):
-            fail_brand: Any = {"domain": "unknown"}
-            fail_operator = "unknown"
-        else:
-            fail_brand = ref.brand if ref.brand else {"domain": "unknown"}
-            fail_operator = ref.operator or "unknown"
-        return _build_failed_result(
-            brand=fail_brand,
-            operator=fail_operator,
-            billing=None,
-            sandbox=None,
-            errors=[
-                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
-                    code="UNSUPPORTED_PROVISIONING",
-                    message="No existing account matches the provided account reference; "
-                    "a settings-update entry never provisions a new account.",
-                    suggestion="Provide 'brand', 'operator', and 'billing' to provision a new account instead.",
-                    recovery="correctable",
-                )
-            ],
-        )
+        return _unmatched_settings_update_result(ref)
+
+    echo_brand = persisted.brand if persisted is not None else existing.brand
+    echo_operator = persisted.operator if persisted is not None else existing.operator
 
     # Same shared validator as the provisioning arm, and BEFORE any write so a
     # rejected entry leaves the persisted array byte-identical.
@@ -1060,8 +1133,8 @@ def _process_settings_update_entry(
         notif_errors = proof_errors
     if notif_errors is not None:
         return _build_failed_result(
-            brand=existing.brand,
-            operator=existing.operator or "",
+            brand=echo_brand,
+            operator=echo_operator or "",
             billing=existing.billing,
             sandbox=existing.sandbox,
             errors=notif_errors,
@@ -1073,8 +1146,8 @@ def _process_settings_update_entry(
     reject_errors = _rejected_field_errors(entry, mode="settings_update", index=index)
     if reject_errors is not None:
         return _build_failed_result(
-            brand=existing.brand,
-            operator=existing.operator or "",
+            brand=echo_brand,
+            operator=echo_operator or "",
             billing=existing.billing,
             sandbox=existing.sandbox,
             errors=reject_errors,
@@ -1087,12 +1160,19 @@ def _process_settings_update_entry(
 
     action = "unchanged"
     if changes:
-        repo.update_fields(existing.account_id, **changes)
+        if dry_run:
+            # The write the live arm performs, in memory only: `existing` is the
+            # request-local preview state (never a persisted row), so this can
+            # reach no session and later entries on the key read post-write state.
+            for field, value in changes.items():
+                setattr(existing, field, value)
+        else:
+            repo.update_fields(existing.account_id, **changes)
         action = "updated"
 
     return _build_sync_result(
-        brand=existing.brand,
-        operator=existing.operator,
+        brand=echo_brand,
+        operator=echo_operator or "",
         action=action,
         status=existing.status,
         account_id=existing.account_id,
@@ -1490,7 +1570,25 @@ async def _sync_accounts_impl(
                 )
 
             if entry.account is not None:
-                results.append(_process_settings_update_entry(entry, repo, proof_failures.get(index), index))
+                su_result = _process_settings_update_entry(
+                    entry,
+                    repo,
+                    proof_failures.get(index),
+                    index,
+                    dry_run=dry_run,
+                    previewed_by_key=previewed_by_key,
+                )
+                results.append(su_result)
+                # delete_missing deactivates accounts "not included in this
+                # request" (sync-accounts-request.json#/properties/delete_missing)
+                # — a settings-update target IS included, so it must be marked
+                # seen or the very request that updated it would close it. A
+                # FAILED result carries no account_id (built by
+                # _build_failed_result), so a failed entry does not shield its
+                # account — same boundary as failed provisioning entries, which
+                # never reach seen_account_ids either.
+                if su_result.account_id:
+                    seen_account_ids.add(su_result.account_id)
                 continue
 
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
