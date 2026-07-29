@@ -89,6 +89,7 @@ from adcp.signing.canonical import build_signature_base, parse_signature_input_h
 
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness._base import BareIntegrationEnv
+from tests.helpers.app_state import preserved_global_app_state
 from tests.helpers.asgi_wire import WireResponse, send_wire_request
 from tests.helpers.signing import (
     COUNTERPARTY_AGENT_URL,
@@ -289,12 +290,20 @@ def conformance_app() -> Iterator[tuple[Any, Any]]:
     ``TestClient`` is entered ONLY for the lifespan and its event-loop portal —
     never to send: an httpx driver voids eight vectors (see
     :mod:`tests.helpers.asgi_wire`).
+
+    Starting the lifespan for real mutates process-global state on the ``src.app.app``
+    SINGLETON that the shutdown hook does not undo — chiefly the route table, which
+    ``_install_admin_mounts()`` re-shapes with a catch-all ``Mount("")``. Under
+    ``--dist loadfile`` the next file on this worker inherits that shape, which is how
+    this fixture silently broke the trust-root suite's discovery of the endpoint paths
+    the app serves (``salesagent-66a1``). :func:`preserved_global_app_state` puts the
+    globals back; see its module docstring for the measured routing flips.
     """
     from starlette.testclient import TestClient
 
     from src.app import app
 
-    with TestClient(app) as client:
+    with preserved_global_app_state(), TestClient(app) as client:
         yield app, client.portal
 
 

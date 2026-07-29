@@ -132,14 +132,30 @@ def _served_endpoint_paths(client) -> dict[str, str]:
     with 405, i.e. it is served at exactly that path. That asymmetry is the whole
     point: the byte-equal match in security.mdx step 5 is against the URL the
     counterparty invoked, and the redirect decides what that string is.
+
+    The ``404`` guard is what makes the fallback branch legitimate. "Not a redirect"
+    only means "served at *candidate*" while SOMETHING answers *candidate*; a ``404``
+    means nothing does, and recording it as the served path would publish a URL that
+    resolves to nothing. It has a concrete trigger: a sibling test file that starts the
+    app lifespan and does not restore leaves the Flask catch-all ``Mount("")`` on the
+    singleton's route table, which swallows both bare paths and turns the ``307``/``405``
+    above into ``404`` (``salesagent-66a1``, :mod:`tests.helpers.app_state`). Failing
+    here names that cause; falling through produced a byte-equality mismatch that did
+    not.
     """
     paths: dict[str, str] = {}
     for name, candidate in (("mcp", "/mcp"), ("a2a", "/a2a")):
         response = client.get(candidate, follow_redirects=False)
         if response.status_code in (301, 302, 303, 307, 308):
             paths[name] = urlsplit(response.headers["location"]).path
-        else:
-            paths[name] = candidate
+            continue
+        assert response.status_code != 404, (
+            f"discovery is meaningless: nothing on this app answers {candidate!r} and it "
+            "issues no redirect either, so no served path can be read off it. Most likely "
+            "another test file started the app lifespan without restoring "
+            "src.app.app.router.routes (see tests.helpers.app_state)"
+        )
+        paths[name] = candidate
     return paths
 
 

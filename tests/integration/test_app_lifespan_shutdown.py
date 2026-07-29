@@ -37,11 +37,11 @@ import pytest
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 
-import src.app as app_module
 from src.app import app_lifespan
 from src.core import lifecycle
 from src.services import protocol_webhook_service
 from src.services.protocol_webhook_service import ProtocolWebhookService, get_protocol_webhook_service
+from tests.helpers.app_state import preserved_global_app_state
 
 pytestmark = pytest.mark.integration
 
@@ -50,25 +50,14 @@ pytestmark = pytest.mark.integration
 def isolated_global_app_state():
     """Snapshot/restore the legitimate global side-effects of lifespan startup.
 
-    - ``src.app.app.router.routes``: ``_install_admin_mounts()`` (run for real,
-      not stubbed) rewrites this module-global list.
-    - ``protocol_webhook_service._webhook_service``: the documented singleton
-      slot; ``get_protocol_webhook_service()`` populates it and self-registers.
-    - ``lifecycle._shutdown_callbacks``: the service-agnostic registry the
-      shutdown hook drains; self-registration appends to it.
-
-    Restoring these afterwards keeps the real startup from polluting sibling
-    tests without patching any production code.
+    Which globals, and why each one leaks, is documented once in
+    :mod:`tests.helpers.app_state` — every test that starts the real lifespan needs the
+    same restore, and a second hand-rolled copy of the list drifts (it already did:
+    ``test_signing_conformance_vectors.py`` had none, and its leaked route table broke
+    the trust-root suite whenever ``--dist loadfile`` put them on one worker).
     """
-    original_routes = list(app_module.app.router.routes)
-    original_singleton = protocol_webhook_service._webhook_service
-    original_callbacks = list(lifecycle._shutdown_callbacks)
-    try:
+    with preserved_global_app_state():
         yield
-    finally:
-        app_module.app.router.routes = original_routes
-        protocol_webhook_service._webhook_service = original_singleton
-        lifecycle._shutdown_callbacks[:] = original_callbacks
 
 
 async def test_lifespan_closes_real_webhook_session_pool(isolated_global_app_state):
