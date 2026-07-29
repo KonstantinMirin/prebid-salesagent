@@ -28,7 +28,7 @@ What does NOT count, deliberately:
 The allowlist was seeded at its maximum with the 17 modules in the #1589
 inventory and only ever shrinks — ``src/core/property_list_resolver.py`` and
 ``src/services/order_approval_service.py`` and ``src/core/creative_agent_registry.py``
-and ``src/services/webhook_delivery_service.py`` are migrated, so it is 12 now. Each entry pairs a module with its current
+and ``src/services/webhook_delivery_service.py`` are migrated, so it is 11 now. Each entry pairs a module with its current
 egress-call count, so adding a call to an already-allowlisted module fails too
 rather than hiding behind the entry.
 """
@@ -67,7 +67,6 @@ EGRESS_FUNCTIONS = frozenset({"urlopen"})
 # source location.
 ALLOWLIST = {
     # Counterparty-supplied URL — the actual SSRF surface.
-    ("src/services/protocol_webhook_service.py", 1),
     # Operator-configured vendor endpoints.
     ("src/adapters/base_workflow.py", 1),
     ("src/adapters/gam_reporting_service.py", 1),

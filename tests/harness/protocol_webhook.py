@@ -1,0 +1,226 @@
+"""ProtocolWebhookEnv — integration test environment for ProtocolWebhookService.
+
+Real: a local HTTP origin that actually serves the POST, the real database for
+      the ``webhook_delivery_log`` rows the service writes, and a real
+      ``ProtocolWebhookService`` instance.
+Mocked: nothing. There is no ``EXTERNAL_PATCHES`` entry on purpose — the whole
+      point of this env is that the transport is not substituted, so the same
+      assertions grade ``requests.Session.post`` today and
+      ``src.core.security.outbound_http.asend`` after the migration.
+
+Why an env rather than the bare ``local_origin`` fixture plus direct calls:
+``ProtocolWebhookService`` writes its delivery log through
+``DeliveryRepository``, whose rows carry a foreign key to ``media_buys``, and
+the ``PushNotificationConfig`` it is handed is an ORM instance.
+``IntegrationEnv.__enter__`` is what binds the factory session, so outside an
+env neither row can be created at all.
+
+``LocalOriginMixin`` already means "start the origin, publish ``webhook_url``,
+open both outbound escape hatches" — the origin necessarily listens on loopback
+over plain HTTP, which the egress seam refuses by default. Composing it is how
+that decision stays spelled once.
+
+The ONE service instance per env (:attr:`ProtocolWebhookEnv.service`) is
+load-bearing, not a convenience: the property this migration exists to create is
+that a single service instance can deliver to two different hostnames, which is
+only expressible if the tests share one instance across deliveries.
+
+Requires: integration_db fixture (creates test PostgreSQL DB).
+
+Usage::
+
+    @pytest.mark.requires_db
+    async def test_something(self, integration_db):
+        with ProtocolWebhookEnv() as env:
+            env.setup_default_data()
+            env.set_http_status(200)
+
+            delivered = await env.send()
+
+            assert delivered is True
+            assert env.delivery_attempts == 1
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any, Self
+from unittest.mock import patch
+
+from adcp import create_mcp_webhook_payload
+from adcp.types import McpWebhookPayload
+
+from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
+from src.services.protocol_webhook_service import ProtocolWebhookService
+from tests.factories import MediaBuyFactory, PushNotificationConfigFactory
+from tests.harness._base import IntegrationEnv
+from tests.harness._mixins import LocalOriginMixin
+
+# Test-speed base for the egress seam's retry backoff. The seam's real base is
+# 1s (BR-RULE-029: 1s/2s/4s + jitter), which a retry case would otherwise pay in
+# wall time on every run. The shape and the jitter are NOT overridden — only the
+# base — and the schedule itself is graded once, in
+# tests/integration/test_outbound_http.py via tests/helpers/backoff_assertions.py.
+#
+# It is read by the seam at call time, so it takes effect only once this call
+# site has actually been migrated. Before the migration the service runs its own
+# ``asyncio.sleep(min(2**attempt, 60))`` loop and ignores it, so the retry cases
+# below cost ~3s of real waiting today and ~0s afterwards.
+_FAST_BACKOFF_BASE_SECONDS = "0.01"
+
+# ``metadata["task_type"]`` is the INTERNAL label the service gates its
+# delivery-log writes on; the payload's own ``task_type`` is the spec TaskType
+# enum. They are deliberately different — see the comment at
+# ``src/services/delivery_webhook_scheduler.py`` where production sets both.
+DELIVERY_METADATA_TASK_TYPE = "media_buy_delivery"
+DELIVERY_PAYLOAD_TASK_TYPE = "update_media_buy"
+
+# The logger production's audit entries go to (``src/core/audit_logger.py``).
+AUDIT_LOGGER_NAME = "adcp.audit"
+
+
+class ProtocolWebhookEnv(LocalOriginMixin, IntegrationEnv):
+    """Integration test environment for ``ProtocolWebhookService.send_notification``.
+
+    The notification POST goes over real HTTP to a real local origin; the
+    delivery-log rows go through the real database.
+
+    Fluent API (from LocalOriginMixin):
+        webhook_url                       -- the running origin's URL
+        set_http_status(code, text)       -- answer every attempt with one status
+        set_http_sequence(responses)      -- answer attempts in order, last repeats
+        set_http_error()                  -- drop the connection without answering
+        delivery_attempts / last_delivery -- what the endpoint actually received
+        delivered_requests                -- every request, oldest first
+    """
+
+    MODULE = "src.services.protocol_webhook_service"
+
+    _service: ProtocolWebhookService | None = None
+
+    def __enter__(self) -> Self:
+        self._fast_backoff = patch.dict(
+            os.environ,
+            {"ADCP_OUTBOUND_BACKOFF_BASE_SECONDS": _FAST_BACKOFF_BASE_SECONDS},
+        )
+        self._fast_backoff.start()
+        self._service = None
+        return super().__enter__()
+
+    def __exit__(self, *exc: object) -> bool:
+        try:
+            return super().__exit__(*exc)
+        finally:
+            self._service = None
+            self._fast_backoff.stop()
+
+    # -- The subject under test ---------------------------------------------
+
+    @property
+    def service(self) -> ProtocolWebhookService:
+        """The ONE ``ProtocolWebhookService`` this env drives every delivery through.
+
+        Constructed directly rather than through
+        ``get_protocol_webhook_service()`` so a test never mutates the module
+        singleton (and, today, never appends to the process-wide shutdown
+        registry). One instance per env is what makes "two destinations, one
+        service" a statement a test can actually make.
+        """
+        if self._service is None:
+            self._service = ProtocolWebhookService()
+        return self._service
+
+    # -- Programming the inputs ---------------------------------------------
+
+    def make_media_buy(self, **overrides: Any) -> Any:
+        """Create the ``MediaBuy`` row the delivery log's foreign key requires.
+
+        ``webhook_delivery_log.media_buy_id`` references ``media_buys``, so a
+        delivery-log assertion against a media buy that does not exist would
+        grade nothing: ``_write_delivery_log`` swallows the integrity error and
+        logs it, leaving zero rows and no exception.
+        """
+        tenant, principal = self.setup_default_data()
+        return MediaBuyFactory(tenant=tenant, principal=principal, **overrides)
+
+    def make_config(
+        self,
+        *,
+        url: str | None = None,
+        authentication_type: str | None = None,
+        authentication_token: str | None = None,
+    ) -> PushNotificationConfig:
+        """Store a ``PushNotificationConfig`` pointing at ``url``.
+
+        ``url`` defaults to the origin that is really listening. Passing an
+        explicit URL is how a test targets somewhere else — a second origin, or
+        somewhere nothing is listening at all.
+        """
+        tenant, principal = self.setup_default_data()
+        return PushNotificationConfigFactory(
+            tenant=tenant,
+            principal=principal,
+            url=url if url is not None else self.webhook_url,
+            authentication_type=authentication_type,
+            authentication_token=authentication_token,
+            is_active=True,
+        )
+
+    def make_payload(
+        self,
+        *,
+        task_id: str = "task_001",
+        result: dict[str, Any] | None = None,
+    ) -> McpWebhookPayload:
+        """Build the real SDK webhook payload production sends for a delivery report.
+
+        Mirrors ``DeliveryWebhookScheduler._send_delivery_report``: the payload
+        carries the spec ``TaskType`` (``update_media_buy``) while the metadata
+        carries the internal ``media_buy_delivery`` label.
+        """
+        return create_mcp_webhook_payload(
+            task_id=task_id,
+            task_type=DELIVERY_PAYLOAD_TASK_TYPE,
+            status="completed",
+            result=result if result is not None else {"media_buy_id": "mb_0001"},
+        )
+
+    # -- Driving production --------------------------------------------------
+
+    async def send(
+        self,
+        *,
+        config: PushNotificationConfig | None = None,
+        payload: McpWebhookPayload | None = None,
+        media_buy_id: str | None = None,
+        task_type: str = DELIVERY_METADATA_TASK_TYPE,
+    ) -> bool:
+        """Call the real ``send_notification`` and return what production returned.
+
+        ``config`` defaults to an unauthenticated config for the running origin.
+        ``media_buy_id`` rides in the metadata: it is one of the four values the
+        service requires before it writes a delivery-log row at all.
+        """
+        self._commit_factory_data()
+        return await self.service.send_notification(
+            push_notification_config=config if config is not None else self.make_config(),
+            payload=payload if payload is not None else self.make_payload(),
+            metadata={
+                "task_type": task_type,
+                "tenant_id": self._tenant_id,
+                "principal_id": self._principal_id,
+                "media_buy_id": media_buy_id,
+            },
+        )
+
+    # -- Observing what production recorded ----------------------------------
+
+    def delivery_logs(self, media_buy_id: str) -> list[WebhookDeliveryLog]:
+        """Every ``webhook_delivery_log`` row for ``media_buy_id``, freshly read.
+
+        ``_write_delivery_log`` commits through its own ``get_db_session()``, so
+        the env-bound session must drop anything it already has cached before
+        the read or it would answer from its identity map.
+        """
+        self.get_session().expire_all()
+        return self.query(WebhookDeliveryLog, tenant_id=self._tenant_id, media_buy_id=media_buy_id)

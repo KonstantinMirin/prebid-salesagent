@@ -68,6 +68,9 @@ from tests.harness.order_approval_webhook import OrderApprovalWebhookEnv
 # Product env
 from tests.harness.product import ProductEnv
 
+# Protocol webhook env
+from tests.harness.protocol_webhook import ProtocolWebhookEnv
+
 # Transport helpers
 from tests.harness.transport import Transport, TransportResult
 
@@ -93,6 +96,8 @@ __all__ = [
     "OrderApprovalWebhookEnv",
     # Product env
     "ProductEnv",
+    # Protocol webhook env
+    "ProtocolWebhookEnv",
     # Transport
     "Transport",
     "TransportResult",

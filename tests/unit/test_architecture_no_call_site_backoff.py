@@ -70,7 +70,6 @@ ALLOWLIST = {
     # schedule. Tickets: salesagent-4fya.11, .10, salesagent-cnkq
     # (salesagent-4fya.8 and .9 migrated order_approval_service and
     # creative_agent_registry, removing their entries.)
-    ("src/services/protocol_webhook_service.py", 2),
     # Egress retry schedules that no migration ticket covered — found by the
     # salesagent-4fya.6 disease scan, filed as salesagent-zlwz and salesagent-fwid.
     ("src/core/utils/mcp_client.py", 1),
@@ -216,7 +215,7 @@ class TestNoCallSiteBackoff:
         call site grew its own schedule, which is the thing the guard exists to
         prevent.
         """
-        assert len(ALLOWLIST) <= 6, (
+        assert len(ALLOWLIST) <= 5, (
             f"allowlist grew to {len(ALLOWLIST)} entries — a new call-site backoff was admitted. {FIX_HINT}"
         )
 

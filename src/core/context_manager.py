@@ -21,6 +21,7 @@ from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
+from src.core.security.outbound_http import OutboundError
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -774,8 +775,6 @@ class ContextManager(DatabaseManager):
             session: Active database session
         """
         try:
-            import requests
-
             from src.core.database.models import PushNotificationConfig
 
             # Get object mappings for this step
@@ -929,9 +928,10 @@ class ContextManager(DatabaseManager):
                                 f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
                             )
 
-                    except requests.exceptions.Timeout:
-                        console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
-                    except requests.exceptions.RequestException as e:
+                    except OutboundError as e:
+                        # The seam's two failure classes replaced the requests
+                        # exceptions this used to catch; the send_notification path
+                        # cannot raise those any more.
                         console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
 
         except Exception as e:
