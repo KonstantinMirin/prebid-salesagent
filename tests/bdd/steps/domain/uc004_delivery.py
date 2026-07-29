@@ -1495,9 +1495,17 @@ def then_only_status(ctx: dict, status: str) -> None:
     Guards against a vacuous pass: if the scenario filters on a status with no
     seeded buy, the response is empty and a bare per-item loop would assert
     nothing (#1545 review). Require at least one matching buy so the filter is
-    actually exercised. ``status`` is normalized off the enum's ``.value`` since
-    MediaBuyDeliveryStatus is an Enum (not a str-enum), so identity-compares
-    against the plain wire string would otherwise fail.
+    actually exercised.
+
+    ``status`` needs no enum normalization. The previous docstring here claimed
+    "MediaBuyDeliveryStatus is an Enum (not a str-enum), so identity-compares against
+    the plain wire string would otherwise fail" -- that was wrong twice over, and the
+    ``getattr(raw, "value", raw)`` unwrap it justified was dead code.
+    ``MediaBuyDeliveryData`` sets ``use_enum_values=True``
+    (src/core/schemas/delivery.py), so ``d.status`` is already a plain ``str`` at
+    runtime; and the underlying enum is a ``StrEnum`` anyway, so even unconverted it
+    would compare equal to the wire string. See GH #1749's sibling ticket on
+    defensive enum unwrapping.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -1507,8 +1515,7 @@ def then_only_status(ctx: dict, status: str) -> None:
         f"for this status or the assertion passes vacuously."
     )
     for d in deliveries:
-        raw = getattr(d, "status", None)
-        actual = getattr(raw, "value", raw)  # Enum -> wire string; str passthrough
+        actual = getattr(d, "status", None)
         assert actual == status, f"Expected status '{status}', got '{actual}' for {d.media_buy_id}"
 
 
@@ -3000,13 +3007,16 @@ def then_filter_result(ctx: dict, expected: str) -> None:
             # Concrete filter: every returned delivery must have a matching status
             assert deliveries, f"Expected non-empty deliveries for valid status_filter={request_filter}"
             for d in deliveries:
+                # No enum unwrap: MediaBuyDeliveryData sets use_enum_values=True, so status is
+                # already a plain str (and the underlying enum is a StrEnum regardless). No
+                # `is not None` guard either — a delivery that comes back without a status
+                # cannot have had the filter applied to it, so that is a violation, not a case
+                # to skip.
                 actual_status = getattr(d, "status", None)
-                if actual_status is not None:
-                    status_str = actual_status.value if hasattr(actual_status, "value") else str(actual_status)
-                    assert status_str in request_filter, (
-                        f"Status filter violation: delivery {getattr(d, 'media_buy_id', '?')!r} "
-                        f"has status '{status_str}' but filter requested {request_filter}"
-                    )
+                assert actual_status in request_filter, (
+                    f"Status filter violation: delivery {getattr(d, 'media_buy_id', '?')!r} "
+                    f"has status {actual_status!r} but filter requested {request_filter}"
+                )
         else:
             # Omitted filter or field absent: all buyer's media buys should be returned
             assert deliveries, "Expected all buyer's media buys returned when status_filter is omitted"
