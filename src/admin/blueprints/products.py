@@ -2015,12 +2015,6 @@ def edit_product(tenant_id, product_id):
                 )
                 inventory_synced = inventory_count > 0
 
-                # Build set of selected format IDs for template checking.
-                # Use composite key (agent_url, format_id) tuples per AdCP spec (same as main.py).
-                # product_dict["formats"] holds JSON-safe dicts serialized from the typed
-                # FormatId column above (#1172) — agent_url and id are always present.
-                selected_format_ids = {(fmt["agent_url"], fmt["id"]) for fmt in product_dict["formats"]}
-
                 # Fetch assigned inventory for this product
                 from src.core.database.models import ProductInventoryMapping
 
@@ -2060,7 +2054,6 @@ def edit_product(tenant_id, product_id):
                     "add_product_gam.html",
                     tenant_id=tenant_id,
                     product=product_dict,
-                    selected_format_ids=selected_format_ids,
                     inventory_synced=inventory_synced,
                     formats=get_creative_formats(tenant_id=tenant_id),
                     currencies=currencies,

@@ -7,9 +7,13 @@ Smoke tests: "Does it render?" (status code checks)
 Data tests: "Does it show the right data?" (content validation)
 """
 
+import json
+import re
+
 import pytest
 
 from src.core.database.models import PricingOption
+from src.core.schemas import FormatId
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -658,6 +662,83 @@ class TestWorkflowsDataValidation:
         assert "workflow" in html.lower() or "step" in html.lower() or "task" in html.lower(), (
             "Workflows page should contain workflow-related content"
         )
+
+
+# Matches the one-line bootstrap the GAM product template emits:
+#   const existingFormats = [{"agent_url": "...", "id": "..."}];
+_EXISTING_FORMATS_RE = re.compile(r"^\s*const existingFormats\s*=\s*(.+);\s*$", re.MULTILINE)
+
+
+def _extract_initial_formats(html: str) -> list[dict]:
+    """Return the format payload the page hands to ``FormatTemplatePicker.initialFormats``.
+
+    Fails loudly if either half of the wiring is gone: the ``existingFormats``
+    literal itself, or the assignment that passes it to the picker. Returning
+    an empty list in that case would make the caller's assertion vacuous.
+    """
+    match = _EXISTING_FORMATS_RE.search(html)
+    assert match, "add_product_gam.html no longer emits the `const existingFormats = ...;` bootstrap"
+    assert "initialFormats: existingFormats" in html, (
+        "`existingFormats` is no longer wired into FormatTemplatePicker.initialFormats"
+    )
+    return json.loads(match.group(1))
+
+
+@pytest.mark.requires_db
+class TestGAMEditProductFormatPreselection:
+    """The GAM edit-product page must embed the product's stored formats in its JS bootstrap.
+
+    This is the LIVE format pre-selection path for GAM products — the mechanism
+    that makes a buyer's already-chosen formats show up checked when they reopen
+    the product:
+
+        src/admin/blueprints/products.py  render_template("add_product_gam.html", product=product_dict)
+        templates/add_product_gam.html    const existingFormats = {{ product.formats | tojson }}
+        templates/add_product_gam.html    initialFormats: existingFormats
+        static/js/format-template-picker.js  _parseInitialFormats() -> selectedTemplates / customFormats
+
+    No test loaded this page before, so removing the orphaned ``selected_format_ids``
+    render kwarg (a second, unread derivation of the same data) rested on static
+    evidence alone. This guard executes the surviving path, so an edit that drops
+    the bootstrap fails here instead of silently un-checking every stored format.
+    """
+
+    def test_stored_formats_reach_the_initial_formats_bootstrap(self, authenticated_admin_session, integration_db):
+        """Both stored FormatIds — standard and foreign-agent — appear in ``initialFormats``."""
+        from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+        from tests.harness._base import IntegrationEnv
+
+        stored_formats = [
+            FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250_image"),
+            # A second agent, so the assertion pins agent_url too rather than only the id.
+            FormatId(agent_url="https://formats.guard.example.com/mcp", id="custom_guard_format"),
+        ]
+
+        with IntegrationEnv():
+            tenant = TenantFactory(tenant_id="gam_fmt_preselect", ad_server="google_ad_manager")
+            product = ProductFactory(
+                tenant=tenant,
+                product_id="prod_gam_fmt_preselect",
+                format_ids=stored_formats,
+            )
+            PricingOptionFactory(product=product)
+
+            # No follow_redirects: the view swallows render errors into a flash +
+            # redirect, so a 302 here means the page failed to build.
+            response = authenticated_admin_session.get(f"/tenant/{tenant.tenant_id}/products/{product.product_id}/edit")
+
+        assert response.status_code == 200, f"GAM edit-product page did not render (got {response.status_code})"
+
+        embedded = _extract_initial_formats(response.data.decode("utf-8"))
+
+        assert embedded == [fmt.model_dump(mode="json", exclude_none=True) for fmt in stored_formats], (
+            f"initialFormats does not carry the product's stored formats, got: {embedded}"
+        )
+        assert {fmt["id"] for fmt in embedded} == {"display_300x250_image", "custom_guard_format"}
+        assert {fmt["agent_url"] for fmt in embedded} == {
+            "https://creative.adcontextprotocol.org/",
+            "https://formats.guard.example.com/mcp",
+        }
 
 
 # NOTE: TestAuthorizedPropertiesDataValidation tests removed - authorized_properties_list.html
