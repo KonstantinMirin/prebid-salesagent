@@ -5,16 +5,18 @@ The binding sweep asks "does this scenario's @source resolve?". This asks the
 question that actually decides compliance: **for every storyboard the pinned spec
 would grade us on, do we have a BDD scenario?**
 
-A storyboard is on our path when it is either
+A storyboard is on our path unless a gate the spec defines excludes it:
 
-  * ``universal/``            — always applies, no gate; or
-  * named in ``requires_scenarios`` of a protocol we declare; or
-  * a protocol/domain index for a protocol we declare,
+  * ``universal/``            — always applies, no gate
+  * ``protocols/``            — a protocol we must declare
+  * ``specialisms/``          — a specialism we must declare
+  * ``requires_capability:``  — a capability we must advertise
+  * ``required_tools:``       — lenient any-of; only advertising NONE of the
+                                listed tools triggers a coverage-gap skip
 
-AND it is not excluded by a gate we fail:
-
-  * ``requires_capability:``  — a capability we do not advertise
-  * ``specialisms/``          — a specialism we do not declare
+``requires_scenarios`` is NOT a whitelist. The storyboard schema defines it as
+composition — "scenario IDs that must pass alongside this storyboard" — so a
+scenario absent from it is still graded on its own applicability.
 
 Uncovered on-path storyboards are conformance gaps with no test. Covered
 off-path scenarios are tests claiming a grading that does not apply to us.
@@ -53,40 +55,55 @@ def declared(repo: Path) -> dict[str, set[str]]:
     }
 
 
-def required_scenarios(dist: Path, protocols: set[str]) -> set[str]:
-    """Scenario ids the declared protocols pull onto the base conformance path."""
-    required: set[str] = set()
-    for protocol in protocols:
-        index = dist / "protocols" / protocol / "index.yaml"
-        if not index.exists():
-            continue
-        block = re.search(r"^requires_scenarios:\n((?:\s+-\s+\S+\n)+)", index.read_text("utf-8"), re.M)
-        if block:
-            required |= {line.strip().lstrip("- ").split("/")[-1] for line in block.group(1).splitlines()}
-    return required
+ADVERTISED_TOOLS = {
+    "activate_signal", "create_media_buy", "get_adcp_capabilities", "get_media_buy_delivery",
+    "get_media_buys", "get_products", "get_signals", "list_accounts",
+    "list_authorized_properties", "list_creative_formats", "list_creatives",
+    "sync_accounts", "sync_creatives", "update_media_buy",
+}
 
 
-def classify(rel: str, text: str, decl: dict[str, set[str]], required: set[str]) -> tuple[str, str]:
-    """Return (status, reason) for one storyboard file."""
-    stem = Path(rel).stem
+def classify(rel: str, text: str, decl: dict[str, set[str]], tools: set[str]) -> tuple[str, str]:
+    """Return (status, reason) for one storyboard file.
+
+    Applicability follows the gates the storyboard schema actually defines:
+
+    * ``requires_capability`` — a capability we must advertise
+    * ``specialisms/`` / ``protocols/`` — the declared-gate tiers
+    * ``required_tools`` — LENIENT any-of; per storyboard-schema.yaml, only
+      "missing **all** listed tools triggers a coverage-gap skip"
+
+    ``requires_scenarios`` is deliberately NOT used as a whitelist. The schema
+    defines it as composition ("scenario IDs that must pass alongside this
+    storyboard"), not an exhaustive list of what applies — treating it as one
+    wrongly excludes scenarios that are graded on their own applicability.
+    """
     if rel.startswith("universal/"):
         return "ON-PATH", "universal — applies to every agent"
+
+    def tool_gate() -> tuple[str, str] | None:
+        block = re.search(r"^required_tools:\n((?:\s+-\s+\S+\n)+)", text, re.M)
+        if not block:
+            return None
+        listed = {line.strip().lstrip("- ") for line in block.group(1).splitlines()}
+        if listed and not (listed & tools):
+            return "OFF-PATH", f"advertises none of required_tools {sorted(listed)}"
+        return None
+
     if rel.startswith("specialisms/"):
         name = rel.split("/")[1]
         if name not in decl["specialisms"]:
             return "OFF-PATH", f"specialism {name!r} not declared"
-        return "ON-PATH", f"specialism {name!r} declared"
+        return tool_gate() or ("ON-PATH", f"specialism {name!r} declared")
+
     if rel.startswith(("protocols/", "domains/")):
         protocol = rel.split("/")[1]
         if protocol not in decl["protocols"]:
             return "OFF-PATH", f"protocol {protocol!r} not declared"
         if capability := re.search(r"requires_capability:\s*\n\s*path:\s*(\S+)\s*\n\s*equals:\s*(\S+)", text):
             return "GATED", f"requires_capability {capability.group(1)} == {capability.group(2)}"
-        if stem == "index":
-            return "ON-PATH", f"protocol {protocol!r} index"
-        if stem in required:
-            return "ON-PATH", f"in {protocol!r} requires_scenarios"
-        return "OFF-PATH", f"not in {protocol!r} requires_scenarios"
+        return tool_gate() or ("ON-PATH", f"protocol {protocol!r}, required_tools advertised")
+
     return "UNKNOWN", "unclassified tier"
 
 
@@ -127,7 +144,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         raise SystemExit(f"missing pinned compliance tree: {dist}")
 
     decl = declared(repo)
-    required = required_scenarios(dist, decl["protocols"])
     claims = covered_storyboards(repo)
 
     rows: list[dict[str, Any]] = []
@@ -140,7 +156,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         stem = storyboard_key(rel)
         if rel.startswith(("test-kits/", "test-vectors/")) or stem == "storyboard-schema":
             continue
-        status, reason = classify(rel, yaml_file.read_text("utf-8"), decl, required)
+        status, reason = classify(rel, yaml_file.read_text("utf-8"), decl, ADVERTISED_TOOLS)
         key = f"{rel}"
         if key in seen:
             continue
@@ -159,7 +175,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     return {
         "pinned_version": version,
         "declared": {k: sorted(v) for k, v in decl.items()},
-        "requires_scenarios": sorted(required),
+        "advertised_tools": sorted(ADVERTISED_TOOLS),
         "totals": {
             "storyboards": len(rows),
             "on_path": len(on_path),
