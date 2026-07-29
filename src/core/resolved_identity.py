@@ -16,6 +16,7 @@ from src.core.config_loader import (
     get_tenant_by_subdomain,
     get_tenant_by_virtual_host,
 )
+from src.core.schemas import Principal
 from src.core.testing_hooks import AdCPTestContext
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class ResolvedIdentity(BaseModel, frozen=True):
     # the row the token lookup already fetched — zero extra queries. None for
     # admin tokens, unauthenticated identities, and pre-#1088 construction
     # sites (each must populate or prove unreachable before _impl migration).
-    principal: Any = None  # schemas.Principal | None (Any avoids import cycle)
+    principal: Principal | None = None
     tenant_id: str | None = None
     tenant: Any = None  # TenantContext | dict[str, Any] | None (transitional)
     auth_token: str | None = None
