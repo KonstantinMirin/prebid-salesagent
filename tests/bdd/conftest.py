@@ -594,10 +594,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-got8): E2E_REST — webhook/circuit assertions observe
-        # env.mock['post'] or CircuitBreaker state, neither of which is visible
-        # through the Docker HTTP path. Remove when an E2E webhook receiver or
-        # circuit-breaker introspection is available.
+        # FIXME(#1750): E2E_REST — webhook/circuit assertions observe env.mock['post'] or
+        # CircuitBreaker state, neither of which is visible through the Docker HTTP path.
+        # Remove when an E2E webhook receiver or circuit-breaker introspection exists.
+        #
+        # Re-derived 2026-07-29: 13 of these rows XPASS in-network, but that is NOT evidence the
+        # gap closed. tests/harness/delivery_webhook.py and delivery_circuit_breaker.py carry ZERO
+        # @realize_e2e decorations, so the seam that let the UC-004/005/018 mock-injection ledger
+        # entries graduate does not cover these — the cause above is intact. An xpass has two
+        # causes; with the cause intact this is the second one (the scenario is too weak to fail),
+        # matching the confirmed hollow pass on sort_by where _inject_placement_data bypasses the
+        # seam. Do NOT graduate on the green mark alone; investigate vacuity first.
         _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
             "T-UC-004-webhook-bearer",
             "T-UC-004-webhook-hmac",
