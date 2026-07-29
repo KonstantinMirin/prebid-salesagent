@@ -18,7 +18,7 @@ from src.admin.utils.operator_errors import safe_error_message
 from src.core.config import get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import PublisherPartner, Tenant
+from src.core.database.models import AuthorizedProperty, PropertyTag, PublisherPartner, Tenant
 from src.core.domain_config import get_tenant_url
 
 logger = logging.getLogger(__name__)
@@ -283,23 +283,33 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                                 f"creating fallback mock property"
                             )
 
-                            from src.core.database.models import AuthorizedProperty, PropertyTag
-
                             # Ensure 'all_inventory' tag exists
                             tag_stmt = select(PropertyTag).where(
                                 PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == "all_inventory"
                             )
-                            all_inventory_tag = session.scalars(tag_stmt).first()
-                            if not all_inventory_tag:
-                                all_inventory_tag = PropertyTag(
-                                    tag_id="all_inventory",
-                                    tenant_id=tenant_id,
-                                    name="All Inventory",
-                                    description="Default tag that applies to all properties.",
-                                    created_at=datetime.now(UTC),
-                                    updated_at=datetime.now(UTC),
+                            all_inventory_tag = PropertyTag(
+                                tag_id="all_inventory",
+                                tenant_id=tenant_id,
+                                name="All Inventory",
+                                description="Default tag that applies to all properties.",
+                                created_at=datetime.now(UTC),
+                                updated_at=datetime.now(UTC),
+                            )
+
+                            # A tag and a property are each identified by their own primary
+                            # key, so losing the race leaves exactly the row this branch
+                            # wanted — nothing to count, nothing to redo. Both callables run
+                            # before this iteration ends, so the late binding B023 warns
+                            # about cannot happen.
+                            if (
+                                resolve_or_write(
+                                    session,
+                                    conflict=lambda: session.scalars(tag_stmt).first(),  # noqa: B023
+                                    write=lambda: session.add(all_inventory_tag),  # noqa: B023
+                                    constraint="property_tags_pkey",
                                 )
-                                session.add(all_inventory_tag)
+                                is None
+                            ):
                                 tags_created += 1
 
                             # Create fallback property
@@ -308,22 +318,29 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                                 AuthorizedProperty.tenant_id == tenant_id,
                                 AuthorizedProperty.property_id == property_id,
                             )
-                            existing = session.scalars(prop_stmt).first()
-                            if not existing:
-                                fallback_property = AuthorizedProperty(
-                                    tenant_id=tenant_id,
-                                    property_id=property_id,
-                                    property_type="website",
-                                    name=domain,
-                                    publisher_domain=domain,
-                                    identifiers=[{"type": "domain", "value": domain}],
-                                    tags=["all_inventory"],
-                                    verification_status="verified",
-                                    verification_checked_at=datetime.now(UTC),
-                                    created_at=datetime.now(UTC),
-                                    updated_at=datetime.now(UTC),
+                            fallback_property = AuthorizedProperty(
+                                tenant_id=tenant_id,
+                                property_id=property_id,
+                                property_type="website",
+                                name=domain,
+                                publisher_domain=domain,
+                                identifiers=[{"type": "domain", "value": domain}],
+                                tags=["all_inventory"],
+                                verification_status="verified",
+                                verification_checked_at=datetime.now(UTC),
+                                created_at=datetime.now(UTC),
+                                updated_at=datetime.now(UTC),
+                            )
+
+                            if (
+                                resolve_or_write(
+                                    session,
+                                    conflict=lambda: session.scalars(prop_stmt).first(),  # noqa: B023
+                                    write=lambda: session.add(fallback_property),  # noqa: B023
+                                    constraint="authorized_properties_pkey",
                                 )
-                                session.add(fallback_property)
+                                is None
+                            ):
                                 fallback_properties += 1
 
                             session.commit()

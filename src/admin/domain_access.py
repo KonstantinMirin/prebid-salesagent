@@ -10,6 +10,7 @@ import logging
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User
 from src.core.domain_config import get_super_admin_domain
 
@@ -156,19 +157,8 @@ def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name:
     with get_db_session() as session:
         # Check if user already exists
         stmt = select(User).filter_by(email=email_lower, tenant_id=tenant_id)
-        user = session.scalars(stmt).first()
 
-        if user:
-            # Update existing user
-            if not user.is_active:
-                user.is_active = True
-                logger.info(f"Reactivated user {email} in tenant {tenant_id}")
-            user.last_login = datetime.now(UTC)
-            session.commit()
-            return user
-
-        # Create new user
-        user = User(
+        new_user = User(
             user_id=str(uuid.uuid4()),
             tenant_id=tenant_id,
             email=email_lower,
@@ -178,12 +168,27 @@ def ensure_user_in_tenant(email: str, tenant_id: str, role: str = "admin", name:
             created_at=datetime.now(UTC),
             last_login=datetime.now(UTC),
         )
+        user = resolve_or_write(
+            session,
+            conflict=lambda: session.scalars(stmt).first(),
+            write=lambda: session.add(new_user),
+            constraint="uq_users_tenant_email",
+        )
 
-        session.add(user)
+        if user:
+            # Update existing user — also where a concurrent creation of the same
+            # (tenant, email) leaves us, so both callers get the same row back.
+            if not user.is_active:
+                user.is_active = True
+                logger.info(f"Reactivated user {email} in tenant {tenant_id}")
+            user.last_login = datetime.now(UTC)
+            session.commit()
+            return user
+
         session.commit()
 
         logger.info(f"Created new user {email} in tenant {tenant_id} with role {role}")
-        return user
+        return new_user
 
 
 def get_user_tenant_access(email: str) -> dict:

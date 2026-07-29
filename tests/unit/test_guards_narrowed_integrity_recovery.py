@@ -24,32 +24,21 @@ and warns about.
 """
 
 import ast
-import re
 
 from tests.unit._architecture_helpers import (
     REPO_ROOT,
+    handles_integrity_error,
     parse_module,
     src_python_files,
+    structural_guard_marker_re,
 )
 
-MARKER = "structural-guard: integrity-narrowing"
+GUARD_NAME = "integrity-narrowing"
+MARKER = f"structural-guard: {GUARD_NAME}"
 NARROWING_CALL = "is_constraint_violation"
 
 #: The marker must be followed by a reason — a bare opt-out is not a justification.
-_MARKER_WITH_REASON = re.compile(re.escape(MARKER) + r"\s*[-—:]\s*\S+")
-
-
-def _handles_integrity_error(handler: ast.ExceptHandler) -> bool:
-    """True when this except clause catches IntegrityError (alone or in a tuple)."""
-    node = handler.type
-    if node is None:
-        return False
-    candidates = node.elts if isinstance(node, ast.Tuple) else [node]
-    for candidate in candidates:
-        name = candidate.attr if isinstance(candidate, ast.Attribute) else getattr(candidate, "id", None)
-        if name == "IntegrityError":
-            return True
-    return False
+_MARKER_WITH_REASON = structural_guard_marker_re(GUARD_NAME)
 
 
 def _narrows(handler: ast.ExceptHandler) -> bool:
@@ -76,7 +65,7 @@ def find_unnarrowed_integrity_handlers(tree: ast.Module, source: str) -> list[in
     lines = source.splitlines()
     violations: list[int] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ExceptHandler) or not _handles_integrity_error(node):
+        if not isinstance(node, ast.ExceptHandler) or not handles_integrity_error(node):
             continue
         if _narrows(node):
             continue

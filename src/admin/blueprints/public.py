@@ -178,7 +178,11 @@ def provision_tenant():
                     }
                 ),
             )
-            db_session.add(new_tenant)
+            # Both ids are freshly generated above (a uuid4 and its first 8 chars), so a
+            # collision here would be a generator accident, not two users racing for the
+            # same name — the SELECT above is a paranoia fast path, not a claim check.
+            # The user-facing subdomain race is answered in tenant_management_api.
+            db_session.add(new_tenant)  # structural-guard: uniqueness-index-verdict - generated ids, no user race
 
             # Create adapter configuration
             adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type=adapter_type)

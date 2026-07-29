@@ -14,6 +14,7 @@ from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
 from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
@@ -453,15 +454,21 @@ def configure_gam(tenant_id):
                 from src.core.database.models import CurrencyLimit
 
                 stmt = select(CurrencyLimit).filter_by(tenant_id=tenant_id, currency_code=network_currency)
-                existing_limit = db_session.scalars(stmt).first()
-                if not existing_limit:
-                    currency_limit = CurrencyLimit(
-                        tenant_id=tenant_id,
-                        currency_code=network_currency,
-                        max_daily_package_spend=Decimal("10000.00"),
-                        min_package_budget=Decimal("1.00"),
-                    )
-                    db_session.add(currency_limit)
+                currency_limit = CurrencyLimit(
+                    tenant_id=tenant_id,
+                    currency_code=network_currency,
+                    max_daily_package_spend=Decimal("10000.00"),
+                    min_package_budget=Decimal("1.00"),
+                )
+                already_there = resolve_or_write(
+                    db_session,
+                    conflict=lambda: db_session.scalars(stmt).first(),
+                    write=lambda: db_session.add(currency_limit),
+                    # The pair is both the primary key and uq_currency_limit; an
+                    # INSERT can be rejected by either index.
+                    constraint=("currency_limits_pkey", "uq_currency_limit"),
+                )
+                if already_there is None:
                     logger.info(f"Auto-created CurrencyLimit for GAM currency {network_currency}")
 
             db_session.commit()

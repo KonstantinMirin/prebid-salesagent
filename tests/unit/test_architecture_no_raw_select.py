@@ -14,14 +14,13 @@ are also exempt.
 beads: beads-xw7 (universal no-raw-select guard)
 """
 
-import ast
-from pathlib import Path
-
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations
-
-ROOT = Path(__file__).resolve().parents[2]
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    find_raw_select_violations,
+    orm_model_class_defs,
+)
 
 # ── Exempt directories and files ────────────────────────────────────
 # These are ALLOWED to use raw select() — they are the abstraction layer.
@@ -36,31 +35,14 @@ INFRASTRUCTURE_FILES = {
 
 
 def _discover_orm_model_names() -> set[str]:
-    """Parse src/core/database/models.py and return all ORM model class names.
+    """Every ORM model class name declared in src/core/database/models.py.
 
     A class is an ORM model if it inherits from Base (directly or with mixins).
-    The Base class itself is excluded.
+    The Base class itself is excluded. Discovery reads the shared
+    ``models_module_tree()`` parse so this guard, the uniqueness-index-verdict
+    guard and every other models.py reader agree on one inventory.
     """
-    models_file = ROOT / "src" / "core" / "database" / "models.py"
-    tree = ast.parse(models_file.read_text())
-    model_names: set[str] = set()
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        if node.name == "Base":
-            continue
-        for base in node.bases:
-            base_name = ""
-            if isinstance(base, ast.Name):
-                base_name = base.id
-            elif isinstance(base, ast.Attribute):
-                base_name = base.attr
-            if base_name in ("Base", "JSONValidatorMixin"):
-                model_names.add(node.name)
-                break
-
-    return model_names
+    return {cls.name for cls in orm_model_class_defs()}
 
 
 # Cache the model names at module load (fast — single file parse)
