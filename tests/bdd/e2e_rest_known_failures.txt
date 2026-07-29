@@ -26,10 +26,16 @@
 # entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
 # entries remain, grouped by gap below.
 #
-# FINAL SET AFTER THE main MERGE: 17 entries =
+# CURRENT SET: 8 entries =
 #   5  uc004 invalid-input rows the live server still accepts (spec-production gap)
-#   2  explicit inline-xfail production gaps (attribution default, push-notification ack)
-#   10 parallel-e2e_rest mock-injection artifacts (E2E_PER_WORKER, owner-approved)
+#   1  explicit inline-xfail production gap (push-notification ack)
+#   2  daily-breakdown rows — GH #1776 (see the block at the end of this file)
+# Every one of the 8 is a PRODUCTION CODE GAP. None is a harness artifact and none is
+# masking a regression this suite introduced: where an entry was added rather than
+# graduated, it is because repairing a vacuous test UNMASKED a pre-existing production
+# failure, and the GH issue named on that entry owns closing it.
+# Graduated away from the earlier 17: the 10 parallel-e2e_rest mock-injection artifacts
+# (5887ac7d9, GH #1739) and the attribution-default scenario (retired, GH #1726).
 # The 4 uc004 date-range rows and the 2 uc004 account valid rows GRADUATED at the
 # #1417 merge and must never be re-added.
 

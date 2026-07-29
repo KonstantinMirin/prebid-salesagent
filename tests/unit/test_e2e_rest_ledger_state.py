@@ -22,10 +22,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 17 e2e_rest nodeids remaining: 7 genuine gaps + 10 parallel-e2e_rest
-# mock-injection artifacts (owner-approved, added on the adcp-6.6 /
-# perf/parallelize-test-suite work — see the block comment inside the set).
-# Graduated on the way here: the 2 date-range boundary rows (2026-07-09, first
+# The 8 e2e_rest nodeids remaining, ALL of them production code gaps:
+#   5  uc004 invalid-input rows the live server still accepts
+#   1  push-notification ack (inline-xfail in the step body)
+#   2  daily-breakdown rows — GH #1776
+# None is a harness artifact and none masks a regression this suite introduced. Where an
+# entry was ADDED rather than graduated, it is because repairing a vacuous test UNMASKED a
+# pre-existing production failure; the GH issue named on that entry owns closing it.
+# Graduated on the way here: the 10 parallel-e2e_rest mock-injection artifacts (5887ac7d9,
+# GH #1739), the attribution-default scenario (retired, GH #1726),
+# the 2 date-range boundary rows (2026-07-09, first
 # in-network CI run), the 2 date-range partition twins (origin/pr-1417 merge,
 # d4af23095 — strict-xfail XPASS in-network), and the 2 uc004 account valid rows
 # (#1417 merge, jr5b seeded-account Given, XPASS innet_140726_1516).
@@ -76,12 +82,10 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # conftest _UC004_GENUINE_XFAIL_ROWS when #1776 is fixed.
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_true-true-valid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-true (explicit)-true-valid]",
-        # Added 2026-07-09 on the adcp-6.6 branch (owner-approved) when
-        # perf/parallelize-test-suite enabled parallel e2e_rest (E2E_PER_WORKER):
-        # mock-injection-incompatible artifacts, not regressions — UC-004
-        # set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
-        # injected cross-principal creatives are invisible to the separate HTTP
-        # server. Preserved through the main merge.
+        # (The 2026-07-09 E2E_PER_WORKER mock-injection block that used to sit here is
+        # gone with its entries: all 10 graduated in 5887ac7d9, GH #1739. It described
+        # those rows, NOT the daily-breakdown pair above — do not reintroduce it here,
+        # where it would read as if the #1776 gap were a parallel-execution artifact.)
     }
 )
 
