@@ -31,6 +31,7 @@ import pytest
 
 from src.core.exceptions import build_two_layer_error_envelope
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
+from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import hangs_up, responds
 
 # Both entry points get every case. Parametrising instead of duplicating the
@@ -94,10 +95,12 @@ def set_flags(monkeypatch, *, private: bool = False, insecure: bool = False) -> 
 
     Always writing both — including the off case, as the literal ``"false"`` the
     repo's ``== "true"`` convention treats as off — pins the test against
-    ambient environment rather than assuming the variables are unset.
+    ambient environment rather than assuming the variables are unset. The names
+    and literals come from :func:`tests.helpers.egress_hatches.egress_hatch_env`,
+    which is the only place in the test tree that spells them.
     """
-    monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true" if private else "false")
-    monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true" if insecure else "false")
+    for name, value in egress_hatch_env(private=private, insecure=insecure).items():
+        monkeypatch.setenv(name, value)
 
 
 def pin_jitter(monkeypatch, value: float) -> list[tuple]:

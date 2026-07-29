@@ -34,6 +34,7 @@ from src.services.webhook_delivery_service import (
     WebhookDeliveryService,
 )
 from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import (
     LocalOrigin,
     OriginRequest,
@@ -295,10 +296,7 @@ class LocalOriginMixin:
     def __enter__(self) -> Self:
         self._origin_ctx = run_local_origin()
         self.origin = self._origin_ctx.__enter__()
-        self._egress_hatches = patch.dict(
-            os.environ,
-            {"ADCP_OUTBOUND_ALLOW_PRIVATE": "true", "ADCP_OUTBOUND_ALLOW_INSECURE": "true"},
-        )
+        self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True, insecure=True))
         self._egress_hatches.start()
         return super().__enter__()  # type: ignore[misc,no-any-return]
 

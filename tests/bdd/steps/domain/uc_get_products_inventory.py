@@ -18,7 +18,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import _require_response, assert_wire_rejection
 from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
@@ -28,7 +28,6 @@ from tests.factories import (
     ProductFactory,
     TenantFactory,
 )
-from tests.helpers import assert_envelope_shape
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -217,9 +216,7 @@ def then_has_products(ctx: dict) -> None:
 @then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
 def then_rejected_validation_field(ctx: dict, field: str) -> None:
     """Assert the wire envelope is VALIDATION_ERROR and names the field structurally."""
-    envelope = ctx.get("wire_error_envelope")
-    assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
-    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable", field=field)
+    assert_wire_rejection(ctx, "VALIDATION_ERROR", recovery="correctable", field=field)
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))

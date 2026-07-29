@@ -59,6 +59,24 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def assert_wire_rejection(ctx: dict, code: str, *, recovery: str, field: str) -> None:
+    """Assert the wire error envelope is *code* / *recovery* and names *field*.
+
+    One implementation for every "the request is rejected with <CODE> naming
+    field <f>" Then step. Each such step keeps its own literal Gherkin text —
+    replacing them with one ``{code}``-parameterized parser would leave two
+    parsers matching the same sentence, resolved by pytest-bdd's scan order, and
+    the shadowed body would silently stop grading (``test_architecture_bdd_no_shadowed_steps``
+    compares text ACROSS modules, so it would not catch it). Thin steps over a
+    shared helper give DRY without the shadow.
+    """
+    from tests.helpers import assert_envelope_shape
+
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
+    assert_envelope_shape(envelope, code, recovery=recovery, field=field)
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 

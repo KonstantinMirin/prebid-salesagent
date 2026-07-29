@@ -67,6 +67,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
+    "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
 ]
@@ -3083,9 +3084,13 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
-    if "inventory_profile" in marker_names or (
-        "brand_shorthand" in marker_names and not _is_brand_shorthand_media_buy(marker_names)
+    if (
+        "egress" in marker_names
+        or "inventory_profile" in marker_names
+        or ("brand_shorthand" in marker_names and not _is_brand_shorthand_media_buy(marker_names))
     ):
+        # @egress (local SSRF-refusal feature) dispatches get_products too — it
+        # shares this arm and differs only in which env the arm builds.
         return "UC-GET-PRODUCTS"
     if _is_brand_shorthand_media_buy(marker_names):
         return "UC-002"
@@ -3507,9 +3512,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
     elif uc == "UC-GET-PRODUCTS":
-        from tests.harness.product import ProductEnv
+        # @egress scenarios grade a refusal the REAL property-list resolver and
+        # the REAL egress seam produce, so they need the env that does not patch
+        # resolve_property_list. Everything else in this arm (_db_scope_for, the
+        # e2e reset) is identical and shared.
+        from tests.harness.product import ProductEnv, RealResolverProductEnv
 
-        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
+        marker_names = {m.name for m in request.node.iter_markers()}
+        product_env_cls = RealResolverProductEnv if "egress" in marker_names else ProductEnv
+
+        with _db_scope_for(request, e2e_config), product_env_cls(e2e_config=e2e_config) as env:
             ctx["env"] = env
             yield
     elif uc == "UC-019":

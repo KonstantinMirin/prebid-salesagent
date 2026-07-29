@@ -76,7 +76,7 @@ import pytest
 
 from src.core.property_list_resolver import clear_cache, resolve_property_list
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.harness.product import ProductEnv
+from tests.harness.product import RealResolverProductEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
 from tests.integration.property_list_helpers import (
@@ -255,36 +255,8 @@ class TestCaching:
         assert local_origin.hits == 2
 
 
-class _RealResolverProductEnv(ProductEnv):
-    """``ProductEnv`` with the property-list resolver left UNPATCHED.
-
-    ``ProductEnv`` mocks ``resolve_property_list`` so ordinary product tests
-    never reach the network. This variant drops exactly that one patch and
-    changes nothing else, so ``get_products`` runs the real resolver and the
-    real egress seam — which is the point: the refusal under test has to be
-    produced by production code, or the wire envelope proves nothing.
-    """
-
-    EXTERNAL_PATCHES = {
-        name: target for name, target in ProductEnv.EXTERNAL_PATCHES.items() if name != "resolve_property_list"
-    }
-    ASYNC_PATCHES = ProductEnv.ASYNC_PATCHES - {"resolve_property_list"}
-
-    def _configure_mocks(self) -> None:
-        # ProductMixin's happy-path wiring pokes ``self.mock["resolve_property_list"]``.
-        # A throwaway stand-in keeps that one line harmless without forking the
-        # rest of the wiring, which this env does want.
-        from unittest.mock import MagicMock
-
-        self.mock["resolve_property_list"] = MagicMock()
-        try:
-            super()._configure_mocks()
-        finally:
-            del self.mock["resolve_property_list"]
-
-
 @contextmanager
-def _products_env(tenant_id: str) -> Iterator[_RealResolverProductEnv]:
+def _products_env(tenant_id: str) -> Iterator[RealResolverProductEnv]:
     """A ``get_products`` env running the real resolver, with one sellable product seeded.
 
     The product exists so the request reaches the property-list branch on a
@@ -292,7 +264,7 @@ def _products_env(tenant_id: str) -> Iterator[_RealResolverProductEnv]:
     on there being nothing to filter.
     """
     principal_id = f"{tenant_id}-principal"
-    with _RealResolverProductEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+    with RealResolverProductEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
         tenant = TenantFactory(tenant_id=tenant_id, subdomain=tenant_id)
         PrincipalFactory(tenant=tenant, principal_id=principal_id)
         product = ProductFactory(tenant=tenant, product_id=f"{tenant_id}-product")
