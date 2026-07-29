@@ -17,7 +17,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import wire_dict, wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 _VALUE_TYPES = {"binary", "categorical", "numeric"}
@@ -178,14 +178,59 @@ def then_signals_have_value_type(ctx: dict) -> None:
 
 @then("the response is wrapped in MCP ToolResult content")
 def then_wrapped_in_tool_result(ctx: dict) -> None:
-    """The MCP dispatcher stashes ToolResult.structured_content as the wire body."""
-    assert wire_field(ctx, "signals") is not None, "no structured_content captured from MCP ToolResult"
+    """MCP framing: the wire body is the ToolResult's ``structured_content``.
+
+    Transport-pinned by construction — this text appears in exactly one
+    scenario (T-UC-008-main-mcp), whose @mcp tag suppresses parametrization and
+    whose When step pins Transport.MCP.
+
+    The framing oracle is production-derived and must FAIL on an A2A body:
+
+    * ``success`` is NOT a GetSignalsResponse field; ``_serialize_for_a2a``
+      (src/a2a_server/adcp_a2a_server.py) sets it on every A2A artifact body,
+      so its absence proves the body is not A2A-framed.
+    * ``message`` IS a declared response field, so key presence proves nothing —
+      it is asserted BY VALUE. FastMCP builds ``structured_content`` with
+      ``pydantic_core.to_jsonable_python()``, which bypasses AdCPBaseModel's
+      exclude_none ``model_dump``, so an unset ``message`` surfaces as None;
+      the A2A body carries ``message = str(response)`` (a non-empty str).
+    * No A2A Task was produced by THIS dispatch — ``call_via`` resets the raw
+      per-dispatch captures, so a stale Task cannot satisfy this.
+    """
+    _wire_signals(ctx)
+    wire = wire_dict(ctx)
+    assert "success" not in wire, f"A2A envelope field 'success' present on an MCP body: {sorted(wire)}"
+    assert wire.get("message") is None, (
+        f"'message' is {wire.get('message')!r}; an MCP ToolResult body leaves the unset field None"
+    )
+    assert ctx["env"].last_a2a_task is None, "an A2A Task was captured for this dispatch — not MCP framing"
 
 
 @then("the response is returned directly (no ToolResult wrapper)")
 def then_returned_directly(ctx: dict) -> None:
-    """A2A returns the response artifact directly — signals at the top level."""
-    assert wire_field(ctx, "signals") is not None, "signals not at the top level of the A2A artifact"
+    """A2A framing: the wire body IS the Task artifact's DataPart, unwrapped.
+
+    Transport-pinned by construction — this text appears in exactly one
+    scenario (T-UC-008-main-rest), whose When step pins Transport.A2A.
+
+    Mirror image of :func:`then_wrapped_in_tool_result`, so feeding either step
+    the other transport's body fails: ``_serialize_for_a2a`` adds ``success``
+    and sets ``message`` to ``str(response)`` on every A2A body, while an MCP
+    ``structured_content`` body carries no ``success`` and leaves ``message``
+    None. The captured Task pins the "no wrapper" half — exactly one artifact,
+    whose DataPart is the wire body read above (stashed pre-strip by
+    ``_run_a2a_handler``).
+    """
+    _wire_signals(ctx)
+    wire = wire_dict(ctx)
+    assert wire.get("success") is True, f"A2A envelope field 'success' missing or false: {wire.get('success')!r}"
+    message = wire.get("message")
+    assert isinstance(message, str) and message, (
+        f"A2A 'message' is {message!r}; _serialize_for_a2a sets it to str(response)"
+    )
+    task = ctx["env"].last_a2a_task
+    assert task is not None, "no A2A Task captured for this dispatch — not A2A framing"
+    assert len(task.artifacts) == 1, f"A2A response should carry exactly 1 artifact, got {len(task.artifacts)}"
 
 
 @then(parsers.parse("the response context equals {context_json}"))

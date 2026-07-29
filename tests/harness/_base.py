@@ -567,9 +567,14 @@ class BaseTestEnv:
         kwargs.setdefault("identity", self.identity_for(transport))
 
         dispatcher = DISPATCHERS[transport]
-        # Reset success-path wire capture; _run_a2a_handler / _run_mcp_client
-        # set it fresh on success so A2A/MCP dispatchers can surface real wire.
+        # Reset ALL raw per-dispatch captures; _run_a2a_handler / _run_mcp_client
+        # set them fresh on success so A2A/MCP dispatchers can surface real wire.
+        # Framing asserts read these as facts about THIS dispatch (e.g. UC-008's
+        # "no A2A Task on an MCP dispatch", #1600), so a capture left over from an
+        # earlier dispatch through another transport would make them unsound.
+        # Any new raw-capture field must be reset here too.
         self._last_wire_response = None
+        self._last_a2a_task = None
         return dispatcher.dispatch(self, **kwargs)
 
     # -- Per-transport hooks (override in subclass) -------------------------

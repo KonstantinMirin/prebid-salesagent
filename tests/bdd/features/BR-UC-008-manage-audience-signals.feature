@@ -44,8 +44,17 @@ Feature: BR-UC-008 Manage Audience Signals
     And each signal includes deployments array
     And each signal includes pricing_options array with at least 1 entry
     And each pricing_option includes pricing_option_id and a pricing model
-    And each signal includes value_type from [binary, categorical, numeric]
     And the response is wrapped in MCP ToolResult content
+    # RECONCILED ORDER (#1600, local edit — mirror upstream in adcp-req):
+    # the value_type assert is grouped LAST, ahead of nothing, because it is a
+    # strict-xfail graduation trigger (#1593) and pytest-bdd stops at the first
+    # failing step — behind it the MCP-framing assert was unreachable by
+    # construction. NOTE it is still unreachable in practice: this scenario dies
+    # at the FIRST Then because production matches signal_spec as a whole-phrase
+    # substring, so the natural-language spec above returns zero signals (the
+    # pinned signals_baseline storyboard grades a natural-language spec returning
+    # >= 1 signal). See the UC-008 row in tests/bdd/conftest.py _SPEC_GAP_XFAILS.
+    And each signal includes value_type from [binary, categorical, numeric]
     # POST-S1: Buyer knows which audience signals are available
     # POST-S2: Buyer knows pricing options (pricing_options array with pricing_option_id)
     # POST-S3: Buyer knows coverage percentage

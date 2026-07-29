@@ -196,12 +196,40 @@ _SPEC_GAP_XFAILS: list[tuple[frozenset[str], str]] = [
         frozenset({"T-UC-010-main-mcp", "T-UC-010-main-rest"}),
         "UC-010 spec-production gap — pricing_models/reporting_delivery_methods/account not populated (#1592)",
     ),
-    # UC-008 (#1594 wiring): main-mcp demands value_type on every
-    # signal; the production catalog (src/core/tools/signals.py) never sets it
-    # (schema default None; #1593).
+    # UC-008 (#1594 wiring): TWO gaps keep main-mcp red; both are real.
+    # 1. FIRST failing step (#1600): "the response contains a non-empty signals
+    #    array". The scenario's signal_spec is natural language, but production
+    #    matches it as a WHOLE-PHRASE substring of name/description/signal_type
+    #    (src/core/tools/signals.py), so the catalog returns []. The pin GRADES
+    #    this: dist/compliance/3.1.1/domains/signals/index.yaml step
+    #    `search_signals` sends signal_spec "Adults interested in electric
+    #    vehicles" and validates field_present signals[0].signal_agent_segment_id.
+    #    Every later assert in this scenario is unreachable until that is fixed.
+    # 2. LAST step: value_type on every signal; the catalog never sets it
+    #    (schema default None; #1593).
+    # RECONCILED CITATION (#1600): value_type is NOT a v3.1.1 schema requirement.
+    # signals/get-signals-response.json declares it on the signal item but lists
+    # required = [signal_agent_segment_id, name, description, signal_type,
+    # deployments]; core/signal-listing.json requires it only when
+    # signal_ref.scope == "product", and the catalog emits the legacy signal_id
+    # and never a signal_ref, so that conditional cannot fire. It is also
+    # UNGRADED: no 3.1.1 storyboard `validations:` block checks value_type — it
+    # appears only as `expected:` prose on the signal-owned `search_owned_signals`
+    # and signal-marketplace `search_by_spec` steps. The obligation is real all
+    # the same (upstream adcp-req BR-UC-008 postcondition POST-S6a: "Buyer knows
+    # the value_type ... categories/range"), so the strict xfail STAYS.
+    # Graduation = the catalog populates value_type (+ categories/range), and the
+    # dormant siblings T-UC-008-main-value-type-categorical / -numeric must be
+    # wired in the same change.
     (
         frozenset({"T-UC-008-main-mcp"}),
-        "UC-008 spec-production gap — signal catalog carries no value_type",
+        "UC-008 — (1) natural-language signal_spec returns zero signals: production "
+        "substring-matches the whole phrase, while the pinned signals_baseline storyboard "
+        "grades a natural-language spec returning >=1 signal (#1600); this fails FIRST and "
+        "makes every later assert unreachable. (2) signal catalog carries no value_type "
+        "(#1593) — obligation is adcp-req BR-UC-008 POST-S6a + the AdCP 3.1.1 specialism "
+        "`expected:` prose, NOT a v3.1.1 schema requirement and ungraded by any storyboard "
+        "validations block",
     ),
 ]
 
