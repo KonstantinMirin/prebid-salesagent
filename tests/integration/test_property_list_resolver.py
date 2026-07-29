@@ -89,10 +89,11 @@ from tests.integration.property_list_helpers import (
 
 pytestmark = [pytest.mark.integration]
 
-# Wire transports that can carry a ``property_list``. REST is absent because
-# ``GetProductsBody`` (src/routes/api_v1.py) does not expose the field at all —
-# a REST buyer cannot send one, so there is no REST refusal to grade.
-_WIRE_TRANSPORTS = [Transport.MCP, Transport.A2A]
+# Wire transports that can carry a ``property_list``. All three: ``property_list``
+# is a top-level property of get-products-request.json at the pinned AdCP 3.1.1,
+# so a REST buyer that cannot send one is a protocol gap, not a transport quirk
+# (salesagent-sxl4).
+_WIRE_TRANSPORTS = [Transport.MCP, Transport.A2A, Transport.REST]
 
 # Buyer-supplied URLs the seam refuses before opening a connection: one for
 # scheme policy, one for address policy. Neither resolves DNS or touches the

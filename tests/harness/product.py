@@ -109,10 +109,14 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetProductsBody shape for REST POST.
 
-        GetProductsBody (src/routes/api_v1.py) accepts:
-            brief, brand, filters, adcp_version
+        The field list is read off ``GetProductsBody`` itself rather than repeated
+        here. A hardcoded copy silently dropped ``property_list`` when the route
+        gained it (salesagent-sxl4), so a REST case could send the field, have it
+        discarded by the harness, and pass — grading nothing.
         """
-        _BODY_FIELDS = ("brief", "brand", "filters", "adcp_version")
+        from src.routes.api_v1 import GetProductsBody
+
+        _BODY_FIELDS = tuple(GetProductsBody.model_fields)
         return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:
