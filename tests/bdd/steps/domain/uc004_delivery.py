@@ -332,8 +332,14 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 
 
 # The URL a buyer *declares* in a create_media_buy request. It is never fetched
-# by these scenarios — only validated — so it stays a stable literal.
-_DECLARED_WEBHOOK_URL = "https://buyer.example.com/webhook"
+# by these scenarios — only validated — so it stays a stable literal. It IS
+# validated at ingest now (the seam's validate_url runs inside
+# _create_media_buy_impl), so the literal must pass egress policy under every
+# hatch posture: an https public-unicast IP literal resolves nothing (no DNS
+# dependency) and is refused by no gate, unlike the previous
+# ``buyer.example.com``, which NXDOMAINs and is therefore refused even with
+# both hatches open.
+_DECLARED_WEBHOOK_URL = "https://1.1.1.1/webhook"
 
 
 def _webhook_url(env: Any) -> str:
@@ -965,16 +971,10 @@ def when_validate_webhook_config(ctx: dict) -> None:
     rejection happens in PRODUCTION, not in test code. A 32-char credential is
     accepted and the create succeeds.
     """
-    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _pricing_option_id
+    from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
 
     secret = ctx.get("webhook_secret", "")
-    kwargs = _ensure_request_defaults(ctx)
-    product = ctx.get("default_product")
-    pricing_option = ctx.get("default_pricing_option")
-    if product is not None:
-        kwargs["packages"][0]["product_id"] = product.product_id
-    if pricing_option is not None:
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
+    kwargs = harness_create_request_kwargs(ctx)
     kwargs["reporting_webhook"] = {
         "url": _DECLARED_WEBHOOK_URL,
         "reporting_frequency": "daily",

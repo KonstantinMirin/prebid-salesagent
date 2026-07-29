@@ -124,8 +124,9 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     # counterparty pointed.
     #
     # No ``field=``: the URL is read back out of a stored PushNotificationConfig,
-    # not off the request document a buyer just sent. Refusing it at ingest, where
-    # a response still exists to carry the error, is salesagent-w97e.
+    # not off the request document a buyer just sent. The refusal a buyer can act
+    # on already happened at ingest (src/core/webhook_ingest.py), so a block here
+    # means the environment's policy changed after acceptance.
     try:
         result = send(
             delivery.webhook_url,

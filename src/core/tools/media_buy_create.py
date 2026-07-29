@@ -161,6 +161,7 @@ from src.core.tools.financial_validation import (
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
+from src.core.webhook_ingest import validated_push_notification_config, validated_reporting_webhook
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -2095,6 +2096,16 @@ async def _create_media_buy_impl(
             return replay
         # Miss or unusable cached envelope — proceed as a fresh execution; the
         # MediaBuy backstop resolves any resulting duplicate to the degraded path.
+
+    # Ingest-time egress verdict on the stored-then-fetched webhook URLs, so a
+    # buyer registering a URL the seam will never dial gets a correctable
+    # INVALID_REQUEST naming the field NOW instead of a silent delivery failure
+    # later. Positioned after the replay lookup (a replay of a previously
+    # accepted key stays verbatim, with no fresh buyer-controlled DNS
+    # resolution) and before EITHER store of the config — the workflow-step
+    # metadata and the push_notification_configs row below.
+    validated_push_notification_config(push_notification_config)
+    validated_reporting_webhook(req.reporting_webhook)
 
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)

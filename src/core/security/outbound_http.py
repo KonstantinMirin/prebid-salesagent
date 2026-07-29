@@ -45,14 +45,15 @@ URL arrived on, carried onto a refusal so the buyer learns which input to fix.
 It is a PASSTHROUGH, not a fourth decision — the seam sees a URL string, never a
 request document, so it cannot compute the path, and the path's namespace differs
 per call site. Callers pass it only for a URL that came from the caller's own
-request; an operator-configured endpoint has no such path. ``validate_url`` takes
-no ``field`` for exactly that reason: its callers are ingest handlers that build
-no AdCP envelope.
+request; an operator-configured endpoint has no such path.
 
 There is one more entry point, :func:`validate_url`, for URLs that are STORED
 rather than sent — a webhook URL accepted at ingest and fetched later. It runs
 the identical pre-connection policy and connects to nothing, so those call sites
-have no reason to grow a second copy of address policy either.
+have no reason to grow a second copy of address policy either. It takes the same
+optional ``field``: admin ingest handlers build no AdCP envelope and omit it,
+while protocol ``_impl`` ingest sites (create/update/sync accepting a buyer's
+webhook URL) pass the request path so the refusal names the input to fix.
 """
 
 from __future__ import annotations
@@ -294,9 +295,15 @@ def _checked_field(field: str | None, url: str) -> str | None:
 
     ``field`` is buyer-visible, and the whole point of the opaque refusal message
     is that a refusal discloses nothing about our network (spec point 6). A call
-    site that passed the URL — or anything containing a scheme — would route
-    around that in a field the message never touches. Documentation cannot stop
-    that; this can.
+    site that passed the URL — or anything containing it or a scheme — would
+    route around that in a field the message never touches. Documentation cannot
+    stop that; this can.
+
+    The containment check runs in the leak direction only (``url in field``,
+    never ``field in url``): call sites pass fixed path constants, and the URL is
+    buyer-controlled, so a buyer who embeds a constant like
+    ``push_notification_config.url`` inside their own URL must get the normal
+    policy verdict on that URL — not a ValueError manufactured from our guard.
 
     Refusing loudly rather than silently dropping the value: a call site that
     means to name a field and instead names a URL has a bug, and swallowing it
@@ -304,9 +311,9 @@ def _checked_field(field: str | None, url: str) -> str | None:
     """
     if field is None:
         return None
-    if "://" in field or field in url:
+    if "://" in field or url in field:
         raise ValueError(
-            f"field must be a JSONPath-lite path into the request payload, not a URL or part of one: {field!r}"
+            f"field must be a JSONPath-lite path into the request payload, not a URL or one containing it: {field!r}"
         )
     return field
 
@@ -453,7 +460,7 @@ def _fail(attempts: int, last_status: int | None, retry_after: float | None = No
     )
 
 
-def validate_url(url: str) -> None:
+def validate_url(url: str, *, field: str | None = None) -> None:
     """Apply the seam's egress policy to a URL WITHOUT sending anything.
 
     For URLs that are *stored* rather than sent: a webhook or brand-manifest URL
@@ -463,6 +470,12 @@ def validate_url(url: str) -> None:
     serve those call sites, and the alternative they reach for otherwise is a
     second, hand-written copy of address policy, which is the recurrence this
     module exists to make impossible.
+
+    ``field`` is the same passthrough :func:`send` and :func:`asend` take — the
+    request-payload path the URL arrived on, carried onto the refusal so the
+    buyer learns which input to fix. Admin ingest handlers build no AdCP
+    envelope and omit it; protocol ``_impl`` ingest sites pass their request
+    path constant.
 
     It refuses EXACTLY what :func:`send` and :func:`asend` refuse, because all
     three go through :func:`_prepare` and differ only in what they ask the SDK
@@ -478,7 +491,7 @@ def validate_url(url: str) -> None:
     resolved address would leak it to whatever logs or stores the result (spec
     point 6).
     """
-    _prepare(url, resolve_and_validate_host)
+    _prepare(url, resolve_and_validate_host, field)
 
 
 def send(

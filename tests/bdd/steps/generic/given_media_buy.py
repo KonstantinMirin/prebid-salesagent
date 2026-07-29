@@ -85,6 +85,26 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     return ctx["request_kwargs"]
 
 
+def harness_create_request_kwargs(ctx: dict) -> dict[str, Any]:
+    """Request kwargs for a create dispatched from a harness-seeded scenario.
+
+    ``_ensure_request_defaults`` only reads ``default_product`` /
+    ``default_pricing_option`` when it FIRST builds ``request_kwargs``; a
+    scenario whose Given steps created ``request_kwargs`` earlier (before the
+    UC-004 create arm seeded the harness data) would dispatch against the
+    placeholder ids. Re-pinning the package to the harness product here is what
+    both create-dispatching When steps share instead of each carrying a copy.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    product = ctx.get("default_product")
+    pricing_option = ctx.get("default_pricing_option")
+    if product is not None:
+        kwargs["packages"][0]["product_id"] = product.product_id
+    if pricing_option is not None:
+        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
+    return kwargs
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Adapter DB config sync (E2E support)
 # ═══════════════════════════════════════════════════════════════════════
@@ -3240,7 +3260,10 @@ def given_webhook_configured(ctx: dict) -> None:
     Stores both the config in ctx (Given→Then contract) and wires it into
     request_kwargs so production receives it when the media buy is created.
     """
-    webhook_url = "https://buyer.example.com/webhooks/adcp-notifications"
+    # Must pass ingest egress policy under every hatch posture (validate_url
+    # runs inside _create_media_buy_impl): https public-unicast IP literal, no
+    # DNS dependency. Never fetched by these scenarios.
+    webhook_url = "https://1.1.1.1/webhooks/adcp-notifications"
     push_config = {"url": webhook_url, "events": ["status_change"]}
     ctx["push_notification_config"] = push_config
     # Also wire into request_kwargs if they exist (for create requests)

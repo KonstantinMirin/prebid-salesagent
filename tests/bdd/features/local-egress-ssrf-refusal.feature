@@ -43,8 +43,12 @@
 # across the Docker boundary) and the delivery-time push_notification_config
 # refusal (tests/integration/test_delivery_webhook_behavioral.py:523 — no
 # request/response cycle, so no envelope to grade). The ingest-time
-# push_notification_config twin of the first scenario below lands with
-# salesagent-w97e, which adds the validation it needs.
+# push_notification_config twin (last scenario below) grades the same seam
+# verdict at the one moment a request still exists to refuse into —
+# create_media_buy ingest, before the URL is stored for later delivery. Its
+# @egress_create tag routes it to the media-buy create harness; the sibling
+# ingest paths (update_media_buy, sync_creatives, reporting_webhook.url) are
+# graded at tests/integration/test_webhook_url_ingest_refusal.py.
 Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
 
   A URL the buyer supplies for us to fetch is an SSRF vector. When the egress
@@ -89,3 +93,22 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     And both outbound egress escape hatches are closed
     When the buyer requests products with a property list agent at "http://example.com"
     Then the request is rejected with INVALID_REQUEST naming field "property_list.agent_url"
+
+  # The ingest twin: the same seam verdict, graded at the one moment a request
+  # still exists to refuse into. A push_notification_config.url is STORED at
+  # create_media_buy and dialled later by a background worker — by then the
+  # buyer is gone, so an accepted-then-undeliverable URL is a silent failure.
+  # Same two hatch-immune causes, same non-disclosure obligation, same
+  # INVALID_REQUEST / correctable grading; only the field differs.
+  @T-EGRESS-SSRF-ingest-refused-webhook-url @egress_create @invariant
+  Scenario Outline: a refused push_notification_config.url is a correctable buyer error at ingest
+    Given both outbound egress escape hatches are open
+    When the buyer creates a media buy with push notification url "<webhook_url>"
+    Then the request is rejected with INVALID_REQUEST naming field "push_notification_config.url"
+    And the refusal message on both envelope layers is exactly "Outbound request to the supplied URL was refused by egress policy."
+    And the error envelope names neither the supplied host nor any IP address
+
+    Examples:
+      | webhook_url                  |
+      | https://169.254.169.254      |
+      | https://no-such-host.invalid |

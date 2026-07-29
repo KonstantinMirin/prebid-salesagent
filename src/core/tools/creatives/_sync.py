@@ -16,6 +16,7 @@ from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
+from src.core.webhook_ingest import validated_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
@@ -108,14 +109,16 @@ def _sync_creatives_impl(
     # Track creatives requiring approval for workflow creation
     creatives_needing_approval = []
 
-    # Extract webhook URL from push_notification_config for AI review callbacks
+    # Extract webhook URL from push_notification_config for AI review callbacks.
+    # The ingest-time egress verdict happens HERE, before the per-creative loop:
+    # inside it, the per-item `try` would turn the correctable INVALID_REQUEST
+    # into a per-item transient failure and the buyer would be told to retry a
+    # URL that will never be allowed. The callback fires from a background
+    # worker, so ingest is the only gate with a request to refuse into.
     webhook_url = None
     if push_notification_config:
-        # Transitional: accept both PushNotificationConfig model and dict
-        if isinstance(push_notification_config, dict):
-            webhook_url = push_notification_config.get("url")
-        else:
-            webhook_url = str(push_notification_config.url) if push_notification_config.url else None
+        pnc_model = validated_push_notification_config(push_notification_config)
+        webhook_url = str(pnc_model.url) if pnc_model and pnc_model.url else None
         logger.info(f"[sync_creatives] Push notification webhook URL: {webhook_url}")
 
     # Get tenant creative approval settings

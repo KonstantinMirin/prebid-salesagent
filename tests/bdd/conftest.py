@@ -3084,6 +3084,11 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
+    if "egress_create" in marker_names:
+        # The ingest-time twin in the local SSRF-refusal feature dispatches
+        # create_media_buy, so it needs the media-buy create harness (UC-004's
+        # "create" arm), not the product env the other @egress scenarios share.
+        return "UC-004"
     if (
         "egress" in marker_names
         or "inventory_profile" in marker_names
@@ -3128,6 +3133,10 @@ def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
     # create transport wrappers, not the delivery/circuit-breaker harness — route
     # them to MediaBuyCreateEnv so production Pydantic does the rejecting.
     if {"T-UC-004-webhook-creds-short", "T-UC-004-webhook-creds-valid"} & marker_names:
+        return "create"
+    if "egress_create" in marker_names:
+        # Ingest-time egress refusal of a buyer webhook URL — dispatches a real
+        # create_media_buy, same harness needs as the webhook-creds scenarios.
         return "create"
     if "webhook-reliability" in marker_names:
         return "circuit-breaker"

@@ -65,7 +65,15 @@ def _make_creative_uow():
 
 
 class TestSyncPushNotificationConfig:
-    """Lines 117-121: push_notification_config dict and model forms."""
+    """Lines 117-121: push_notification_config dict and model forms.
+
+    The URL is an https public-unicast IP literal: sync_creatives now runs the
+    seam's ingest verdict on it (src/core/webhook_ingest.py), and an IP
+    literal passes under every hatch posture without resolving DNS — a
+    hostname here would make a unit test do live DNS and NXDOMAIN-refuse.
+    The refusal path itself is graded by
+    tests/integration/test_webhook_url_ingest_refusal.py.
+    """
 
     def test_push_notification_config_dict_form(self, identity, mock_format_spec):
         """Line 117-118: dict push_notification_config extracts URL."""
@@ -75,7 +83,7 @@ class TestSyncPushNotificationConfig:
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
                 identity=identity,
-                push_notification_config={"url": "https://hook.example.com"},
+                push_notification_config={"url": "https://1.1.1.1/hook"},
             )
         assert response.creatives[0].action == "created"
 
@@ -87,7 +95,7 @@ class TestSyncPushNotificationConfig:
         from src.core.tools.creatives import _sync_creatives_impl
 
         config = PushNotificationConfig(
-            url="https://hook.example.com",
+            url="https://1.1.1.1/hook",
             authentication=Authentication(credentials="a" * 32, schemes=[AuthenticationScheme.Bearer]),
         )
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):

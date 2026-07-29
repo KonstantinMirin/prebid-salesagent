@@ -23,6 +23,7 @@ from src.core.schemas._base import (
     CreateMediaBuySuccess,
 )
 from tests.harness._base import IntegrationEnv
+from tests.harness.egress import EgressHatchMixin
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -62,11 +63,14 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(IntegrationEnv):
+class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
-    Everything else is real: DB, repositories, validation, schema processing.
+    Everything else is real: DB, repositories, validation, schema processing —
+    including the egress seam's ingest verdict on webhook URLs, which is why
+    the env carries ``set_egress_hatches`` (the @egress ingest-twin scenarios
+    pin the hatch posture the refusal is graded under).
     """
 
     EXTERNAL_PATCHES = {

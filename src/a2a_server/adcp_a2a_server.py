@@ -1988,6 +1988,7 @@ class AdCPRequestHandler(RequestHandler):
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
+            reporting_webhook=params.get("reporting_webhook"),
             identity=identity,
         )
 

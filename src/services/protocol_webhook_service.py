@@ -364,8 +364,8 @@ class ProtocolWebhookService:
         # destination, which is why no client or session may outlive the call.
         #
         # No ``field=``: the URL is read back out of a stored PushNotificationConfig,
-        # not off a request document a buyer just sent (ingest-time refusal is
-        # salesagent-w97e).
+        # not off a request document a buyer just sent — the buyer-actionable
+        # refusal already happened at ingest (src/core/webhook_ingest.py).
         logger.info(f"Sending webhook for task {task_id} to {url}")
         try:
             result_out = await asend(

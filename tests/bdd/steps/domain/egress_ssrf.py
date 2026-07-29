@@ -1,14 +1,17 @@
 """Domain steps for the local egress/SSRF refusal feature.
 
 Grades the buyer-visible half of AdCP 3.1.1 L1 § "Webhook URL validation
-(SSRF)" through ``property_list.agent_url`` on ``get_products`` — the one
-counterparty-supplied URL that every wire transport (including REST, since
-911cf5259) can carry, which is what makes the same scenario runnable on
-a2a / mcp / rest / e2e_rest.
+(SSRF)" through two buyer-supplied URLs: ``property_list.agent_url`` on
+``get_products`` (fetch-now — the refusal happens at send time) and
+``push_notification_config.url`` on ``create_media_buy`` (store-now/dial-later
+— the refusal happens at ingest, the only moment a request exists to carry
+it). Both run on every wire transport, which is what makes the same scenario
+runnable on a2a / mcp / rest / e2e_rest.
 
 The refusal itself is produced by production: the harness routes @egress
-scenarios to ``RealResolverProductEnv``, which leaves ``resolve_property_list``
-unpatched so the request reaches the real resolver and the real egress seam.
+scenarios to ``RealResolverProductEnv`` (real resolver, real seam) and
+@egress_create scenarios to ``MediaBuyCreateEnv`` (real ``_impl``, real
+ingest verdict via ``src.core.webhook_ingest``).
 
 Steps store in ctx (on top of what ``dispatch_request`` stores):
     ctx["supplied_agent_url"] — the URL the buyer sent, so the non-disclosure
@@ -105,6 +108,23 @@ def when_request_products_with_property_list(ctx: dict, agent_url: str) -> None:
         brief="egress refusal test",
         property_list={"agent_url": agent_url, "list_id": _LIST_ID},
     )
+
+
+@when(parsers.parse('the buyer creates a media buy with push notification url "{webhook_url}"'))
+def when_create_media_buy_with_push_url(ctx: dict, webhook_url: str) -> None:
+    """Dispatch create_media_buy carrying a buyer-supplied push_notification_config.url.
+
+    The ingest twin of the get_products dispatch above: the URL is stored now
+    and dialled later, so the refusal under test must happen on THIS request.
+    Runs on the media-buy create harness (@egress_create routes there); the
+    request body is otherwise the harness's minimal valid create.
+    """
+    from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
+
+    ctx["supplied_agent_url"] = webhook_url
+    kwargs = harness_create_request_kwargs(ctx)
+    kwargs["push_notification_config"] = {"url": webhook_url}
+    dispatch_request(ctx, **kwargs)
 
 
 # ── Then steps ──────────────────────────────────────────────────────

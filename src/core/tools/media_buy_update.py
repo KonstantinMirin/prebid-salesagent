@@ -52,6 +52,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
+from src.core.webhook_ingest import validated_push_notification_config, validated_reporting_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -372,6 +373,16 @@ def _update_media_buy_impl(
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
+
+    # Ingest-time egress verdict on the stored-then-fetched webhook URLs,
+    # deliberately ABOVE the UoW: a buyer-controlled DNS resolution must not
+    # run while a DB transaction is held, and a refused URL is INVALID_REQUEST
+    # regardless of buy state — the buyer must fix the request before state
+    # questions are reachable, so this outranks the terminal-state refusal.
+    # The stored copy this guards is the workflow step's request_data, which
+    # context_manager later reads back and dials.
+    validated_push_notification_config(req.push_notification_config)
+    validated_reporting_webhook(req.reporting_webhook)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the

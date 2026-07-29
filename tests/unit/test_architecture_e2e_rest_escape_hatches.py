@@ -189,8 +189,12 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
         # the two scenarios that matter over e2e_rest — a cloud-metadata address
         # and an unresolvable host — are refused with the hatches open, which is
         # precisely why they were chosen: their green mark there means the same
-        # thing it means in-process.
-        ("tests/harness/product.py", "_egress_hatches_on_the_live_stack", "<dynamic>"),
+        # thing it means in-process. Declared in tests/harness/egress.py since
+        # set_egress_hatches moved to the shared EgressHatchMixin (the media-buy
+        # create env grades the same seam for the ingest-time webhook refusal) —
+        # same single declaration, one more env mixing it in, no scenario moved
+        # out of live grading by the move itself.
+        ("tests/harness/egress.py", "_egress_hatches_on_the_live_stack", "<dynamic>"),
     }
 )
 
