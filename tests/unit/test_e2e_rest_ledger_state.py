@@ -66,12 +66,14 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # honours the requested window, so INV-2 never applied to it. The nodeid no longer exists,
         # so this is a scenario retirement, not a graduation.
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
-        # Added 2026-07-28 (owner-approved, GH #1751): NOT newly broken — these two rows
-        # were passing vacuously against a guard that could never be entered (the oracle read
-        # pkg.daily / pkg.by_day, neither of which exists on ByPackageItem). Repairing it made a
-        # pre-existing production gap observable: include_package_daily_breakdown=true is accepted
-        # but never honoured. Tracked as GH #1319 item C5; retire with its in-process
-        # twins in conftest _UC004_GENUINE_XFAIL_ROWS when that lands.
+        # Added 2026-07-28 — THE GAP IS GH #1776: include_package_daily_breakdown=true is
+        # accepted and never honoured (media_buy_delivery.py:549 hardcodes daily_breakdown=None).
+        # NOT newly broken — these two rows were passing vacuously against a guard that could
+        # never be entered (the oracle read pkg.daily / pkg.by_day, neither of which exists on
+        # ByPackageItem). Repairing it made the pre-existing gap observable; that repair's defect
+        # CLASS is GH #1751, which is not this gap, and GH #1319 item C5 is only the
+        # strict-marker debt bucket these rows sit in. Retire with the in-process twins in
+        # conftest _UC004_GENUINE_XFAIL_ROWS when #1776 is fixed.
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_true-true-valid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-true (explicit)-true-valid]",
         # Added 2026-07-09 on the adcp-6.6 branch (owner-approved) when

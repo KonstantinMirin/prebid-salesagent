@@ -120,21 +120,39 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # failed with 'asyncio.run() cannot be called from a running event loop').
 # Verified in-network: all 4 transports pass incl. e2e_rest.
 
-# --- GRADUATED 2026-07-29 (GH #1749 sweep): the 10 "parallel e2e_rest mock-injection
-# artifacts" are gone. Their stated cause -- "UC-004 set_adapter_response, UC-005
-# set_registry_formats, UC-018 injected cross-principal creatives: none visible to the
-# separate HTTP server" -- died with the @realize_e2e seam (tests/harness/_realize.py:60),
-# which gives each mock-injection helper a real server-side implementation for e2e_rest.
-# All ten XPASSED in-network on innet_280726_1952. The UC-018 pair matters most: BR-RULE-034
+# --- GRADUATED 2026-07-29 (GH #1739): the 10 "parallel e2e_rest mock-injection artifacts"
+# are gone. All ten XPASSED in-network on innet_280726_1952.
+#
+# Their stated cause -- "UC-004 set_adapter_response, UC-005 set_registry_formats, UC-018
+# injected cross-principal creatives: none visible to the separate HTTP server" -- died for
+# THREE DIFFERENT REASONS. Do not credit one seam for all of them; only UC-004 is a seam.
+#   UC-004: @realize_e2e(_persist_simulation_config) (tests/harness/_mixins.py:38) -- a genuine
+#     server-side realization. Note _inject_placement_data (uc004_delivery.py:3457) mutates
+#     env._adapter_responses in place and BYPASSES it when a response already exists; that is
+#     the recorded reason the sort_by row was KEPT rather than graduated.
+#   UC-005: NOTHING is injected. _validate_registry_formats (tests/harness/creative_formats.py:113)
+#     only asserts realizability -- its own docstring says "there is no per-scenario server
+#     registry to write". These rows pass because the live stack serves the same
+#     reference_formats.json the scenarios pin to. FRAGILE: if that fixture is ever refreshed
+#     such that display_300x250_image disappears, the third-party row loses its falsifier and
+#     weakens silently rather than failing.
+#   UC-018: factory seeding on the server-bound session plus a fresh tenant per scenario.
+#     No seam involved.
+#
+# The UC-018 pair matters most: BR-RULE-034
 # principal scoping is a TENANT-ISOLATION obligation, and it passes for the right reason --
 # then_none_belong_to carries an explicit anti-vacuity guard, then_all_creatives_belong_to
 # asserts set equality, and _wire_creatives raises rather than falling back. So a real
 # isolation guarantee was being recorded as broken.
 
-# --- newly VISIBLE production gap (2) — GH #1776 — owner-approved addition 2026-07-28 ---
+# --- newly VISIBLE production gap (2) — GH #1776 — added 2026-07-28 ---
 # THE GAP (what has to change in src/ for these to retire): GH #1776 —
 # include_package_daily_breakdown=true is accepted and never honoured, because
-# media_buy_delivery.py:549 hardcodes daily_breakdown=None. AdCP 3.1.1 has no
+# media_buy_delivery.py:549 hardcodes daily_breakdown=None. AdCP 3.1.1 writes the obligation
+# on BOTH ends of the call: the request schema says "When true, include daily_breakdown arrays
+# within each package in by_package", and get-media-buy-delivery-response.json says of
+# media_buy_deliveries[].by_package[].daily_breakdown -- "Only present when
+# include_package_daily_breakdown is true in the request." There is no
 # 'ignore if unsupported' clause for this field (contrast attribution_window, where that
 # permission IS written into the request schema), so it is genuine non-conformance.
 #
