@@ -18,14 +18,12 @@ Usage::
             result = env.call_via(Transport.MCP, req=GetSignalsRequest(signal_spec="sports"))
             assert result.is_success
 
-MCP wire shape: the MCP wrapper (signals.py:204) takes a single typed
-``req: GetSignalsRequest`` parameter, so FastMCP exposes the tool with a
-nested ``{"req": {...}}`` argument schema (verified empirically against
-FastMCP's TypeAdapter — flat arguments are rejected with
-``unexpected_keyword_argument``). ``call_mcp`` therefore wraps the request
-in a one-field envelope model so ``_run_mcp_client``'s req-flattening
-produces the nested ``{"req": {...}}`` arguments dict the registered tool
-expects on the wire.
+MCP wire shape: the MCP wrapper (src/core/tools/signals.py) declares the
+get-signals-request properties as FLAT typed parameters, so FastMCP exposes
+the tool with a flat argument schema. ``call_mcp`` hands ``_run_mcp_client``
+a typed ``req`` and lets its req-flattening put those fields on the wire
+individually — exactly what a conformant buyer sends per the v3.1.1
+get-signals-request schema.
 """
 
 from __future__ import annotations
@@ -81,7 +79,7 @@ class SignalsEnv(IntegrationEnv):
         This override used to return ``{}`` for them, so every one of the 17 fields
         ``GetSignalsBody`` accepts was unreachable except through a typed ``req=`` — and a typed
         model cannot express a malformed payload, so REST error-path tests could not be written at
-        all (salesagent-bhhz).
+        all (#1600).
         """
         req = kwargs.pop("req", None)
         body = req.model_dump(mode="json", exclude_unset=True, exclude_none=True) if req is not None else {}

@@ -1,6 +1,6 @@
-"""TDD-red contract tests for GH #1172: typed format_ids at the DB boundary.
+"""Contract tests for GH #1172: typed format_ids at the DB boundary.
 
-Core invariant (salesagent-r50r): ``Product.format_ids`` and
+Core invariant (GH #1172): ``Product.format_ids`` and
 ``InventoryProfile.format_ids`` cross the DB boundary as typed
 ``list[FormatId]`` — the column TypeDecorator
 (``JSONType(model=FormatId, is_list=True)``) is the single coercion point;
@@ -9,8 +9,8 @@ no reader re-parses shapes.
 These tests pin the ORM roundtrip contract through real PostgreSQL:
 
 1. Roundtrip: rows written as plain ``{agent_url, id}`` JSON entries are
-   read back as ``FormatId`` model instances (RED today — the bare JSONType
-   column returns plain dicts).
+   read back as ``FormatId`` model instances (written red against the bare
+   JSONType column, which returned plain dicts).
 2. Extras: stored entries carrying the CHECK-permitted ``width`` / ``height``
    / ``duration_ms`` keys (migration ``allow_width_height_duration_in_format``,
    rev f972939dd331) load without error and populate the parameterized
@@ -19,17 +19,19 @@ These tests pin the ORM roundtrip contract through real PostgreSQL:
 3. Write path: assigning a list of ``FormatId`` MODELS persists through
    JSONType bind serialization and round-trips (the plpgsql CHECK rejects
    nulls for optional keys, so bind must not serialize unset fields as null).
-4. Stored-data flip gate: every stored ``agent_url`` on both columns must be
+4. Stored-data gate: every stored ``agent_url`` on both columns must be
    a valid URL (``FormatId.agent_url`` is AnyUrl; the plpgsql CHECK only
-   enforces non-empty string) — a non-URL row would become unreadable at the
-   single coercion point after the flip.
-5. mock_ad_server write bug: the mock adapter config POST writes
-   ``request.form.getlist("formats")`` (list[str]) straight into the column
-   (src/adapters/mock_ad_server.py:1550) — the persisted shape must be
-   FormatId objects.
+   enforces non-empty string) — a non-URL row is unreadable at the single
+   coercion point.
+5. mock_ad_server write path: the mock adapter config POST used to write
+   ``request.form.getlist("formats")`` (list[str]) straight into the column;
+   it now builds typed ``FormatId`` models. The pin is the persisted shape —
+   FormatId objects, never plain strings.
 
-Do NOT weaken these assertions to match current production behavior — they
-define the post-flip contract (TDD red for salesagent-r50r).
+Written TDD-red; the typed-column flip has since landed (both columns are
+``JSONType(model=FormatId, is_list=True)`` in src/core/database/models.py),
+so these tests now guard the contract. Do NOT weaken the assertions — a
+failure here is a regression to the untyped boundary, not an unbuilt feature.
 """
 
 from __future__ import annotations
@@ -230,18 +232,19 @@ class TestStoredFormatIdsAgentUrlFlipGate:
 class TestMockAdServerFormatWritePath:
     """Regression pin for the mock adapter config write bug.
 
-    src/adapters/mock_ad_server.py:1550 assigns
+    The mock adapter's config POST used to assign
     ``request.form.getlist("formats")`` — a list[str] — straight into
-    ``Product.format_ids``. The contract pinned here is the column-shape
-    invariant: after driving the config POST with formats selected, every
-    persisted format_ids entry is a FormatId object — never a plain string.
-    (The pin is deliberately fix-strategy-agnostic: it holds whether the fix
-    persists the submitted ids as objects or removes the format write from
-    this view, per the "formats are managed on the product page" note in
+    ``Product.format_ids``; it now resolves each id's agent_url and builds
+    typed ``FormatId`` models. The contract pinned here is the column-shape
+    invariant, not that fix: after driving the config POST with formats
+    selected, every persisted format_ids entry is a FormatId object — never a
+    plain string. (Deliberately fix-strategy-agnostic: it holds whether the
+    view persists the submitted ids as objects or drops the format write
+    altogether, per the "formats are managed on the product page" note in
     src/admin/blueprints/adapters.py.)
 
-    Level note (recorded per the r50r directive — why this is the closest
-    feasible level, not the assembled admin app):
+    Level note (why this is the closest feasible level, not the assembled
+    admin app):
     - In the assembled admin app the view is UNREACHABLE:
       ``src/admin/blueprints/adapters.py:23`` registers ``adapters.mock_config``
       on the identical URL rule first (and it never touches format_ids), and

@@ -16,9 +16,9 @@ A script counts as WIRED when it is named by any of:
 
 Deliberately not enforced here: that the wiring RUNS IN CI. That is a separate gap —
 no workflow invokes pre-commit at all, so the pre-push hooks are graded only on a developer's
-machine and only over their push range (salesagent-5v2w).
+machine and only over their push range (#1600).
 
-beads: salesagent-md0r
+GitHub: #1600
 """
 
 from __future__ import annotations

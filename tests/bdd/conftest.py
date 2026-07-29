@@ -1494,10 +1494,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "production lax-coerces non-boolean strings to bool (no strict-bool "
                 "validation). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            # daily-breakdown CONTENT (salesagent-76vn): a SECOND, distinct gap at the same tag.
+            # daily-breakdown CONTENT (#1711): a SECOND, distinct gap at the same tag.
             # media_buy_delivery.py:549 sets daily_breakdown=None ("not calculated in this
             # implementation"), so include_package_daily_breakdown=true returns 200 with no
-            # breakdown at all. Only the =true rows are listed: salesagent-oz4j made the oracle
+            # breakdown at all. Only the =true rows are listed: the guarded-assertion sweep (#1600) made the oracle
             # derive its expectation from the dispatched request, so false/omitted now assert
             # ABSENCE and genuinely pass. Before that fix the oracle read `daily`/`by_day` — field
             # names that do not exist — behind `if daily is not None`, so every row passed.
@@ -1505,13 +1505,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-004-partition-daily-breakdown",
                 {"explicit_true"},
                 "production returns no per-package daily_breakdown when the flag is set "
-                "(media_buy_delivery.py:549 daily_breakdown=None). See salesagent-76vn.",
+                "(media_buy_delivery.py:549 daily_breakdown=None). See #1711.",
             ),
             (
                 "T-UC-004-boundary-daily-breakdown",
                 {"true (explicit)"},
                 "production returns no per-package daily_breakdown when the flag is set "
-                "(media_buy_delivery.py:549 daily_breakdown=None). See salesagent-76vn.",
+                "(media_buy_delivery.py:549 daily_breakdown=None). See #1711.",
             ),
             # account (salesagent-8n9): only the omitted/(field absent) rows
             # pass on every transport. The other rows fail transport-asym-
@@ -1574,7 +1574,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # pinned adcp v3.1.1 tree (verified: `git grep sampling_method v3.1.1`
             # in the adcp repo returns nothing). Only (omitted)/not_provided
             # genuinely pass; every named-method row fails on every transport.
-            # UPDATED(salesagent-bhhz): the rest named-method rows used to be
+            # UPDATED(#1600): the rest named-method rows used to be
             # excluded here because SignalsEnv/DeliveryPollEnv-style
             # build_rest_body DROPPED the unknown param, so REST answered 200 to
             # a request that never carried it and the rows accidentally "passed".
@@ -1600,7 +1600,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-failures_only",
                     "mcp-unknown_value-systematic",
                     "[rest-unknown_value-systematic",
-                    # Unmasked by salesagent-bhhz (see comment above). The e2e_rest twins are
+                    # Unmasked by #1600 (see comment above). The e2e_rest twins are
                     # NOT listed here — this list is gated `if not is_e2e_rest`, so entries for
                     # that transport would be dead code. They go in
                     # tests/bdd/e2e_rest_known_failures.txt instead.
@@ -1626,7 +1626,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-failures_only (last enum value)",
                     "mcp-Unknown string not in enum",
                     "[rest-Unknown string not in enum",
-                    # Unmasked by salesagent-bhhz: REST no longer drops the unknown
+                    # Unmasked by #1600: REST no longer drops the unknown
                     # sampling_method, so these fail like every other transport.
                     "[rest-random (first enum value)",
                     "[rest-failures_only (last enum value)",
@@ -1670,7 +1670,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # mcp/rest still return 200+empty (C3 gap remains).
                     "mcp-principal differs from owner",
                     "[rest-principal differs from owner",
-                    # Unmasked by salesagent-bhhz: the step dispatches `ownership` as a
+                    # Unmasked by #1600: the step dispatches `ownership` as a
                     # request field, which is not in GetMediaBuyDeliveryRequest either.
                     # REST used to drop it (accidental pass); it is now rejected on the wire.
                     "[rest-principal matches owner",
@@ -1776,7 +1776,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     (not is_rest and not is_e2e_rest and "differs from owner" in nodeid)
                     or (is_rest and "matches owner" in nodeid)
                     or (is_e2e_rest and "matches owner" in nodeid)
-                    # e2e_rest "differs from owner" now PASSES (salesagent-bhhz, in-network
+                    # e2e_rest "differs from owner" now PASSES (#1600, in-network
                     # innet_280726_1918): the step dispatches `ownership` as a request field, which
                     # build_rest_body used to drop, so the live server got a request that could not
                     # fail. With the drop removed it is rejected. Leaving this out kept a
@@ -1836,7 +1836,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         reason="sampling_method boundary: not implemented on this transport", strict=False
                     )
                 )
-            # GRADUATED (salesagent-bhhz, in-network run innet_280726_1823): was FIXME(#1270)
+            # GRADUATED (#1600, in-network run innet_280726_1823): was FIXME(#1270)
             # "e2e_rest: Docker doesn't validate sampling_method — invalid enum value succeeds".
             # The server was never given the chance: SignalsEnv/DeliveryPollEnv-style
             # build_rest_body DROPPED raw kwargs, so sampling_method never reached the wire and the
@@ -2024,7 +2024,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # structured AdCP error envelope (not a raw 500/empty body), so the
         # wire-envelope assertion handles it.
 
-        # GRADUATED (salesagent-bhhz, in-network run innet_280726_1823): was "e2e_rest: ownership boundary
+        # GRADUATED (#1600, in-network run innet_280726_1823): was "e2e_rest: ownership boundary
         # not enforced through REST layer". Same cause as the sampling row above — the step
         # dispatches `ownership` as a request field and build_rest_body dropped it, so the REST leg
         # sent a request that could not fail. With the drop removed the row XPASSed strictly.

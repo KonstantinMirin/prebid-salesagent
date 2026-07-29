@@ -45,7 +45,7 @@ SCHEMA_OPS = {
 
 # Shared with the pre-push hook (.pre-commit-hooks/check_migration_completeness.py) so the two
 # enforcers of this rule cannot drift — they already had, and nothing surfaced it because no CI job
-# runs the pre-push stage (salesagent-5v2w).
+# runs the pre-push stage (#1600).
 def _load_shared_allowlist() -> set[str]:
     """Load the allowlist the pre-push hook uses, by path.
 

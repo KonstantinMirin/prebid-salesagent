@@ -1854,7 +1854,7 @@ def _compare_echoed_scalar(field: str, expected: str | int | float | bool, actua
 
 # --- Operation outcome ---
 # "the operation should succeed" moved to steps/generic/then_success.py
-# (globally registered) so UC-009 and future UCs share it (salesagent-cmjm).
+# (globally registered) so UC-009 and future UCs share it (#1594).
 
 
 # --- Outcome dispatch step (partition/boundary) ---
@@ -2285,7 +2285,7 @@ def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
     # The original media buy is the one the Given step recorded. This used to consult a
     # `named_media_buy_ids` map first, but no step anywhere writes that key, so the `.get(..., {})`
     # default made the named lookup dead and the fallback always won — a branch that could never
-    # run, dressed as a lookup (salesagent-1krl). The recorded id IS the contract; read it loudly.
+    # run, dressed as a lookup (#1600). The recorded id IS the contract; read it loudly.
     original_mb_id = _require(
         ctx,
         "existing_media_buy_id",

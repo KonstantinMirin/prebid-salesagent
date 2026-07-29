@@ -4,8 +4,8 @@
 A test that injects a failure — ``patch(target, side_effect=SomeError(...))`` — and then asserts a
 degraded-state VALUE ([], a default, one static product) usually cannot fail. The no-failure path
 produces the identical value, so the assertion does not distinguish "the failure was handled" from
-"the failure never happened". Three such tests (salesagent-19w8) had been green for their whole
-lifetime; a whole-suite sweep found 12 of 45 tripwire sites in that state (salesagent-9278).
+"the failure never happened". Three such tests (#1600) had been green for their whole
+lifetime; a whole-suite sweep found 12 of 45 tripwire sites in that state (#1600).
 
 **This class is invisible to AST scanning.** It is not a property of the source text but of what an
 assertion can distinguish, so the only sound detector is execution: remove the failure and see
@@ -14,7 +14,7 @@ has been established. Writing an AST guard here and calling the class covered wo
 the mistake these tickets are about — a guard that advertises coverage it cannot deliver.
 
 Two neutralization forms are registered per site, because they are complementary and disagree in
-both directions (salesagent-9278): ``side_effect=None`` leaves the collaborator returning an
+both directions (#1600): ``side_effect=None`` leaves the collaborator returning an
 ordinary MagicMock, while ``return_value=<benign>`` makes it return a specific harmless value. A
 site can be sensitive to one and blind to the other, so a single-form sweep under-reports.
 
@@ -53,7 +53,7 @@ class MutationCase:
         return f"{self.path}::{self.test_pattern} [{self.new.strip().rstrip(',')}]"
 
 
-# Registry — may only grow. Sites fixed under salesagent-19w8.
+# Registry — may only grow. Sites fixed under #1600.
 MUTATION_REGISTRY: list[MutationCase] = [
     MutationCase(
         path="tests/unit/test_format_resolver.py",

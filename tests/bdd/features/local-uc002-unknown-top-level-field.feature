@@ -13,7 +13,7 @@
 # names the field in the `field` property (JSONPath-lite), NOT the free-form
 # `message` — and all transports emit it identically (field="nonsense_field" on
 # MCP, A2A, REST). The only accepted per-transport difference is the boundary
-# `code` (owner decision 2026-07-11, salesagent-cyz0 — no remap): REST ->
+# `code` (owner decision 2026-07-11, GH #1442 — no remap): REST ->
 # INVALID_REQUEST (pydantic extra=forbid handler); A2A boundary validator and
 # MCP mcp_compat_middleware (#1534) -> VALIDATION_ERROR. Recovery=correctable on
 # all. Message prose is not asserted (spec leaves it free-form).

@@ -1,4 +1,4 @@
-"""Reset semantics for ``set_adapter_test_behavior`` (salesagent-wkjc).
+"""Reset semantics for ``set_adapter_test_behavior`` (#1585 review follow-up).
 
 ``set_adapter_test_behavior`` MERGES behavior flags into
 ``config_json["test_behavior"]`` and never removes keys, so ``fail_on_create`` /

@@ -168,7 +168,9 @@ def then_signals_have_value_type(ctx: dict) -> None:
     """Production gap: the catalog sets no value_type (schema default None).
 
     Hard assert keeps T-UC-008-main-mcp strict-xfail until the catalog
-    carries value_type (see conftest _UC008_XFAIL_TAGS).
+    carries value_type — the second of that scenario's two gaps (see
+    conftest _SPEC_GAP_XFAILS, which also records the obligation: upstream
+    adcp-req BR-UC-008 POST-S6a, not a v3.1.1 schema requirement).
     """
     for signal in _wire_signals(ctx):
         assert signal.get("value_type") in _VALUE_TYPES, (

@@ -235,7 +235,7 @@ def then_no_real_api_calls(ctx: dict) -> None:
     )
 
 
-# --- Generic operation outcome (moved from uc026_package_media_buy.py, salesagent-cmjm) ---
+# --- Generic operation outcome (moved from uc026_package_media_buy.py, #1594) ---
 
 
 _FAILURE_STATUSES = frozenset({"failed", "rejected", "error", "canceled"})

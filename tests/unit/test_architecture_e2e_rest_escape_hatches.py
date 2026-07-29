@@ -77,7 +77,7 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     # was retired in PR #1567: it xfailed the pre-3.1.1 workflow_step_id assertion,
     # which the spec-reconciled scenario no longer makes — the scenario now grades
     # the CreateMediaBuySubmitted envelope live on all four transports.
-    # GRADUATED (salesagent-bhhz, in-network innet_280726_1823): the
+    # GRADUATED (#1600, in-network innet_280726_1823): the
     # T-UC-004-boundary-ownership 'differs from owner' route and the
     # "is_e2e_rest and 'Unknown string not in enum' in nodeid" route below.
     # Both were strict=True tripwires asserting the live server does not validate the field. It was

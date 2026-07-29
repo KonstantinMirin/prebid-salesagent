@@ -5,12 +5,12 @@
 it does not recognise, the request still goes out — and because every field of an AdCP request
 schema is optional, the route answers 200 to the reduced body. The test then asserts against a
 response to a payload it never sent. A parametrized ``[a2a, rest]`` test written that way reads as
-cross-transport coverage while grading one transport (salesagent-bhhz).
+cross-transport coverage while grading one transport (#1600).
 
 It also made REST error-path tests impossible to write: a malformed value cannot be expressed
 through a typed ``req=`` model, because the model rejects it client-side before it can be sent. So
 the only way to drive a bad payload through the real route is raw kwargs — which were exactly what
-got dropped. That is why salesagent-0ggp's cross-transport parity test had to stay A2A-only.
+got dropped. That is why the get_signals operation-label parity test (#1600) had to stay A2A-only.
 
 The rule is executable, not structural: hand every env a canary field and require it on the wire.
 That catches a re-implemented field-allowlist builder, a ``return {}`` fallback, and any future

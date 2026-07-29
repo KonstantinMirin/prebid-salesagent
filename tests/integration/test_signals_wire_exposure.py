@@ -1,21 +1,24 @@
 """get_signals wire exposure — MCP tool, A2A skill, REST route.
 
-TDD red for the get_signals exposure work (#1593 tracks the descoped activate_signal) (owner decision 2026-07-12: get_signals ONLY;
-activate_signal descoped to its follow-up bead and must stay unregistered).
+Written TDD-red for the get_signals exposure work (owner decision
+2026-07-12: get_signals ONLY; activate_signal is descoped and must stay
+unregistered until it is v3.1.1-conformant, #1593).
 
-The full implementation stack already exists in src/core/tools/signals.py
-(_get_signals_impl, MCP wrapper, get_signals_raw) — what is missing is
-REGISTRATION on every transport. These tests pin the exposed surface:
+The implementation stack in src/core/tools/signals.py (_get_signals_impl,
+MCP wrapper, get_signals_raw) already existed; what was missing was
+REGISTRATION on every transport. That registration has landed, so these
+tests now guard the exposed surface against regression:
 
 - MCP: get_signals listed by tools/list and callable through the full
-  FastMCP pipeline (currently NOT registered in src/core/main.py).
-- A2A: "get_signals" dispatches through the skill table (currently absent
-  from skill_handlers in adcp_a2a_server.py -> Unknown skill).
+  FastMCP pipeline (registered at src/core/main.py:365).
+- A2A: "get_signals" dispatches through the skill table (skill_handlers in
+  adcp_a2a_server.py -> _handle_get_signals_skill).
 - REST: POST /api/v1/signals returns 200 with a typed GetSignalsResponse
-  (route currently absent from src/routes/api_v1.py -> 404).
+  (routed in src/routes/api_v1.py).
 
-The IMPL-transport test is the control: it passes TODAY, proving the wire
-failures are exposure-only, not business-logic gaps.
+The IMPL-transport test is the control: it passed while all three wire legs
+were red, which is what pinned those failures as exposure-only rather than
+business-logic gaps. It still separates the two failure modes today.
 
 Spec grounding: pinned AdCP v3.1.1 signals schemas
 (dist/schemas/3.1.1/signals/get-signals-{request,response}.json — all fields
@@ -62,7 +65,11 @@ def _assert_sports_signal_response(response: GetSignalsResponse) -> None:
 
 
 class TestGetSignalsImplBaseline:
-    """Control: the business logic works today — red tests below are exposure-only."""
+    """Control: the business logic is reachable with no transport in the path.
+
+    It passed while the wire legs below were red, which is what proved those
+    failures were exposure-only; it keeps the two failure modes separable.
+    """
 
     def test_impl_returns_filtered_signals(self, integration_db):
         with SignalsEnv() as env:
@@ -75,7 +82,7 @@ class TestGetSignalsImplBaseline:
 
 
 class TestGetSignalsWireExposure:
-    """get_signals must be reachable on every wire transport (#1593)."""
+    """get_signals must be reachable on every wire transport."""
 
     def test_get_signals_listed_by_mcp_tools_list(self, integration_db):
         """tools/list (the MCP discovery wire) must advertise get_signals."""
@@ -100,7 +107,8 @@ class TestGetSignalsWireExposure:
     def test_get_signals_reachable_and_forwards_request(self, integration_db, transport):
         """Full-pipeline dispatch per transport returns the spec-shaped response.
 
-        Expected red failures today:
+        Before registration landed, each leg failed on a different symptom —
+        the shapes a regression would bring back:
         - MCP: Unknown tool 'get_signals' (not registered in src/core/main.py)
         - A2A: Unknown skill 'get_signals' (missing from skill_handlers)
         - REST: 404 Not Found (no POST /api/v1/signals route)
@@ -123,7 +131,7 @@ class TestGetSignalsWireExposure:
             assert [s["signal_agent_segment_id"] for s in wire_signals] == ["sports_content"]
 
     def test_rest_route_exists(self, integration_db):
-        """POST /api/v1/signals must not 404 (route currently absent).
+        """POST /api/v1/signals must not 404 (the route was absent before this work).
 
         Isolates the route-existence failure from response-shape failures:
         whatever else may be wrong, a 404 means the wire surface is missing.

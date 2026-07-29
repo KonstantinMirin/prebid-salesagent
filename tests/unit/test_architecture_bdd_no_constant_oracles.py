@@ -7,7 +7,7 @@ assertion holds no matter what production does.
 
 **Rule A — a defaulted read inside an oracle (the primary rule).**
 ``requested.get("post_click_interval", 7)`` reads as "what the scenario asked for" and evaluates to
-``7`` whenever the key is missing. salesagent-1zy8 survived precisely because the hardcoded default
+``7`` whenever the key is missing. The attribution-echo oracle (#1600) survived precisely because the hardcoded default
 happened to equal the only scenario's request: the suite was green while asserting nothing, and
 neither review nor CI could see it.
 
@@ -29,7 +29,7 @@ went DOWN.
 Both allowlists may only SHRINK. Entries are keyed by (module, function, key) rather than by line so
 that unrelated edits do not silently retire an entry, and a stale entry fails rather than lingering.
 
-beads: salesagent-17io (guard), salesagent-1zy8 / salesagent-1krl (the instances)
+GitHub: #1600 (this guard and the oracle instances it was written from)
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ LOUD_READ_HELPERS = {"_require", "_require_response", "_require_error"}
 #
 # Seeded at 79 by measurement. The empty-container defaults (`ctx.get("k", {})`) dominate that count
 # and are the dangerous ones: the read looks structural, so nothing about it says "constant". A real
-# instance was written WHILE fixing salesagent-oz4j, with this guard already green, because the
+# instance was written WHILE fixing the guarded-assertion sweep (#1600), with this guard already green, because the
 # detector did not yet treat {} as a default.
 _ALLOWED_DEFAULTED_READS: frozenset[str] = frozenset(
     {
@@ -149,7 +149,7 @@ _ALLOWED_DEFAULTED_READS: frozenset[str] = frozenset(
 
 
 # --- Rule B allowlist: ctx keys read but never written -------------------------------------------
-# MAY ONLY SHRINK. salesagent-1krl fixed the four that supplied a default (the silent-constant
+# MAY ONLY SHRINK. #1600 fixed the four that supplied a default (the silent-constant
 # form); these are the remainder, which raise or yield None rather than silently constant-ing.
 _ALLOWED_ORPHAN_KEYS: frozenset[str] = frozenset(
     {
@@ -162,7 +162,7 @@ _ALLOWED_ORPHAN_KEYS: frozenset[str] = frozenset(
         "explicit_buying_mode",
         "last_order_name",
         "media_buy_id",
-        "request_attribution",  # salesagent-1zy8's key — still read, still never written
+        "request_attribution",  # the attribution-echo oracle's key (#1600) — still read, still never written
         "request_push_config",
         "seeded_task_count",
         "target_media_buy_id",
@@ -178,7 +178,7 @@ def _is_literal_default(node: ast.expr) -> bool:
     ``ast.Constant``, and skipping it let a real instance through — a uc004 oracle read
     ``ctx.get("request_params", {}).get("include_package_daily_breakdown")`` where nothing ever
     wrote that key, so the flag read as False for every row and the oracle asserted the opposite of
-    what the scenario requested. That was written WHILE fixing salesagent-oz4j, with this guard
+    what the scenario requested. That was written WHILE fixing the guarded-assertion sweep (#1600), with this guard
     already in place and green.
     """
     if isinstance(node, ast.Constant):
@@ -333,7 +333,7 @@ class TestDetectorMetaTests:
         assert [k for k, _, _ in find_defaulted_oracle_reads(src, "m.py")] == ["m.py::then_x::interval"]
 
     def test_flags_defaulted_read_one_level_down(self):
-        """salesagent-1zy8's actual shape. A ctx-only guard certifies this as clean."""
+        """The attribution-echo oracle's actual shape (#1600). A ctx-only guard certifies this as clean."""
         src = 'def then_x(ctx):\n    v = ctx["dispatched_kwargs"].get("post_click_interval", 7)\n    assert v == 7\n'
         assert [k for k, _, _ in find_defaulted_oracle_reads(src, "m.py")] == ["m.py::then_x::post_click_interval"]
 

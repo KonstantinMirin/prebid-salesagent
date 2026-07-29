@@ -235,7 +235,7 @@ _PROD_IGNORE_SCRIPT = textwrap.dedent(
 class TestProductionModeRestBodyIgnoresExtra:
     """api_v1 REST *Body classes silently DROP unknown top-level fields in production.
 
-    Pattern #7 prod arm (GH #1442, salesagent-cyz0). The extra mode binds at
+    Pattern #7 prod arm (GH #1442). The extra mode binds at
     CLASS DEFINITION (import) time via ``ConfigDict(extra=get_pydantic_extra_mode())``,
     so a runtime env patch cannot flip already-imported classes — the
     production behavior is pinned in a SUBPROCESS that sets

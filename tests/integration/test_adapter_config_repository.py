@@ -321,7 +321,7 @@ class TestFindByTenantAdapterTypeFilter:
 class TestGetOrCreate:
     """get_or_create(adapter_type='google_ad_manager') — upsert helper (GH #1169).
 
-    Contract pinned by architect review (salesagent-u9ci.4 / salesagent-xj9r):
+    Contract pinned by architect review (GH #1169):
     tenant_id is the PRIMARY KEY (strict 1:1) — get_or_create finds by tenant_id
     ONLY; adapter_type is a construct-default for a NEW row, never a find filter.
     Never commits: the caller mutates the returned row and owns the transaction.

@@ -1,9 +1,9 @@
-"""Structural lock on the e2e shared-adapter-state baseline (salesagent-wkjc).
+"""Structural lock on the e2e shared-adapter-state baseline (#1585 review follow-up).
 
 The e2e suite shares ONE live database. Its ci-test tenant's adapter
 test-behavior (manual approval, fault injection) is mutable global state, and
 pytest-randomly reorders tests every run, so whoever mutates it last decides how
-the NEXT test's ``create_media_buy`` behaves (salesagent-d1n0).
+the NEXT test's ``create_media_buy`` behaves (#1600).
 
 The fix inverted the ownership: ``tests/e2e/conftest.py`` owns that state through
 ONE autouse fixture that resets it to the default baseline on both sides of every
@@ -116,7 +116,7 @@ def test_exactly_one_autouse_baseline_owner_resetting_both_sides() -> None:
         fix_hint=(
             "Shared ci-test adapter state has exactly one owner. Do not add a second "
             "autouse resetter and do not delete this one — tests opt INTO non-default "
-            "behavior only (salesagent-wkjc)."
+            "behavior only (#1585 review follow-up)."
         ),
     )
 

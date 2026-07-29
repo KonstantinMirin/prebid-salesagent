@@ -3,7 +3,7 @@
 Uses pytest-bdd's ``scenarios()`` to auto-generate test functions from the
 generated feature file. Step definitions are imported via conftest.py.
 
-Wired set (salesagent-cmjm / salesagent-8wf2): the five @T-UC-009-main-*
+Wired set (#1594): the five @T-UC-009-main-*
 scenarios run a real update_performance_index through every transport on
 PerformanceEnv. Every other scenario stays dormant via the UC-009 fixture
 catch-all xfail.

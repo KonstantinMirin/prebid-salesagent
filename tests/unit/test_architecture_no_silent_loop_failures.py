@@ -51,7 +51,7 @@ SILENT_LOOP_HANDLER_ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl"),
 }
 
-# Straight-line silent handlers in *_impl — the widened rule (salesagent-gr4z).
+# Straight-line silent handlers in *_impl — the widened rule (#1566).
 # Keyed (repo-relative file, enclosing function, ORDINAL of the silent handler within that
 # function). Several sites share one function, so a coarser key would let a new violation hide
 # behind an existing entry; a line-number key would make every entry in a file go stale whenever
@@ -71,19 +71,20 @@ _SILENT_STRAIGHT_LINE_ALLOWLIST: set[tuple[str, str, int]] = {
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl", 4),  # activity feed
     ("src/core/tools/media_buy_create.py", "_create_media_buy_impl", 5),  # Slack: success
     # -- DEGRADES the response: real violations, migration owned elsewhere -------------------------
-    # salesagent-3xmz migrates these to GetAdcpCapabilitiesResponse.errors[].
+    # The capability-declaration work migrates these to GetAdcpCapabilitiesResponse.errors[];
+    # tracked with the other allowlisted silent failures in #1566.
     ("src/core/tools/capabilities.py", "_get_adcp_capabilities_impl", 0),  # adapter channels dropped
     ("src/core/tools/capabilities.py", "_get_adcp_capabilities_impl", 1),  # publisher domains dropped
-    # salesagent-gr4z: adapter formats / agent referrals dropped from the format list.
+    # #1566: adapter formats / agent referrals dropped from the format list.
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 0),
     ("src/core/tools/creative_formats.py", "_list_creative_formats_impl", 1),
-    # salesagent-gr4z: GetProductsResponse HAS errors[], so these four are the strongest migration
+    # #1566: GetProductsResponse HAS errors[], so these four are the strongest migration
     # candidates — dynamic variants, dynamic pricing, AI ranking and adapter-support annotations all
     # silently vanish from the response. NOT migrated here: emitting advisory errors changes the
     # response contract, and CLAUDE.md's spec-grounding gate requires citing the pinned AdCP section
     # that mandates it BEFORE the code is written. The pin does not mandate advisory errors on
     # degraded enrichment, and UC-001-MAIN-41/42 require only that a warning be LOGGED (which
-    # salesagent-19w8 now grades). Migrating on the strength of "the field exists" would be exactly
+    # the tripwire-mutation registry now grades). Migrating on the strength of "the field exists" would be exactly
     # the downstream-artifact reasoning that gate exists to prevent.
     ("src/core/tools/products.py", "_get_products_impl", 0),  # dynamic variants
     ("src/core/tools/products.py", "_get_products_impl", 1),  # dynamic pricing
@@ -147,8 +148,8 @@ def find_silent_handlers(tree: ast.Module, relpath: str, *, scope: str) -> list[
     the module docstring), so a plain ``try: enrich(...) except: log`` in an ``_impl`` was
     structurally invisible to it — even though it degrades the client-facing response in exactly
     the way "No Quiet Failures" forbids, and even though the four swallowed degradations in
-    ``_get_adcp_capabilities_impl`` that motivated salesagent-3xmz are all of that shape. Same
-    disease, different statement position (salesagent-gr4z).
+    ``_get_adcp_capabilities_impl`` (allowlisted below, #1566) are all of that shape. Same
+    disease, different statement position.
     """
     violations: list[tuple[str, str, int]] = []
     want_loop = scope == "loop"
@@ -273,7 +274,7 @@ class TestNoSilentStraightLineFailuresInImpl:
 
     The loop-scoped rule below could not see these: its detector requires the handler to sit
     directly in a for/while, so a plain ``try: enrich(...) except: log`` was structurally invisible
-    even though it degrades the response identically (salesagent-gr4z).
+    even though it degrades the response identically (#1566).
     """
 
     @pytest.mark.arch_guard

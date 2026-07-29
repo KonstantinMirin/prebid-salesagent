@@ -16,7 +16,7 @@ REQUIRED_RENDERED_CHECKS = {
     # invoked pre-commit at any stage, so every pre-push hook — migration completeness, docs links,
     # route conflicts, tenant-context order, the count ratchets, MCP schema alignment, hardcoded
     # URLs — was graded only on a developer's machine and only over their push range. That is how
-    # salesagent-nzgg stayed latent (salesagent-5v2w). Listed here so a rename cannot silently
+    # the allowlist-less migration-completeness hook stayed latent (#1600). Listed here so a rename cannot silently
     # drop the job; mirroring into branch protection only applies where protection is configured
     # (it is not on the fork this branch is pushed to).
     "CI / Pre-push Hooks",

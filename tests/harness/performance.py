@@ -1,8 +1,13 @@
 """PerformanceEnv — integration test environment for _update_performance_index_impl.
 
-Patches: get_adapter ONLY (the external ad server — performance feedback is
-forwarded to the adapter as PackagePerformance entries).
-Real: MediaBuyUoW ownership check, principal resolution, audit logging,
+Patches: get_adapter (the external ad server — performance feedback is
+forwarded to the adapter as PackagePerformance entries) AND get_audit_logger
+(the audit sink). Audit logging is therefore NOT exercised end to end: the
+impl's ``audit_logger.log_operation(...)`` call lands on a mock, so any test
+asserting on it — including UC-009's "the audit log should contain an entry
+with:" step, which reads ``env.mock["audit"]`` — grades the CALL production
+makes, not the audit record that gets persisted.
+Real: MediaBuyUoW ownership check, principal resolution, request validation,
 transport wrappers (MCP tool, A2A skill handler, REST route).
 
 Requires: integration_db fixture.
@@ -24,6 +29,9 @@ Usage::
 Available mocks via env.mock:
     "adapter" -- get_adapter mock; env.adapter_update_calls reads the
                  PackagePerformance forwarding.
+    "audit"   -- get_audit_logger mock; its
+                 ``return_value.log_operation.call_args_list`` is what audit
+                 assertions actually read.
 """
 
 from __future__ import annotations
@@ -37,9 +45,9 @@ from tests.harness._base import IntegrationEnv
 class PerformanceEnv(IntegrationEnv):
     """Integration test environment for update_performance_index.
 
-    Only the adapter is mocked (external ad server). Everything else is real:
-    ownership verification (MediaBuyUoW), principal resolution, audit logging,
-    and all transport wrappers.
+    The adapter (external ad server) and the audit logger are mocked.
+    Everything else is real: ownership verification (MediaBuyUoW), principal
+    resolution, request validation, and all transport wrappers.
     """
 
     EXTERNAL_PATCHES = {

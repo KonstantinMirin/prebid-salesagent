@@ -400,7 +400,7 @@ def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     try:
         # Recorded for the continuation step below, which must page with the SAME size the
         # scenario chose — otherwise it silently requests a different page than the one set up
-        # (salesagent-1krl).
+        # (#1600).
         ctx["last_max_results"] = value
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=value))
         dispatch_request(ctx, req=req)
@@ -419,7 +419,7 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
     cursor = prev_response.pagination.cursor
     # Page with the SAME size the scenario used for the first page. This read used to supply a
     # default of 50 that nothing ever wrote, so a scenario paging by 2 silently asked for 50 on the
-    # continuation and the pagination behaviour under test was never exercised (salesagent-1krl).
+    # continuation and the pagination behaviour under test was never exercised (#1600).
     max_results = _require(
         ctx,
         "last_max_results",
@@ -1105,7 +1105,7 @@ def _snapshot_account_ids(ctx: dict) -> None:
     ``ctx.get("pre_request_account_ids", set())`` — a hardcoded EMPTY set, which turned an
     isolation check into "the principal has zero accounts". Any scenario with pre-existing accounts
     would have failed it, and the one scenario that uses it passes only because its set happens to
-    be empty; nothing was actually being verified (salesagent-1krl).
+    be empty; nothing was actually being verified (#1600).
     """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository

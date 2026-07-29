@@ -1024,8 +1024,8 @@ class BaseTestEnv:
         against a response to a payload it never sent. A REST leg written that way grades nothing
         while looking like cross-transport coverage — and it made malformed-payload tests
         impossible to write at all on REST, since the typed ``req=`` path rejects them client-side
-        before they can be sent (salesagent-bhhz, and the reason salesagent-0ggp's parity test is
-        A2A-only).
+        before they can be sent (#1600, and the reason the get_signals operation-label parity test
+        is A2A-only).
 
         ``identity`` is popped by ``_prepare_rest_request`` before this runs, so everything arriving
         here is a field the caller meant to send. Subclasses that need special serialization for

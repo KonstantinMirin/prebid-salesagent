@@ -1735,7 +1735,7 @@ class TestFormatCompatibilityExtended:
         result = response.creatives[0]
         assert result.action != "failed", f"Expected success but got: {result.errors}"
 
-    def test_format_id_dual_key_support(self, integration_db):
+    def test_canonical_format_id_key_passes_compatibility(self, integration_db):
         """Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-05.
 
         The legacy stored 'format_id' key was retired by the typed FormatId
@@ -1743,6 +1743,12 @@ class TestFormatCompatibilityExtended:
         {agent_url, id} object shape (the migrated DB CHECK rejects any other
         key). This test now pins that a product seeded with the canonical key
         passes the creative-format compatibility check.
+
+        NOTE (#1600): obligation -05 still reads "the match succeeds (system
+        checks both key names)", which describes the retired dual-key path. The
+        Covers tag is kept so obligation traceability is not lost, matching the
+        unit twin (test_product_format_ids_typed_key_match); reconciling the
+        obligation text to the typed contract is tracked separately.
         """
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")

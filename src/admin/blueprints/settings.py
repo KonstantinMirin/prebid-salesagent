@@ -331,7 +331,7 @@ def update_adapter(tenant_id):
             # three writers (auth gam_callback, gam configure_gam, adapters
             # save_adapter_config), so the pinned no-commit and PK-safety
             # contracts cover this writer too.
-            from src.core.database.repositories import AdapterConfigRepository
+            from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
             adapter_config_obj = AdapterConfigRepository(db_session, tenant_id).get_or_create(adapter_type=new_adapter)
             adapter_config_obj.adapter_type = new_adapter

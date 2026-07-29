@@ -560,9 +560,9 @@ def adapter_state_baseline(request):
     run, so a test that enables manual approval (the a2a submitted-webhook tests)
     or injects an adapter fault leaks that state into any later test asserting the
     synchronous success shape — create/update then returns Submitted with no
-    media_buy_id, flakily (salesagent-d1n0).
+    media_buy_id, flakily (#1600).
 
-    Pinning the five known victims was inverted here (salesagent-wkjc): this is the
+    Pinning the five known victims was inverted here (#1585 review follow-up): this is the
     single OWNER of that shared state. It resets to the default baseline on setup
     AND teardown, so tests only ever opt INTO non-default behavior and never have
     to opt back out — a newly-added sync-success test is safe by default, and a

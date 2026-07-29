@@ -81,7 +81,7 @@ class CapabilitiesEnv(IntegrationEnv):
 
         ``_run_rest_request`` never calls this for REST_METHOD="get"; reaching it means a caller
         expects fields to travel that this transport cannot carry. Returning {} would silently drop
-        them and let the test grade a request it did not make (salesagent-bhhz).
+        them and let the test grade a request it did not make (#1600).
         """
         if kwargs:
             raise AssertionError(

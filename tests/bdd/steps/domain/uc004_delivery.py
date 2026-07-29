@@ -911,7 +911,7 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     # Baseline for the probe-count oracle in `then_single_probe`. The probe is dispatched by the
     # call_send() below, so "how many probes did half-open allow?" is the delta across THIS step —
     # not the scenario's total POST count. Recording it here is what makes that Then step able to
-    # distinguish one probe from ten (salesagent-1krl).
+    # distinguish one probe from ten (#1600).
     mock_post = env.mock.get("post")
     ctx["pre_probe_call_count"] = mock_post.call_count if mock_post is not None else 0
 
@@ -1813,7 +1813,7 @@ def then_single_probe(ctx: dict) -> None:
     # "httpx_post"/"webhook_post" — neither of which any env defines — so it ALWAYS missed and the
     # step fell through to a pytest.xfail("HARNESS GAP: no webhook POST mock"). There was no
     # harness gap; the key was wrong, and the "exactly one probe" claim in this step's name went
-    # ungraded for the scenario's whole lifetime (salesagent-1krl).
+    # ungraded for the scenario's whole lifetime (#1600).
     mock_post = env.mock.get("post")
     assert mock_post is not None, (
         f"{type(env).__name__} exposes no POST mock, so 'exactly one probe' cannot be counted. "
@@ -1832,9 +1832,9 @@ def then_single_probe(ctx: dict) -> None:
     if mock_post.call_count == 0:
         # Nothing reached the HTTP layer for the WHOLE scenario, so the probe cannot be counted
         # here at all — a deeper gap than the wrong mock key this step used to blame
-        # (salesagent-8uoy). Narrow on purpose: a non-zero-but-wrong count still fails loudly below.
+        # (#1600). Narrow on purpose: a non-zero-but-wrong count still fails loudly below.
         pytest.xfail(
-            "HARNESS GAP(salesagent-8uoy): the half-open probe is logged as scheduled but never "
+            "HARNESS GAP(#1600): the half-open probe is logged as scheduled but never "
             "reaches httpx post within this step, so 'exactly one probe' is unobservable here"
         )
 
@@ -2738,7 +2738,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
                 actual_status = getattr(d, "status", None)
                 # Unconditional: `if actual_status:` let a delivery with no status slip the filter
                 # check entirely, so a response that stopped reporting status at all satisfied a
-                # status-filter scenario (salesagent-oz4j).
+                # status-filter scenario (#1600).
                 assert actual_status, (
                     f"Status filter scenario: delivery {getattr(d, 'media_buy_id', '?')!r} carries no "
                     f"status, so the filter {requested_filter} cannot be shown to have been honored"
@@ -2780,7 +2780,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         assert deliveries, f"Valid {field}: expected non-empty deliveries"
         # Branch on what the scenario actually REQUESTED — this is scenario shape, not the
-        # salesagent-oz4j disease. What that ticket flagged was `if daily is not None: assert
+        # guarded-assertion disease (#1600). What that sweep flagged was `if daily is not None: assert
         # isinstance(daily, list)`, which graded only the TYPE and let production dropping the
         # breakdown entirely satisfy every valid row. It also read `daily`/`by_day`, field names
         # that do not exist: the response field is `daily_breakdown`.

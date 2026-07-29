@@ -4,7 +4,7 @@ Pattern #7 extra-field policy at the TOP-LEVEL request body: dev/CI runs with
 extra=forbid, so an unknown top-level key must be rejected on every wire
 transport. REST/A2A emit the two-layer INVALID_REQUEST envelope; MCP rejects
 at the FastMCP tool-signature layer before the envelope builder runs (owner
-decision 2026-07-11 on salesagent-cyz0 accepts that transport-native shape —
+decision 2026-07-11 on GH #1442 accepts that transport-native shape —
 no envelope remap). Production (extra=ignore, spec-compliant per v3.1.1
 additionalProperties: true) is graded by
 tests/unit/test_schema_validation_modes.py::TestProductionModeRestBodyIgnoresExtra.
@@ -37,7 +37,7 @@ def then_unknown_top_level_field_rejected(ctx: dict, field_name: str) -> None:
     ``message`` — so the field-naming obligation is asserted on ``error.field``,
     which every transport emits identically (verified: ``field="nonsense_field"``
     on MCP, A2A, and REST). The only accepted per-transport difference is the
-    boundary ``code`` (owner decision 2026-07-11, salesagent-cyz0 — no remap):
+    boundary ``code`` (owner decision 2026-07-11, GH #1442 — no remap):
     REST rejects at the pydantic extra=forbid handler -> ``INVALID_REQUEST``;
     A2A's boundary validator and MCP's ``mcp_compat_middleware`` (#1534) both
     emit ``VALIDATION_ERROR``. Message prose is intentionally NOT asserted — the

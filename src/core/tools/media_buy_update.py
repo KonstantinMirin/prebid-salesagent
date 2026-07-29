@@ -260,10 +260,9 @@ def _validate_creatives_for_assignment(
     # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
     # supported_format_keys is the ONE canonical comparison key shared by every
     # creative-vs-product format check, so URL variants compare equal.
+    # Always non-empty: the early return above guarantees product.format_ids is
+    # non-empty, and supported_format_keys yields one key per entry (#1600).
     supported_formats: set[tuple[str, str]] = supported_format_keys(product.format_ids)
-
-    if not supported_formats:
-        return  # No usable format restrictions — allow all.
 
     incompatible: list[str] = []
     for creative in creatives_list:

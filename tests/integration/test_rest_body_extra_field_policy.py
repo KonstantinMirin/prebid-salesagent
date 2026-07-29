@@ -16,7 +16,7 @@ Spec grounding: AdCP v3.1.1 create-media-buy request schema sets top-level
 dev-forbid is the internal Pattern #7 drift gate, stricter than spec (graded
 as a project gate, not a BR-* spec obligation).
 
-beads: salesagent-cyz0 (GH #1442)
+GitHub: #1442
 """
 
 from datetime import UTC, datetime, timedelta

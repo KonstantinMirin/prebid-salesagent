@@ -1,6 +1,6 @@
 """Slice-1 contract tests for GH #1088: eager Principal on ResolvedIdentity.
 
-Core Invariant (salesagent-8xi7): identity/principal resolution happens exactly
+Core Invariant (GH #1088): identity/principal resolution happens exactly
 once at the transport boundary — ``_impl`` functions receive a ResolvedIdentity
 carrying an eagerly-loaded principal and never query principal/auth tables.
 
@@ -17,8 +17,11 @@ These tests pin the Slice-1 contract:
    factory args WITHOUT any DB query — identities are built before Given steps,
    i.e. before any principal row exists.
 
-TDD red: ResolvedIdentity has no ``principal`` field yet, so every test fails
-with AttributeError on ``identity.principal``.
+Written TDD-red: before this work ResolvedIdentity carried no ``principal``
+field, so every test below failed with AttributeError on
+``identity.principal``. The field has since landed, so these tests now guard
+the eager-principal contract against regression — a failure here means the
+boundary stopped populating the principal, not that the feature is unbuilt.
 """
 
 import pytest
