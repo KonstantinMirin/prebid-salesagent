@@ -22,7 +22,6 @@ Usage:
         result = await client.call_tool("tool_name", params)
 """
 
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -30,7 +29,7 @@ from typing import Any
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from src.core.security.outbound_http import validate_url
+from src.core.security.outbound_http import sleep_backoff, validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +171,6 @@ async def create_mcp_client(
         candidates.append((fallback_url, 1))
 
     # Retry loop(s) with exponential backoff for primary; single attempt for fallback
-    retry_delay = 1.0  # seconds
     last_exception = None
     attempted_urls: list[str] = []
 
@@ -215,8 +213,13 @@ async def create_mcp_client(
                 )
 
                 if attempt < attempts - 1:
-                    # Exponential backoff for primary candidate only (attempts > 1)
-                    await asyncio.sleep(retry_delay * (2**attempt))
+                    # Backoff for the primary candidate only (attempts > 1). This
+                    # client owns its transport for protocol reasons — a stateful
+                    # MCP session over StreamableHttpTransport, which the egress
+                    # seam's one-shot asend cannot carry — so it defers to the
+                    # seam's BR-RULE-029 schedule instead of recomputing one
+                    # (1-based attempt index; this loop counts from 0).
+                    await sleep_backoff(attempt + 1)
                 else:
                     # Exhausted attempts for this candidate; move to next (if any)
                     logger.error(

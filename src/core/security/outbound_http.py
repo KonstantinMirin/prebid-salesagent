@@ -54,6 +54,12 @@ have no reason to grow a second copy of address policy either. It takes the same
 optional ``field``: admin ingest handlers build no AdCP envelope and omit it,
 while protocol ``_impl`` ingest sites (create/update/sync accepting a buyer's
 webhook URL) pass the request path so the refusal names the input to fix.
+
+The last entry point is :func:`sleep_backoff`, for the one retry loop that
+lives outside this module by design: the MCP seam owns a stateful session
+transport ``send``/``asend`` cannot carry, but it reads THIS schedule instead
+of recomputing one. It awaits the wait itself and returns nothing, so no call
+site ever holds a number it could quietly scale.
 """
 
 from __future__ import annotations
@@ -357,10 +363,27 @@ def _backoff_seconds(attempt: int) -> float:
     base doubles per attempt (1s, 2s, 4s) and each wait carries its own
     ``uniform(0, 1)`` draw. Because the schedule is computed here and nowhere
     else, no call site can migrate onto this seam and quietly keep a different
-    one.
+    one. Deliberately private: the one sanctioned external consumer gets
+    :func:`sleep_backoff`, which performs the wait itself so no call site ever
+    holds a number it could scale or replace.
     """
     base = _env_float(_BACKOFF_BASE_ENV, _BACKOFF_BASE_SECONDS)
     return base * (2 ** (attempt - 1)) + random.uniform(0, 1)
+
+
+async def sleep_backoff(attempt: int) -> None:
+    """Await BR-RULE-029's wait before the attempt after ``attempt`` (1-based).
+
+    For the MCP seam (``src/core/utils/mcp_client.py``), which owns its own
+    transport for protocol reasons — a stateful MCP session that ``asend``'s
+    one-shot request/response cannot carry — but must not own a second copy of
+    the retry schedule. Sleeping HERE rather than returning the number is the
+    guard: the no-call-site-backoff detector follows same-module names only, so
+    a public ``backoff_seconds()`` would let ``sleep(backoff_seconds(1))`` or a
+    scaled variant drift invisibly; an awaitable that hands nothing back leaves
+    a call site nothing to get wrong but the attempt index.
+    """
+    await asyncio.sleep(_backoff_seconds(attempt))
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:

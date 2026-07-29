@@ -70,10 +70,11 @@ ALLOWLIST = {
     # schedule. Tickets: salesagent-4fya.11, .10, salesagent-cnkq
     # (salesagent-4fya.8 and .9 migrated order_approval_service and
     # creative_agent_registry, removing their entries.)
-    # Egress retry schedules that no migration ticket covered — found by the
-    # salesagent-4fya.6 disease scan, filed as salesagent-zlwz and salesagent-fwid.
-    ("src/core/utils/mcp_client.py", 1),
-    # (salesagent-fwid deleted oauth_retry.py, removing its entry.)
+    # (The two entries the salesagent-4fya.6 disease scan filed are gone:
+    # salesagent-fwid deleted oauth_retry.py, and salesagent-zlwz moved
+    # mcp_client onto the seam's sleep_backoff — the awaitable that hands the
+    # call site no number, so this detector's same-module blindness to an
+    # imported helper cannot become a drift channel.)
     # Geometric, but not outbound HTTP — so the seam is not where they belong,
     # and they stay listed with the reason in writing rather than exempted by a
     # path rule the next reader has to reverse-engineer.

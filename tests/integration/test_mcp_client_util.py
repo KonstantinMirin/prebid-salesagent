@@ -25,6 +25,7 @@ skip_no_audience_agent = pytest.mark.skipif(
     reason="audience-agent.fly.dev is not reachable",
 )
 
+from src.core.security import outbound_http as outbound_http_module
 from src.core.security.outbound_http import OutboundRequestBlocked
 from src.core.utils import mcp_client as mcp_client_module
 from src.core.utils.mcp_client import (
@@ -32,6 +33,12 @@ from src.core.utils.mcp_client import (
     _build_auth_headers,
     create_mcp_client,
 )
+from tests.helpers import assert_backoff_schedule
+
+# Reused rather than restated (precedent: tests/integration/test_vendor_egress.py):
+# the jitter pin, the escape-hatch setter and the backoff-base knob name are the
+# seam suite's own helpers — copying any of them here is how one copy drifts.
+from tests.integration.test_outbound_http import BACKOFF_BASE_ENV, pin_jitter, set_flags
 
 # A cloud-metadata address: refused by the egress seam unconditionally, escape
 # hatches or not. Spelled as an MCP endpoint because that is the shape a
@@ -225,7 +232,7 @@ class TestErrorHandling:
 
 
 class _SleepRecordingAsyncio:
-    """Stands in for the MCP client module's ``asyncio``, recording sleeps only.
+    """Stands in for a module's ``asyncio``, recording sleeps only.
 
     Replacing the name the module resolves — rather than setting
     ``asyncio.sleep`` on the real module — keeps the substitution scoped to the
@@ -247,11 +254,19 @@ class _SleepRecordingAsyncio:
 
 @pytest.fixture
 def recorded_retry_sleeps(monkeypatch):
-    """Record every sleep the MCP client performs, without waiting any of them out.
+    """Record every sleep the MCP client's retries perform, without waiting them out.
 
     The sleep is the observation point, not the wall clock: a retry schedule of
     1s then 2s cannot be graded by timing a test, and waiting it out would make
     this file three seconds slower for no added signal.
+
+    BOTH modules that could hold the retry sleep are covered — ``mcp_client``
+    itself and the egress seam (``src.core.security.outbound_http``), whose
+    backoff helper the client is required to defer to instead of recomputing a
+    schedule locally. Recording into one shared list means the grade is about
+    the durations, wherever the sleep executes; a sleep that moved between the
+    two modules stays observed, and a schedule graded here cannot pass because
+    the observation point was pointed at the wrong module.
 
     The replacement must be an ``async def`` — a plain ``MagicMock`` returns a
     non-awaitable and the client would ``TypeError`` on the await instead of
@@ -259,11 +274,8 @@ def recorded_retry_sleeps(monkeypatch):
     ``tests/integration/test_outbound_http.py``.
     """
     slept: list[float] = []
-    monkeypatch.setattr(
-        mcp_client_module,
-        "asyncio",
-        _SleepRecordingAsyncio(mcp_client_module.asyncio, slept),
-    )
+    for module in (mcp_client_module, outbound_http_module):
+        monkeypatch.setattr(module, "asyncio", _SleepRecordingAsyncio(module.asyncio, slept))
     return slept
 
 
@@ -331,4 +343,75 @@ class TestRefusedAgentUrlIsNotDialled:
         assert recorded_retry_sleeps == [], (
             f"a policy refusal was retried (slept {recorded_retry_sleeps}) — it was caught by the "
             "connection retry loop instead of being raised before it"
+        )
+
+
+@pytest.mark.asyncio
+class TestConnectionRetryBackoffSchedule:
+    """Connection retries against a failing primary sleep the seam's schedule.
+
+    BR-RULE-029 (graded for webhook delivery in BR-UC-004 INV-3, generalised to
+    every egress retry loop by the call-site-backoff guard): exponential backoff
+    of 1s, 2s, 4s PLUS a ``uniform(0, 1)`` jitter draw, up to 3 attempts. The
+    schedule is computed in exactly one module —
+    ``src/core/security/outbound_http.py`` — and the MCP client's connection
+    loop must read it from there, not recompute a local copy that silently
+    drifts (a bare ``retry_delay * 2**attempt`` has no jitter and ignores the
+    ``ADCP_OUTBOUND_BACKOFF_BASE_SECONDS`` knob, and nothing fails when it
+    drifts further).
+
+    ``recorded_retry_sleeps`` observes the sleep in BOTH modules, so the grade
+    is about the durations wherever the sleep executes — the jitter term is
+    what separates the seam's schedule from a call-site recomputation.
+    """
+
+    async def test_failing_primary_sleeps_seam_schedule_with_jitter(self, monkeypatch, recorded_retry_sleeps):
+        """max_retries=3 against a dead port sleeps base + pinned jitter, twice.
+
+        The jitter draw is pinned to 0.25 via the seam suite's ``pin_jitter``
+        (patches ``outbound_http.random.uniform`` — the one home of the draw),
+        turning the grade exact: 1.25s then 2.25s. A schedule computed anywhere
+        other than the seam never reaches that draw and shows up here as the
+        bare bases. The base knob is ``delenv``'d so an ambient test-speed
+        value cannot turn this into an assertion about something else.
+        """
+        set_flags(monkeypatch, private=True, insecure=True)
+        monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+        pin_jitter(monkeypatch, 0.25)
+        # A loopback port with nothing listening: resolves, fails fast, and the
+        # sleeps between attempts are what is graded (hatches open because
+        # policy refuses loopback plain-http by default). Ends in /mcp so no
+        # fallback candidate is synthesised — one URL, 3 attempts, 2 sleeps.
+        agent_url = "http://localhost:9999/mcp"
+
+        with pytest.raises(MCPConnectionError):
+            async with create_mcp_client(agent_url=agent_url, timeout=1, max_retries=3):
+                pass
+
+        # The shared grader accepts a matching PREFIX of the schedule, so the
+        # count is pinned explicitly: 3 attempts must produce exactly 2 sleeps.
+        assert len(recorded_retry_sleeps) == 2, (
+            f"expected exactly 2 backoff sleeps for 3 attempts, got {recorded_retry_sleeps}"
+        )
+        assert_backoff_schedule(recorded_retry_sleeps, jitter=0.25)
+
+    async def test_default_attempt_budget_is_the_rules_three(self, monkeypatch, recorded_retry_sleeps):
+        """Omitting ``max_retries`` grades the DEFAULT budget against the rule.
+
+        BR-RULE-029 says "up to 3 times". The schedule case above passes
+        ``max_retries=3`` explicitly, so on its own a silently raised default
+        (say, 5) would sail past it while every production caller that takes
+        the default exceeds the rule. Three attempts leave exactly two sleeps
+        and say so in the failure message.
+        """
+        set_flags(monkeypatch, private=True, insecure=True)
+        agent_url = "http://localhost:9999/mcp"
+
+        with pytest.raises(MCPConnectionError) as exc_info:
+            async with create_mcp_client(agent_url=agent_url, timeout=1):
+                pass
+
+        assert "after 3 attempts" in str(exc_info.value)
+        assert len(recorded_retry_sleeps) == 2, (
+            f"default attempt budget slept {recorded_retry_sleeps} — expected 2 sleeps for 3 attempts"
         )
