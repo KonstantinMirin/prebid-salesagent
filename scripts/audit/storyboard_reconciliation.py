@@ -37,23 +37,39 @@ GRADED_RE = re.compile(r"^\s*GRADED", re.I)
 
 def first_prose_line(text: str, start: int) -> str:
     for line in text[start:].splitlines()[1:]:
-        stripped = line.strip().strip("*`")
+        stripped = line.strip().replace("**", "").replace("`", "").strip()
         if stripped:
             return stripped
     return ""
 
 
+# Verdicts that qualify themselves ("but only half", "one of its three phases",
+# "for the behaviour the scenario currently asserts") are compound: part of the
+# scenario is salvageable green, part is not. A single action label would
+# misroute them, so they are surfaced as PARTIAL for a human to split rather
+# than guessed at.
+COMPOUND_RE = re.compile(
+    r"but only|only half|\bhalf\b|one of its \w+ phases|only one of|"
+    r"currently asserts|for the behaviour|partly|in part",
+    re.I,
+)
+
+
 def derive_action(verdict: str) -> str:
-    """Map a verdict sentence onto the concrete next action."""
+    """Map a verdict sentence onto the concrete next action.
+
+    Deliberately conservative: anything self-qualifying becomes PARTIAL rather
+    than being forced into a single bucket.
+    """
     lowered = verdict.lower()
+    if COMPOUND_RE.search(verdict):
+        return "PARTIAL"
     if NOT_GRADED_RE.match(verdict):
         return "RETAG"
     if "non-conformant" in lowered or "never emitted" in lowered or "unimplemented" in lowered:
         return "TICKET"
     if "asserts the wrong" in lowered or "not graded, and it" in lowered or "is prose, not a grad" in lowered:
         return "FIX-ASSERT"
-    if "wrong" in lowered or "never" in lowered or "footer" in lowered:
-        return "REPIN"
     return "REPIN"
 
 
@@ -154,7 +170,8 @@ def render(result: dict[str, Any]) -> str:
         "Actions — `RETAG` tag claims a grading that does not apply to us "
         "(becomes `@schema-v3.1`, identifier preserved) · `REPIN` graded, `@source` stale/wrong/absent · "
         "`FIX-ASSERT` graded, scenario asserts the wrong thing · "
-        "`TICKET` graded, production non-conformant, scenario stays dormant.",
+        "`TICKET` graded, production non-conformant, scenario stays dormant · "
+        "`PARTIAL` verdict is compound (part salvageable green, part not) — needs a human split.",
         "",
         "| Scenario | Status | Action | Verdict |",
         "|---|---|---|---|",
