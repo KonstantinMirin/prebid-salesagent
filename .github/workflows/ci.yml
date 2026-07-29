@@ -247,6 +247,13 @@ jobs:
           extra_args: --timeout=60 -m "(${{ matrix.marker }}) and not skip_ci"
         env:
           CREATIVE_AGENT_URL: ${{ matrix.group == 'creative' && 'http://localhost:9999/api/creative-agent' || '' }}
+          # The pinned creative agent is reached over loopback plain-http, which the
+          # egress seam refuses on both counts. run_all_tests_host.sh and the e2e
+          # compose files already open these; this group is driven directly by the
+          # action, so it needs them too — without them the group goes red the moment
+          # the MCP client validates its agent URL (salesagent-jl08).
+          ADCP_OUTBOUND_ALLOW_PRIVATE: ${{ matrix.group == 'creative' && 'true' || '' }}
+          ADCP_OUTBOUND_ALLOW_INSECURE: ${{ matrix.group == 'creative' && 'true' || '' }}
       - name: Cleanup pinned creative agent
         if: always() && matrix.group == 'creative'
         run: ./scripts/creative-agent-stack.sh down

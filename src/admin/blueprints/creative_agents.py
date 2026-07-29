@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CreativeAgent, Tenant
 
@@ -98,6 +99,16 @@ def add_creative_agent(tenant_id):
             auth_type = request.form.get("auth_type", "").strip() or None
             auth_credentials = request.form.get("auth_credentials", "").strip() or None
 
+            # The agent URL is stored now and fetched later, so egress policy is
+            # applied at ingest — see src.admin.utils.url_policy. Without it the
+            # operator learns of a refusal at dial time instead of at the form.
+            if blocked := redirect_if_url_blocked(
+                agent_url,
+                "Agent URL",
+                url_for("creative_agents.add_creative_agent", tenant_id=tenant_id),
+            ):
+                return blocked
+
             if not agent_url:
                 flash("Agent URL is required", "error")
                 return redirect(url_for("creative_agents.add_creative_agent", tenant_id=tenant_id))
@@ -174,7 +185,15 @@ def edit_creative_agent(tenant_id, agent_id):
                 flash("Creative agent not found", "error")
                 return redirect(url_for("creative_agents.list_creative_agents", tenant_id=tenant_id))
 
-            agent.agent_url = request.form.get("agent_url", "").strip()
+            new_agent_url = request.form.get("agent_url", "").strip()
+            if blocked := redirect_if_url_blocked(
+                new_agent_url,
+                "Agent URL",
+                url_for("creative_agents.edit_creative_agent", tenant_id=tenant_id, agent_id=agent_id),
+            ):
+                return blocked
+
+            agent.agent_url = new_agent_url
             agent.name = request.form.get("name", "").strip()
             agent.enabled = request.form.get("enabled") == "on"
             agent.priority = int(request.form.get("priority", "10"))

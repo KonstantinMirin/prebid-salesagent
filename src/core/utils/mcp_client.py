@@ -30,6 +30,8 @@ from typing import Any
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
+from src.core.security.outbound_http import validate_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,6 +144,19 @@ async def create_mcp_client(
     # Strip trailing slashes only - preserve the actual path (no mutation besides trimming)
     agent_url = agent_url.rstrip("/")
 
+    # Egress policy, once, BEFORE the candidate loop and outside every try.
+    #
+    # Position is load-bearing. Inside the loop this sits under a bare
+    # ``except Exception``, so a refusal would be logged as a connection failure,
+    # slept on, retried against the same blocked URL and then against the
+    # synthesised ``/mcp`` candidate, and finally re-raised as MCPConnectionError
+    # — a policy decision laundered into a transport failure. Here the refusal
+    # propagates as OutboundRequestBlocked, unretried and correctly classified.
+    #
+    # Validating the primary also covers the ``/mcp`` fallback below: it differs
+    # only by path, and the seam's policy is about scheme and address.
+    validate_url(agent_url)
+
     # Build auth headers
     headers = _build_auth_headers(auth, auth_header)
 
@@ -215,63 +230,3 @@ async def create_mcp_client(
         f"Failed to connect to MCP agent at {agent_url} after {max_retries} attempts: "
         f"{type(last_exception).__name__ if last_exception else 'UnknownError'}: {last_exception}"
     ) from last_exception
-
-
-async def check_mcp_agent_connection(
-    agent_url: str, auth: dict[str, Any] | None = None, auth_header: str | None = None
-) -> dict[str, Any]:
-    """Check connection to an MCP agent.
-
-    This is useful for Admin UI "Test Connection" buttons and diagnostics.
-
-    Args:
-        agent_url: URL of the MCP agent endpoint
-        auth: Optional auth configuration
-        auth_header: Optional custom auth header name
-
-    Returns:
-        Dict with success status, message, and optional tool count
-        Format: {"success": bool, "message": str, "tool_count": int}
-                or {"success": bool, "error": str}
-
-    Example:
-        result = await check_mcp_agent_connection(
-            agent_url="https://creative.adcontextprotocol.org/mcp",
-            auth={"type": "bearer", "credentials": "token123"}
-        )
-        if result["success"]:
-            print(f"Connected! Found {result['tool_count']} tools")
-        else:
-            print(f"Failed: {result['error']}")
-    """
-    try:
-        async with create_mcp_client(agent_url=agent_url, auth=auth, auth_header=auth_header, timeout=10) as client:
-            # Try to list tools to verify full functionality
-            tools = await client.list_tools()
-
-            return {
-                "success": True,
-                "message": "Successfully connected to MCP agent",
-                "tool_count": len(tools) if isinstance(tools, list) else 0,
-            }
-
-    except MCPCompatibilityError as e:
-        logger.warning(f"MCP compatibility issue during connection test: {e}")
-        return {
-            "success": False,
-            "error": f"MCP SDK compatibility issue: {str(e)}",
-        }
-
-    except MCPConnectionError as e:
-        logger.error(f"MCP connection test failed: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": f"Connection failed: {str(e)}",
-        }
-
-    except Exception as e:
-        logger.error(f"Unexpected error during MCP connection test: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": f"Unexpected error: {type(e).__name__}: {str(e)}",
-        }

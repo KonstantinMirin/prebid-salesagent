@@ -31,11 +31,32 @@ inventory and only ever shrinks — ``src/core/property_list_resolver.py`` and
 and ``src/services/webhook_delivery_service.py`` are migrated, so it is 11 now. Each entry pairs a module with its current
 egress-call count, so adding a call to an already-allowlisted module fails too
 rather than hiding behind the entry.
+
+SDK/MCP client egress — a SECOND scan, a SECOND allowlist
+---------------------------------------------------------
+
+``requests`` / ``httpx`` / ``aiohttp`` are not the only way out. Constructing an
+SDK or MCP client dials too, and the raw-egress scan above cannot see it. The
+second scan below closes that (salesagent-jl08): it matches the constructor NAME
+alone, because ``ADCPMultiAgentClient(agents=[...])`` carries no URL argument at
+all — the URL is one indirection away inside ``AgentConfig.agent_uri`` — so a
+"has a URL argument" condition would silently pass the exact two sites this scan
+exists to see.
+
+The two scans keep separate allowlists on purpose. ``ALLOWLIST`` reaching zero is
+the epic's raw-egress completion signal (salesagent-gstl); merging SDK entries
+into it would make that signal unreachable rather than amended.
+
+**Definition of done — amended (salesagent-jl08).** The epic closes when the
+RAW-EGRESS allowlist is empty (``EXPECTED_VIOLATION_COUNT = 0``). It does NOT
+require :data:`SDK_EGRESS_ALLOWLIST` to be empty — see the comment on that
+literal for why it is permanently non-empty.
 """
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 
 import pytest
 
@@ -85,6 +106,55 @@ ALLOWLIST = {
 
 EXPECTED_VIOLATION_COUNT = len(ALLOWLIST)
 
+# ---------------------------------------------------------------------------
+# SDK/MCP client egress
+# ---------------------------------------------------------------------------
+
+# The MCP seam: the one module allowed to construct an MCP transport. It is
+# exempt BY PATH for exactly the reason SEAM_FILE is — address policy is decided
+# there, once, at the top of `create_mcp_client`, before any connection
+# candidate is tried. `create_mcp_client` is that seam's entry point (the
+# analogue of `send`), so its callers are clean by construction and are NOT
+# matched below, the same way `send(...)` callers are not matched above.
+MCP_SEAM_FILE = "src/core/utils/mcp_client.py"
+SDK_EXEMPT_FILES = frozenset({MCP_SEAM_FILE})
+
+# Constructing any of these dials. Matched on the callable NAME alone — see the
+# module docstring for why a URL-argument condition would be worse than useless.
+#
+# Deliberately ABSENT:
+# - `create_mcp_client` — the MCP seam's entry point, not egress past it.
+# - `Client` — it takes no URL, and the bare name collides with `httpx.Client`
+#   in the egress seam (outbound_http.py) and with fastmcp's `Client(transport=...)`
+#   wrapping the transport built beside it (mcp_client.py).
+# - `build_agent_config` — builds a config object and dials nothing.
+#
+# Known limit, recorded rather than fixed: name-only matching is blind to an
+# alias import (`from adcp import ADCPClient as X`).
+SDK_EGRESS_CONSTRUCTORS = frozenset(
+    {
+        "StreamableHttpTransport",
+        "SSETransport",
+        "ADCPMultiAgentClient",
+        "ADCPClient",
+    }
+)
+
+# SDK/MCP egress the guard can see but cannot clear: (module_path, call_count).
+#
+# PERMANENTLY NON-EMPTY, and not a regression. `adcp` 6.6.0 exposes no transport
+# injection point on `AgentConfig` or on either client constructor; the internal
+# `httpx_client_factory` slot is private and only wired for RFC 9421 signing. So
+# these two sites carry validation (in `build_agent_config`) that the guard
+# cannot see. It shrinks only when the SDK grows a transport knob — never by
+# relaxing the guard. Each entry has a FIXME(#1589) at the source location.
+SDK_EGRESS_ALLOWLIST = {
+    ("src/core/creative_agent_registry.py", 1),
+    ("src/core/signals_agent_registry.py", 1),
+}
+
+SDK_EXPECTED_VIOLATION_COUNT = len(SDK_EGRESS_ALLOWLIST)
+
 
 def _call_is_egress(call: ast.Call) -> bool:
     """True when *call* issues an outbound request.
@@ -127,11 +197,45 @@ def find_raw_egress_violations(tree: ast.Module) -> list[int]:
     return sorted(linenos)
 
 
-def _scan_src(*, exempt: frozenset[str] = EXEMPT_FILES) -> dict[str, int]:
+def _call_is_sdk_egress(call: ast.Call) -> bool:
+    """True when *call* constructs an SDK/MCP client, i.e. dials.
+
+    Name-only, on both spellings — ``ADCPClient(...)`` and ``mod.ADCPClient(...)``.
+    Keying on the Call node (never the bare Name) is what keeps a type
+    annotation or an ``except`` clause naming the same class from being flagged.
+    """
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id in SDK_EGRESS_CONSTRUCTORS
+    if isinstance(func, ast.Attribute):
+        return func.attr in SDK_EGRESS_CONSTRUCTORS
+    return False
+
+
+def find_sdk_egress_violations(tree: ast.Module) -> list[int]:
+    """Line numbers of SDK/MCP client construction in *tree*.
+
+    Same ``(tree) -> list[int]`` detector shape as
+    :func:`find_raw_egress_violations`, so the meta-tests feed both the same way.
+    """
+    return sorted(call.lineno for call in iter_call_expressions(tree) if _call_is_sdk_egress(call))
+
+
+def _scan_src(
+    *,
+    detector: Callable[[ast.Module], list[int]] = find_raw_egress_violations,
+    exempt: frozenset[str] = EXEMPT_FILES,
+) -> dict[str, int]:
     """Map every offending module under src/ to its violation count.
 
-    ``exempt`` is a parameter so a meta-test can run the same scan with nothing
-    exempted and prove the exemption changes exactly one file.
+    ``detector`` and ``exempt`` are both parameters so the raw-egress scan and
+    the SDK/MCP scan share one implementation, and so a meta-test can re-run
+    either with nothing exempted and prove the exemption changes exactly the
+    files it claims to.
+
+    The two go together: pass BOTH at every SDK call site. Defaulting the SDK
+    scan to ``EXEMPT_FILES`` would exempt the httpx seam from a scan that has
+    nothing to say about it, and hide the MCP seam from the twin below.
     """
     repo = repo_root()
     counts: dict[str, int] = {}
@@ -139,10 +243,15 @@ def _scan_src(*, exempt: frozenset[str] = EXEMPT_FILES) -> dict[str, int]:
         rel = path.relative_to(repo).as_posix()
         if rel in exempt:
             continue
-        violations = find_raw_egress_violations(parse_module(path))
+        violations = detector(parse_module(path))
         if violations:
             counts[rel] = len(violations)
     return counts
+
+
+def _scan_src_for_sdk_egress(*, exempt: frozenset[str] = SDK_EXEMPT_FILES) -> dict[str, int]:
+    """The SDK/MCP scan: :func:`_scan_src` with its detector and exempt set paired."""
+    return _scan_src(detector=find_sdk_egress_violations, exempt=exempt)
 
 
 class TestNoRawEgress:
@@ -190,6 +299,68 @@ class TestNoRawEgress:
         assert actual == EXPECTED_VIOLATION_COUNT, (
             f"Expected {EXPECTED_VIOLATION_COUNT} allowlisted modules with raw egress, found {actual}. "
             "If you migrated one, remove it from ALLOWLIST. If you added one, DON'T — use the seam."
+        )
+
+
+class TestNoSdkEgress:
+    """SDK/MCP clients are constructed by the MCP seam and nowhere else.
+
+    Mirrors :class:`TestNoRawEgress` case for case, against its own allowlist.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_new_sdk_egress(self):
+        """An SDK/MCP client constructed in a module that had none fails immediately."""
+        allowlisted = {module for module, _count in SDK_EGRESS_ALLOWLIST}
+        new = {module: count for module, count in _scan_src_for_sdk_egress().items() if module not in allowlisted}
+
+        if new:
+            lines = ["SDK/MCP client construction found outside the MCP seam:", ""]
+            lines.extend(f"  {module} ({count} construction site(s))" for module, count in sorted(new.items()))
+            lines += [
+                "",
+                f"Fix: dial through {MCP_SEAM_FILE} — `create_mcp_client(agent_url=...)`, which applies "
+                "the egress seam's address policy once, before any connection candidate is tried.",
+                "Do NOT add it to SDK_EGRESS_ALLOWLIST: that list shrinks only when the SDK grows a transport knob.",
+            ]
+            raise AssertionError("\n".join(lines))
+
+    @pytest.mark.arch_guard
+    def test_sdk_allowlist_matches_reality(self):
+        """Every allowlisted module still constructs, with exactly the recorded count."""
+        assert_violations_match_allowlist(
+            set(_scan_src_for_sdk_egress().items()),
+            SDK_EGRESS_ALLOWLIST,
+            fix_hint=(
+                "Entries are (module, sdk_construction_count). This allowlist is permanently "
+                "non-empty while adcp exposes no transport injection point — see the comment on "
+                "SDK_EGRESS_ALLOWLIST. It never grows."
+            ),
+        )
+
+    @pytest.mark.arch_guard
+    def test_sdk_violation_count_matches(self):
+        """Module count matches the recorded SDK/MCP inventory."""
+        actual = len(_scan_src_for_sdk_egress())
+        assert actual == SDK_EXPECTED_VIOLATION_COUNT, (
+            f"Expected {SDK_EXPECTED_VIOLATION_COUNT} allowlisted modules constructing SDK/MCP clients, "
+            f"found {actual}. If you migrated one, remove it from SDK_EGRESS_ALLOWLIST. If you added "
+            "one, DON'T — dial through the MCP seam."
+        )
+
+    @pytest.mark.arch_guard
+    def test_sdk_allowlist_is_non_empty_and_that_is_the_amended_done(self):
+        """The SDK residue is stated, not silent.
+
+        The epic's "empty allowlist = done" is a claim about RAW egress only. If
+        this list ever empties, that is a real event — the SDK grew a transport
+        knob — and the amendment in the module docstring must be revisited
+        rather than the emptiness quietly absorbed.
+        """
+        assert SDK_EGRESS_ALLOWLIST, (
+            "SDK_EGRESS_ALLOWLIST is empty. If adcp now exposes a transport injection point, "
+            "route these through the seam and update the amended definition of done in this "
+            "module's docstring. Do not delete this assertion."
         )
 
 
@@ -290,3 +461,112 @@ class TestGuardDetector:
         without_exemption = _scan_src(exempt=frozenset())
         difference = set(without_exemption) - set(_scan_src())
         assert difference == {SEAM_FILE}, f"unexpected exempt path(s): {sorted(difference - {SEAM_FILE})}"
+
+
+class TestSdkGuardDetector:
+    """The SDK/MCP detector's own correctness, on synthetic sources."""
+
+    @pytest.mark.arch_guard
+    def test_detector_catches_known_bad(self):
+        """Every SDK/MCP construction form is reported."""
+        assert_detector_catches_ast_snippets(
+            find_sdk_egress_violations,
+            snippets={
+                "StreamableHttpTransport": (
+                    "from fastmcp.client.transports import StreamableHttpTransport\n"
+                    "t = StreamableHttpTransport(url='https://x/mcp', headers={})\n"
+                ),
+                "SSETransport": (
+                    "from fastmcp.client.transports import SSETransport\nt = SSETransport(url='https://x/sse')\n"
+                ),
+                "ADCPMultiAgentClient": (
+                    "from adcp import ADCPMultiAgentClient\nc = ADCPMultiAgentClient(agents=[cfg])\n"
+                ),
+                "ADCPClient": "from adcp import ADCPClient\nc = ADCPClient(agent=cfg)\n",
+                "dotted spelling": "import adcp\nc = adcp.ADCPMultiAgentClient(agents=[cfg])\n",
+                # The url-argument trap, kept as an explicit regression case: this
+                # form carries NO url anywhere, and it is one of the two real
+                # sites. A detector conditioned on a URL argument passes it.
+                "no url argument at all": (
+                    "from adcp import ADCPMultiAgentClient\n\n\n"
+                    "def build(agents):\n    return ADCPMultiAgentClient(agents=[build_agent_config(a) for a in agents])\n"
+                ),
+                "construction inside a method": (
+                    "from adcp import ADCPMultiAgentClient\n\n\n"
+                    "class R:\n    def client(self, agents):\n        return ADCPMultiAgentClient(agents=agents)\n"
+                ),
+            },
+        )
+
+    @pytest.mark.arch_guard
+    @pytest.mark.parametrize(
+        ("label", "source"),
+        [
+            # Every case below uses a name the detector DOES look at (or the one
+            # name deliberately excluded from the set). A known-good built from a
+            # name the detector never inspects asserts nothing.
+            (
+                "type annotation only",
+                "from adcp import ADCPMultiAgentClient\n\n\ndef f(c: ADCPMultiAgentClient) -> None:\n    return None\n",
+            ),
+            (
+                "return annotation only",
+                "from adcp import ADCPMultiAgentClient\n\n\n"
+                "def build(agents) -> ADCPMultiAgentClient:\n    return _cached\n",
+            ),
+            (
+                "matched name in an except clause",
+                "from adcp import ADCPClient\n\ntry:\n    pass\nexcept ADCPClient:\n    pass\n",
+            ),
+            (
+                "bare name reference, no call",
+                "from adcp import ADCPMultiAgentClient\n\nalias = ADCPMultiAgentClient\n",
+            ),
+            (
+                "import alone",
+                "from fastmcp.client.transports import StreamableHttpTransport\n",
+            ),
+            # `Client` is the real collision: httpx.Client in the egress seam and
+            # fastmcp's Client(transport=...) in the MCP seam. It takes no URL.
+            (
+                "fastmcp Client wrapping a transport",
+                "from fastmcp.client import Client\n\nc = Client(transport=transport)\n",
+            ),
+            # The MCP seam's entry point. Its callers are clean by construction —
+            # the same reason `send(...)` callers are not raw-egress violations.
+            (
+                "MCP seam entry point",
+                "from src.core.utils.mcp_client import create_mcp_client\n\n"
+                "async def f(u):\n    async with create_mcp_client(agent_url=u) as c:\n        return c\n",
+            ),
+        ],
+    )
+    def test_detector_ignores_non_egress(self, label, source):
+        """Naming an SDK client without constructing one is not a violation."""
+        assert find_sdk_egress_violations(ast.parse(source)) == [], f"false positive on {label}"
+
+    @pytest.mark.arch_guard
+    def test_mcp_seam_would_otherwise_be_flagged(self):
+        """The MCP seam is exempt by path, and is genuinely exempt — not merely clean.
+
+        An exemption that excludes an already-clean file proves nothing. The MCP
+        seam really does construct a transport; the scan skips it by path.
+        """
+        seam = repo_root() / MCP_SEAM_FILE
+        assert find_sdk_egress_violations(parse_module(seam)), (
+            "the MCP seam no longer constructs a transport — is the path stale?"
+        )
+        assert MCP_SEAM_FILE not in _scan_src_for_sdk_egress()
+
+    @pytest.mark.arch_guard
+    def test_mcp_seam_is_the_only_exempt_path(self):
+        """Exempting the MCP seam changes exactly one file, and no other.
+
+        The twin of :meth:`TestGuardDetector.test_seam_is_the_only_exempt_path`,
+        and NOT a copy of it: run with the SDK detector, the httpx seam
+        constructs no MCP clients, so the meaningful difference here is the MCP
+        seam. A second quietly-exempted module shows up as an extra key.
+        """
+        without_exemption = _scan_src_for_sdk_egress(exempt=frozenset())
+        difference = set(without_exemption) - set(_scan_src_for_sdk_egress())
+        assert difference == {MCP_SEAM_FILE}, f"unexpected exempt path(s): {sorted(difference - {MCP_SEAM_FILE})}"
