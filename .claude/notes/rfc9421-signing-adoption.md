@@ -56,17 +56,17 @@ the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`; #6 and
 | # | Divergence | Consequence |
 |---|---|---|
 | 1 | `adcp.signing.verifier.VerifierCapability` (verifier.py:88) carries **4 of `request_signing`'s 8 properties** — i.e. **2 of its 6 operation buckets** (`supported_for`, `required_for`). Missing: `warn_for`, `protocol_methods_supported_for`, `protocol_methods_warn_for`, `protocol_methods_required_for`. | Shadow mode (§10) and the JSON-RPC method namespace are **ours to implement**. Passing `warn_for` into `VerifierCapability` silently drops it. |
-| 2 | `request_target_uri_malformed` (security.mdx step 10) and `request_body_malformed` (step 14) exist in the prose and in **no** SDK constant and **no** vector. | We emit both from our own layer. Do not "resolve" the divergence by dropping the codes. |
+| 2 | `request_target_uri_malformed` (security.mdx step 10) and `request_body_malformed` (step 14) exist in the prose and in **no** SDK constant. `request_target_uri_malformed` IS graded by data (see #7); `request_body_malformed` is graded by no vector. | We emit both from our own layer. Do not "resolve" the divergence by dropping the codes. |
 | 3 | `verify_starlette_request`'s docstring (middleware.py:38-44) claims Starlette caches the body so downstream handlers re-reading it get the same bytes. The cache lives on the `Request` **instance** the middleware constructs, not on the one the downstream app builds from the same scope — the receive channel **is** drained. | The `_receive` replay shim already in `src/app.py:455-462` is required. The docstring is wrong. |
 | 4 | `adcp.signing.agent_resolver._fetch_capabilities` (agent_resolver.py:179-305) performs a raw `GET <agent_url>` and requires a JSON **object** body. security.mdx:1142 says the opposite verbatim: "This is a **protocol-level** call — invoke `get_adcp_capabilities` via the agent's declared transport (MCP `tools/call` or A2A skill invocation), **not a raw HTTP `GET`** against `A`. The agent URL is the protocol endpoint, not a JSON capabilities document." | `resolve_agent(<our agent url>)` cannot reach hop 2 against us no matter what we publish: `/mcp` answers GET with a redirect to an SSE stream and `/a2a` is JSON-RPC POST. Any test driving the resolver must seed hop 1 through `_capabilities_client_factory` (`tests/e2e/test_trust_root_e2e.py` does, and leaves hops 2 and 3 live). |
 | 5 | `adcp.signing.brand_jwks._pick_agent` (brand_jwks.py:824-869) selects the `agents[]` entry by `type` plus an optional `agent_id` and **never compares `url` to the agent URL `A`** — so it raises `agent_ambiguous` for the shape the schema explicitly blesses (`#/definitions/agents`: "Multiple entries with the same type are permitted when they have distinct url values, such as one endpoint URL per tenant or property scope"), while security.mdx:1104 step 5 defines the match as byte-equality on `url`. | We publish one `agents[]` entry PER ENDPOINT we serve (`/mcp/`, `/a2a`) with distinct `id`s, per the schema — an origin-only `url` would byte-equal nothing any counterparty ever invoked. Our own resolver calls must pass `agent_id`. Do not "resolve" this by collapsing to one entry. |
 | 6 | **Canonicalization.** `adcp.signing.canonical._canon_authority` (canonical.py:128-150) never calls the SDK's OWN `adcp.signing._idna_canonicalize.canonicalize_host` (four sibling SDK modules do), performs **no** malformed-authority rejection, and `canonicalize_target_uri` drops a trailing empty query. MEASURED: **8 of the 31 shipped `canonicalization.json` cases fail** against `adcp==6.6.0` — the 2 IDN cases, `trailing-empty-query-preserved`, and all 6 `reject: true` cases (5 accepted outright, `malformed-ipv6-missing-closing-bracket` refused with a bare `ValueError` carrying no code). The same root cause makes the SDK answer request vector `negative/026` with `request_signature_invalid` instead of `request_signature_header_malformed`. | `src/core/signing/canonical.py` is the thin seam: it DELEGATES every canonical form to the SDK and adds ONLY the spec's rejection set (url-canonicalization.mdx steps 2-3), so we never carry a second canonicalizer. 28 of 31 cases run as conformance through it; the 2 IDN mapping cases and `trailing-empty-query-preserved` are **not implementable at a verifier boundary** (the first are signer-side — a comparer MUST reject, not re-normalize; the third is destroyed by ASGI, which hands `query_string=b""` for both `/p` and `/p?`) and run as named our-obligation tests. **0 skipped, 0 xfailed.** |
-| 7 | **`request_target_uri_malformed` is now GRADED, and the constant still does not exist.** Cross-reference #2, which flagged the constant's absence but recorded that no vector graded it. That is no longer true: `canonicalization.json`'s 6 `reject: true` cases expect exactly this string, grounded at url-canonicalization.mdx ("Malformed authorities are rejected with `request_target_uri_malformed` on the signing path"). NOTE the vector README's worked example is **stale** and shows `request_signature_header_malformed`; the shipped DATA wins. | Defined in our layer as `src.core.signing.canonical.REQUEST_TARGET_URI_MALFORMED`, per #2's own instruction. **Keep it apart from `request_signature_header_malformed`**: request vector `negative/026` legitimately expects the latter (a checklist step-1 wire rejection), the canonicalization reject set expects the former. Collapsing the two loses a graded artifact in each direction. |
+| 7 | **`request_target_uri_malformed` is graded by data, and no SDK constant exists for it.** `canonicalization.json`'s 6 `reject: true` cases expect exactly this string, grounded at url-canonicalization.mdx ("Malformed authorities are rejected with `request_target_uri_malformed` on the signing path"). NOTE the vector README's worked example is **stale** and shows `request_signature_header_malformed`; the shipped DATA wins. | Defined in our layer as `src.core.signing.canonical.REQUEST_TARGET_URI_MALFORMED`, per #2's own instruction. **Keep it apart from `request_signature_header_malformed`**: request vector `negative/026` legitimately expects the latter (a checklist step-1 wire rejection), the canonicalization reject set expects the former. Collapsing the two loses a graded artifact in each direction. |
 
 **Upstream filing status (B3, `salesagent-z6nr.14`) — FILED, as four issues, not one.**
 
 #6 and #7 are filed against `adcontextprotocol/adcp-client-python`, decomposed by root cause rather
-than bundled as originally planned. All four are OPEN and UNFIXED:
+than bundled. All four are OPEN and UNFIXED:
 
 | Upstream | Covers |
 |---|---|
@@ -491,14 +491,53 @@ Composed in `src/core/config.py` following the existing `BaseSettings` sub-confi
 | revocation list issuer origin + poll interval | one fetcher per process |
 | brand.json / `adagents.json` / JWKS publication origin | one deployment origin |
 
-**Amendment (A2, salesagent-z6nr.8).** This row originally read "`SigningProvider` selection + key
-material LOCATION". Taken literally that is unimplementable: each tenant is a distinct seller
-identity with its own brand domain and therefore its own key material, so there is no single
-agent-level key location. A2 splits it — the **store kind** is agent-level
-(`SigningConfig.provider`, plus `allowed_key_ref_schemes`, which is what lets a deployment forbid
-`file:` in production), while each key's **location** is per-tenant and lives on the `signing_keys`
-row's scheme-prefixed `private_key_ref` (`env:NAME` / `file:/abs/path`). A3 and C1 inherit that
-split; do not re-derive it.
+The store **kind** is agent-level (`SigningConfig.provider`, plus `allowed_key_ref_schemes`, which
+is what lets a deployment forbid a scheme outright); each key's **location** is per-tenant and lives
+on the `signing_keys` row's scheme-prefixed `private_key_ref`. There is no single agent-level key
+location, because each tenant is a distinct seller identity with its own brand domain and therefore
+its own key material. A3 and C1 inherit this split; do not re-derive it.
+
+### How key material is stored
+
+**The application never writes key material to a filesystem.** The private PEM lives in the
+`signing_keys` row, **encrypted**, opened with one deployment-wide KEK read from one environment
+variable. `private_key_ref` is `db:<row-id>` — a pointer, never **plaintext** key material.
+
+This is not new crypto. `generate_signing_keypair(passphrase=...)` returns PKCS#8
+`BEGIN ENCRYPTED PRIVATE KEY`, so the stored ciphertext is the PEM itself; the passphrase path
+(`SigningConfig.key_passphrase_env` → `key_passphrase` → `load_private_key_pem(password=)`) resolves
+the KEK from the environment on every use rather than pinning it in process memory.
+
+**Minting refuses when no KEK is configured**, naming the variable to set. There is no plaintext
+fallback — that fallback is what would degrade "encrypted PEM in Postgres" into "private keys in the
+database".
+
+| scheme | role |
+|---|---|
+| `db:` | **the default.** Encrypted PEM in the row, KEK from one env var |
+| `env:` | single-tenant deployments that prefer it |
+| `file:` | **read-only**, for an orchestrator-mounted secret (k8s `Secret`, Docker secret) |
+| `kms` | reserved in `SigningConfig.provider` and refused by `validate_provider`; `salesagent-z6nr.30` |
+
+`db:` is the default because keys are **per tenant** and minted **at runtime**. `env:` would need one
+variable per tenant per key, and onboarding a tenant would require a redeploy — the
+"write a secret, read it into an env var" pattern fits one application-level secret, not N
+runtime-minted per-tenant keys. A secret manager cannot be assumed to exist in every deployment.
+
+**Threat model.** A database dump, backup or read replica alone yields useless ciphertext; the
+environment alone yields nothing. An attacker holding **both** gets the key — identical to
+`file:`+passphrase and to the AWS secret→env pattern, where a plaintext PEM sits in the environment.
+Only a KMS/HSM improves on it, because there the private key never enters the process at all. `db:`
+is envelope encryption already, so a KMS-managed data key later replaces the KEK with no change to
+the row format.
+
+Multi-replica deployment is **unsupported**. `db:` happens to work across replicas, since nothing is
+on local disk, but that is a side effect and not a tested property.
+
+**The public half.** `public_jwk` is a `JSONType` column on `signing_keys` carrying `kid`, `alg`,
+`adcp_use`, `kty`, `crv` and `x`; `build_jwks` renders `/.well-known/jwks.json` from those rows via
+`publishable_at`. `kid` is the wire selector: the signer emits it as the `keyid=` parameter of
+`Signature-Input`, and a verifier matches that against the published JWK's `kid`.
 
 **Group C — counterparty key resolution** (the inbound discovery chain: checklist step 7,
 `get_adcp_capabilities → identity.brand_json_url → brand.json → agents[] → jwks_uri`). This group
