@@ -54,8 +54,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
     MODULE = "src.services.webhook_delivery_service"
     EXTERNAL_PATCHES = {
-        "sleep": f"{MODULE}.time.sleep",
-        "random": f"{MODULE}.random.uniform",
+        "sleep": "src.core.security.outbound_http.time.sleep",
+        "random": "src.core.security.outbound_http.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
         "logger": f"{MODULE}.logger",
     }

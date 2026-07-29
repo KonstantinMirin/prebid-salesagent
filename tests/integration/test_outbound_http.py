@@ -755,7 +755,7 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
 
     The second half pins the default: a caller that supplies no ``field`` gets
     no ``field`` KEY, not a null. That default is what almost every call site
-    wants — the 13 unmigrated ``# FIXME(#1589)`` sites, and the migrated ones
+    wants — the 12 unmigrated ``# FIXME(#1589)`` sites, and the migrated ones
     that fetch stored operator config, have no request-payload path to name at
     all. Only a caller whose URL arrived in the caller's own request document
     passes one (``src/core/property_list_resolver.py`` is the first). Emitting
@@ -1338,3 +1338,110 @@ def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monk
 
     assert error.retry_after is None, f"{header!r} was parsed into a retry_after: {error.retry_after!r}"
     assert durations == pytest.approx([0.001]), f"expected the plain geometric wait for {header!r}, got {durations}"
+
+
+# ---------------------------------------------------------------------------
+# 12. The terminal-client-error predicate — WHICH 4xx the seam refused to retry
+# ---------------------------------------------------------------------------
+#
+# ``terminal_client_error_status`` lives in ``src/core/helpers/outbound_error_mapping.py``,
+# but the fact it asserts is a property of THIS module: a 4xx is "terminal" only
+# if it is absent from ``_RETRYABLE_STATUSES``. 429 is the counter-example that
+# makes the distinction load-bearing — it is a 4xx the seam retries to
+# exhaustion, so a caller keying off ``400 <= status < 500`` logs "will not
+# retry" about a request that was just retried three times.
+#
+# Graded here, against real origin responses, so the predicate and the retry set
+# cannot drift apart in two files; and reusing this suite's origin, flag and
+# backoff helpers rather than restating them in a second module.
+
+
+def _terminal_client_error_status():
+    """Import the predicate lazily, for the same reason as :func:`_seam`."""
+    from src.core.helpers.outbound_error_mapping import terminal_client_error_status
+
+    return terminal_client_error_status
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_4xx_the_seam_did_not_retry_reports_its_status(seam_call, monkeypatch, local_origin):
+    """A 404 the seam gave up on after one attempt IS a terminal client error.
+
+    ``attempts == 1`` is asserted alongside the predicate on purpose: it is what
+    makes "will not retry" a true sentence about this failure rather than a
+    guess, and it is the half a status-range test cannot see.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    local_origin.respond_with(404, body=b'{"error": "no such hook"}')
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert error.attempts == 1, f"the seam retried a 404 {error.attempts} times"
+    assert _terminal_client_error_status()(error) == 404
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_rate_limited_4xx_is_never_reported_as_terminal(seam_call, monkeypatch, local_origin):
+    """A 429 is a 4xx the seam RETRIES, so it is not a terminal client error.
+
+    This is the case a hand-written ``400 <= status < 500`` at a call site gets
+    wrong, and no operator can catch it from the outside: the log would read
+    "returned client error 429, will not retry" about a delivery the seam had
+    just attempted three times. The origin really answers 429 and the hit count
+    really is 3, so the contradiction is observed, not assumed.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    fast_backoff(monkeypatch)
+    rate_limited(local_origin)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+
+    assert error.last_status == 429
+    assert error.attempts == 3
+    assert local_origin.hits == 3, "the seam did not actually retry the 429"
+    assert _terminal_client_error_status()(error) is None, (
+        "a 429 the seam retried three times was reported as a terminal client error"
+    )
+
+
+def test_every_status_the_seam_retries_is_reported_as_not_terminal():
+    """The predicate is keyed on the seam's OWN retry set, not a copied range.
+
+    The two origin-driven cases above grade one member each. This grades the
+    key: every status in ``_RETRYABLE_STATUSES``, whatever that set becomes,
+    must answer ``None`` — which is only true if the predicate reads the set
+    rather than restating a status range that happens to agree with it today.
+    """
+    seam = _seam()
+    predicate = _terminal_client_error_status()
+
+    for status in sorted(seam._RETRYABLE_STATUSES):
+        error = seam.OutboundDeliveryFailed(attempts=3, last_status=status)
+        assert predicate(error) is None, f"status {status} is retried by the seam but was reported as terminal"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_refusal_is_not_a_client_error(seam_call, monkeypatch):
+    """A URL refused before connecting has no status to be terminal about."""
+    set_flags(monkeypatch, private=True, insecure=True)
+
+    error = assert_blocked(seam_call, METADATA_URL)
+
+    assert _terminal_client_error_status()(error) is None
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypatch, local_origin):
+    """A failure with no response at all reports no client error, rather than crashing.
+
+    ``last_status`` is ``None`` here, which is the input a predicate written as
+    a bare comparison raises ``TypeError`` on.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    fast_backoff(monkeypatch)
+    local_origin.close_without_responding()
+
+    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+
+    assert error.last_status is None
+    assert _terminal_client_error_status()(error) is None

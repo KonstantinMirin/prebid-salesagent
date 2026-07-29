@@ -636,6 +636,214 @@ class TestDeliverWithBackoffTransportFailure:
 
 
 # ---------------------------------------------------------------------------
+# UC-004-EXT-G-03 (_deliver_with_backoff: a URL egress policy refuses)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestDeliverWithBackoffRefusedUrl:
+    """A URL the egress policy refuses is as visible to the breaker as a dead one.
+
+    The refusal is the failure mode nothing else in this suite produces: the
+    other cases all reach the origin and fail there. A refusal never reaches the
+    wire at all, so it arrives at the call site as a DIFFERENT exception class,
+    and a handler that catches only "the destination answered badly" would let a
+    permanently unreachable endpoint fail silently forever — every delivery
+    dropped, the circuit never opening, no operator signal.
+
+    ``no-such-host.invalid`` is the unresolvable host the seam's own suite uses
+    (``tests/integration/test_outbound_http.py``); it is refused by address
+    policy, and the escape hatches this env opens for the loopback origin do not
+    reach it.
+
+    Covers: UC-004-EXT-G-03
+    """
+
+    REFUSED_URL = "https://no-such-host.invalid/webhook"
+
+    def test_refused_url_records_failures_and_opens_the_circuit(self, integration_db):
+        """Every refusal records one circuit-breaker failure, and the circuit opens.
+
+        Covers: UC-004-EXT-G-03
+        """
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=self.REFUSED_URL,
+            )
+
+            service = env.get_service()
+            # Read the threshold off a breaker rather than restating 5: the test
+            # is about "enough failures to open it", not about the number.
+            threshold = env.get_breaker().failure_threshold
+
+            for _ in range(threshold):
+                result = service._send_webhook_enhanced(
+                    tenant_id="t1",
+                    principal_id="p1",
+                    media_buy_id="mb_001",
+                    delivery_payload={"impressions": 5000},
+                )
+                assert result is False
+
+            state, failure_count = service.get_circuit_breaker_state(self.REFUSED_URL)
+            assert failure_count == threshold, (
+                f"a refused URL produced {failure_count} circuit-breaker failures across "
+                f"{threshold} deliveries — a refusal that does not reach record_failure() "
+                "makes a bad endpoint invisible to the breaker"
+            )
+            assert state == CircuitState.OPEN
+
+            # A refusal is decided before any connection is attempted, so there
+            # is nothing to retry and nothing to back off from.
+            assert env.mock["sleep"].call_count == 0, (
+                f"a refused URL was retried with backoff ({env.mock['sleep'].call_count} sleeps)"
+            )
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-01 (_deliver_with_backoff: a rate-limited endpoint)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestDeliverWithBackoffRateLimited:
+    """A 429 is retried, and is never logged as a failure that will not be retried.
+
+    429 is the one 4xx the seam retries, which makes it the case where a call
+    site that classifies by status range contradicts what actually happened: it
+    logs "client error 429, will not retry" about a delivery that was attempted
+    three times. Nothing outside this test grades that sentence, and an operator
+    reading it would go looking for a rejected request instead of a rate limit.
+
+    Covers: UC-004-EXT-G-01
+    """
+
+    def test_429_is_retried_and_not_logged_as_a_no_retry_client_error(self, integration_db):
+        """The origin answers 429 to every attempt: retried, then one failure recorded.
+
+        Covers: UC-004-EXT-G-01
+        """
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=env.webhook_url,
+            )
+
+            env.set_http_response(429)
+            service = env.get_service()
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_001",
+                delivery_payload={"impressions": 5000},
+            )
+
+            assert result is False
+
+            # The endpoint really was tried again — this is what makes the
+            # "will not retry" wording below a false statement rather than a
+            # stylistic quibble.
+            assert env.delivery_attempts == 3
+            assert env.mock["sleep"].call_count == 2
+
+            no_retry_claims = [record for record in env.captured_logs if "will not retry" in record]
+            assert no_retry_claims == [], (
+                f"a 429 that was retried {env.delivery_attempts} times was logged as not retryable: {no_retry_claims}"
+            )
+            assert any("429" in record for record in env.captured_logs), (
+                f"the rate limit was never named in an operator log: {env.captured_logs}"
+            )
+
+            endpoint_key = env.endpoint_key("t1")
+            _, failure_count = service.get_circuit_breaker_state(endpoint_key)
+            assert failure_count == 1
+
+
+# ---------------------------------------------------------------------------
+# UC-004-EXT-G-01 (_deliver_with_backoff: a rejected request)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestDeliverWithBackoffClientError:
+    """A rejected request is terminal, and this module logs the status itself.
+
+    The status has to be named by THIS module's logger at WARNING: the capture
+    handler in ``CircuitBreakerEnv`` attaches to
+    ``src.services.webhook_delivery_service`` only and at WARNING only, so
+    membership in ``captured_logs`` grades both the logger and the level. The
+    egress seam logs under its own name and says nothing at all about a
+    non-retryable 4xx, so if this site stops logging it, the only operator signal
+    that an endpoint is rejecting deliveries disappears.
+
+    Covers: UC-004-EXT-G-01
+    """
+
+    def test_404_is_not_retried_and_the_status_is_logged(self, integration_db):
+        """The origin answers 404: one attempt, one recorded failure, one warning.
+
+        Covers: UC-004-EXT-G-01
+        """
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=env.webhook_url,
+            )
+
+            env.set_http_response(404)
+            service = env.get_service()
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_001",
+                delivery_payload={"impressions": 5000},
+            )
+
+            assert result is False
+            assert env.delivery_attempts == 1
+            assert env.mock["sleep"].call_count == 0
+
+            assert any("404" in record for record in env.captured_logs), (
+                f"the rejected status was never named in an operator log: {env.captured_logs}"
+            )
+
+            endpoint_key = env.endpoint_key("t1")
+            _, failure_count = service.get_circuit_breaker_state(endpoint_key)
+            assert failure_count == 1
+
+
+# ---------------------------------------------------------------------------
 # Coverage: is_adjusted notification type (line 239)
 # ---------------------------------------------------------------------------
 

@@ -605,14 +605,15 @@ class TestDeliverWithBackoffGenericException:
             }
         )
 
-        with patch("src.services.webhook_delivery_service.httpx") as mock_httpx:
-            mock_httpx.Client.return_value.__enter__ = MagicMock(
-                return_value=MagicMock(post=MagicMock(side_effect=RuntimeError("unexpected")))
-            )
-            mock_httpx.Client.return_value.__exit__ = MagicMock(return_value=False)
-            mock_httpx.TimeoutException = type("TimeoutException", (Exception,), {})
-            mock_httpx.RequestError = type("RequestError", (Exception,), {})
+        # salesagent-vkxf part 2: the subject is a NON-transport exception escaping
+        # the delivery call, so there is nothing an origin can serve to produce it.
+        # It is injected at the seam instead of at a transport this module no
+        # longer touches — and the seam's own exception TYPES are real now, rather
+        # than the placeholder classes the old httpx-module stub had to invent.
+        def _unexpected(*args, **kwargs):
+            raise RuntimeError("unexpected")
 
+        with patch("src.services.webhook_delivery_service.send", _unexpected):
             result = svc._deliver_with_backoff("test_endpoint", cb, queue)
 
         assert result is False

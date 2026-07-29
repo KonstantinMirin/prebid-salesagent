@@ -179,6 +179,33 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
         self.retry_after = retry_after
 
 
+def terminal_client_error_status(exc: OutboundError) -> int | None:
+    """The 4xx this seam refused to retry, or ``None``.
+
+    "Client error, will not retry" has to be true by construction rather than by
+    each call site remembering which statuses are retryable. A plain
+    ``400 <= status < 500`` test looks right and is not: 429 is a 4xx this seam
+    DOES retry, so that spelling reports a rate-limited endpoint — retried to
+    exhaustion — as a terminal client error, and any log or classification built
+    on it states the opposite of what happened.
+
+    It lives here rather than beside the taxonomy mapper because the answer is a
+    property of :data:`_RETRYABLE_STATUSES`, i.e. of this module's own retry
+    policy, not of any caller's error vocabulary. Callers reading it from here
+    also cannot drift from the set as it changes.
+
+    Returns ``None`` for a refusal (no status to be terminal about) and for a
+    transport failure (``last_status is None`` — the input a bare comparison
+    raises ``TypeError`` on).
+    """
+    if not isinstance(exc, OutboundDeliveryFailed):
+        return None
+    status = exc.last_status
+    if status is None or not (400 <= status < 500) or status in _RETRYABLE_STATUSES:
+        return None
+    return status
+
+
 @dataclass(frozen=True)
 class OutboundResult:
     """A delivered response, plus what it cost to get it."""

@@ -33,7 +33,12 @@ from __future__ import annotations
 import logging
 from typing import NoReturn
 
-from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundError, OutboundRequestBlocked
+from src.core.security.outbound_http import (
+    OutboundDeliveryFailed,
+    OutboundError,
+    OutboundRequestBlocked,
+    terminal_client_error_status,
+)
 
 
 def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger: logging.Logger) -> NoReturn:
@@ -74,8 +79,9 @@ def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger:
         logger.warning(f"{agent_label} rate-limited after {exc.attempts} attempts")
         raise AdCPRateLimitError(f"{agent_label} is rate-limited.", retry_after=exc.retry_after) from exc
 
-    if isinstance(exc, OutboundDeliveryFailed) and exc.last_status is not None and 400 <= exc.last_status < 500:
-        logger.error(f"{agent_label} rejected the request (HTTP {exc.last_status})")
+    terminal_status = terminal_client_error_status(exc)
+    if terminal_status is not None:
+        logger.error(f"{agent_label} rejected the request (HTTP {terminal_status})")
         raise AdCPAdapterError(f"{agent_label} rejected the request.", recovery="terminal") from exc
 
     raise exc

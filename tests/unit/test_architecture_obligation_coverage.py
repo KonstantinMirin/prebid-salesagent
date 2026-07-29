@@ -46,7 +46,6 @@ _UNIT_ENTITY_FILES = [
     "test_delivery.py",
     "test_delivery_poll_behavioral.py",
     "test_delivery_service_behavioral.py",
-    "test_webhook_delivery_service.py",
     "test_product.py",
     "test_product_schema_obligations.py",
     "test_property_list_schema.py",

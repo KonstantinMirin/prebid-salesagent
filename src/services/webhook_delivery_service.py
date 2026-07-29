@@ -15,16 +15,15 @@ import hashlib
 import hmac
 import json
 import logging
-import random
 import threading
-import time
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-import httpx
 from adcp import get_adcp_spec_version
+
+from src.core.security.outbound_http import OutboundError, send, terminal_client_error_status
 
 logger = logging.getLogger(__name__)
 
@@ -439,9 +438,6 @@ class WebhookDeliveryService:
         Returns:
             True if delivered successfully, False otherwise
         """
-        max_retries = 3
-        base_delay = 1.0  # Initial delay in seconds
-
         webhook_data = queue.dequeue()
         if not webhook_data:
             return False
@@ -469,56 +465,36 @@ class WebhookDeliveryService:
         if config.authentication_type == "bearer" and config.authentication_token:
             headers["Authorization"] = f"Bearer {config.authentication_token}"
 
-        # Exponential backoff with jitter
-        for attempt in range(max_retries):
-            try:
-                # Calculate delay with exponential backoff and jitter
-                if attempt > 0:
-                    # Base delay * 2^attempt + random jitter (0-1 seconds)
-                    delay = (base_delay * (2**attempt)) + random.uniform(0, 1)
-                    logger.debug(f"Retrying webhook delivery after {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(delay)
+        # One call: the seam owns attempts, the BR-RULE-029 schedule (plus any
+        # Retry-After the endpoint asks for), address and TLS policy, and which
+        # statuses are worth trying again. No ``field=`` — this URL is read back
+        # out of storage, not off a request document.
+        try:
+            result = send(config.url, json=payload, headers=headers, timeout=10.0, max_attempts=3)
+        except OutboundError as exc:
+            # The BASE class on purpose. A refused URL and a dead one both have to
+            # reach record_failure(), or a misconfigured destination stays
+            # invisible to the breaker while a merely unreachable one opens it.
+            terminal_status = terminal_client_error_status(exc)
+            if terminal_status is not None:
+                # Named at WARNING from THIS logger: the seam logs nothing on a
+                # non-retryable 4xx and its records do not propagate here, so this
+                # line is the only operator-visible trace of a rejected delivery.
+                logger.warning(
+                    f"Webhook delivery to {config.url} returned client error {terminal_status}, will not retry"
+                )
+            else:
+                logger.warning(f"Webhook delivery to {config.url} failed: {exc}")
+            circuit_breaker.record_failure()
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error delivering to {config.url}: {e}", exc_info=True)
+            circuit_breaker.record_failure()
+            return False
 
-                # Send webhook
-                # FIXME(#1589): raw outbound HTTP — migrate to src/core/security/outbound_http.py
-                with httpx.Client(timeout=10.0) as client:
-                    response = client.post(
-                        config.url,
-                        json=payload,
-                        headers=headers,
-                    )
-
-                    if 200 <= response.status_code < 300:
-                        logger.debug(f"Webhook delivered to {config.url} (status: {response.status_code})")
-                        circuit_breaker.record_success()
-                        return True
-
-                    # Client errors (4xx): do NOT retry — the request is invalid
-                    if 400 <= response.status_code < 500:
-                        logger.warning(
-                            f"Webhook delivery to {config.url} returned "
-                            f"client error {response.status_code}, will not retry"
-                        )
-                        circuit_breaker.record_failure()
-                        return False
-
-                    logger.warning(
-                        f"Webhook delivery to {config.url} returned "
-                        f"status {response.status_code} "
-                        f"(attempt: {attempt + 1}/{max_retries})"
-                    )
-
-            except httpx.TimeoutException:
-                logger.warning(f"Webhook delivery to {config.url} timed out (attempt: {attempt + 1}/{max_retries})")
-            except httpx.RequestError as e:
-                logger.warning(f"Webhook delivery to {config.url} failed: {e} (attempt: {attempt + 1}/{max_retries})")
-            except Exception as e:
-                logger.error(f"Unexpected error delivering to {config.url}: {e}", exc_info=True)
-                break
-
-        # All retries failed
-        circuit_breaker.record_failure()
-        return False
+        logger.debug(f"Webhook delivered to {config.url} (status: {result.status_code})")
+        circuit_breaker.record_success()
+        return True
 
     def reset_sequence(self, media_buy_id: str):
         """Reset sequence number for a media buy.

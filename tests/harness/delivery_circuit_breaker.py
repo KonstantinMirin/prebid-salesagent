@@ -1,6 +1,9 @@
 """CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
 
-Patches: time.sleep, random.uniform (timing and randomness only).
+Patches: the SEAM's time.sleep and random.uniform (timing and randomness only).
+Delivery retries are the seam's since salesagent-4fya.10, so the schedule is
+observed where it is now decided — patching this module's names would silently
+observe nothing.
 Real: a local HTTP origin that actually serves the delivery attempts, and
       get_db_session for PushNotificationConfig queries (real DB).
 
@@ -74,8 +77,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     MODULE = "src.services.webhook_delivery_service"
 
     EXTERNAL_PATCHES = {
-        "sleep": "src.services.webhook_delivery_service.time.sleep",
-        "random": "src.services.webhook_delivery_service.random.uniform",
+        "sleep": "src.core.security.outbound_http.time.sleep",
+        "random": "src.core.security.outbound_http.random.uniform",
     }
 
     def __init__(self, **kwargs: Any) -> None:
