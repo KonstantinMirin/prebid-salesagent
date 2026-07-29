@@ -17,7 +17,7 @@ from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product, Tenant
-from src.core.schemas._base import FormatId
+from src.core.schemas import FormatId
 from tests.helpers import assert_effective_properties_normalized
 
 

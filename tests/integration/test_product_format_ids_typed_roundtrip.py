@@ -38,7 +38,7 @@ import pytest
 from pydantic import AnyUrl, TypeAdapter
 from sqlalchemy import text
 
-from src.core.schemas._base import FormatId
+from src.core.schemas import FormatId
 from tests.factories import FormatIdFactory, InventoryProfileFactory, ProductFactory, TenantFactory
 from tests.harness._base import BareIntegrationEnv
 

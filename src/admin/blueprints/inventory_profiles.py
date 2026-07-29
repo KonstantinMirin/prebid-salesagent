@@ -27,7 +27,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.schemas._base import FormatId
+from src.core.schemas import FormatId
 
 logger = logging.getLogger(__name__)
 
