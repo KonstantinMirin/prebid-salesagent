@@ -964,6 +964,14 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         ctx["cb_can_attempt"] = cb.can_attempt()
+
+    # Baseline for the probe-count oracle in `then_single_probe`. The probe is dispatched by the
+    # call_send() below, so "how many probes did half-open allow?" is the delta across THIS step —
+    # not the scenario's total POST count. Recording it here is what lets that Then step
+    # distinguish one probe from ten.
+    mock_post = env.mock.get("post")
+    ctx["pre_probe_call_count"] = mock_post.call_count if mock_post is not None else 0
+
     try:
         ctx["circuit_result"] = env.call_send()
     except Exception as exc:
@@ -1870,33 +1878,48 @@ def then_single_probe(ctx: dict) -> None:
     The preceding step already verified the breaker transitioned to half_open.
     This step verifies the behavioral claim: exactly one probe attempt was made.
 
-    A third branch used to sit between these two, counting ``mock_post.call_count`` minus
-    ``ctx.get("pre_open_call_count", 0)``. Nothing ever wrote ``pre_open_call_count``, so the
-    subtrahend was always 0 and the "delta during half-open" it claimed to compute was really
-    the TOTAL POST count for the whole scenario. It was also unreachable: neither
-    ``httpx_post`` nor ``webhook_post`` is a registered mock here, proven by injecting
-    ``assert False`` into that branch and still seeing all three transports pass (a control
-    mutation at the function entry did fail, so this was not a sync artifact). Removed as dead
-    code rather than repaired — fixing an oracle that cannot execute changes nothing.
-    See GH #1749.
+    The mock lookup here used to ask for ``httpx_post`` / ``webhook_post``. No env defines
+    either key, so it ALWAYS missed and the step fell through to
+    ``pytest.xfail("HARNESS GAP: no webhook POST mock")``. There was no missing mock — the key
+    was wrong, and this step's own claim went ungraded for the scenario's whole lifetime behind
+    a false excuse. ``CircuitBreakerEnv`` does expose it, as ``mock["post"]``
+    (``tests/harness/delivery_circuit_breaker_unit.py:74``). The baseline was a phantom too:
+    ``ctx.get("pre_open_call_count", 0)`` over a key nothing wrote, so the default turned the
+    half-open delta into the scenario's TOTAL POST count. See GH #1749.
 
-    The remaining ``pytest.xfail`` below is an INLINE xfail in a step body: invisible to the
-    conftest xfail sweep and to the xpass audit, so it can never graduate on its own. That is
-    the GH #1726 disease, and relocating it — together with giving this harness a real
-    webhook POST mock so the probe count can be graded for real — is tracked there.
+    Correcting the lookup exposes a real and deeper gap: the probe is logged as scheduled but
+    never reaches httpx post, so ``call_count`` is 0 for the whole scenario — GH #1781. The
+    xfail below is narrowed to exactly that case, so a non-zero-but-wrong count still fails
+    loudly instead of being swallowed.
     """
     env = ctx["env"]
     probe_count = ctx.get("probe_count")
     if probe_count is not None:
         # Probe count was explicitly recorded by the When step
         assert probe_count == 1, f"Expected exactly 1 probe delivery attempt, got {probe_count}"
-    else:
-        # No dispatch mock — verify the CB gate at least allowed the attempt
-        cb_can_attempt = ctx.get("cb_can_attempt")
-        assert cb_can_attempt is True, (
-            f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
+        return
+
+    mock_post = env.mock.get("post")
+    assert mock_post is not None, (
+        f"{type(env).__name__} exposes no POST mock, so 'exactly one probe' cannot be counted. "
+        f"Available mocks: {sorted(env.mock)}"
+    )
+    pre_probe_calls = _require(
+        ctx,
+        "pre_probe_call_count",
+        hint="the When step that evaluates the circuit breaker must record the POST count before dispatching the probe",
+    )
+    if mock_post.call_count == 0:
+        pytest.xfail(
+            "HARNESS GAP(GH #1781): the half-open probe is logged as scheduled but never reaches "
+            "httpx post within this step, so 'exactly one probe' is unobservable here"
         )
-        pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
+
+    probe_dispatches = mock_post.call_count - pre_probe_calls
+    assert probe_dispatches == 1, (
+        f"Expected exactly 1 probe dispatch in half-open state, got {probe_dispatches} "
+        f"(total={mock_post.call_count}, pre-probe={pre_probe_calls})"
+    )
 
 
 @then("normal scheduled deliveries should resume")
