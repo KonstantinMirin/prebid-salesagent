@@ -39,8 +39,11 @@ def _wire_body(ctx: dict) -> dict:
     Loud guard: a real-wire transport (REST/A2A/MCP) that didn't stash
     ``wire_response`` would otherwise fall through to the ``model_dump`` path and
     assert nothing on the wire — a silent tautology. A sibling wired against a
-    non-stashing env trips this instead of passing green. IMPL (and the
-    non-parametrized ``None`` default) legitimately have no wire.
+    non-stashing env trips this instead of passing green. Only an EXPLICIT
+    ``Transport.IMPL`` legitimately has no wire; an unset transport (``None`` —
+    any non-parametrized caller, e.g. a @rest/@mcp/@a2a-tagged scenario's empty
+    ctx) raises too, naming the fix, because silently serializing there turns
+    the wire assertion into a serializer round-trip (GH #1744).
 
     Sole guard implementation for :func:`wire_field`, :func:`wire_dict` and
     :func:`wire_absent` — three copies of it would be exactly the duplication the
@@ -57,11 +60,17 @@ def _wire_body(ctx: dict) -> dict:
     if wire is None and error is not None and ctx.get("response") is None:
         raise AssertionError(f"expected a success response, got error: {error!r}")
     transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
+    if wire is None and transport is None:
+        raise AssertionError(
+            "wire assertion with transport unset — a non-parametrized caller reached the "
+            "wire helpers without a stashed wire. Set ctx['transport'] (or pass "
+            "Transport.IMPL explicitly) to declare whether a real wire must exist."
+        )
+    if wire is None and transport is not Transport.IMPL:
         raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
     if wire is not None:
         return wire
-    # IMPL has no wire — serialize the typed payload through the production
+    # Explicit IMPL has no wire — serialize the typed payload through the production
     # serializer. _require_response preserves the diagnostic if a (reused) sibling
     # scenario hit an error path, instead of a bare ctx["response"] KeyError.
     return _require_response(ctx).model_dump(mode="json")

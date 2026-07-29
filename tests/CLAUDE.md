@@ -144,7 +144,11 @@ all of them have caused real defects when skipped.
    - success: `wire_field(ctx, "x")` / `wire_dict(ctx)`
      (`tests/bdd/steps/_outcome_helpers.py`) — these raise loudly when the env didn't
      stash the wire, instead of silently falling back to `model_dump()` (a serializer
-     round-trip proves model self-consistency, not what the buyer received).
+     round-trip proves model self-consistency, not what the buyer received). The
+     `model_dump` fallback exists ONLY for an EXPLICIT `Transport.IMPL` in
+     `ctx["transport"]`; an unset transport raises too, naming the fix — set
+     `ctx['transport']` or pass IMPL explicitly (GH #1744). Contract pinned by
+     `tests/harness/test_outcome_helpers_wire_contract.py`.
 
 4. **Assertions compare values, not existence.** `assert status` is green for ANY
    status. `assert actual == expected` or it isn't a test. A Then whose text claims a
