@@ -2441,6 +2441,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # keyword targeting ops not implemented, error codes/suggestions missing.
         # FIXME(salesagent-av7): UC-026 production gaps in update response and validation.
         _UC026_XFAIL_TAGS: set[str] = {
+            # AdCP 3.1+ format selectors — FIXME(#1789). Production reads only the LEGACY
+            # format_ids selector: grep over src/ finds zero references to
+            # format_option_refs / format_kind / format_options, although all three are
+            # accepted at the boundary via the SDK base model. These three scenarios state
+            # the obligations the pinned spec imposes (v3.1.1
+            # dist/schemas/3.1.1/media-buy/package-request.json) and are DELIBERATELY
+            # UNWIRED — no step definitions exist yet; #1789 covers implementing the
+            # selectors and wiring these. Do not graduate them by writing steps that assert
+            # today's exact (agent_url, id) comparison: the same schema calls that
+            # comparison "insufficient".
+            "T-UC-026-format-option-refs-wins",
+            "T-UC-026-format-option-refs-only",
+            "T-UC-026-legacy-format-id-canonical-projection",
             # Graduated: T-UC-026-main-explicit-formats (qq6f: format_ids now echoed)
             # Full-config: optimization_goals missing `kind`, targeting_overlay.audiences extra_forbidden
             "T-UC-026-main-full-config",

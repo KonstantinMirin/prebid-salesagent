@@ -794,6 +794,76 @@ Feature: BR-UC-026 Package Media Buy
       | empty array []                                    | error "INVALID_REQUEST" with suggestion    |
       | format_id from different product                  | error "INVALID_REQUEST" with suggestion    |
 
+
+  # ─── AdCP 3.1+ format selectors (GH #1789) ────────────────────────────────
+  # Grounded in the pinned spec: v3.1.1 dist/schemas/3.1.1/media-buy/package-request.json.
+  # A package carries THREE ranked format selectors:
+  #   format_option_refs   "3.1+ format-option selector"   (structured, wins)
+  #   format_kind + params "3.1+ direct canonical selector"
+  #   format_ids           "Legacy named-format selector"
+  # Production reads ONLY format_ids: grep over src/ finds zero references to
+  # format_option_refs / format_kind / format_options, though all three are accepted
+  # at the boundary via the SDK base model. The scenarios below state the obligations
+  # the spec imposes; they are xfailed pending GH #1789 and are NOT yet wired.
+
+  @T-UC-026-format-option-refs-wins @format_ids @format_option_refs @adcp-3.1
+  Scenario: format_option_refs wins over a legacy format_ids hint
+    # Spec (package-request.json, format_option_refs): "Both format_option_refs and
+    # format_ids present. format_option_refs wins; the seller routes by structured
+    # references and MUST NOT validate format_ids for consistency with the resolved
+    # declarations. The format_ids value is a legacy-compat hint for intermediaries on
+    # the wire path; the resolving seller ignores it."
+    Given a product "prod-1" declaring format_options entry "opt-mrec" with scope "product"
+    And a create_media_buy request with a package containing:
+      | field              | value                                        |
+      | product_id         | prod-1                                       |
+      | budget             | 5000                                         |
+      | pricing_option_id  | cpm-standard                                 |
+      | format_option_refs | [{"scope":"product","format_option_id":"opt-mrec"}] |
+      | format_ids         | [{"agent_url":"https://creative.adcontextprotocol.org","id":"video_unsupported_by_prod_1"}] |
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should succeed
+    And the package should resolve to format option "opt-mrec"
+    And the seller should not have validated the legacy format_ids hint
+
+  @T-UC-026-format-option-refs-only @format_option_refs @adcp-3.1
+  Scenario: format_option_refs alone resolves against the product's format_options
+    # Spec (package-request.json, format_option_refs): "format_option_refs only. Seller
+    # looks up each entry against the product's format_options[]." Product-local options
+    # match by { scope: "product", format_option_id }.
+    Given a product "prod-1" declaring format_options entry "opt-mrec" with scope "product"
+    And a create_media_buy request with a package containing:
+      | field              | value                                        |
+      | product_id         | prod-1                                       |
+      | budget             | 5000                                         |
+      | pricing_option_id  | cpm-standard                                 |
+      | format_option_refs | [{"scope":"product","format_option_id":"opt-mrec"}] |
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should succeed
+    And the package should resolve to format option "opt-mrec"
+
+  @T-UC-026-legacy-format-id-canonical-projection @format_ids @adcp-3.1
+  Scenario: a legacy fixed-size format_id satisfies a canonical image declaration of the same size
+    # Spec (package-request.json, format_ids): "Sellers comparing this selector to a
+    # product's format_options[] MUST first normalize each legacy format_id through the
+    # canonical mapping path (canonical, v1_format_ref, or registry projection). Exact
+    # (agent_url, id) comparison after projection is insufficient: a legacy fixed-size
+    # display ID can satisfy a canonical image product declaration with matching
+    # width/height."
+    # Production compares exact (canonical_agent_url, id) pairs -- supported_format_keys()
+    # -> format_id_identity(), src/core/schemas/_base.py:228-230 used at
+    # src/core/tools/media_buy_create.py:3269-3276 -- so it REJECTS this today.
+    Given a product "prod-1" declaring a canonical "image" format option with width 300 and height 250
+    And a create_media_buy request with a package containing:
+      | field             | value                                                                     |
+      | product_id        | prod-1                                                                    |
+      | budget            | 5000                                                                      |
+      | pricing_option_id | cpm-standard                                                              |
+      | format_ids        | [{"agent_url":"https://creative.adcontextprotocol.org","id":"display_300x250"}] |
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should succeed
+    And the package should resolve to the canonical "image" format option
+
   @T-UC-026-partition-pricing-option @partition @pricing_option_id
   Scenario Outline: Pricing option partition validation -- <partition>
     Given a create_media_buy request with pricing_option_id per <partition>

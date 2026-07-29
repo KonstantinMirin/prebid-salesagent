@@ -14484,6 +14484,24 @@ mappings:
       upstream_refs: ["BR-RULE-196"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-026-format-option-refs-wins"
+      adcp_feature: "BR-UC-026-package-media-buy.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-026-format-option-refs-only"
+      adcp_feature: "BR-UC-026-package-media-buy.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-026-legacy-format-id-canonical-projection"
+      adcp_feature: "BR-UC-026-package-media-buy.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-026-partition-format-ids"
       adcp_feature: "BR-UC-026-package-media-buy.feature"
       obligation_id: null
