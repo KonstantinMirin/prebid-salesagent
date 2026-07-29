@@ -150,6 +150,7 @@ ignore = [
     "C901",    # complexity
     "PLR0912", # too-many-branches
     "PLR0915", # too-many-statements
+    "F841",    # unused local variable — was a blanket keep until it hid a computed-then-dropped warning
     #
     # --- Permanently accepted (low-signal style; ADR-009) ---
     "PLR0911", # too-many-return-statements — guard-clause returns; low signal
@@ -166,7 +167,6 @@ ignore = [
     "E741",    # Short `l` in math-heavy loops — renaming hurts readability
     "B904",    # raise-without-from in adapter error handling — add `from e` when touching
     "B027",    # Empty methods in BaseAdapter — intentional optional interface, not abstract
-    "F841",    # Unused vars in complex destructuring — each reviewed, kept for clarity
 ]
 
 
