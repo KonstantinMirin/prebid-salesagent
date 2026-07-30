@@ -890,9 +890,16 @@ class TestDeliverWithBackoffClientError:
 
 @pytest.mark.requires_db
 class TestIsAdjustedNotificationType:
-    """send_delivery_webhook with is_adjusted=True sets notification_type='adjusted'.
+    """``is_adjusted`` decides the notification_type, and both arms are graded.
 
-    Covers: line 239 of webhook_delivery_service.py
+    An adjusted report REPLACES figures the buyer already booked; a scheduled one
+    adds to them. The buyer tells the two apart by these two fields and nothing
+    else, so the False arm is not a mirror of the True arm — a build that marked
+    every report adjusted would satisfy the True arm alone and quietly ask buyers
+    to overwrite good data on every delivery.
+
+    Covers: line 239 of webhook_delivery_service.py,
+            UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
     """
 
     def test_is_adjusted_sets_notification_type_adjusted(self, integration_db):
@@ -935,6 +942,242 @@ class TestIsAdjustedNotificationType:
             sent_payload = env.last_delivery.json()
             assert sent_payload["notification_type"] == "adjusted"
             assert sent_payload["is_adjusted"] is True
+
+    def test_scheduled_report_is_not_marked_adjusted(self, integration_db):
+        """A periodic report the caller did not flag: 'scheduled', and is_adjusted False.
+
+        ``is False`` rather than falsy: the field is a boolean on the wire, and a
+        buyer branching on it must not have to treat ``null`` or a missing key as
+        "not adjusted".
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
+        """
+        from datetime import UTC, datetime
+
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=env.webhook_url,
+            )
+
+            env.set_http_response(200)
+            service = env.get_service()
+            result = service.send_delivery_webhook(
+                media_buy_id="mb_sched",
+                tenant_id="t1",
+                principal_id="p1",
+                reporting_period_start=datetime(2025, 6, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
+                impressions=1000,
+                spend=50.0,
+            )
+
+            assert result is True
+            sent_payload = env.last_delivery.json()
+            assert sent_payload["notification_type"] == "scheduled"
+            assert sent_payload["is_adjusted"] is False
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-01 (send_delivery_webhook: adcp_version echo)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestDeliveredPayloadAdcpVersion:
+    """The delivered payload names the AdCP version this build speaks.
+
+    A buyer receiving a push report has no handshake to negotiate against — the
+    payload's own ``adcp_version`` is how it decides which schema to parse it
+    with, so a stale value is a misparse on their side, not a cosmetic drift.
+
+    Compared against ``get_adcp_spec_version()`` rather than a literal: a literal
+    would keep passing across a spec bump while the wire told buyers the old
+    version, which is the exact failure the assertion exists to catch. This is
+    the only place the field is graded on THIS surface — the assertion in
+    ``tests/e2e/test_a2a_endpoints_working.py`` is on the A2A envelope, a
+    different payload assembled by different code.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
+    """
+
+    def test_delivered_payload_echoes_the_pinned_adcp_spec_version(self, integration_db):
+        """The bytes that reached the endpoint carry the SDK's spec version.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
+        """
+        from datetime import UTC, datetime
+
+        from adcp import get_adcp_spec_version
+
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=env.webhook_url,
+            )
+
+            env.set_http_response(200)
+            service = env.get_service()
+            result = service.send_delivery_webhook(
+                media_buy_id="mb_version",
+                tenant_id="t1",
+                principal_id="p1",
+                reporting_period_start=datetime(2025, 6, 1, tzinfo=UTC),
+                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
+                impressions=1000,
+                spend=50.0,
+            )
+
+            assert result is True
+            sent_payload = env.last_delivery.json()
+            assert sent_payload["adcp_version"] == get_adcp_spec_version()
+
+
+# ---------------------------------------------------------------------------
+# UC-004-ALT-WEBHOOK-PUSH-REPORTING-05 (send_delivery_webhook: sequence under
+# concurrency — the lock around the per-media-buy counter)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestSequenceNumberUnderConcurrency:
+    """Two reports for one media buy never carry the same sequence_number.
+
+    BR-RULE-029 INV-1 makes ``sequence_number`` strictly increasing per media
+    buy, and it is the only handle a buyer has for ordering reports and dropping
+    replays. Two payloads sharing a number is therefore silent data loss on their
+    side: one of the two reports is indistinguishable from a duplicate of the
+    other and gets discarded.
+
+    Production holds that invariant with ``self._lock`` around a read-modify-write
+    that is not atomic on its own — ``d[k] = d.get(k, 0) + 1`` and then a separate
+    read-back of ``d[k]``. Serial deliveries cannot grade the lock; they pass
+    identically with it and without it, which is why the three-report monotonicity
+    scenarios elsewhere leave it untested.
+
+    So the threads here contend for ONE media buy, and the window between the read
+    and the write is made observable by stalling the read: the mapping production
+    increments is replaced with one whose ``get`` sleeps. That does not invent a
+    failure mode — an unsynchronized read-modify-write may legally interleave at
+    exactly that point on any thread switch, GC pause or page fault. Stalling
+    picks that interleaving every run instead of waiting for the scheduler to
+    produce it once in a million. Everything else is real: ten concurrent
+    deliveries over real HTTP to the local origin, and the assertion reads the
+    sequence numbers off the bytes that arrived.
+
+    Confirmed by mutation: with ``service._lock`` replaced by a no-op context
+    manager, all ten reports arrive numbered 1 and the assertion fails.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+    """
+
+    THREADS = 10
+
+    # Long enough that every thread is inside the read before the first one
+    # leaves it; short enough that ten serialized deliveries stay well under a
+    # second when the lock is doing its job.
+    READ_STALL_SECONDS = 0.05
+
+    def test_concurrent_reports_for_one_media_buy_get_distinct_sequence_numbers(self, integration_db):
+        """Ten threads, one media buy: the endpoint receives sequence numbers 1..10.
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+        """
+        import threading
+        from datetime import UTC, datetime
+
+        # Bound BEFORE the env starts: the env patches the seam's ``time.sleep``,
+        # and because ``import time`` yields one shared module object that patch
+        # lands on ``time.sleep`` process-wide. Looking the name up later would
+        # get the MagicMock, and a stall that does not stall widens nothing.
+        from time import sleep as unpatched_sleep
+
+        from tests.factories import (
+            PrincipalFactory,
+            PushNotificationConfigFactory,
+            TenantFactory,
+        )
+        from tests.harness import CircuitBreakerEnv
+
+        stall_seconds = self.READ_STALL_SECONDS
+
+        class StalledReadMapping(dict):
+            """The per-media-buy counter, with its read-modify-write window held open."""
+
+            def get(self, key, default=None):  # type: ignore[override]
+                value = super().get(key, default)
+                unpatched_sleep(stall_seconds)
+                return value
+
+        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=env.webhook_url,
+            )
+
+            env.set_http_response(200)
+            service = env.get_service()
+            service._sequence_numbers = StalledReadMapping()
+
+            start = threading.Barrier(self.THREADS)
+            sent_results: list[bool] = []
+            results_lock = threading.Lock()
+
+            def deliver_one_report() -> None:
+                start.wait()
+                sent = service.send_delivery_webhook(
+                    media_buy_id="mb_concurrent",
+                    tenant_id="t1",
+                    principal_id="p1",
+                    reporting_period_start=datetime(2025, 6, 1, tzinfo=UTC),
+                    reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
+                    impressions=1000,
+                    spend=50.0,
+                )
+                with results_lock:
+                    sent_results.append(sent)
+
+            threads = [threading.Thread(target=deliver_one_report) for _ in range(self.THREADS)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=60)
+
+            assert not any(thread.is_alive() for thread in threads), (
+                "a delivery thread never finished — the sequence lock is deadlocked, not merely unsynchronized"
+            )
+            assert sent_results == [True] * self.THREADS
+            assert env.delivery_attempts == self.THREADS
+
+            delivered_sequence_numbers = sorted(request.json()["sequence_number"] for request in env.delivered_requests)
+            assert delivered_sequence_numbers == list(range(1, self.THREADS + 1)), (
+                f"{self.THREADS} concurrent reports for one media buy were numbered "
+                f"{delivered_sequence_numbers} — a repeated sequence_number makes one "
+                "report indistinguishable from a replay of another, and the buyer drops it"
+            )
 
 
 # ---------------------------------------------------------------------------

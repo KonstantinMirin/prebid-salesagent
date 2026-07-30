@@ -412,7 +412,7 @@ class TestA2ASkillInvocation:
         a TRANSPORT-layer parameter, never folded into request-body validation, so the
         adcp ``Authentication.credentials`` MinLen(32) does not gate the create
         (gh-#1299; the create skill's comment documents the decision). The webhook-URL
-        ingest verdict (src/core/webhook_ingest.py) grades ONLY the url, so this exact
+        ingest verdict (src/core/webhook_validator.py, reject_unsafe_webhook_registration_url) grades ONLY the url, so this exact
         shape — a policy-passing url plus an 18-char credential, the shape the a2a e2e
         webhook tests send — creates the buy. A regression here surfaced only in e2e
         when the ingest helper briefly model-validated the whole config.

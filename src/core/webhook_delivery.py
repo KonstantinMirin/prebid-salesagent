@@ -125,7 +125,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     #
     # No ``field=``: the URL is read back out of a stored PushNotificationConfig,
     # not off the request document a buyer just sent. The refusal a buyer can act
-    # on already happened at ingest (src/core/webhook_ingest.py), so a block here
+    # on already happened at ingest (src/core/webhook_validator.py, reject_unsafe_webhook_registration_url), so a block here
     # means the environment's policy changed after acceptance.
     try:
         result = send(

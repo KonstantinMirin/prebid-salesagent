@@ -11,7 +11,20 @@ runnable on a2a / mcp / rest / e2e_rest.
 The refusal itself is produced by production: the harness routes @egress
 scenarios to ``RealResolverProductEnv`` (real resolver, real seam) and
 @egress_create scenarios to ``MediaBuyCreateEnv`` (real ``_impl``, real
-ingest verdict via ``src.core.webhook_ingest``).
+ingest verdict via ``reject_unsafe_webhook_registration_url`` in
+``src.core.webhook_validator``).
+
+Note the ingest verdict is NOT the seam's: the registration gate is
+deliberately DNS-free, so an unresolvable-but-public hostname is ACCEPTED at
+ingest and only re-checked when the callback is dialled. The seam
+(``src.core.security.outbound_http``) remains the send-time gate. Scenarios
+that expect an ingest refusal must therefore pick a cause the DNS-free gate
+actually rejects — a reserved-address literal — not an unresolvable name; and,
+to keep the non-disclosure obligation gradable, one the gate does not report by
+naming the blocked hostname or a dotted-quad range (see the Examples rationale
+in the feature). The two gates also differ on the wire: the seam surfaces as
+INVALID_REQUEST, the registration gate as VALIDATION_ERROR (it raises
+``AdCPValidationError``), both correctable and both naming the field.
 
 Steps store in ctx (on top of what ``dispatch_request`` stores):
     ctx["supplied_agent_url"] — the URL the buyer sent, so the non-disclosure
@@ -152,9 +165,14 @@ def then_refusal_message_is_exactly(ctx: dict, message: str) -> None:
     a regression to ``f"{_BLOCKED_MESSAGE} (host {h})"`` would still satisfy a
     substring check. Equality on both layers is what makes such a regression red.
 
-    Asserted identically for every Examples row, which IS spec point 6's second
-    half: an unresolvable host and a blocked reserved address must be
-    indistinguishable on the wire, or the refusal is a name-existence oracle.
+    The SEND-time scenarios pass one literal for every Examples row, which IS
+    spec point 6's second half: an unresolvable host and a blocked reserved
+    address must be indistinguishable on the wire, or the refusal is a
+    name-existence oracle. The INGEST scenario passes a per-row literal instead —
+    the registration gate refuses a URL no one has dialled, so its message is a
+    statement about the buyer's own document (``Invalid <field>: <reason>``) and
+    reveals nothing a fetch could have revealed. Non-disclosure there is carried
+    by :func:`then_envelope_discloses_nothing`, not by sameness.
     """
     envelope = _wire_error_envelope(ctx)
     assert envelope["errors"][0]["message"] == message, (

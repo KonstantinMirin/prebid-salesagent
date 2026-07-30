@@ -68,7 +68,7 @@ class TestSyncPushNotificationConfig:
     """Lines 117-121: push_notification_config dict and model forms.
 
     The URL is an https public-unicast IP literal: sync_creatives now runs the
-    seam's ingest verdict on it (src/core/webhook_ingest.py), and an IP
+    seam's ingest verdict on it (src/core/webhook_validator.py, reject_unsafe_webhook_registration_url), and an IP
     literal passes under every hatch posture without resolving DNS — a
     hostname here would make a unit test do live DNS and NXDOMAIN-refuse.
     The refusal path itself is graded by

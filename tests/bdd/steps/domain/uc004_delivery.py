@@ -341,6 +341,13 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 # both hatches open.
 _DECLARED_WEBHOOK_URL = "https://1.1.1.1/webhook"
 
+# A destination the egress seam refuses under EVERY hatch posture. The cloud
+# metadata address is blocked by the SDK's address policy even with
+# ADCP_OUTBOUND_ALLOW_PRIVATE on, which the delivery envs turn on for their
+# loopback origin — a private-range or plaintext-http cause would be disarmed
+# there and the "blocked" scenario would silently deliver.
+BLOCKED_WEBHOOK_URL = "https://169.254.169.254/webhook"
+
 
 def _webhook_url(env: Any) -> str:
     """The endpoint a delivery for this scenario would actually be POSTed to.
@@ -548,6 +555,38 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
     """Configure webhook endpoint to return specific status."""
     env = ctx["env"]
     env.set_http_status(status_code, reason)
+
+
+@given("the outbound webhook URL is blocked by SSRF validation")
+def given_outbound_webhook_ssrf_blocked(ctx: dict) -> None:
+    """Point this scenario's webhook at an address the egress seam always refuses.
+
+    The send-time gate is the seam (``src.core.security.outbound_http``): it
+    resolves, validates and pins inside the same call that opens the socket, so
+    a delivery to a refused address raises ``OutboundRequestBlocked`` before any
+    POST and ``_deliver_with_backoff`` turns that into ``record_failure()``.
+    There is no longer an application-level gate above it to program, so this
+    Given states the CAUSE — a blocked destination — rather than mocking a
+    verdict.
+
+    The cause has to be one no configuration disarms. The delivery envs run a
+    real loopback origin and therefore open BOTH egress hatches
+    (``LocalOriginMixin``), which disarms the private-range and the plaintext-
+    scheme refusals; the cloud-metadata address is refused by the SDK's address
+    policy regardless of ``allow_private``, so it is the one cause that means
+    the same thing under every posture this scenario can run in.
+    """
+    env = ctx["env"]
+    for cfg in ctx.setdefault("webhook_config", {}).values():
+        cfg["url"] = BLOCKED_WEBHOOK_URL
+    # Rewrite the endpoint production will actually read: the preceding Given
+    # persisted a config naming the local origin, and set_db_webhooks replaces
+    # the active set (deactivating that row) rather than adding to it — leaving
+    # it active would deliver to the origin and grade nothing.
+    env.set_db_webhooks([env.make_webhook_config(url=BLOCKED_WEBHOOK_URL)])
+    # Production keys the breaker on the URL it was asked to deliver to, so the
+    # Then step has to look under the blocked URL, not the origin's.
+    ctx["circuit_breaker_endpoint_key"] = f"{env._tenant_id}:{BLOCKED_WEBHOOK_URL}"
 
 
 @given("the webhook endpoint is unreachable (connection timeout)")
@@ -1793,6 +1832,38 @@ def then_webhook_marked_failed(ctx: dict) -> None:
     assert success is False, (
         f"Expected webhook delivery to be marked as failed (success=False), "
         f"got success={success!r} from webhook_result={ctx.get('webhook_result')!r}"
+    )
+
+
+@then("the webhook delivery should be skipped without an HTTP POST")
+def then_webhook_skipped_no_post(ctx: dict) -> None:
+    """Assert the send-time refusal: delivery failed and nothing was POSTed.
+
+    "No POST" is read off the real origin the env is running (``delivery_attempts``
+    counts the requests that actually arrived), not off a transport mock: the
+    refusal has to mean no packet left, and a mock's call count would only say
+    that a particular symbol went uncalled.
+    """
+    env = ctx["env"]
+    success = _extract_webhook_success(ctx)
+    assert success is False, f"Expected SSRF-skipped delivery to return False, got success={success!r}"
+    assert env.delivery_attempts == 0, (
+        f"Expected no HTTP POST after SSRF rejection, the origin received {env.delivery_attempts} request(s)"
+    )
+
+
+@then("the circuit breaker should record a failure")
+def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
+    """Assert the send-time SSRF path called circuit_breaker.record_failure()."""
+    env = ctx["env"]
+    service = env.get_service()
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
+    cb = service._circuit_breakers.get(endpoint_key)
+    assert cb is not None, (
+        f"Expected circuit breaker for {endpoint_key!r} after SSRF skip, found keys={list(service._circuit_breakers)}"
+    )
+    assert cb.failure_count >= 1, (
+        f"Expected failure_count >= 1 after SSRF rejection for {endpoint_key!r}, got {cb.failure_count}"
     )
 
 

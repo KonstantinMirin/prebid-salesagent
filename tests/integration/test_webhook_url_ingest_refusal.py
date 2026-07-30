@@ -16,9 +16,12 @@ sync_creatives) with both egress escape hatches CLOSED:
 
 * the request FAILS at ingest (no 'success' followed by a silent delivery
   failure), and
-* the wire envelope is ``INVALID_REQUEST`` / ``correctable`` with
-  ``error.field`` naming exactly which buyer input to fix — graded on BOTH
-  envelope layers via ``assert_envelope_shape``, and
+* the wire envelope is ``VALIDATION_ERROR`` / ``correctable`` with
+  ``error.field`` naming exactly which buyer input to fix and a buyer-facing
+  ``suggestion`` telling them what an acceptable URL looks like — all graded on
+  BOTH envelope layers. Every surface refuses through the one registration-time
+  SSRF gate (``reject_unsafe_webhook_registration_url``, which raises
+  ``AdCPValidationError``); see ``_REGISTRATION_GATE_CODE`` below, and
 * the refused config leaves NO side effect (no persisted
   push_notification_config row; no creative synced) — the refusal happens
   BEFORE the storage points, not per-item inside them.
@@ -34,9 +37,14 @@ v3.1.1:<path>``):
    prescribe the refusal; point 6 prescribes the silence about our network —
    which leaves ``error.field`` as the only channel naming WHICH input to fix.
 2. ``docs/building/by-layer/L3/error-handling.mdx`` § "Request Validation"
-   (``INVALID_REQUEST | correctable``) + § "Recovery Classification": a URL
+   (``VALIDATION_ERROR | correctable``) + § "Recovery Classification": a URL
    egress policy refuses identically forever, so ``transient`` would promise
-   something false.
+   something false. ``VALIDATION_ERROR`` is the code the registration gate
+   emits, and it is independently pinned for the sync_creatives leg by
+   ``tests/bdd/features/BR-UC-006-sync-creatives.feature``
+   ``@T-UC-006-ext-webhook-ssrf`` (``VALIDATION_ERROR`` + ``correctable`` +
+   ``suggestion``, carrying an ``@source repo=adcp ref=v3.1.1`` citation on
+   ``dist/schemas/3.1.1/enums/error-code.json``).
 3. ``push_notification_config`` is a TOP-LEVEL property of
    ``dist/schemas/3.1.1/media-buy/create-media-buy-request.json`` (``$ref``
    ``core/push-notification-config.json``, required ``["url"]``); same
@@ -103,6 +111,19 @@ _METADATA_URL = "https://169.254.169.254/hook"
 _PNC_FIELD = "push_notification_config.url"
 _REPORTING_WEBHOOK_FIELD = "reporting_webhook.url"
 
+# The wire code is a fact about WHICH gate refused, and all three ingest
+# surfaces call the SAME one: the DNS-free registration gate
+# (``src/core/webhook_validator.py`` ``reject_unsafe_webhook_registration_url``
+# — create_media_buy media_buy_create.py:2060/2067 and the A2A create skill
+# adcp_a2a_server.py:154, update_media_buy media_buy_update.py:393/406,
+# sync_creatives _sync.py:114). It raises ``AdCPValidationError``:
+# VALIDATION_ERROR / correctable / field / suggestion. Deliberately NOT the
+# outbound seam's ``validate_url``, which always resolves DNS and would refuse a
+# buyer whose hostname has not propagated yet — the seam stays the SEND-time
+# gate (gh-#1589 / gh-#1697). Independently pinned for the sync leg by BR-UC-006
+# ``@T-UC-006-ext-webhook-ssrf``.
+_REGISTRATION_GATE_CODE = "VALIDATION_ERROR"
+
 # A schema-valid ReportingWebhook carrying a refused URL: url/authentication/
 # reporting_frequency are required by the pinned core/reporting-webhook.json,
 # and Authentication.credentials has MinLen(32) — the request must be valid
@@ -114,13 +135,17 @@ _REFUSED_REPORTING_WEBHOOK = {
 }
 
 
-def _assert_refused_at_ingest(result, field: str, surface: str) -> None:
+def _assert_refused_at_ingest(result, field: str, surface: str, *, code: str) -> None:
     """The one refusal contract, graded on the wire envelope.
 
     ``wire_error_envelope`` is the primary authority (tests/CLAUDE.md Error
     Verification Policy); ``synthesized_error_envelope`` is the documented
     fallback for dispatch paths with no wire (IMPL, the raw-wrapper A2A sync
     path) — same precedent as test_creative_sync_transport.py:756.
+
+    ``code`` is the emitting gate's wire code (``_REGISTRATION_GATE_CODE``) —
+    passed explicitly at every call site so a surface that starts refusing
+    through some other gate cannot silently inherit this one's code.
     """
     assert result.is_error, (
         f"A refused buyer-supplied webhook URL must fail {surface} at ingest with a "
@@ -130,10 +155,34 @@ def _assert_refused_at_ingest(result, field: str, surface: str) -> None:
     envelope = result.wire_error_envelope or result.synthesized_error_envelope
     assert_envelope_shape(
         envelope,
-        "INVALID_REQUEST",
+        code,
         recovery="correctable",
         field=field,
     )
+    _assert_registration_suggestion(envelope, surface)
+
+
+def _assert_registration_suggestion(envelope: dict, surface: str) -> None:
+    """The registration gate's buyer-facing ``suggestion``, on BOTH envelope layers.
+
+    ``reject_unsafe_webhook_registration_url`` passes
+    ``suggestion=webhook_ssrf_suggestion()``, and
+    ``build_two_layer_error_envelope`` (exceptions.py:1028-1043) copies
+    ``errors[0]`` into ``adcp_error``, so both layers must carry it. Graded
+    because spec point 6 keeps our network out of the message, which leaves
+    ``field`` + ``suggestion`` as the buyer's only repair instructions — the
+    same triple BR-UC-006 ``@T-UC-006-ext-webhook-ssrf`` grades. The expected
+    text is read from production in-process so the strict/dev variant matches
+    the posture the test actually ran under.
+    """
+    from src.core.webhook_validator import webhook_ssrf_suggestion
+
+    expected = webhook_ssrf_suggestion()
+    for layer, body in (("adcp_error", envelope["adcp_error"]), ("errors[0]", envelope["errors"][0])):
+        assert body.get("suggestion") == expected, (
+            f"{surface}: {layer}.suggestion={body.get('suggestion')!r}, expected {expected!r} — "
+            f"a refusal that names no repair leaves the buyer nothing to act on"
+        )
 
 
 def _assert_no_push_config_persisted(tenant_id: str, principal_id: str) -> None:
@@ -182,7 +231,7 @@ class TestCreateMediaBuyRefusedPushNotificationConfigUrl:
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     @pytest.mark.parametrize("url", _REFUSED_WEBHOOK_URLS)
     def test_refused_url_fails_create_naming_the_field(self, integration_db, transport, url, monkeypatch):
-        """INVALID_REQUEST / correctable / field=push_notification_config.url, and no row persisted."""
+        """VALIDATION_ERROR / correctable / field=push_notification_config.url, and no row persisted."""
         enforce_egress_policy(monkeypatch)
 
         with MediaBuyCreateEnv() as env:
@@ -194,7 +243,7 @@ class TestCreateMediaBuyRefusedPushNotificationConfigUrl:
                 **_create_kwargs(product),
             )
 
-            _assert_refused_at_ingest(result, _PNC_FIELD, surface="create_media_buy")
+            _assert_refused_at_ingest(result, _PNC_FIELD, surface="create_media_buy", code=_REGISTRATION_GATE_CODE)
             _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
 
 
@@ -210,7 +259,7 @@ class TestCreateMediaBuyRefusedReportingWebhookUrl:
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     def test_refused_url_fails_create_naming_the_field(self, integration_db, transport, monkeypatch):
-        """INVALID_REQUEST / correctable / field=reporting_webhook.url on the create wire."""
+        """VALIDATION_ERROR / correctable / field=reporting_webhook.url on the create wire."""
         enforce_egress_policy(monkeypatch)
 
         with MediaBuyCreateEnv() as env:
@@ -222,7 +271,9 @@ class TestCreateMediaBuyRefusedReportingWebhookUrl:
                 **_create_kwargs(product),
             )
 
-            _assert_refused_at_ingest(result, _REPORTING_WEBHOOK_FIELD, surface="create_media_buy")
+            _assert_refused_at_ingest(
+                result, _REPORTING_WEBHOOK_FIELD, surface="create_media_buy", code=_REGISTRATION_GATE_CODE
+            )
 
 
 class TestUpdateMediaBuyRefusedWebhookUrls:
@@ -268,25 +319,27 @@ class TestUpdateMediaBuyRefusedWebhookUrls:
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     def test_refused_push_notification_config_url_fails_update(self, env_with_media_buy, transport, monkeypatch):
-        """INVALID_REQUEST / correctable / field=push_notification_config.url on the update wire."""
+        """VALIDATION_ERROR / correctable / field=push_notification_config.url on the update wire."""
         enforce_egress_policy(monkeypatch)
         env, media_buy = env_with_media_buy
 
         req = self._update_req(media_buy, push_notification_config={"url": _METADATA_URL})
         result = env.call_via(transport, req=req)
 
-        _assert_refused_at_ingest(result, _PNC_FIELD, surface="update_media_buy")
+        _assert_refused_at_ingest(result, _PNC_FIELD, surface="update_media_buy", code=_REGISTRATION_GATE_CODE)
 
     @pytest.mark.parametrize("transport", _UPDATE_REPORTING_WEBHOOK_TRANSPORTS, ids=lambda t: t.value)
     def test_refused_reporting_webhook_url_fails_update(self, env_with_media_buy, transport, monkeypatch):
-        """INVALID_REQUEST / correctable / field=reporting_webhook.url on the update wire."""
+        """VALIDATION_ERROR / correctable / field=reporting_webhook.url on the update wire."""
         enforce_egress_policy(monkeypatch)
         env, media_buy = env_with_media_buy
 
         req = self._update_req(media_buy, reporting_webhook=dict(_REFUSED_REPORTING_WEBHOOK))
         result = env.call_via(transport, req=req)
 
-        _assert_refused_at_ingest(result, _REPORTING_WEBHOOK_FIELD, surface="update_media_buy")
+        _assert_refused_at_ingest(
+            result, _REPORTING_WEBHOOK_FIELD, surface="update_media_buy", code=_REGISTRATION_GATE_CODE
+        )
 
 
 class TestSyncCreativesRefusedPushNotificationConfigUrl:
@@ -300,7 +353,7 @@ class TestSyncCreativesRefusedPushNotificationConfigUrl:
     failure: inside the per-creative try (_sync.py:150) or _processing.py's
     ``except Exception`` it would surface as a partial success with a
     transient per-item error ("retry recommended" — false forever). The
-    request-level INVALID_REQUEST/correctable/field asserts pin exactly that
+    request-level VALIDATION_ERROR/correctable/field/suggestion asserts pin exactly that
     (a laundered refusal is a success envelope, or transient recovery — both
     fail here), and the no-creative-persisted assert pins that the refusal
     precedes per-creative processing entirely (plan step 5).
@@ -313,7 +366,7 @@ class TestSyncCreativesRefusedPushNotificationConfigUrl:
 
     @pytest.mark.parametrize("transport", _ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_refused_url_fails_sync_naming_the_field(self, integration_db, transport, monkeypatch):
-        """INVALID_REQUEST / correctable / field=push_notification_config.url; nothing synced."""
+        """VALIDATION_ERROR / correctable / field=push_notification_config.url; nothing synced."""
         from tests.factories.creative_asset import CreativeAssetFactory
         from tests.harness import CreativeSyncEnv
 
@@ -330,7 +383,7 @@ class TestSyncCreativesRefusedPushNotificationConfigUrl:
                 push_notification_config={"url": _METADATA_URL},
             )
 
-            _assert_refused_at_ingest(result, _PNC_FIELD, surface="sync_creatives")
+            _assert_refused_at_ingest(result, _PNC_FIELD, surface="sync_creatives", code=_REGISTRATION_GATE_CODE)
 
             # The refusal precedes per-creative processing: a refused request
             # syncs NOTHING (placement outside the per-creative try, plan step 5).

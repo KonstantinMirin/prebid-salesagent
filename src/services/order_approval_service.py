@@ -14,9 +14,10 @@ from typing import Any
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import SyncJob
+from src.core.database.models import PushNotificationConfig, SyncJob
 from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundRequestBlocked, send
 from src.core.thread_registry import ThreadRegistry
+from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,64 @@ def _mark_approval_failed(
         logger.error(f"Failed to mark approval failed: {e}")
 
 
+def _approval_webhook_headers(config: PushNotificationConfig | None) -> dict[str, str]:
+    """Build HTTP headers for an order-approval webhook POST."""
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)",
+    }
+    if not config:
+        return headers
+    if config.authentication_type == "bearer" and config.authentication_token:
+        headers["Authorization"] = f"Bearer {config.authentication_token}"
+    elif config.authentication_type == "basic" and config.authentication_token:
+        headers["Authorization"] = f"Basic {config.authentication_token}"
+    if config.validation_token:
+        headers["X-Webhook-Token"] = config.validation_token
+    return headers
+
+
+def _post_approval_webhook(
+    webhook_url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> None:
+    """POST the approval payload through the egress seam.
+
+    The seam owns every address and transport decision this function used to make
+    for itself, which is why none of them is restated here: https-only, reserved-
+    range refusal and resolve-once IP pinning (so the send-time SSRF gate is
+    subsumed — there is no separate pre-flight check to run), refusing to follow
+    redirects, the response-size cap, what counts as retryable (4xx terminal,
+    5xx/429 retried), and BR-RULE-029's 1s/2s/4s-plus-jitter backoff.
+
+    What stays local is the logging contract: every message names the SANITIZED
+    URL, never the raw one, so a webhook URL carrying credentials or a token in
+    its query string cannot reach the logs.
+    """
+    safe_url = webhook_url_for_log(webhook_url)
+    try:
+        result = send(webhook_url, json=payload, headers=headers, timeout=10.0, max_attempts=3)
+    except OutboundRequestBlocked:
+        # The URL never left the process. Deliberately opaque: the seam has
+        # already logged which policy refused it and why.
+        logger.warning("Approval webhook to %s was refused by egress policy", safe_url)
+    except OutboundDeliveryFailed as e:
+        logger.error(
+            "Failed to send approval webhook to %s after %s attempts (last status: %s)",
+            safe_url,
+            e.attempts,
+            e.last_status,
+        )
+    else:
+        logger.info(
+            "Approval webhook sent to %s (status: %s, attempts: %s)",
+            safe_url,
+            payload.get("status"),
+            result.attempts,
+        )
+
+
 def _send_approval_webhook(
     webhook_url: str,
     tenant_id: str,
@@ -371,45 +430,20 @@ def _send_approval_webhook(
             payload["attempts"] = attempts
 
         # Get webhook authentication from push notification config
-        from src.core.database.models import PushNotificationConfig
-
         with get_db_session() as db:
             stmt = select(PushNotificationConfig).filter_by(
                 tenant_id=tenant_id, principal_id=principal_id, url=webhook_url, is_active=True
             )
             config = db.scalars(stmt).first()
 
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)",
-        }
-
-        # Add authentication if configured
-        if config:
-            if config.authentication_type == "bearer" and config.authentication_token:
-                headers["Authorization"] = f"Bearer {config.authentication_token}"
-            elif config.authentication_type == "basic" and config.authentication_token:
-                headers["Authorization"] = f"Basic {config.authentication_token}"
-
-            if config.validation_token:
-                headers["X-Webhook-Token"] = config.validation_token
-
-        # Send through the egress seam: it owns address and TLS policy, redirect
-        # refusal, what counts as retryable, and the BR-RULE-029 backoff. Nothing
-        # about those decisions is restated here — that is the point of the seam.
-        try:
-            result = send(webhook_url, json=payload, headers=headers, timeout=10.0, max_attempts=3)
-        except OutboundRequestBlocked:
-            # The URL never left the process. Deliberately opaque: the seam has
-            # already logged which policy refused it and why.
-            logger.warning(f"Approval webhook to {webhook_url} was refused by egress policy")
-        except OutboundDeliveryFailed as e:
-            logger.error(
-                f"Failed to send approval webhook to {webhook_url} after {e.attempts} attempts "
-                f"(last status: {e.last_status})"
-            )
-        else:
-            logger.info(f"Approval webhook sent to {webhook_url} (status: {status}, attempts: {result.attempts})")
+        # The egress seam validates the URL as part of sending it, so there is no
+        # separate SSRF pre-flight here: one refusal path, raised as
+        # OutboundRequestBlocked before any connection is attempted.
+        _post_approval_webhook(
+            webhook_url,
+            payload,
+            _approval_webhook_headers(config),
+        )
 
     except Exception as e:
         logger.error(f"Error sending approval webhook: {e}", exc_info=True)

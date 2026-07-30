@@ -60,9 +60,14 @@ class TestCircuitBreakerEnvContract:
             assert env.last_delivery.json()["media_buy_deliveries"][0]["media_buy_id"] == "mb_001"
 
     def test_mock_access(self):
-        """env.mock[name] provides access to all patch targets — timing only, no transport."""
+        """env.mock[name] provides access to all patch targets — timing only, no transport.
+
+        ``ssrf`` is the send-time SSRF gate (#1697) — a *decision* production consults
+        before anything leaves, not a transport mock; delivery itself still goes to the
+        real local origin.
+        """
         with CircuitBreakerEnv() as env:
-            assert set(env.mock) == {"sleep", "random", "db", "logger"}
+            assert set(env.mock) == {"sleep", "random", "db", "logger", "ssrf"}
 
     def test_make_webhook_config(self):
         """make_webhook_config creates a mock with expected attributes."""

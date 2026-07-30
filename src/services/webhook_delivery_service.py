@@ -25,6 +25,7 @@ from typing import Any
 from adcp import get_adcp_spec_version
 
 from src.core.security.outbound_http import OutboundError, send, terminal_client_error_status
+from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -402,9 +403,13 @@ class WebhookDeliveryService:
                 # Send to all configured webhooks
                 sent_count = 0
                 for config in configs:
+                    safe_url = webhook_url_for_log(config.url)
                     # Skip auth-blocked endpoints (UC-004-EXT-G-07)
                     if isinstance(getattr(config, "auth_blocked_at", None), datetime):
-                        logger.warning(f"⚠️ Auth blocked for {config.url}, skipping until credentials reconfigured")
+                        logger.warning(
+                            "⚠️ Auth blocked for %s, skipping until credentials reconfigured",
+                            safe_url,
+                        )
                         continue
 
                     endpoint_key = f"{tenant_id}:{config.url}"
@@ -422,8 +427,24 @@ class WebhookDeliveryService:
 
                     # Check circuit breaker
                     if not circuit_breaker.can_attempt():
-                        logger.warning(f"⚠️ Circuit breaker OPEN for {config.url}, skipping webhook delivery")
+                        logger.warning(
+                            "⚠️ Circuit breaker OPEN for %s, skipping webhook delivery",
+                            safe_url,
+                        )
                         continue
+
+                    # No send-time address gate here: #1697 put one in front of the
+                    # raw POST this path used to do, and the egress seam that POST
+                    # became now owns exactly that policy — it resolves, validates
+                    # and PINS the connection to the validated IP inside the same
+                    # call, so there is no window between the verdict and the
+                    # socket. Re-checking here would only re-resolve, which is the
+                    # rebinding gap the pin closes, and #1697's refusal-records-a-
+                    # failure bookkeeping survives in _deliver_with_backoff: a
+                    # refused URL raises OutboundRequestBlocked, which reaches
+                    # record_failure() through the OutboundError handler.
+                    # (Registration-time validation, which must NOT resolve DNS,
+                    # still lives in src/core/webhook_validator.py.)
 
                     # Add to queue (bounded)
                     webhook_data = {
@@ -433,7 +454,7 @@ class WebhookDeliveryService:
                     }
 
                     if not queue.enqueue(webhook_data):
-                        logger.warning(f"⚠️ Queue full for {config.url}, webhook dropped")
+                        logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
                         continue
 
                     # Deliver from queue with enhanced features
@@ -474,6 +495,7 @@ class WebhookDeliveryService:
         config = webhook_data["config"]
         payload = webhook_data["payload"]
         timestamp = webhook_data["timestamp"].isoformat()
+        safe_url = webhook_url_for_log(config.url)
 
         # Generate HMAC signature if webhook secret is configured
         webhook_secret = getattr(config, "webhook_secret", None)
@@ -485,7 +507,10 @@ class WebhookDeliveryService:
 
         if webhook_secret:
             if not self._verify_secret_strength(webhook_secret):
-                logger.warning(f"⚠️ Webhook secret for {config.url} is too weak (min 32 characters required)")
+                logger.warning(
+                    "⚠️ Webhook secret for %s is too weak (min 32 characters required)",
+                    safe_url,
+                )
             else:
                 signature = self._generate_hmac_signature(payload, webhook_secret, timestamp)
                 headers["X-ADCP-Signature"] = signature
@@ -498,6 +523,15 @@ class WebhookDeliveryService:
         # Retry-After the endpoint asks for), address and TLS policy, and which
         # statuses are worth trying again. No ``field=`` — this URL is read back
         # out of storage, not off a request document.
+        #
+        # The seam's redirect refusal is what #1697 reached for with
+        # ``follow_redirects=False``: httpx defaults to that and the seam never
+        # overrides it, so a 302 toward a private address or a metadata endpoint
+        # cannot carry this delivery past the validated destination.
+        #
+        # Every log below names ``safe_url`` (scheme://host/path), never
+        # ``config.url``: a buyer's webhook URL may carry credentials in userinfo
+        # or a token in the query string, and these lines land in operator logs.
         try:
             result = send(
                 config.url,
@@ -516,7 +550,9 @@ class WebhookDeliveryService:
                 # non-retryable 4xx and its records do not propagate here, so this
                 # line is the only operator-visible trace of a rejected delivery.
                 logger.warning(
-                    f"Webhook delivery to {config.url} returned client error {terminal_status}, will not retry"
+                    "Webhook delivery to %s returned client error %s, will not retry",
+                    safe_url,
+                    terminal_status,
                 )
             else:
                 # Name the status and the attempt count. The seam's own message is a
@@ -526,15 +562,24 @@ class WebhookDeliveryService:
                 attempts = getattr(exc, "attempts", None)
                 last_status = getattr(exc, "last_status", None)
                 cause = f"status {last_status}" if last_status is not None else "no response"
-                logger.warning(f"Webhook delivery to {config.url} failed after {attempts} attempts ({cause})")
+                logger.warning(
+                    "Webhook delivery to %s failed after %s attempts (%s)",
+                    safe_url,
+                    attempts,
+                    cause,
+                )
             circuit_breaker.record_failure()
             return False
         except Exception as e:
-            logger.error(f"Unexpected error delivering to {config.url}: {e}", exc_info=True)
+            logger.error("Unexpected error delivering to %s: %s", safe_url, e, exc_info=True)
             circuit_breaker.record_failure()
             return False
 
-        logger.debug(f"Webhook delivered to {config.url} (status: {result.status_code})")
+        logger.debug(
+            "Webhook delivered to %s (status: %s)",
+            safe_url,
+            result.status_code,
+        )
         circuit_breaker.record_success()
         return True
 

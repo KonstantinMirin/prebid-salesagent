@@ -52,7 +52,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
-from src.core.webhook_ingest import validated_push_notification_config, validated_reporting_webhook
+from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -374,15 +374,40 @@ def _update_media_buy_impl(
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
 
-    # Ingest-time egress verdict on the stored-then-fetched webhook URLs,
-    # deliberately ABOVE the UoW: a buyer-controlled DNS resolution must not
-    # run while a DB transaction is held, and a refused URL is INVALID_REQUEST
-    # regardless of buy state — the buyer must fix the request before state
-    # questions are reachable, so this outranks the terminal-state refusal.
-    # The stored copy this guards is the workflow step's request_data, which
-    # context_manager later reads back and dials.
-    validated_push_notification_config(req.push_notification_config)
-    validated_reporting_webhook(req.reporting_webhook)
+    # SSRF gate at registration — after auth so unauthenticated callers get AUTH
+    # first, and ABOVE the UoW so no DB transaction is held and a refused URL is
+    # VALIDATION_ERROR regardless of buy state: the buyer must fix the request
+    # before state questions are reachable, so this outranks the terminal-state
+    # refusal. The stored copy this guards is the workflow step's request_data,
+    # which context_manager later reads back and dials.
+    #
+    # Deliberately the no-DNS registration gate (gh-#1697), NOT the outbound seam's
+    # validate_url (gh-#1589): validate_url always resolves, so at registration it
+    # would reject a buyer whose hostname has not yet propagated — and would answer
+    # the same input differently from create_media_buy / sync_creatives. The seam
+    # stays the SEND-time gate and re-checks with DNS when the URL is actually dialed.
+    # Use str(url): library PushNotificationConfig/ReportingWebhook.url is pydantic
+    # AnyUrl, not str.
+    if req.push_notification_config:
+        pnc_url = getattr(req.push_notification_config, "url", None)
+        reject_unsafe_webhook_registration_url(
+            str(pnc_url) if pnc_url is not None else None,
+            field="push_notification_config.url",
+            context=req.context,
+        )
+        if pnc_url is not None and str(pnc_url).strip():
+            # Log scheme+host+path only — never credentials / full auth blob.
+            logger.info(
+                "[update_media_buy] Push notification webhook URL: %s",
+                webhook_url_for_log(str(pnc_url)),
+            )
+    if req.reporting_webhook:
+        rw_url = getattr(req.reporting_webhook, "url", None)
+        reject_unsafe_webhook_registration_url(
+            str(rw_url) if rw_url is not None else None,
+            field="reporting_webhook.url",
+            context=req.context,
+        )
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the

@@ -1,7 +1,8 @@
 """Unit tests for order approval service."""
 
+import logging
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -180,3 +181,72 @@ def test_get_approval_status_not_found(mock_db_session):
 
     status = get_approval_status("nonexistent")
     assert status is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Two webhook unit tests that lived here were REMOVED, not repaired, when
+# ``_send_approval_webhook`` stopped speaking httpx and started handing the URL
+# to the egress seam (``src.core.security.outbound_http.send``):
+#
+#   * ``test_webhook_notification_sent_on_success`` claimed: the payload carries
+#     event/media_buy_id/status/order_id/attempts, and a stored bearer
+#     PushNotificationConfig becomes ``Authorization: Bearer <token>``. It read
+#     those off a substituted ``httpx.Client``, plus (from #1697)
+#     ``httpx.Client(timeout=10.0, follow_redirects=False)`` — a constructor the
+#     module no longer calls at all. Regraded against a real origin in
+#     ``tests/integration/test_order_approval_webhook.py``
+#     (``TestDeliveredPayload``, ``TestStoredCredential`` — which also covers the
+#     no-config direction the old test only hit incidentally).
+#   * ``test_webhook_retries_on_failure`` claimed: a failing POST is retried to
+#     three attempts. The hand-rolled ``for attempt in range(...)`` /
+#     ``time.sleep(2 ** attempt)`` loop it patched no longer exists; the seam owns
+#     attempt count, retry classification and BR-RULE-029 backoff. Regraded in
+#     ``tests/integration/test_order_approval_webhook.py``
+#     (``TestRetryClassification``, ``TestExhaustedDeliveryIsSilent``) and, for
+#     the spacing, once in ``tests/integration/test_outbound_http.py``.
+#
+# The SSRF obligation from #1697 stays here because it is a claim about THIS
+# call site — that the order-approval sender shares the gate — which the seam's
+# own suite cannot make on its behalf.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_approval_webhook_rejects_metadata_url_without_post(caplog):
+    """Order-approval sender must share the outbound SSRF gate (no open redirect).
+
+    Repointed off ``patch("httpx.Client")``: the sender does not speak httpx any
+    more, so a mock standing in for it would grade a transport this module never
+    touches. ``send`` is spied with ``wraps=`` instead, so the REAL validation
+    runs — the link-local metadata address is refused inside the seam before any
+    connection is attempted (and stays refused even with the private/insecure
+    escape hatches on), and production swallows the refusal as a log line.
+
+    Both halves are asserted: the raw URL reached the gate under the attempt
+    budget this call site asks for, and the gate refused it — which is what
+    "nothing was POSTed" means once no local transport exists to count.
+    """
+    from src.core.security.outbound_http import send as real_send
+    from src.services.order_approval_service import _send_approval_webhook
+
+    metadata_url = "http://169.254.169.254/latest/meta-data/"
+
+    with (
+        patch("src.services.order_approval_service.get_db_session") as mock_db,
+        patch("src.services.order_approval_service.send", wraps=real_send) as spy_send,
+        caplog.at_level(logging.WARNING, logger="src.services.order_approval_service"),
+    ):
+        mock_db_instance = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_db_instance
+        mock_db_instance.scalars.return_value.first.return_value = None
+
+        _send_approval_webhook(
+            webhook_url=metadata_url,
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+            media_buy_id="mb_123",
+            status="approved",
+            message="Order approved successfully",
+        )
+
+    spy_send.assert_called_once_with(metadata_url, json=ANY, headers=ANY, timeout=10.0, max_attempts=3)
+    assert "was refused by egress policy" in caplog.text

@@ -35,6 +35,7 @@ from src.core.security.outbound_http import (
     asend,
     terminal_client_error_status,
 )
+from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,15 @@ class ProtocolWebhookService:
         # place allowed to decide anything about the destination. Test stacks that
         # need a host-reachable callback register a reachable hostname instead
         # (ADCP_WEBHOOK_HOST, see tests/e2e/_webhook_capture.py).
+        #
+        # No separate send-time SSRF gate here (#1697 added one in front of the old
+        # requests.Session POST): the seam's pre-connection check IS that gate and
+        # strictly more — same HTTPS requirement and same reserved/private-address
+        # refusal over a real DNS resolution, but it then PINS the connection to the
+        # address it validated, so the resolve-then-connect rebinding window a
+        # separate validator leaves open does not exist. Re-validating here would be
+        # a second copy of address policy, which is what deleting the hand-rolled
+        # validator (src/core/security/url_validator.py) was for.
         url = push_notification_config.url
 
         # Prepare headers
@@ -347,10 +357,19 @@ class ProtocolWebhookService:
         # worth another attempt — and it builds a transport pinned to THIS
         # destination, which is why no client or session may outlive the call.
         #
+        # The seam's redirect refusal is what #1697 reached for with
+        # ``allow_redirects=False``: httpx defaults to ``follow_redirects=False``
+        # and the seam never overrides it, so a 302 toward metadata or a private
+        # address cannot carry us past the validated destination.
+        #
         # No ``field=``: the URL is read back out of a stored PushNotificationConfig,
         # not off a request document a buyer just sent — the buyer-actionable
-        # refusal already happened at ingest (src/core/webhook_ingest.py).
-        logger.info(f"Sending webhook for task {task_id} to {url}")
+        # refusal already happened at ingest (src/core/webhook_validator.py, reject_unsafe_webhook_registration_url).
+        #
+        # The URL is logged sanitized (scheme://host/path): a buyer's webhook URL
+        # may carry credentials in userinfo or a token in the query string, and a
+        # log line is the one place they would sit in cleartext (#1697).
+        logger.info("Sending webhook for task %s to %s", task_id, webhook_url_for_log(url))
         try:
             result_out = await asend(
                 url,
