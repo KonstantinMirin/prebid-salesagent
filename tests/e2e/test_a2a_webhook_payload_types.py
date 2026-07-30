@@ -624,6 +624,23 @@ class TestProtocolWebhookWireFormat:
     raise SnakeCaseWireViolation in the capture classifier).
     """
 
+    @pytest.fixture(autouse=True)
+    def _open_egress_hatches(self):
+        """Open both seam hatches: the callback is plain-http on loopback.
+
+        These tests grade the WIRE FORMAT, not egress policy — the http://127.0.0.1
+        capture URL is incidental transport. Without the hatches the seam refuses
+        the scheme and the address before any payload reaches the wire, in exactly
+        the host-run posture (no compose env) this hermetic class runs in.
+        """
+        import os
+        from unittest.mock import patch as mock_patch
+
+        from tests.helpers.egress_hatches import egress_hatch_env
+
+        with mock_patch.dict(os.environ, egress_hatch_env(private=True, insecure=True)):
+            yield
+
     def _send_and_capture(self, payload) -> dict[str, Any]:
         """Send `payload` via the real service and return the classified capture."""
         import asyncio
