@@ -57,41 +57,57 @@ class TestWebhookURLValidator:
     ``10.0.0.0/8``-style assertions would stop grading the address policy at all.
     The scheme decision itself is graded on its own, in
     ``TestWebhookSchemeGateTracksTheEgressSeam``.
+
+    POSTURE IS PINNED, and that is load-bearing. ``tests/conftest.py`` sets
+    ``ADCP_TESTING=true`` autouse for the whole suite, and under it the gate
+    hands any loopback verdict to ``_maybe_allow_localhost``, which RESCUES it.
+    An address case left on the ambient posture would therefore grade the
+    testing-mode allowance instead of the address policy it claims to grade —
+    and the two loopback cases would flip from refused to accepted outright
+    (verified: removing the fixture below fails exactly those two).
+    The allowance is real behaviour and is graded on purpose, in
+    ``TestLocalhostAllowanceUnderTestingMode`` below; here it is switched off so
+    these cases mean what their names say.
     """
+
+    @pytest.fixture(autouse=True)
+    def _no_testing_mode(self, monkeypatch):
+        """Grade the address policy, not the testing-mode loopback allowance."""
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
 
     def test_valid_public_https_url(self):
         """Valid public HTTPS URLs should pass."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://example.com/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://example.com/webhook")
         assert is_valid
         assert error == ""
 
     def test_blocks_localhost(self):
         """Should block localhost."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://localhost:3000/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://localhost:3000/webhook")
         assert not is_valid
         assert "blocked" in error.lower()
 
     def test_blocks_127_0_0_1(self):
         """Should block 127.0.0.1."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://127.0.0.1:8080/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://127.0.0.1:8080/webhook")
         assert not is_valid
         assert "127.0.0.0/8" in error
 
     def test_blocks_private_network_10(self):
         """Should block 10.0.0.0/8 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://10.0.0.5/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://10.0.0.5/webhook")
         assert not is_valid
         assert "10.0.0.0/8" in error
 
     def test_blocks_private_network_192(self):
         """Should block 192.168.0.0/16 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://192.168.1.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://192.168.1.1/webhook")
         assert not is_valid
         assert "192.168.0.0/16" in error
 
     def test_blocks_private_network_172(self):
         """Should block 172.16.0.0/12 private network."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://172.16.0.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://172.16.0.1/webhook")
         assert not is_valid
         assert "172.16.0.0/12" in error
 
@@ -99,19 +115,23 @@ class TestWebhookURLValidator:
         """Should block 169.254.0.0/16 link-local (AWS metadata service)."""
         # Use a non-hostname-allowlist IP so the CIDR path is graded (169.254.169.254
         # is also in BLOCKED_HOSTNAMES and short-circuits before network match).
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://169.254.1.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://169.254.1.1/webhook")
         assert not is_valid
         assert "169.254.0.0/16" in error
 
     def test_blocks_aws_metadata_hostname(self):
         """Literal metadata IP hostname is blocked by hostname allowlist."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://169.254.169.254/latest/meta-data")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration(
+            "https://169.254.169.254/latest/meta-data"
+        )
         assert not is_valid
         assert "blocked" in error.lower()
 
     def test_blocks_metadata_hostname(self):
         """Should block cloud metadata hostnames."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://metadata.google.internal/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration(
+            "https://metadata.google.internal/webhook"
+        )
         assert not is_valid
         assert "blocked" in error.lower()
 
@@ -126,54 +146,109 @@ class TestWebhookURLValidator:
         happened to provide.
         """
         monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true" if hatch_open else "false")
-        is_valid, error = WebhookURLValidator.validate_webhook_url("ftp://example.com/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("ftp://example.com/webhook")
         assert not is_valid
         assert "http" in error.lower()
 
     def test_requires_hostname(self):
         """Should reject URLs without hostname."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https:///webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https:///webhook")
         assert not is_valid
         assert "hostname" in error.lower()
 
     def test_invalid_url_format(self):
         """Should reject malformed URLs."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("not-a-url")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("not-a-url")
         assert not is_valid
         assert error != ""
 
-    def test_validate_for_testing_allows_localhost(self):
-        """Testing mode should allow localhost when enabled."""
-        is_valid, error = WebhookURLValidator.validate_for_testing(
-            "http://localhost:3001/webhook", allow_localhost=True
-        )
-        assert is_valid
-        assert error == ""
-
-    def test_validate_for_testing_blocks_private_networks(self):
-        """Testing mode should still block private networks even with allow_localhost."""
-        is_valid, error = WebhookURLValidator.validate_for_testing("http://192.168.1.1/webhook", allow_localhost=True)
-        assert not is_valid
-
     def test_blocks_cgnat_range(self):
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://100.64.1.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://100.64.1.1/webhook")
         assert not is_valid
         assert "100.64.0.0/10" in error
 
     def test_blocks_multicast_range(self):
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://224.0.0.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://224.0.0.1/webhook")
         assert not is_valid
         assert "224.0.0.0/4" in error
 
     def test_blocks_ipv6_multicast_range(self):
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://[ff02::1]/")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://[ff02::1]/")
         assert not is_valid
         assert "ff00::/8" in error
 
     def test_blocks_nat64_well_known_prefix(self):
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://[64:ff9b::a9fe:a9fe]/")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://[64:ff9b::a9fe:a9fe]/")
         assert not is_valid
         assert "64:ff9b::/96" in error
+
+
+class TestLocalhostAllowanceUnderTestingMode:
+    """The loopback allowance is a real behaviour, so it is graded on BOTH arms.
+
+    ``validate_webhook_url_registration`` hands its verdict to
+    ``_maybe_allow_localhost``, which rescues a loopback refusal when
+    ``ADCP_TESTING`` is set. That branch is what lets an e2e capture server on
+    127.0.0.1 register at all — live production behaviour, and until now asserted
+    NOWHERE: the only cases that touched it graded the NEGATIVE (that the
+    allowance must not also rescue a bad SCHEME), and the two tests that reached
+    it directly went through ``validate_for_testing``, which this change deletes.
+
+    Both arms are pinned explicitly because the suite sets ``ADCP_TESTING=true``
+    autouse: a one-armed test here would silently grade whichever posture the
+    fixture happened to leave behind, which is exactly how a gate control goes
+    inert without anyone noticing.
+
+    The scheme hatch is opened because a loopback capture server is reached over
+    plain http; that is the same pairing the e2e stack runs
+    (``ADCP_OUTBOUND_ALLOW_INSECURE=true`` beside ``ADCP_TESTING=true``), and it
+    keeps this class grading the ADDRESS allowance rather than colliding with the
+    scheme gate graded below.
+    """
+
+    LOOPBACK_URLS = ["http://localhost:3001/webhook", "http://127.0.0.1:8080/webhook"]
+
+    @pytest.mark.parametrize("url", LOOPBACK_URLS)
+    def test_loopback_refused_without_testing_mode(self, monkeypatch, url):
+        """Without ADCP_TESTING a loopback URL is refused, allowance or not."""
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
+
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration(url)
+
+        assert not is_valid, f"{url} must be refused when the testing-mode allowance is off"
+        assert error != "", "a refusal must say something the caller can log"
+
+    @pytest.mark.parametrize("url", LOOPBACK_URLS)
+    def test_loopback_allowed_under_testing_mode(self, monkeypatch, url):
+        """With ADCP_TESTING the allowance rescues the loopback verdict.
+
+        This is the arm with no prior coverage. Verified to fail the moment
+        ``_maybe_allow_localhost`` stops rescuing — without it, deleting that
+        branch would break only the e2e stack, far from the change that caused it.
+        """
+        monkeypatch.setenv("ADCP_TESTING", "true")
+        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
+
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration(url)
+
+        assert is_valid, f"{url} must be accepted under ADCP_TESTING so a loopback capture server can register"
+        assert error == ""
+
+    def test_allowance_does_not_rescue_a_private_range(self, monkeypatch):
+        """The allowance is loopback-only — a private range stays refused under it.
+
+        Carried over from the deleted ``validate_for_testing`` coverage: the
+        rescue keys on the loopback wording, so a 192.168/16 verdict must survive
+        it. Without this, widening the rescue predicate would go unnoticed.
+        """
+        monkeypatch.setenv("ADCP_TESTING", "true")
+        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
+
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("http://192.168.1.1/webhook")
+
+        assert not is_valid, "the loopback allowance must not rescue a private-range address"
+        assert "192.168.0.0/16" in error
 
 
 class TestWebhookSchemeGateTracksTheEgressSeam:
