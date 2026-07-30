@@ -123,6 +123,33 @@ def when_request_products_with_property_list(ctx: dict, agent_url: str) -> None:
     )
 
 
+@when(parsers.parse('the buyer syncs a creative whose format agent is at "{agent_url}"'))
+def when_sync_creative_with_agent_url(ctx: dict, agent_url: str) -> None:
+    """Dispatch sync_creatives carrying a buyer-supplied creatives[].format_id.agent_url.
+
+    The third buyer-supplied URL on the protocol surface. Unlike the two above,
+    this one is a PER-CREATIVE field, so the refusal has to name which creative
+    — hence the indexed ``field`` the Then step asserts.
+
+    The creative is built through ``CreativeAssetFactory`` (overriding only
+    ``format_id``) rather than as a literal dict: a payload missing a required
+    field is rejected by the MCP wrapper's typed parameters BEFORE any egress
+    decision, and that VALIDATION_ERROR resembles a refusal closely enough to
+    pass a careless assertion for entirely the wrong reason.
+    """
+    from adcp.types import FormatId
+
+    from tests.factories.creative_asset import CreativeAssetFactory
+
+    ctx["supplied_agent_url"] = agent_url
+    creative = CreativeAssetFactory(
+        creative_id="c_egress_refusal",
+        name="Egress Refusal Creative",
+        format_id=FormatId(id="display_300x250_image", agent_url=agent_url),
+    )
+    dispatch_request(ctx, creatives=[creative])
+
+
 @when(parsers.parse('the buyer creates a media buy with push notification url "{webhook_url}"'))
 def when_create_media_buy_with_push_url(ctx: dict, webhook_url: str) -> None:
     """Dispatch create_media_buy carrying a buyer-supplied push_notification_config.url.
@@ -202,3 +229,37 @@ def then_envelope_discloses_nothing(ctx: dict) -> None:
 
     leaked = _ip_addresses_in(serialized)
     assert leaked == [], f"refusal disclosed IP address(es) {leaked} to the buyer: {serialized}"
+
+
+@then(parsers.parse('the creative is rejected with INVALID_REQUEST naming field "{field}"'))
+def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
+    """Assert the PER-ITEM failure carries the seam's own classification.
+
+    Per-item rather than request-level because ``format_id.agent_url`` is a
+    per-CREATIVE field: the pinned sync-creatives-response schema calls a
+    synchronous success "best-effort processing with per-item status/failures"
+    and says ``action="failed"`` items are "per-item validation/processing
+    failures, not operation-level failures". The sibling
+    ``push_notification_config.url`` fails the whole request because THAT field
+    is request-level; the analogy does not carry to this one.
+
+    ``field`` is the load-bearing half. The refusal message says nothing about
+    the destination (L1 point 6), so it is the only channel that can tell a
+    buyer WHICH of up to 100 creatives to fix.
+    """
+    response = _require(ctx, "response")
+    creatives = response["creatives"] if isinstance(response, dict) else response.creatives
+    assert creatives, f"expected a per-creative result, got {response!r}"
+    entry = creatives[0]
+    action = entry["action"] if isinstance(entry, dict) else getattr(entry.action, "value", entry.action)
+    assert str(action) == "failed", f"a creative whose agent_url egress refused must not sync; action={action!r}"
+
+    errors = entry["errors"] if isinstance(entry, dict) else entry.errors
+    assert errors, f"a failed creative must carry an error; got {entry!r}"
+    error = errors[0]
+    code = error["code"] if isinstance(error, dict) else error.code
+    recovery = error["recovery"] if isinstance(error, dict) else error.recovery
+    got_field = error["field"] if isinstance(error, dict) else error.field
+    assert code == "INVALID_REQUEST", f"errors[0].code={code!r} — a buyer-supplied URL is buyer-correctable"
+    assert recovery == "correctable", f"errors[0].recovery={recovery!r}"
+    assert got_field == field, f"errors[0].field={got_field!r}, expected {field!r}"

@@ -76,7 +76,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
             mock_registry = Mock()
@@ -109,7 +109,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return []
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return None  # Format not found
 
             mock_registry = Mock()
@@ -157,7 +157,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return []
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 raise AdCPServiceUnavailableError("Connection failed: agent unreachable — Connection refused")
 
             mock_registry = Mock()
@@ -193,7 +193,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
             mock_registry = Mock()
@@ -238,7 +238,7 @@ class TestSyncCreativesFormatValidation:
                 return [mock_format_spec]
 
             # Mock get_format to return format_spec for valid format, None for invalid
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 if format_id == "display_300x250_image":
                     return mock_format_spec
                 return None
@@ -291,7 +291,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
             mock_registry = Mock()
@@ -380,7 +380,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return []
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 if "offline.example.com" in agent_url:
                     raise AdCPServiceUnavailableError("Connection failed: Connection refused")
 

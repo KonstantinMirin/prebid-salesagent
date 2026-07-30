@@ -3157,6 +3157,11 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
+    if "egress_sync" in marker_names:
+        # The sync_creatives leg of the local SSRF-refusal feature dispatches
+        # sync_creatives, so it needs the creative-sync harness (UC-006's arm),
+        # not the product env the other @egress scenarios share.
+        return "UC-006"
     if "egress_create" in marker_names:
         # The ingest-time twin in the local SSRF-refusal feature dispatches
         # create_media_buy, so it needs the media-buy create harness (UC-004's
@@ -3449,7 +3454,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf"}:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf", "egress_sync"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
@@ -3458,9 +3463,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # creative lookup) — dormant until the cross-principal existence-gate
             # fix (PR #1430 review) made the surface safe to grade.
             # @webhook-ssrf scenarios grade registration SSRF on push_notification_config.url.
-            from tests.harness.creative_sync import CreativeSyncEnv
+            # @egress_sync grades a refusal the REAL registry and the REAL egress
+            # seam produce, so it needs the env that does not patch the registry —
+            # a refusal manufactured by a mock proves nothing about production.
+            from tests.harness.creative_sync import CreativeSyncEnv, RealRegistryCreativeSyncEnv
 
-            with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
+            sync_env_cls = RealRegistryCreativeSyncEnv if "egress_sync" in marker_names else CreativeSyncEnv
+            with _db_scope_for(request, e2e_config), sync_env_cls(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:

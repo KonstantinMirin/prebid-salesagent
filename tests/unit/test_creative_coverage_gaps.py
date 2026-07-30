@@ -603,7 +603,7 @@ class TestValidationEdgeCases:
             variants=[],
         )
 
-        async def mock_get_format(agent_url, format_id):
+        async def mock_get_format(agent_url, format_id, **_kwargs):
             return mock_format_spec
 
         mock_registry = Mock()

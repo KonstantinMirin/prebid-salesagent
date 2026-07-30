@@ -32,7 +32,12 @@ logger = logging.getLogger(__name__)
 
 
 def _failed_sync_result(
-    creative_id: str, error_msg: str, *, recovery: str | None = None, code: str = "SERVICE_UNAVAILABLE"
+    creative_id: str,
+    error_msg: str,
+    *,
+    recovery: str | None = None,
+    code: str = "SERVICE_UNAVAILABLE",
+    field: str | None = None,
 ) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
@@ -51,7 +56,7 @@ def _failed_sync_result(
         action="failed",
         errors=[
             AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-                code=code, message=error_msg, recovery=recovery
+                code=code, message=error_msg, recovery=recovery, field=field
             )
         ],
         review_feedback=None,

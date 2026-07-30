@@ -104,6 +104,31 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     When the buyer requests products with a property list agent at "http://example.com"
     Then the request is rejected with INVALID_REQUEST naming field "property_list.agent_url"
 
+  # The third buyer-supplied URL on the protocol surface, and the one with the
+  # LOWEST privilege bar: creatives[].format_id.agent_url names the creative
+  # agent a creative's format lives on, and sync_creatives dials it to check the
+  # format exists. Any authenticated advertiser can send it (gh-#1790).
+  #
+  # Graded here rather than only in integration because the refusal's
+  # classification — not merely its existence — is the obligation: before the
+  # fix the connection WAS refused, but the registry reported it through its
+  # OPERATOR arm as CONFIGURATION_ERROR / terminal, telling the buyer a seller
+  # was misconfigured about a URL the buyer themselves chose, with no field.
+  #
+  # Hatches OPEN, and a cloud-metadata address, for the reason the header gives:
+  # that is the only posture the e2e stack can realize, and metadata is refused
+  # even with both hatches wide open, so this scenario grades ONE production on
+  # every transport including e2e_rest.
+  #
+  # The field is INDEXED (creatives[0]...) per the pinned spec's JSONPath-lite
+  # examples: a sync carries up to 100 creatives and the message says nothing,
+  # so an unindexed path would leave the buyer unable to tell WHICH creative.
+  @T-EGRESS-SSRF-sync-creatives-agent-url @egress_sync @invariant
+  Scenario: a refused creative-agent agent_url is a correctable buyer error at sync ingest
+    Given both outbound egress escape hatches are open
+    When the buyer syncs a creative whose format agent is at "https://169.254.169.254"
+    Then the creative is rejected with INVALID_REQUEST naming field "creatives[0].format_id.agent_url"
+
   # The ingest twin: the same obligation — a buyer-supplied URL we refuse comes
   # back as a correctable, non-disclosing error naming the field to fix —
   # graded at the one moment a request still exists to refuse into. A

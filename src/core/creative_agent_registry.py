@@ -196,6 +196,27 @@ def _get_reference_formats() -> list[Format]:
 PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
+def _is_operator_agent(agent_url: str) -> bool:
+    """Whether *agent_url* names an agent THIS DEPLOYMENT stands behind.
+
+    A buyer naming the seller's own default agent — the overwhelmingly common
+    case — is not choosing a destination; they are echoing back the one we
+    published. So the testing short-circuit still applies to it, exactly as
+    before, and CI does not start dialling on ordinary traffic.
+
+    Learned the hard way: bypassing the short-circuit for EVERY buyer-supplied
+    url made the e2e stack fetch for real on routine update_media_buy traffic,
+    and an unrelated scenario failed on the seam's delivery error. The narrow
+    rule keeps the short-circuit where it was designed to help while still
+    letting a genuinely foreign destination reach the seam and be refused.
+    """
+    known = {canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL)}
+    configured = os.environ.get("CREATIVE_AGENT_URL")
+    if configured:
+        known.add(canonical_agent_url(configured))
+    return canonical_agent_url(agent_url) in known
+
+
 def _connection_agent_url(agent_url: str) -> str:
     """Resolve the TRANSPORT url for an agent reference (salesagent-9qe2).
 
@@ -500,8 +521,28 @@ class CreativeAgentRegistry:
 
             raise_mapped_adcp_error(e, agent_label=f"creative agent {agent.name}", logger=logger)
 
-    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent) -> list[Format]:
-        """Fallback: fetch formats via raw HTTP when adcp SDK rejects TextContent.
+    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent, *, field: str | None = None) -> list[Format]:
+        """Fetch formats through the EGRESS SEAM, as a raw MCP tools/call.
+
+        Two callers, for two different reasons:
+
+        * the SDK-client path's fallback, when adcp rejects a TextContent
+          response (the original reason this existed), and
+        * every fetch of a COUNTERPARTY-SUPPLIED ``agent_url``, because the SDK
+          client dials through its own httpx stack that no policy of ours can
+          reach — adcp 6.6.0 exposes no transport knob (upstream
+          adcp-client-python#1004). Measured: a buyer URL sent down the SDK path
+          put 3 real requests on the wire against a destination egress policy
+          forbids. Here the seam owns address, TLS, redirect and retry, so the
+          request either goes to an allowed destination or never leaves.
+
+        ``field`` carries PROVENANCE, and it is the only thing that decides how a
+        refusal is reported. Present = the URL came out of the caller's request
+        document, so the seam's own ``OutboundRequestBlocked`` (INVALID_REQUEST /
+        correctable, naming that field) is already the right answer and is
+        re-raised untouched. Absent = an operator-registered endpoint, where
+        ``raise_mapped_outbound_error`` is right: the buyer did not choose the
+        address and cannot fix it.
 
         The adcp SDK 3.6.0 requires structuredContent in MCP responses, but some
         creative agents return TextContent with JSON. This method calls the MCP
@@ -525,8 +566,9 @@ class CreativeAgentRegistry:
 
         # One call, no retry loop: the seam owns attempts, backoff (BR-RULE-029
         # plus any Retry-After the agent asks for), address and TLS policy, and
-        # what counts as retryable. No ``field=`` — this endpoint is the
-        # operator's registered configuration, not something a buyer supplied.
+        # what counts as retryable. Nothing is validated before this call — the
+        # seam refuses or it sends, and a pre-check would only add a TOCTOU
+        # window and a second copy of a decision it already owns.
         try:
             result = await asend(
                 mcp_url,
@@ -538,8 +580,11 @@ class CreativeAgentRegistry:
                 },
                 headers=headers,
                 timeout=agent.timeout,
+                field=field,
             )
         except OutboundError as exc:
+            if field is not None:
+                raise
             raise_mapped_outbound_error(exc, agent_label=f"Creative agent {agent.name}", logger=logger)
 
         response = result.response
@@ -591,6 +636,7 @@ class CreativeAgentRegistry:
         asset_types: list[str] | None = None,
         name_search: str | None = None,
         type_filter: str | None = None,
+        counterparty_field: str | None = None,
     ) -> list[Format]:
         """Get formats from agent with caching.
 
@@ -609,6 +655,27 @@ class CreativeAgentRegistry:
         Returns:
             List of Format objects
         """
+        # A COUNTERPARTY-supplied agent_url is judged before anything else, and is
+        # NOT eligible for the testing short-circuit below.
+        #
+        # That short-circuit exists to avoid dialling the OPERATOR's default agent
+        # from CI (docstring: "avoids timeouts when external creative agents are
+        # unreachable"). Applied to a counterparty URL it does something quite
+        # different: it makes us skip the only egress decision on the path, so a
+        # buyer could name any destination and every test environment — including
+        # the e2e stack, which also sets ADCP_TESTING=true — would return reference
+        # formats and grade nothing. The security-relevant path would be the one
+        # path no test ever exercises.
+        if counterparty_field is not None and not _is_operator_agent(agent.agent_url):
+            # Straight to the seam: it refuses or it sends. Nothing is validated
+            # first — a pre-check would add a TOCTOU window and a second copy of a
+            # decision the seam already owns. The SDK client is not usable here at
+            # all, since it dials through an httpx stack no policy of ours can
+            # reach (upstream adcp-client-python#1004).
+            return self._cache_formats(
+                agent, await self._fetch_formats_raw_mcp(agent, field=counterparty_field), has_filters=False
+            )
+
         # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
         # to avoid external HTTP calls (and to match the e2e server by construction).
         if os.environ.get("ADCP_TESTING", "").lower() == "true":
@@ -650,12 +717,19 @@ class CreativeAgentRegistry:
             type_filter=type_filter,
         )
 
-        # Update cache only if no filtering parameters (cache full result set)
+        return self._cache_formats(agent, formats, has_filters)
+
+    def _cache_formats(self, agent: CreativeAgent, formats: list[Format], has_filters: bool) -> list[Format]:
+        """Cache a full result set and return it; a filtered one is returned uncached.
+
+        Only the unfiltered fetch may be cached — a filtered result is a subset,
+        and storing it under the agent's key would serve that subset to the next
+        caller who asked for everything.
+        """
         if not has_filters:
-            self._format_cache[cache_key] = CachedFormats(
+            self._format_cache[self._cache_key(agent.agent_url)] = CachedFormats(
                 formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
             )
-
         return formats
 
     async def list_all_formats(
@@ -820,19 +894,27 @@ class CreativeAgentRegistry:
 
         return results
 
-    async def get_format(self, agent_url: str, format_id: str) -> Format | None:
+    async def get_format(self, agent_url: str, format_id: str, *, field: str | None = None) -> Format | None:
         """Get a specific format from an agent.
+
+        ``agent_url`` here is an arbitrary URL handed in by a caller, not one of
+        this tenant's registered agents — which is why this entry point always
+        fetches through the egress seam rather than the SDK client.
 
         Args:
             agent_url: URL of the creative agent
             format_id: Format ID to retrieve
+            field: The request-document path this URL arrived on, when a
+                counterparty supplied it (e.g. ``creatives[0].format_id.agent_url``).
+                Carried so a refusal is reported as the buyer's correctable error
+                naming their own input, instead of a seller misconfiguration.
 
         Returns:
             Format object or None if not found
         """
         # Find agent
         agent = CreativeAgent(agent_url=agent_url, name="Unknown", enabled=True)
-        formats = await self.get_formats_for_agent(agent)
+        formats = await self.get_formats_for_agent(agent, counterparty_field=field)
 
         # Find matching format
         for fmt in formats:

@@ -32,9 +32,9 @@ def is_dialled_agent_url(agent_url: str) -> bool:
     to make, no address to judge, and an egress gate applied to one would refuse
     a format the SELLER published to the buyer.
 
-    One predicate, two callers — the egress pre-pass in ``_sync.py`` and the
-    format-existence check below MUST agree on what "external" means, or the
-    pre-pass judges a URL the fetch never dials (or worse, the reverse).
+    Guards the format-existence fetch below: an adapter pseudo-URL must not be
+    handed to the seam, which would refuse it on scheme and reject a format the
+    seller itself published.
     """
     return agent_url.startswith(("http://", "https://"))
 
@@ -43,6 +43,7 @@ def _validate_creative_input(
     creative: CreativeAsset,
     registry: Any,
     principal_id: str,
+    index: int = 0,
 ) -> Creative:
     """Validate a CreativeAsset and return a validated Creative model.
 
@@ -54,6 +55,11 @@ def _validate_creative_input(
         creative: CreativeAsset model from the sync payload.
         registry: CreativeAgentRegistry instance for format validation.
         principal_id: Authenticated principal ID for ownership.
+        index: This creative's position in the request's ``creatives`` array,
+            used to build the JSONPath-lite ``field`` carried on a refusal of the
+            buyer-supplied ``agent_url`` — a sync may hold up to 100 creatives and
+            the refusal message says nothing, so an unindexed path would leave the
+            buyer unable to tell WHICH one to fix.
 
     Returns:
         Validated Creative schema object.
@@ -141,7 +147,7 @@ def _validate_creative_input(
         # doesn't expose the format.
         from src.core.format_resolver import fetch_format_spec
 
-        format_spec = fetch_format_spec(agent_url, format_id)
+        format_spec = fetch_format_spec(agent_url, format_id, field=f"creatives[{index}].format_id.agent_url")
         if not format_spec:
             raise AdCPValidationError(
                 f"Unknown format '{format_id}' from agent {agent_url}. "

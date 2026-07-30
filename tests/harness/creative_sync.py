@@ -53,9 +53,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness.egress import EgressHatchMixin
 
 
-class CreativeSyncEnv(IntegrationEnv):
+class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _sync_creatives_impl.
 
     Only mocks external services (creative agent registry, async runner,
@@ -247,3 +248,36 @@ class CreativeSyncEnv(IntegrationEnv):
     def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:
         """Parse REST JSON into SyncCreativesResponse."""
         return SyncCreativesResponse(**data)
+
+
+class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
+    """``CreativeSyncEnv`` with the creative-agent registry left UNPATCHED.
+
+    ``CreativeSyncEnv`` mocks ``get_creative_agent_registry`` so ordinary sync
+    tests never reach the network. This variant drops exactly that one patch and
+    changes nothing else, so a buyer-supplied ``format_id.agent_url`` travels the
+    real registry and is judged by the real egress seam — which is the point: a
+    refusal produced by a mock proves nothing about production.
+
+    Hermetic for the causes worth grading. A refused destination (cloud metadata,
+    a reserved literal, a non-https scheme) is refused BEFORE a connection is
+    opened, so no packet leaves and no DNS answer is needed. A scenario that
+    wants a SUCCESSFUL fetch wants plain ``CreativeSyncEnv`` — here the reference
+    agent would be dialled for real.
+
+    TRAP inherited from the same pattern in ``RealResolverProductEnv``:
+    ``self.mock["registry"]`` does not exist after ``__enter__``, so any helper
+    that programs the registry mock (``setup_generative_build``,
+    ``set_run_async_result``) will ``KeyError`` on this env.
+    """
+
+    EXTERNAL_PATCHES = {name: target for name, target in CreativeSyncEnv.EXTERNAL_PATCHES.items() if name != "registry"}
+
+    def _configure_mocks(self) -> None:
+        """Configure everything except the registry, which is real here."""
+        self.mock["run_async"].side_effect = lambda coro: []
+        self.mock["send_notifications"].return_value = None
+        self.mock["audit_log"].return_value = None
+        mock_config = MagicMock()
+        mock_config.gemini_api_key = None
+        self.mock["config"].return_value = mock_config

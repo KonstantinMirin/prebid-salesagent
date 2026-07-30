@@ -105,7 +105,7 @@ def sync_patches():
         async def mock_list_all_formats(tenant_id=None):
             return [mock_format_spec_arg] if mock_format_spec_arg else []
 
-        async def mock_get_format(agent_url, format_id):
+        async def mock_get_format(agent_url, format_id, **_kwargs):
             return mock_format_spec_arg
 
         mock_registry = Mock()

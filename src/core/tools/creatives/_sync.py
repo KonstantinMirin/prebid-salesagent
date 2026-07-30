@@ -167,7 +167,7 @@ def _sync_creatives_impl(
             )
 
         # Process each creative with proper transaction isolation
-        for raw_creative in creatives:
+        for creative_index, raw_creative in enumerate(creatives):
             try:
                 # Normalize to CreativeAsset model (handles dicts from A2A raw, BaseModel subclasses)
                 if isinstance(raw_creative, CreativeAsset):
@@ -182,7 +182,7 @@ def _sync_creatives_impl(
 
                 # Validate the creative against schema and business rules
                 try:
-                    validated_creative = _validate_creative_input(creative, registry, principal_id)
+                    validated_creative = _validate_creative_input(creative, registry, principal_id, creative_index)
                     format_value = validated_creative.format
 
                 except (ValidationError, ValueError) as validation_error:
@@ -373,7 +373,21 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(_failed_sync_result(creative_id, error_msg))
+                # Carry the typed error's OWN classification onto the per-item
+                # result. The default is SERVICE_UNAVAILABLE/no-recovery, which
+                # for a correctable error reports the SELLER as unavailable for a
+                # problem in the buyer's own document — and drops the `field`
+                # that says which input to fix. That matters most for an egress
+                # refusal, whose message deliberately says nothing.
+                results.append(
+                    _failed_sync_result(
+                        creative_id,
+                        error_msg,
+                        code=e.error_code,
+                        recovery=e.recovery,
+                        field=getattr(e, "field", None),
+                    )
+                )
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
                 creative_id = _get_field(raw_creative, "creative_id", "unknown")

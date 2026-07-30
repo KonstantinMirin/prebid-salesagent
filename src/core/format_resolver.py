@@ -19,7 +19,7 @@ from src.core.validation_helpers import run_async_in_sync_context
 logger = logging.getLogger(__name__)
 
 
-def fetch_format_spec(agent_url: str, format_id: str) -> Format | None:
+def fetch_format_spec(agent_url: str, format_id: str, *, field: str | None = None) -> Format | None:
     """Fetch one format spec from the creative-agent registry (sync bridge).
 
     THE single fetch path for format specs (salesagent-mpo1) — create_media_buy,
@@ -40,7 +40,7 @@ def fetch_format_spec(agent_url: str, format_id: str) -> Format | None:
 
     registry = get_creative_agent_registry()
     try:
-        return run_async_in_sync_context(registry.get_format(agent_url, format_id))
+        return run_async_in_sync_context(registry.get_format(agent_url, format_id, field=field))
     except AdCPError:
         raise
     except Exception as e:
