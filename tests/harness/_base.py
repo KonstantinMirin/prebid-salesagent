@@ -1359,6 +1359,17 @@ class IntegrationEnv(BaseTestEnv):
 
     # -- Public query API (step functions must use these, not env._session) ----
 
+    @property
+    def tenant_id(self) -> str:
+        """This env's tenant id — public so tests never read ``env._tenant_id``.
+
+        Needed by any test that has to build a tenant-scoped production object (a
+        repository, a signing key) for the SAME tenant the env is driving; reaching for
+        the private attribute is how a test ends up scoped to a different tenant than the
+        code it is grading.
+        """
+        return self._tenant_id
+
     def get_session(self) -> Session:
         """Return the env-bound SQLAlchemy session for read-back assertions.
 

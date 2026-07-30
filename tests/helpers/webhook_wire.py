@@ -13,7 +13,9 @@ sender                                       client
 ``protocol_webhook_service.py:296``          ``requests.Session.post``
 ``webhook_delivery_service.py:484``          ``httpx.Client.post``
 ``order_approval_service.py:403``            ``httpx.Client.post``
-``notification_proof_service.py:91``         ``httpx.AsyncClient.post``
+``webhook_sender_factory.send_signed_challenge``  ``httpx.AsyncClient.post`` (#1291 C2 — the
+                                             proof-of-control challenge; its POST lives in
+                                             the boundary module, not in the service)
 ``mock_ad_server.py:512``                    ``requests.post``
 ``adcp.webhooks.WebhookSender._send_bytes``  ``httpx.AsyncClient.post`` over a pinned
                                              IP transport
@@ -33,6 +35,15 @@ resolves the destination through real DNS before the SDK signs anything. DNS is 
 true external; leaving it live would make every test depend on whether the box can
 resolve ``buyer.example.com`` (it cannot), and the resulting ``SSRFValidationError``
 would masquerade as a signing failure.
+
+``socket.gethostbyname`` is stubbed for exactly the same reason one layer up: a sender
+that runs ``check_url_ssrf(url, require_https=True)`` at fire time
+(``notification_proof_service``, #1291 C2) resolves the destination ITSELF before it
+signs anything, and an unresolvable name there reports "refused: Cannot resolve
+hostname" — which reads like a signing or policy failure and is really just the box
+having no answer for a test domain. The stub answers a PUBLIC address, so the SSRF
+policy under test still runs for real: a sender pointed at a private range is still
+refused, because that decision is made from the address, not from the lookup.
 """
 
 from __future__ import annotations
@@ -51,7 +62,16 @@ import requests
 #: What a captured delivery answers with. Success, so a sender's retry loop stops
 #: after one attempt and the capture holds exactly the deliveries the code chose
 #: to make rather than a burst of retries.
+#:
+#: Deliberately NOT a proof-of-control echo: a receiver that merely accepts the POST
+#: has proven nothing (#1291 C2), so the default answer is the one that must FAIL the
+#: echo check. :func:`echoing_challenge_response` is the opt-in that passes it.
 _ACCEPTED_BODY = b'{"status":"received"}'
+
+#: A public address every stubbed DNS lookup resolves to. Public on purpose: the SSRF
+#: policy is evaluated FROM the resolved address, so answering a private one would make
+#: every sender refuse and the tests would grade the refusal path.
+_STUB_RESOLVED_IP = "93.184.216.34"
 
 
 @dataclass(frozen=True)
@@ -102,8 +122,22 @@ def stub_outbound_webhooks(responder: Callable[..., Any]) -> Iterator[None]:
     def _handler(request: httpx.Request) -> httpx.Response:
         request.read()
         answer = responder(str(request.url), headers=httpx.Headers(request.headers), content=request.content)
+        # A responder MAY dictate the response body. It has to be able to: a sender whose
+        # proof is the receiver's ECHO of a value the sender just generated cannot be
+        # graded against a fixed body at all (#1291 C2).
+        #
+        # "Did the responder supply a body" is decided on the VALUE, never on whether the
+        # attribute exists. The BDD harness's responder IS a bare ``MagicMock``
+        # (``_mixins.install_webhook_wire``), which answers every attribute access with a
+        # new child mock — so an ``is None`` test reads a MagicMock as a supplied body and
+        # feeds it to ``httpx.Response``, breaking every delivery in the suite.
+        body = getattr(answer, "content", None)
+        if not isinstance(body, bytes | bytearray):
+            body = None
         return httpx.Response(
-            int(answer.status_code), content=_ACCEPTED_BODY, headers={"Content-Type": "application/json"}
+            int(answer.status_code),
+            content=_ACCEPTED_BODY if body is None else body,
+            headers={"Content-Type": "application/json"},
         )
 
     transport = httpx.MockTransport(_handler)
@@ -146,11 +180,48 @@ def stub_outbound_webhooks(responder: Callable[..., Any]) -> Iterator[None]:
             stack.enter_context(patch(target, lambda *a, **k: transport))
         stack.enter_context(patch.object(requests.Session, "post", _session_post))
         stack.enter_context(patch("requests.post", _requests_post))
+        # Patched on the module the resolver lives on rather than at each caller, so a
+        # sender that grows its own fire-time SSRF check is covered without editing this
+        # helper again.
+        stack.enter_context(patch("socket.gethostbyname", lambda _host: _STUB_RESOLVED_IP))
         yield
 
 
+#: How a receiver answers ONE captured POST: ``(status_code, body)``. ``body`` may be
+#: ``None`` to keep the default accepted body.
+Answer = Callable[[CapturedWebhook], "tuple[int, bytes | None]"]
+
+
+def echoing_challenge_response(field: str = "challenge") -> Answer:
+    """Answer a proof-of-control challenge the way a receiver that CONTROLS the endpoint does.
+
+    Reads the single-use value out of the POSTed body and echoes it back, which is the
+    only answer that proves control: a 2xx alone is produced by any endpoint that accepts
+    POSTs, including one an attacker pointed at us (``sync_accounts.mdx`` @ v3.1.1
+    :223-235). Echoing from the CAPTURED body rather than from a value the test also knows
+    is what keeps the assertion about production's own nonce.
+
+    ``field`` selects which of the two schema-permitted response fields is used —
+    ``webhook-challenge-response.json`` requires exactly one of ``challenge`` / ``token``,
+    so both spellings have to be answerable.
+    """
+
+    def _answer(captured: CapturedWebhook) -> tuple[int, bytes | None]:
+        value = captured.payload.get("challenge")
+        if not value:
+            # Not a challenge POST, or one carrying no value to echo. Answering the
+            # default keeps this responder usable as a blanket answer without inventing
+            # an echo for a body that has nothing to echo.
+            return 200, None
+        return 200, json.dumps({field: value}).encode()
+
+    return _answer
+
+
 @contextmanager
-def capture_outbound_webhooks(status_codes: Sequence[int] = ()) -> Iterator[list[CapturedWebhook]]:
+def capture_outbound_webhooks(
+    status_codes: Sequence[int] = (), *, responder: Answer | None = None
+) -> Iterator[list[CapturedWebhook]]:
     """Record every outbound POST made through httpx or requests inside the block.
 
     The list is appended to in call order, so ``len(captured)`` grades "was the
@@ -162,13 +233,20 @@ def capture_outbound_webhooks(status_codes: Sequence[int] = ()) -> Iterator[list
     one thereafter; the default answers every delivery ``200``. It exists so a
     sender's retry ladder can be driven through the same capture that grades its
     bytes.
+
+    ``responder`` additionally shapes the response BODY from the captured request — see
+    :func:`echoing_challenge_response`. Recording happens either way, so a test never has
+    to choose between controlling the answer and grading the bytes.
     """
     captured: list[CapturedWebhook] = []
 
     def _responder(url: str, *, headers: Any, content: Any) -> SimpleNamespace:
         _record(captured, url, headers, content)
         status = 200 if not status_codes else status_codes[min(len(captured) - 1, len(status_codes) - 1)]
-        return SimpleNamespace(status_code=status)
+        body: bytes | None = None
+        if responder is not None:
+            status, body = responder(captured[-1])
+        return SimpleNamespace(status_code=status, content=body)
 
     with stub_outbound_webhooks(_responder):
         yield captured

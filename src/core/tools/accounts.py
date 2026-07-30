@@ -17,8 +17,8 @@ import base64
 import logging
 import time
 import uuid
-from datetime import UTC
-from typing import Annotated, Any
+from datetime import UTC, datetime
+from typing import Annotated, Any, NamedTuple
 
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, PaginationRequest, PaginationResponse
@@ -1160,26 +1160,111 @@ def _proof_error(entry: Any, config: Any, message: str, suggestion: str) -> Any:
     )
 
 
-def _already_proven_tuples(activating: list[tuple[int, Any, Any]], tenant_id: str) -> dict[int, set[tuple]]:
-    """Proof tuples already persisted as active, per entry index.
+class _ProofPreflight(NamedTuple):
+    """Everything the proof pass needs from the database, read in ONE transaction."""
+
+    #: Proof tuples already persisted as active, per entry index.
+    already_proven: dict[int, set[tuple]]
+    #: The account id each entry's challenge must name, per entry index.
+    account_ids: dict[int, str]
+
+
+def _proof_preflight(
+    activating: list[tuple[int, Any, Any]], tenant_id: str, minted_ids: dict[int, str]
+) -> _ProofPreflight:
+    """Read the persisted proof tuples and resolve each entry's account id.
 
     Its own SHORT read-only transaction, closed before any socket is opened -- the
-    whole point of hoisting the proof out of the write transaction.
+    whole point of hoisting the proof out of the write transaction. Both facts come from
+    the SAME existence lookup, so resolving them together is one read rather than two.
+
+    The account id matters because the receiver scopes its proof to it (#1291 C2): an
+    entry resolving to an existing account must name THAT id, and a provisioning-mode
+    entry must name the id it is about to be CREATED with -- which is why the ids are
+    minted before this pass and threaded into the create, rather than generated inside the
+    write transaction after the challenge has already gone out.
     """
     already_proven: dict[int, set[tuple]] = {}
+    account_ids: dict[int, str] = dict(minted_ids)
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
         for index, entry, _ in activating:
             existing = _lookup_existing_for_entry(entry, uow.accounts)
             if existing is None:
                 continue
+            account_ids[index] = existing.account_id
             already_proven.setdefault(index, set()).update(
                 _proof_tuple(c) for c in (existing.notification_configs or []) if getattr(c, "active", False)
             )
-    return already_proven
+    return _ProofPreflight(already_proven=already_proven, account_ids=account_ids)
 
 
-async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_run: bool) -> dict[int, list[Any]]:
+def _challenge_signing(tenant_id: str, protocol: str) -> Any:
+    """The signing identity for this tenant's challenges, or ``None`` if there is none.
+
+    ONE short transaction yielding both halves a conformant challenge needs -- the tenant
+    row (whose stored host IS the agent identity) and the signing keys -- then closed
+    before any socket opens. ``TrustRootUoW`` already pairs exactly those two repositories,
+    and ``src/routes/well_known.py`` is the precedent for reading an ORM row and handing
+    only resolved values out of the session that owns it.
+
+    Returns ``None``, never raises, for every reason we cannot honestly challenge:
+
+    * the tenant holds no ACTIVE signing key this deployment can open on a publishable
+      origin -- an unsigned challenge is one no conformant receiver can attribute to us;
+    * the registration arrived over REST, for which we publish no ``agents[]`` entry.
+      ``agent_endpoint_urls`` covers the endpoints we actually serve (``/mcp/``, ``/a2a``),
+      and a receiver matches ``seller_agent_url`` byte-for-byte against our brand.json
+      (security.mdx :1104 step 5). Sending the MCP entry for a REST registration would be
+      an invisible mismatch at a strict receiver, so we refuse instead. Publishing a REST
+      entry is the correct end state and is its own ticket;
+    * a configuration fault in the key material (a revoked row, a failed tripwire).
+
+    ``AdCPError`` is caught HERE rather than left to escape, because this runs OUTSIDE the
+    per-entry error path: an exception would fail the whole ``sync_accounts`` request for
+    every other entry in the batch instead of failing the one subscriber that cannot be
+    proven.
+    """
+    from src.core.agent_identity import agent_endpoint_urls
+    from src.core.database.repositories.uow import TrustRootUoW
+    from src.core.exceptions import AdCPError
+    from src.core.signing.webhook_sender_factory import adcp_challenge_signer
+    from src.services.notification_proof_service import ChallengeSigning
+
+    try:
+        with TrustRootUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            assert uow.signing_keys is not None
+            tenant = uow.tenant_config.get_tenant()
+            if tenant is None:
+                return None
+            seller_agent_url = agent_endpoint_urls(tenant).get(protocol)
+            if seller_agent_url is None:
+                logger.warning(
+                    "Notification proof refused for tenant %s: a subscriber registered over %r, and "
+                    "this agent publishes no agents[] entry for that transport, so no seller_agent_url "
+                    "a receiver could resolve exists (#1291)",
+                    tenant_id,
+                    protocol,
+                )
+                return None
+            strategy = adcp_challenge_signer(tenant_id=tenant_id, repo=uow.signing_keys, now=datetime.now(UTC))
+    except AdCPError as exc:
+        logger.warning("Notification proof refused for tenant %s: %s", tenant_id, exc)
+        return None
+    if strategy is None:
+        return None
+    return ChallengeSigning(strategy=strategy, seller_agent_url=seller_agent_url)
+
+
+async def _resolve_activation_proofs(
+    entries: list[Any],
+    tenant_id: str,
+    *,
+    dry_run: bool,
+    protocol: str,
+    minted_ids: dict[int, str],
+) -> dict[int, list[Any]]:
     """Run proof-of-control for every entry activating a subscriber. Index -> errors.
 
     Runs BEFORE the write transaction opens: an outbound call inside an open
@@ -1209,7 +1294,10 @@ async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_
             for index, entry, config in activating
         }
 
-    already_proven = _already_proven_tuples(activating, tenant_id)
+    preflight = _proof_preflight(activating, tenant_id, minted_ids)
+    # Resolved once for the whole batch: the signing identity is per TENANT, not per
+    # subscriber, so building it per challenge would open one session per entry.
+    signing = _challenge_signing(tenant_id, protocol)
     prover = get_notification_proof_service()
     failures: dict[int, list[Any]] = {}
     budget = _PROOF_BUDGET_SECONDS
@@ -1217,9 +1305,11 @@ async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_
     for index, entry, config in activating:
         # Identical tuple already proven and persisted as active -- the spec permits
         # skipping re-proof, so no challenge is sent at all.
-        if _proof_tuple(config) in already_proven.get(index, set()):
+        if _proof_tuple(config) in preflight.already_proven.get(index, set()):
             continue
-        proven, budget = await _prove_within_budget(prover, entry, config, budget)
+        proven, budget = await _prove_within_budget(
+            prover, preflight.account_ids[index], config, budget, signing=signing
+        )
         if not proven:
             failures.setdefault(index, []).append(
                 _proof_error(
@@ -1234,16 +1324,23 @@ async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_
     return failures
 
 
-async def _prove_within_budget(prover: Any, entry: Any, config: Any, budget: float) -> tuple[bool, float]:
+async def _prove_within_budget(
+    prover: Any, account_id: str, config: Any, budget: float, *, signing: Any = None
+) -> tuple[bool, float]:
     """Run one challenge if the request-level budget allows. Returns (proven, budget left).
 
     An exhausted budget is "not proven" rather than an unbounded wait: the caller is
     holding an HTTP request open.
+
+    Takes the resolved ``account_id`` rather than the entry, because the challenge body
+    NAMES it and the receiver scopes its proof to it (#1291 C2). It used to be handed
+    ``_entry_account_hint``, which returns a BRAND DOMAIN when the entry carries no account
+    reference — fine for a log line, and not an account id at all.
     """
     if budget <= 0:
         return False, budget
     started = time.monotonic()
-    proven = await prover.prove(_entry_account_hint(entry), config)
+    proven = await prover.prove(account_id, config, signing=signing)
     return proven, budget - (time.monotonic() - started)
 
 
@@ -1253,15 +1350,6 @@ def _config_index(entry: Any, config: Any) -> int:
         if candidate is config:
             return index
     return 0
-
-
-def _entry_account_hint(entry: Any) -> str:
-    """A human-meaningful account identifier for proof logging."""
-    ref = getattr(entry, "account", None)
-    if ref is not None and isinstance(getattr(ref, "root", None), AccountReference1):
-        return str(ref.root.account_id)
-    brand = getattr(entry, "brand", None)
-    return str(getattr(brand, "domain", None) or "unknown")
 
 
 def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
@@ -1333,7 +1421,21 @@ async def _sync_accounts_impl(
     # Activation proof runs BEFORE the write transaction opens (see
     # _resolve_activation_proofs). Holding a Postgres transaction across an
     # outbound HTTP call is what the owner's carve-out explicitly does not cover.
-    proof_failures = await _resolve_activation_proofs(req.accounts, tenant_id, dry_run=dry_run)
+    # Account ids are minted BEFORE the proof pass so the id a challenge names is the id
+    # the account is created with (#1291 C2). The receiver scopes its proof to that id, so
+    # generating it later — inside the write transaction, after the challenge has already
+    # gone out — would invalidate the proof the moment the account existed. Minted for
+    # every entry: an entry that resolves to an existing account simply never uses its id,
+    # which is cheaper than needing the repository to decide.
+    minted_ids = {index: _generate_account_id() for index in range(len(req.accounts))}
+
+    proof_failures = await _resolve_activation_proofs(
+        req.accounts,
+        tenant_id,
+        dry_run=dry_run,
+        protocol=identity.protocol,
+        minted_ids=minted_ids,
+    )
 
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
@@ -1496,7 +1598,9 @@ async def _sync_accounts_impl(
                 notification_configs_val = created_fields.get("notification_configs")
                 billing_entity_val = created_fields.get("billing_entity")
 
-                account_id = _generate_account_id()
+                # The id minted before the proof pass, so a challenge that already went out
+                # named THIS account (#1291 C2) rather than one generated after the fact.
+                account_id = minted_ids[index]
                 account_name = _generate_account_name(brand_domain, operator, brand_id)
 
                 # BR-RULE-060: determine approval status from tenant config.

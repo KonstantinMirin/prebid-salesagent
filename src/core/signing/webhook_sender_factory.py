@@ -39,13 +39,14 @@ with the signing switch.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx
 from adcp.webhooks import WebhookDeliveryResult, WebhookSender
@@ -56,6 +57,8 @@ from src.core.signing.posture import webhook_signing_posture
 from src.core.signing.provider import resolve_signing_material
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from adcp.webhook_auth import JwkSignerStrategy
+
     from src.core.database.models import PushNotificationConfig
     from src.core.database.repositories.signing_key import SigningKeyRepository
 
@@ -165,6 +168,107 @@ def legacy_auth_mode(config: PushNotificationConfig | None) -> str | None:
         )
         return LEGACY_UNCREDENTIALED
     return LEGACY_HMAC
+
+
+class DeclaredAuth(NamedTuple):
+    """A receiver's declared delivery authentication, normalized to ONE shape.
+
+    The same fact is spelled six ways across this codebase — the ORM row
+    (``authentication_type``/``authentication_token``), the AdCP request type
+    (``authentication.schemes[0]`` + ``credentials``), the A2A protobuf's singular
+    ``scheme``, the wire enum (``delivery_auth.mode``), the admin form's
+    ``auth_type``/``auth_config``, and the string ``"None"`` sentinel MCP header ingest
+    writes. Six spellings of one concept is how they end up disagreeing, and two of them
+    already do.
+
+    This is the normalized pair every derivation should start from. It is deliberately the
+    INPUT half only: :func:`legacy_auth_mode` decides the DELIVERY arm from an ORM row,
+    :func:`delivery_auth_mode` reports the wire enum, and neither reimplements the pluck.
+    """
+
+    #: The scheme the receiver named, verbatim (never case-folded — the wire enum is
+    #: ``Bearer``/``HMAC-SHA256``, and folding here would lose the spelling we must echo).
+    scheme: str | None
+    #: The credential it supplied, or ``None`` for a scheme with no usable secret.
+    credential: str | None
+
+
+def declared_auth(authentication: Any) -> DeclaredAuth:
+    """Normalize an ``authentication`` block, whichever shape it arrives in.
+
+    Accepts a pydantic model (the AdCP request types), a plain dict (a
+    ``step.request_data`` blob or raw transport params) or ``None``, because the four
+    wire->row call sites read two of those and the challenge payload reads the third.
+    A dual accessor here is the price of ONE derivation; four copies of the same
+    three-line pluck — which is what exists today, two of them with a shape guard the
+    other two lack — is the alternative, and the drift is already real.
+
+    ``schemes`` is PLURAL: that is the field name on every AdCP type. The singular
+    ``scheme`` spelling belongs to the A2A protobuf and is translated at that transport's
+    own boundary; reading it here would put protobuf shape in the signing layer.
+    """
+    if authentication is None:
+        return DeclaredAuth(scheme=None, credential=None)
+
+    def _read(field: str) -> Any:
+        if isinstance(authentication, Mapping):
+            return authentication.get(field)
+        return getattr(authentication, field, None)
+
+    schemes = _read("schemes")
+    if not isinstance(schemes, (list, tuple)):
+        # A bare string here would ITERATE — ``"Bearer"`` yielding ``"B"`` — and the
+        # derivation would report a mode nobody declared. The dict path is advertised for
+        # callers reading raw params, so the shape it accepts has to be checked rather than
+        # assumed; a non-list is treated as no declaration at all, which is the same answer
+        # an absent ``authentication`` gets.
+        schemes = []
+    scheme = next((enum_value(s) for s in schemes if s), None)
+    credential = _read("credentials")
+    return DeclaredAuth(scheme=str(scheme) if scheme else None, credential=str(credential) if credential else None)
+
+
+#: The wire value for "we will sign subsequent webhooks with RFC 9421", i.e. the mode a
+#: receiver gets when it declares no ``authentication`` at all.
+DELIVERY_AUTH_RFC9421 = "rfc9421"
+
+#: The wire spellings of the two deprecated legacy modes, keyed by the normalized scheme.
+#: ``webhook-challenge.json``'s ``delivery_auth.mode`` enum is closed
+#: (``[rfc9421, Bearer, HMAC-SHA256]``), so an unrecognized scheme has to resolve to one of
+#: these rather than be echoed verbatim.
+_DELIVERY_AUTH_MODES: dict[bool, str] = {True: "HMAC-SHA256", False: "Bearer"}
+
+
+def delivery_auth_mode(auth: DeclaredAuth) -> str:
+    """The ``delivery_auth.mode`` a challenge reports for *auth* (#1291 C2).
+
+    The REPORTING twin of :func:`legacy_auth_mode`, off the same
+    :data:`_HMAC_SCHEMES` table so the mode we tell the receiver we will use and the arm
+    :func:`build_webhook_sender` actually takes cannot disagree.
+
+    Absent ``authentication`` is :data:`DELIVERY_AUTH_RFC9421`, matching
+    ``legacy_auth_mode``'s ``None``. A present scheme is one of the two legacy values; an
+    UNRECOGNIZED scheme reports ``Bearer``, which is the same answer
+    ``legacy_auth_mode`` gives it (:data:`LEGACY_BEARER`) rather than a third outcome.
+    """
+    if auth.scheme is None:
+        return DELIVERY_AUTH_RFC9421
+    return _DELIVERY_AUTH_MODES[auth.scheme.strip().lower() in _HMAC_SCHEMES]
+
+
+def credential_fingerprint(auth: DeclaredAuth) -> str | None:
+    """The sha256 hex of *auth*'s credential, or ``None`` when there is none.
+
+    ``webhook-challenge.json`` requires this for the legacy modes and FORBIDS it for
+    ``rfc9421``, so the two are derived from the same pair: no scheme means no
+    fingerprint, by construction rather than by a caller remembering the rule. It is a
+    fingerprint and not the credential because the challenge body is a document the
+    receiver may log — the receiver already knows its own secret and only needs to confirm
+    we hold the same one.
+    """
+    if auth.credential is None:
+        return None
+    return hashlib.sha256(auth.credential.encode("utf-8")).hexdigest()
 
 
 def legacy_hmac_fallback_supported() -> bool:
@@ -336,6 +440,143 @@ def build_webhook_sender(
         return _unauthenticated_sender(client)
 
     return _rfc9421_sender(tenant_id=tenant_id, repo=repo, now=now, client=client)
+
+
+def adcp_challenge_signer(*, tenant_id: str, repo: SigningKeyRepository, now: datetime) -> JwkSignerStrategy | None:
+    """The RFC 9421 strategy for a proof-of-control challenge, or ``None`` if we cannot sign.
+
+    #1291 C2. A challenge is not a delivery: it is an assertion of THIS seller's identity
+    that the receiver must verify before echoing, so it needs the signing decision without
+    the delivery act. Three things make the delivery entry points unusable for it, all
+    structural rather than stylistic:
+
+    * ``send_raw`` INJECTS ``idempotency_key`` into the body before signing, and
+      ``webhook-challenge.json`` is ``additionalProperties: false`` with exactly seven
+      allowed properties — so a delivery-shaped send produces a body every conformant
+      receiver must reject. The SDK agrees: its own ``send_webhook_challenge`` exists
+      precisely because it does not inject one.
+    * the SDK's challenge helpers emit FOUR of the seven required fields and accept no
+      arguments for the other three, so they are locked out of a conformant body
+      (upstream gap; the caller builds the payload from the SDK TYPE instead).
+    * ``adcp_webhook_sender`` always hands the sender a client, and the SDK's challenge
+      path refuses a sender that does not own its own client.
+
+    **There is deliberately NO ``config`` parameter.** ``sync_accounts.mdx`` @ v3.1.1 :207
+    is explicit that the challenge "MUST be signed with the seller's RFC 9421 webhook
+    profile key EVEN WHEN the candidate config selects legacy delivery auth". Threading the
+    candidate registration in here — the shape :func:`build_webhook_sender` takes for a
+    DELIVERY, where :1425 forbids the opposite — would silently downgrade the challenge to
+    Bearer or HMAC and break that MUST. The candidate's authentication belongs in the
+    challenge as DATA (``delivery_auth``), never as the signing mode. It is also
+    structurally unavailable: at proof time the subscriber is not persisted, and
+    :func:`legacy_auth_mode` reads an ORM row.
+
+    ``None`` means "this tenant cannot sign", which the caller must turn into "not proven".
+    The return TYPE is the RFC 9421 oracle: ``JwkSignerStrategy`` is the exact class behind
+    ``WebhookSender.signs_with_rfc9421``, so a future edit cannot hand back an
+    unauthenticated strategy and still satisfy the annotation.
+
+    Reuses :func:`webhook_signing_posture` (the ONE key-presence derivation, which since
+    #1291 D1 also carries the trust-root publishability gate) and
+    ``resolve_signing_material`` — the same two calls ``_rfc9421_sender`` makes, so key
+    selection cannot diverge between a challenge and the deliveries that follow it.
+    """
+    from adcp.webhook_auth import JwkSignerStrategy
+
+    from src.core.agent_identity import canonical_agent_url
+
+    if not webhook_signing_posture(repo, now=now, origin=_agent_origin(repo, tenant_id)).supported:
+        _warn_unsignable_challenge(tenant_id, canonical_agent_url)
+        return None
+
+    material = resolve_signing_material(repo, tenant_id=tenant_id, now=now)
+    return JwkSignerStrategy(private_key=material.private_key, key_id=material.kid, alg=material.alg)
+
+
+async def send_signed_challenge(
+    *,
+    url: str,
+    body: bytes,
+    strategy: JwkSignerStrategy,
+    timeout_seconds: float,
+    client: httpx.AsyncClient | None = None,
+) -> httpx.Response:
+    """Sign *body* and POST it — the ONE place a proof-of-control challenge leaves (#1291 C2).
+
+    The sign and the POST are one function because no PUBLIC SDK path can send a conformant
+    AdCP challenge, read from the installed ``adcp==6.6.0`` rather than inferred:
+
+    * ``WebhookSender.send_raw`` does ``body_dict = {**payload, "idempotency_key": …}``
+      BEFORE signing, and ``webhook-challenge.json`` is ``additionalProperties: false`` with
+      exactly seven allowed properties — so a delivery-shaped send produces a document every
+      conformant receiver must reject;
+    * ``WebhookSender.resend()`` raises ``ValueError("cannot resend: result has no captured
+      sent_body …")`` — the SDK author anticipated a fabricated result and refused it;
+    * ``_send_bytes``, the only method that posts caller-supplied bytes without injection, is
+      private;
+    * the three challenge helpers emit four of the seven required fields and accept no
+      argument for ``seller_agent_url``, ``delivery_auth`` or ``event_types``.
+
+    Living HERE rather than in the calling service is what leaves that service with no raw
+    POST at all, so the outbound-sender boundary guard has one fewer allowlisted exception
+    rather than a renamed one.
+
+    ``timeout_seconds`` is a PARAMETER, not :data:`_TIMEOUT_SECONDS`. The module default of
+    10.0s is right for a background delivery and wrong for a handshake inside the request
+    cycle, where the buyer's latency budget is the constraint — the caller passes its own
+    ceiling and the difference stays visible at the call site.
+
+    ``Content-Type`` is load-bearing rather than decoration: ``JwkSignerStrategy`` builds its
+    signature base from ``headers={"Content-Type": "application/json"}`` and covers the
+    ``content-type`` component whenever that header is present, while a webhook verifier
+    REJECTS a signature whose covered components omit it (``security.mdx`` @ v3.1.1 :1476,
+    ``webhook_signature_components_incomplete``). httpx's ``content=`` path sets no
+    Content-Type of its own, so it ships explicitly or the signature covers a header that
+    never left.
+
+    ``content=`` and never ``json=``: ``json=`` would re-encode the payload and the signature
+    would cover bytes that never went on the wire (#1441's defect class). The caller
+    serializes once and hands those exact bytes here.
+
+    Destination policy stays the CALLER's. This opens a plain ``httpx.AsyncClient`` rather
+    than the SDK's IP-pinned transport, because adopting that would change behaviour for
+    every existing receiver URL — deferred to GH #1697. The caller runs its own fire-time
+    SSRF check before calling this.
+    """
+    headers = {
+        "Content-Type": "application/json",
+        **strategy.build_auth_headers(method="POST", url=url, body=body),
+    }
+    if client is not None:
+        return await client.post(url, content=body, headers=headers)
+    async with httpx.AsyncClient(timeout=timeout_seconds) as owned:
+        return await owned.post(url, content=body, headers=headers)
+
+
+#: Tenants already warned that they cannot sign a challenge. Once per tenant per process,
+#: for the same reason as :data:`_keyless_warned`: the alternative is a log line per
+#: activation attempt.
+_unsignable_warned: set[str] = set()
+
+
+def _warn_unsignable_challenge(tenant_id: str, _canonical: Any) -> None:
+    """WARN once that this tenant cannot prove endpoint control, and how to fix it.
+
+    Names the provisioning path, because "no signing key" is an operator action and not a
+    dead end — an activation that fails with no actionable log is the quiet failure this
+    project bans even when the OUTCOME is correct.
+    """
+    with _keyless_lock:
+        if tenant_id in _unsignable_warned:
+            return
+        _unsignable_warned.add(tenant_id)
+    logger.warning(
+        "Tenant %s cannot sign a notification proof-of-control challenge: it has no ACTIVE "
+        "signing key this deployment can open on an https origin it can publish a trust root "
+        "from. Activating a notification subscriber will fail until one is provisioned — see "
+        "scripts/ops/provision_signing_key.py or the admin signing-keys route (#1291).",
+        tenant_id,
+    )
 
 
 @contextmanager

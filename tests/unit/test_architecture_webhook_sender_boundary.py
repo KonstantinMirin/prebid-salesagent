@@ -24,10 +24,20 @@ through ``adcp.webhooks.WebhookSender``, its hand-rolled POST DISAPPEARS — the
 sender stops being discovered here at all. That is the pass condition, and it is
 not fakeable by adding a call somewhere in the module: the raw POST has to go.
 
-``ALLOWED_UNROUTED`` therefore holds only the senders C1 does NOT own, each of
+``ALLOWED_UNROUTED`` therefore holds only the senders that are still UNSIGNED, each of
 which must carry a ``FIXME(#1291)`` at its source location so the debt is visible
 where the code is, not only in this table. Per the repository's allowlist rule,
 it can only shrink.
+
+A sender that cannot use the DELIVERY act moves its POST into the boundary module rather
+than earning an exemption where it stands. The proof-of-control challenge (#1291 C2) is
+the case: ``send_raw`` injects ``idempotency_key`` into the body and the challenge schema
+forbids extra properties, and its fire-time SSRF check is destination policy this repo
+deliberately still owns (GH #1697). Its send therefore lives in
+:data:`BOUNDARY_MODULE`, which the scan skips — because that module's POST is the
+destination every routed sender is routed TO — and which
+:meth:`TestOutboundWebhookSenderBoundary.test_the_boundary_signs_what_it_posts` holds to
+signing everything it posts. Exemption plus positive check, not exemption alone.
 
 Known blind spots, measured by mutation rather than assumed (#1291 sweep):
 a destination written as an INTERPOLATED f-string (``client.post(f"{config.url}",
@@ -86,22 +96,43 @@ ADCP_WEBHOOK_SENDERS: frozenset[tuple[str, str]] = frozenset(
         ("src/services/protocol_webhook_service.py", "url"),
         ("src/services/webhook_delivery_service.py", "config.url"),
         ("src/services/order_approval_service.py", "webhook_url"),
-        ("src/services/notification_proof_service.py", "url"),
         ("src/adapters/mock_ad_server.py", "self.async_webhook_url"),
     }
 )
 
-#: AdCP senders C1 does NOT route, each with the ticket that will. Only shrinks.
+#: AdCP senders that are still UNSIGNED, each with the ticket that will sign them. Only
+#: shrinks, and every entry must carry the FIXME at its source.
 ALLOWED_UNROUTED: frozenset[tuple[str, str]] = frozenset(
     {
-        # C2 (salesagent-z6nr.19) — the proof-of-control challenge MUST be signed;
-        # C1 shapes the boundary so C2 can call it.
-        ("src/services/notification_proof_service.py", "url"),
-        # salesagent-hop4 — the mock adapter's task_completed notification. Same
-        # registration-derived destination, same missing signature.
+        # salesagent-hop4 — the mock adapter's task_completed notification. A
+        # registration-derived destination with no signature.
         ("src/adapters/mock_ad_server.py", "self.async_webhook_url"),
     }
 )
+
+#: The boundary module itself. Its POST is the one every routed sender is routed TO, so
+#: discovering it as an unrouted sender would be the detector reporting the destination as
+#: the problem.
+#:
+#: Skipped the same way the scan already skips ``/tests/``, and it is the step most likely
+#: to be missed when a sender's POST MOVES here: #1291 C2 relocated the proof-of-control
+#: challenge's send into this module, and ``_dynamic_post_sites`` — which scans all of
+#: ``src/`` and classifies by ``(path, destination)`` — re-discovers it as
+#: ``("src/core/signing/webhook_sender_factory.py", "url")``. Without this exemption the
+#: identical three-way trap reappears at the new address and someone rebuilds the same
+#: workaround under a different name: the defect relocated, not fixed.
+#:
+#: The exemption is not a hole, because it is paired with
+#: :meth:`TestOutboundWebhookSenderBoundary.test_the_boundary_signs_what_it_posts` — a
+#: POSITIVE check that this module's POST takes its headers from a ``JwkSignerStrategy``.
+#: Exempting without that check would let an UNSIGNED send hide here, which is exactly what
+#: the guard exists to prevent.
+BOUNDARY_MODULE = "src/core/signing/webhook_sender_factory.py"
+
+#: The one call that turns a body into RFC 9421 headers. Checked on the SEAM rather than on
+#: a signing function's name because this is what every auth strategy implements, so a POST
+#: that stopped making it would be shipping unsigned bytes whatever else the module imports.
+STRATEGY_SEAM = "build_auth_headers"
 
 CLASSIFIED = AD_SERVER_AND_API_CALLS | NON_ADCP_RECEIVERS | ADCP_WEBHOOK_SENDERS
 
@@ -133,7 +164,7 @@ def _dynamic_post_sites(tree_root: Path = SRC, *, relative_to: Path = ROOT) -> l
     sites: list[tuple[str, str, int]] = []
     for path in sorted(tree_root.rglob("*.py")):
         rel = path.relative_to(relative_to).as_posix()
-        if "/tests/" in f"/{rel}":
+        if "/tests/" in f"/{rel}" or rel == BOUNDARY_MODULE:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), rel)
         for node in ast.walk(tree):
@@ -210,8 +241,49 @@ class TestOutboundWebhookSenderBoundary:
                 "Each of these POSTs to a URL a buyer registered, so the buyer's registration must "
                 "select the authentication mode (security.mdx @ v3.1.1 :1424). Build the sender with "
                 "src.core.signing.webhook_sender_factory.build_webhook_sender and deliver through it; "
-                "the hand-rolled POST goes away, and the entry leaves ALLOWED_UNROUTED with it."
+                "the hand-rolled POST goes away, and the entry leaves ALLOWED_UNROUTED with it. A "
+                "sender that cannot use the delivery act for a structural reason moves its POST INTO "
+                "the boundary module instead — it does not get an exemption where it stands."
             ),
+        )
+
+    def test_the_boundary_signs_what_it_posts(self):
+        """Every POST in the boundary module takes its headers from a JWK signer.
+
+        The paired half of :data:`BOUNDARY_MODULE`'s exemption from the scan. Exempting the
+        boundary is necessary — its POST is the destination every routed sender is routed TO
+        — but an exemption with nothing behind it is a place to hide an unsigned send, which
+        is the precise failure this guard exists to prevent.
+
+        So the check is positive and AST-based rather than a substring: every ``.post`` call
+        in the module must sit in a function that also calls ``build_auth_headers``, the one
+        seam that turns a body into RFC 9421 headers. A new POST added here without signing
+        fails immediately, and it cannot be satisfied by the module merely importing
+        something signing-shaped elsewhere.
+        """
+        tree = ast.parse((ROOT / BOUNDARY_MODULE).read_text(encoding="utf-8"), BOUNDARY_MODULE)
+        unsigned: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            posts = [
+                sub
+                for sub in ast.walk(node)
+                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == "post"
+            ]
+            if not posts:
+                continue
+            signs = any(
+                isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == STRATEGY_SEAM
+                for sub in ast.walk(node)
+            )
+            if not signs:
+                unsigned.extend(f"{node.name}@{post.lineno}" for post in posts)
+
+        assert not unsigned, (
+            f"{BOUNDARY_MODULE} is exempt from the sender scan because it IS the boundary, but these "
+            f"POSTs in it never call {STRATEGY_SEAM}(), so they go out unsigned: {unsigned}. The "
+            "exemption is only sound while everything the boundary posts is signed by it."
         )
 
     def test_allowlisted_senders_carry_the_fixme_at_the_source(self):

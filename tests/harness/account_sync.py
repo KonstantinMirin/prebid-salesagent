@@ -212,11 +212,33 @@ class AccountSyncEnv(IntegrationEnv):
         overrides = self._proof_overrides
         default = self._proof_default
 
-        async def _prove(_account_id: Any, config: Any) -> bool:
+        # ``**_signing`` absorbs the strategy / seller_agent_url production threads in
+        # (#1291 C2). A positional-only stand-in would make every account-sync test fail
+        # with a TypeError the moment the real signature grew, which is a harness break
+        # masquerading as a behaviour change.
+        async def _prove(_account_id: Any, config: Any, **_signing: Any) -> bool:
             return overrides.get(str(getattr(config, "url", "")), default)
 
         prover.prove = _prove
         self.mock["notification_proof"].return_value = prover
+
+    def use_real_proof_service(self) -> None:
+        """Run PRODUCTION's prover instead of the dict-lookup stand-in.
+
+        The getter stays patched — it is still the one injection seam — but it now hands
+        back a real :class:`NotificationProofService`, so ``prove()``'s own body executes:
+        the signing-strategy check, the conformant challenge payload, the fire-time SSRF
+        check and the echo validation.
+
+        This exists because the stand-in is why that body had ZERO coverage (#1291 C2): on
+        every in-process transport it replaced the method, and on e2e the harness reaches
+        the refusal branch before the POST. A test that wants to grade the SIGNED path has
+        to be able to turn the substitution off, and doing it here rather than by patching
+        from a test body keeps the seam single.
+        """
+        from src.services.notification_proof_service import NotificationProofService
+
+        self.mock["notification_proof"].return_value = NotificationProofService()
 
     def set_approval_mode(self, mode: str) -> None:
         """Configure account approval mode (BR-RULE-060).

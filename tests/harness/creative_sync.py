@@ -51,6 +51,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from src.core.config import AppConfig
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
 
@@ -98,10 +99,25 @@ class CreativeSyncEnv(IntegrationEnv):
         # Audit log: no-op
         self.mock["audit_log"].return_value = None
 
-        # Config: default with no gemini key (safe for static creatives)
-        mock_config = MagicMock()
-        mock_config.gemini_api_key = None
-        self.mock["config"].return_value = mock_config
+        # Config: the REAL AppConfig, overriding only gemini_api_key (no key -> safe for
+        # static creatives). NOT a MagicMock, and the reason has nothing to do with
+        # creatives (#1291):
+        #
+        # the [rest] transport imports the app LAZILY (``from src.app import app``, in
+        # tests/harness/_base.py), ``src/app.py`` imports ``RequestSignatureMiddleware``,
+        # and that module does ``from src.core.config import get_config`` at MODULE level.
+        # So the FIRST [rest] scenario to run in a worker decides what the middleware
+        # binds for the rest of that worker's life — and a ``from X import Y`` binding is
+        # NOT restored when this patch unwinds. A MagicMock captured that way then answers
+        # every truth test the middleware makes (``config.verifier_enabled``) and
+        # fabricates every value, so nothing fails until the first read that does
+        # ARITHMETIC (``size > config.max_signed_body_bytes``) — in an unrelated test file,
+        # arbitrarily later. Measured: uc006_sync_creatives before uc005 = 149 failures,
+        # all [rest]; reverse order = 0.
+        #
+        # The need here is ONE field for ``_processing.py``'s lazy import. A real config
+        # meets it without faking every other field in the system.
+        self.mock["config"].return_value = AppConfig(gemini_api_key=None)
 
     def setup_generative_build(
         self,
