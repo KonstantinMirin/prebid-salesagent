@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import socket
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -47,6 +48,30 @@ _ORIGIN_OWNED_HEADERS = frozenset({"content-type", "content-length", "connection
 # stall silently vanish, and a stall that does not stall cannot trip a timeout.
 
 
+class _IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+    """``ThreadingHTTPServer`` bound over IPv6, for hosts that resolve to ``::1`` first."""
+
+    address_family = socket.AF_INET6
+
+
+def _server_class_for(listen_host: str) -> type[ThreadingHTTPServer]:
+    """The server class whose address family matches ``listen_host``'s FIRST resolution.
+
+    ``ThreadingHTTPServer`` is AF_INET-only, which is fine for the literal
+    loopback addresses tests usually bind — but a *name* like ``localhost``
+    resolves to BOTH families, and the egress seam's IP pin takes the first
+    ``getaddrinfo`` answer (``adcp.signing`` resolves once, then pins every
+    connect to that address). On a resolver that orders ``::1`` first, an
+    AF_INET server would sit on ``127.0.0.1`` while the pinned client dials
+    ``[::1]`` and gets a connection refused that has nothing to do with what
+    the test meant to grade. Resolving here with the same call the pin makes —
+    ``getaddrinfo(host, None)``, first answer — keeps origin and client on one
+    address deterministically, whichever family the platform prefers.
+    """
+    family = socket.getaddrinfo(listen_host, None)[0][0]
+    return _IPv6ThreadingHTTPServer if family == socket.AF_INET6 else ThreadingHTTPServer
+
+
 @contextlib.contextmanager
 def serve_in_thread(
     handler_class: type[BaseHTTPRequestHandler],
@@ -65,7 +90,7 @@ def serve_in_thread(
     starts, so a handler may read per-server state (e.g. the programmable
     origin) on its very first request without a data race.
     """
-    server = ThreadingHTTPServer((listen_host, 0), handler_class)
+    server = _server_class_for(listen_host)((listen_host, 0), handler_class)
     for name, value in (server_attrs or {}).items():
         setattr(server, name, value)
 

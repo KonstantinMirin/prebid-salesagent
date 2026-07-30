@@ -18,7 +18,6 @@ import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
-from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 from a2a.types import Task, TaskStatusUpdateEvent
@@ -104,25 +103,6 @@ def _to_wire_dict(payload: Any) -> dict[str, Any]:
         "a2a Task / TaskStatusUpdateEvent (protobuf), an AdCP Pydantic model "
         "(e.g. McpWebhookPayload), or a Mapping[str, Any]."
     )
-
-
-def _normalize_localhost_for_docker(url: str) -> str:
-    """Replace localhost host with host.docker.internal while preserving userinfo and port."""
-    try:
-        parsed = urlparse(url)
-        if parsed.hostname and parsed.hostname.lower() == "localhost":
-            userinfo = ""
-            if parsed.username:
-                userinfo = parsed.username
-                if parsed.password:
-                    userinfo += f":{parsed.password}"
-                userinfo += "@"
-            port = f":{parsed.port}" if parsed.port else ""
-            new_netloc = f"{userinfo}host.docker.internal{port}"
-            return urlunparse(parsed._replace(netloc=new_netloc))
-    except Exception:
-        logger.debug("Docker URL rewrite failed, using original URL", exc_info=True)
-    return url
 
 
 class ProtocolWebhookService:
@@ -213,7 +193,11 @@ class ProtocolWebhookService:
             )
             return False
 
-        url = _normalize_localhost_for_docker(push_notification_config.url)
+        # The buyer's URL is delivered verbatim: the egress seam (asend) is the only
+        # place allowed to decide anything about the destination. Test stacks that
+        # need a host-reachable callback register a reachable hostname instead
+        # (ADCP_WEBHOOK_HOST, see tests/e2e/_webhook_capture.py).
+        url = push_notification_config.url
 
         # Prepare headers
         headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}

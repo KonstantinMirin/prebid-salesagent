@@ -236,8 +236,9 @@ services:
       ADCP_TEST_DB_HOST: postgres
       ADCP_TEST_DB_PORT: "5432"
       # Webhook reverse-addressing: the server calls back to this runner by its
-      # network alias (requires `docker compose run --use-aliases`). 'tests' is
-      # not 'localhost', so the server does NOT rewrite it to host.docker.internal.
+      # network alias (requires `docker compose run --use-aliases`). Overrides
+      # the host-run default 'host.docker.internal' in tests/e2e/_webhook_capture.py;
+      # the server delivers the registered hostname verbatim.
       ADCP_WEBHOOK_HOST: tests
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.

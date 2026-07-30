@@ -417,11 +417,9 @@ class TestTwoDestinationsOneService:
     this test would pass against the exact mutation it exists to catch. The
     second origin therefore binds ``127.0.0.2`` — still loopback, still covered
     by the escape hatch ``LocalOriginMixin`` opens, and a different pin.
-
-    ``localhost`` is NOT usable as the second name despite being the obvious
-    choice: ``_normalize_localhost_for_docker`` rewrites it to
-    ``host.docker.internal`` before the URL ever reaches the transport, which
-    resolves off-box and reaches no in-process origin.
+    (``localhost`` would also work now that URLs are delivered verbatim, but
+    ``127.0.0.2`` keeps the two pins unambiguously distinct without depending
+    on resolver family ordering.)
     """
 
     async def test_one_service_delivers_to_two_hostnames(self, integration_db):
@@ -449,3 +447,64 @@ class TestTwoDestinationsOneService:
                 )
                 assert env.delivery_attempts == 1
                 assert second_origin.hits == 1
+
+
+class TestBuyerUrlIsDeliveredVerbatim:
+    """The URL the buyer registered is the URL the delivery connects to — byte for byte.
+
+    Core Invariant (CLAUDE.md pattern #9): no code outside
+    ``src/core/security/outbound_http.py`` may alter, map, or otherwise decide
+    an outbound destination, so the URL ingest validated is the URL the seam
+    validates, pins, and connects to.
+
+    Regression pinned: ``protocol_webhook_service`` used to rewrite a
+    ``localhost`` hostname to ``host.docker.internal`` BEFORE the URL reached
+    ``asend`` (removed in #1589 follow-up). Under that rewrite the delivery
+    leaves for a host that is not the buyer's endpoint and the origin below
+    records zero requests — which is exactly how this test fails if a rewrite
+    ever returns.
+
+    The proof is read at the origin, not in production state: the ``Host``
+    header on the request the endpoint actually served is the netloc the client
+    dialled, so ``localhost:PORT`` recorded there is byte-for-byte evidence
+    that nothing rewrote the destination in front of the seam.
+
+    Determinism note: the origin binds whichever address family ``localhost``
+    resolves to FIRST in this process (``serve_in_thread`` mirrors the seam's
+    pin, which takes the first ``getaddrinfo`` answer), so the case grades the
+    same whether the platform's resolver orders ``::1`` or ``127.0.0.1`` first.
+    """
+
+    async def test_a_localhost_url_is_delivered_to_localhost_verbatim(self, integration_db):
+        with ProtocolWebhookEnv() as env:
+            buy = env.make_media_buy()
+            with run_local_origin(listen_host="localhost") as origin:
+                origin.respond_with(200)
+                config = env.make_config(url=f"{origin.base_url}/webhook")
+                assert urlparse(config.url).hostname == "localhost", (
+                    "the registered URL must carry the literal hostname 'localhost' — "
+                    "that is the exact string the deleted rewrite used to match on"
+                )
+
+                delivered = await env.send(config=config, media_buy_id=buy.media_buy_id)
+
+                assert origin.hits == 1, (
+                    f"the buyer's endpoint at {config.url} served {origin.hits} requests for one "
+                    "notification — the delivery went to a destination other than the URL the "
+                    "buyer registered (a netloc rewrite sits in front of the egress seam)"
+                )
+                request = origin.last_request
+                assert request.headers["Host"] == f"localhost:{origin.port}", (
+                    f"the delivery arrived addressed to Host {request.headers['Host']!r}, not "
+                    f"'localhost:{origin.port}' — the netloc was rewritten between the stored "
+                    "config and the egress seam"
+                )
+                assert request.path == "/webhook"
+                assert delivered is True
+
+                rows = env.delivery_logs(buy.media_buy_id)
+                assert len(rows) == 1
+                assert rows[0].webhook_url == config.url, (
+                    f"the delivery log recorded {rows[0].webhook_url!r} — the operator-readable "
+                    "record must name the URL the buyer registered, not a rewritten destination"
+                )
