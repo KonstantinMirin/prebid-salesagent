@@ -809,18 +809,45 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # `type` filter for ALL transports (not a REST body issue).
 
 
+# Every transport a BDD nodeid can be parametrized over. `impl` is vestigial
+# (sunsetted from BDD parametrization by #1417) but two predicates below still
+# consume it, so it stays in the alternation.
+#
+# `e2e_rest` is listed before `rest` for readability only — it is NOT what
+# disambiguates them, and a comment claiming otherwise was wrong. A regex matches
+# at the earliest POSITION before it consults alternation order, and the "rest"
+# inside "e2e_rest" always sits four characters later, so neither reordering this
+# tuple nor dropping the `\[` anchor can make an `[e2e_rest-row]` nodeid report as
+# `rest` (all three mutations verified to leave the guard green). What the
+# bracket discipline DOES buy is refusing a row id that merely contains a
+# transport name.
+_NODEID_TRANSPORTS = ("e2e_rest", "a2a", "mcp", "rest", "impl")
+_TRANSPORT_IN_NODEID = re.compile(r"\[(" + "|".join(_NODEID_TRANSPORTS) + r")[-\]]")
+
+
+def _transport_of(nodeid: str) -> str | None:
+    """The transport a parametrized BDD nodeid dispatches through, else None.
+
+    One derivation for the whole file. Previously this was spelled out as
+    `"[X]" in nodeid or "[X-" in nodeid` pairs in several places, which is how the
+    `e2e_rest`/`rest` overlap becomes a silent mis-route.
+    """
+    match = _TRANSPORT_IN_NODEID.search(nodeid)
+    return match.group(1) if match else None
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Apply xfail markers to scenarios with unimplemented production features."""
     for item in items:
         marker_names = {m.name for m in item.iter_markers()}
         nodeid = item.nodeid
 
-        # Detect transport from parametrized nodeid: [mcp], [mcp-...], [a2a], [rest], etc.
-        is_mcp = "[mcp]" in nodeid or "[mcp-" in nodeid
-        is_a2a = "[a2a]" in nodeid or "[a2a-" in nodeid
-        is_rest = "[rest]" in nodeid or "[rest-" in nodeid
-        is_impl = "[impl]" in nodeid or "[impl-" in nodeid
-        is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
+        transport = _transport_of(nodeid)
+        is_mcp = transport == "mcp"
+        is_a2a = transport == "a2a"
+        is_rest = transport == "rest"
+        is_impl = transport == "impl"
+        is_e2e_rest = transport == "e2e_rest"
 
         # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
         # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
@@ -1589,9 +1616,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # (see docs/test-debt-bdd-strict-markers.md). strict=True forces marker
         # removal the moment the underlying gap closes.
         _UC004_GENUINE_XFAIL_ROWS: list[tuple[str, set[str], str]] = [
+            # GRADUATED on rest (2026-07-30, GH #1291 work): geo_missing_geo_level,
+            # limit_zero and limit_negative fired as deterministic strict XPASSES on
+            # [rest] the first time that leg ran — it had been the deselected
+            # "redundant transport" for this scenario, so the tripwire could never fire.
+            # Production now satisfies the Example as written on REST: the boundary
+            # translates AdCPInvalidRequestError to the INVALID_REQUEST envelope and
+            # returns HTTP 400 (captured in the graduating run, slice
+            # innet-uc002..uc011 2026-07-30: "REST boundary translating
+            # AdCPInvalidRequestError to envelope: INVALID_REQUEST").
+            # NOT graduated on a2a/mcp, whose legs ran in the same slice and genuinely
+            # xfailed: mcp emits VALIDATION_ERROR and a2a an "Invalid parameters" shape
+            # error for identical input, so the C4 gap there is now an error-CODE
+            # divergence rather than absent validation (filed separately). Those two
+            # keep xfailing through the non-strict _UC004_PARTITION_SELECTIVE entry
+            # below, matching the T-UC-004-partition-attribution precedent.
+            # geo_metro_missing_system stays STRICT here: it is the C10 gap (the spec
+            # states the metro/postal_area system requirement in a field description
+            # only, so nothing validates it) and it xfailed on every transport.
             (
                 "T-UC-004-partition-reporting-dims",
-                {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
+                {"geo_metro_missing_system"},
                 "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # GRADUATED (removed): T-UC-004-partition-attribution interval_zero /
@@ -1894,14 +1939,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # genuinely PASS on all transports; NO strict=True entry needed
             # (same shape as the reconciled date-range valid rows).
         ]
-        # e2e_rest items must NOT be marked by this loop. Its row substrings use
-        # bare transport prefixes ("[rest-…", not the "[rest-" bracket guard at :402),
-        # so a "[rest-…" row substring-matches an "[e2e_rest-…]" nodeid and would stamp
-        # a strict=True in-process "impl passes" reason onto e2e_rest items —
-        # contradicting the ledger's non-strict policy and, once e2e_rest reaches the
-        # real boundary and passes (e.g. INVALID_REQUEST now emitted), turning the pass
-        # into a spurious strict-XPASS failure. e2e_rest xfails are owned by the
-        # dedicated tripwire blocks (~:1490/:1517) and the ledger collapse. (PR #1420)
+        # e2e_rest items must NOT be marked by this loop: it would stamp a strict=True
+        # in-process reason onto e2e_rest items, contradicting the ledger's non-strict
+        # policy and, once e2e_rest reaches the real boundary and passes (e.g.
+        # INVALID_REQUEST now emitted), turning that pass into a spurious strict-XPASS
+        # failure. e2e_rest xfails are owned by the dedicated tripwire blocks and the
+        # ledger collapse. (PR #1420)
+        #
+        # The gate is needed because the entries match by TAG plus a row substring, and
+        # an e2e_rest item carries the same scenario tags as its in-process siblings —
+        # the selector shape is irrelevant to that. An earlier version of this comment
+        # justified the gate by claiming the row substrings are bare prefixes that let
+        # a `"rest-…"` selector match an `[e2e_rest-…]` nodeid; that was wrong twice
+        # over (measured 2026-07-30): there are ZERO bare `"rest-` selectors in this
+        # file — the 67 bare ones are impl (23), a2a (22) and mcp (22), none of which
+        # can appear inside `e2e_rest` — and all 100 bracketed selectors are
+        # `"[<transport>-` guarded. Do not build a guard on the old mechanism.
         if not is_e2e_rest:
             for tag, substrings, reason in _UC004_GENUINE_XFAIL_ROWS:
                 if tag in marker_names and (not substrings or any(s in nodeid for s in substrings)):
@@ -2218,11 +2271,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # examples that expect INVALID_REQUEST/ACCOUNT_NOT_FOUND but production
         # doesn't validate. Only xfail the failing subset; valid-value examples pass.
         _UC004_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
-            # reporting_dimensions: production doesn't validate missing geo_level, limit<=0, etc.
+            # reporting_dimensions: validation IS implemented now, and the reason above
+            # ("production accepts invalid configs") was stale — every transport rejects
+            # these inputs. What differs is the CODE: rest emits INVALID_REQUEST (which
+            # the Example names, so those rows XPASS there and graduated out of the
+            # strict table above), mcp emits VALIDATION_ERROR and a2a an "Invalid
+            # parameters" shape error. Non-strict, so the rest XPASS stays visible
+            # without failing CI — same shape as T-UC-004-partition-attribution below.
+            # geo_metro_missing_system is the separate C10 description-only gap.
             (
                 "T-UC-004-partition-reporting-dims",
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
-                "reporting_dimensions validation not implemented — production accepts invalid configs",
+                "reporting_dimensions rejection code diverges by transport — rest emits INVALID_REQUEST "
+                "(the named Example), mcp VALIDATION_ERROR, a2a an invalid-parameters shape error",
             ),
             # attribution_window: validation IS implemented (SDK model enum/range +
             # _validate_attribution_window for campaign INV-5, emitting VALIDATION_ERROR),
@@ -3012,87 +3073,33 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-    # ── Single-transport optimization for strict xfails ──────────────
-    # Scenarios that xfail(strict=True) waste runtime running the same failure
-    # path on every transport. Keep one canonical transport running (so the
-    # xfail still proves out and an xpass is still caught when production catches
-    # up) and deselect the redundant ones.
+    # ── Every strict-xfail leg runs on every wire transport ──────────
+    # There is deliberately NO single-transport optimization here. Until
+    # 2026-07-30 this block kept ONE mcp/rest "representative" per strict-xfail
+    # scenario and deselected the sibling, which had two consequences:
     #
-    # IMPL was dropped from the BDD default parametrization (#1417), so
-    # a2a is now the canonical transport that always runs; mcp/rest are the
-    # redundant transports deselected when the scenario carries a strict xfail.
-    # (Previously impl was canonical; keeping a2a preserves the "still xfail on
-    # wire, not deselected-to-nothing" guarantee for the impl-exclusive ledger.)
+    #   * the representative was whichever variant appeared FIRST in `items`,
+    #     and pytest-randomly (active for the bdd env — only `integration`
+    #     passes `-p no:randomly`) reshuffles `items` per run, so the surviving
+    #     transport was a per-run coin flip (GH #1291 work, 22 UC-010 nodeids
+    #     traded mcp<->rest between full runs with the totals conserved);
+    #   * transports diverge one at a time in this repo, so a single
+    #     representative structurally cannot see a transport-specific
+    #     production fix: the XPASS(strict) tripwire simply is not on the
+    #     transport that got fixed.
     #
-    # Opt out: set BDD_ALL_TRANSPORTS=1 to run everything (for full runs).
-    if not os.environ.get("BDD_ALL_TRANSPORTS"):
-        # With IMPL sunsetted there is NO [impl] variant — deselecting every
-        # strict-xfail wire variant removes the scenario entirely and loses the
-        # xpass tripwire. Keep ONE wire representative per scenario.
-        #
-        # UC-010 opt-in retained for scenarios that want an mcp/rest
-        # representative even when a2a ALSO carries the strict marker (pure
-        # runtime-reduction opt-out, not a correctness requirement — see the
-        # a2a-strict-marker check below for the correctness half).
-        _REPRESENTATIVE_UC_PREFIXES = ("T-UC-010-",)
-        _transport_param = re.compile(r"^(?P<head>.*?\[)(?:impl|a2a|mcp|rest)(?P<tail>[-\]].*)$")
-
-        def _scenario_base(nodeid: str) -> str | None:
-            match = _transport_param.match(nodeid)
-            return f"{match.group('head')}{match.group('tail')}" if match else None
-
-        impl_bases = {
-            base for base in (_scenario_base(i.nodeid) for i in items if "[impl" in i.nodeid) if base is not None
-        }
-        # The kept a2a variant is NOT always the one carrying
-        # the strict-xfail marker — several UC-004 markers are deliberately
-        # transport-selective (applied to mcp/rest only because a2a already
-        # validates). Deselecting every mcp/rest sibling in that case removes
-        # the ONLY items that could ever XPASS(strict), killing the tripwire
-        # for that scenario. Only treat mcp/rest as redundant when the a2a
-        # sibling ALSO carries an equivalent strict marker — otherwise keep
-        # one mcp/rest representative, same as the UC-010 opt-in.
-        a2a_strict_bases = {
-            base
-            for i in items
-            if ("[a2a]" in i.nodeid or "[a2a-" in i.nodeid)
-            and any(m.name == "xfail" and m.kwargs.get("strict", False) for m in i.iter_markers())
-            for base in [_scenario_base(i.nodeid)]
-            if base is not None
-        }
-        kept_representatives: set[str] = set()
-
-        deselected: list[pytest.Item] = []
-        remaining: list[pytest.Item] = []
-        for item in items:
-            nodeid = item.nodeid
-            is_redundant_transport = "[mcp]" in nodeid or "[mcp-" in nodeid or "[rest]" in nodeid or "[rest-" in nodeid
-            if not is_redundant_transport:
-                remaining.append(item)
-                continue
-            # Check if this item has a strict xfail marker
-            has_strict_xfail = any(m.name == "xfail" and m.kwargs.get("strict", False) for m in item.iter_markers())
-            if not has_strict_xfail:
-                remaining.append(item)
-                continue
-            base = _scenario_base(nodeid)
-            item_markers = {m.name for m in item.iter_markers()}
-            opted_in = any(t.startswith(_REPRESENTATIVE_UC_PREFIXES) for t in item_markers) or (
-                base is not None and base not in a2a_strict_bases
-            )
-            if opted_in and base is not None and base not in impl_bases and base not in kept_representatives:
-                # No impl sibling to catch the xpass — keep this variant as
-                # the scenario's single strict-xfail representative.
-                kept_representatives.add(base)
-                remaining.append(item)
-            else:
-                deselected.append(item)
-
-        if deselected:
-            items[:] = remaining
-            config = items[0].config if items else None
-            if config:
-                config.hook.pytest_deselected(items=deselected)
+    # The fix is completeness, not a deterministic tie-break: a deterministic
+    # representative would have turned an intermittent blind spot into a
+    # permanent one. Every strict-xfail scenario now runs on a2a AND mcp AND
+    # rest, each with strict=True, so an xpass surfaces on whichever transport
+    # production actually fixed. The price is ~341 extra items (4.2% of the BDD
+    # suite), all of them strict xfails.
+    #
+    # Do not reintroduce a keep-one optimization. If runtime ever forces one, it
+    # must be expressed as an explicit per-scenario decision, not as an
+    # order-dependent accumulator — see
+    # tests/unit/test_guards_bdd_strict_xfail_representative.py, which fails on
+    # any deselection of a strict-xfail transport leg.
 
 
 # ---------------------------------------------------------------------------
@@ -3198,7 +3205,6 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # wire envelope (so it can't participate in error-envelope assertions). The four
     # truthful transports are a2a/mcp/rest + e2e_rest (added below when enabled).
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
-    ids = ["a2a", "mcp", "rest"]
 
     # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
     # the A2A + MCP wire transports only — including a REST variant would 404.
@@ -3210,13 +3216,16 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
     if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]
-        ids = ["a2a", "mcp"]
 
     if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
         transports.append(Transport.E2E_REST)
-        ids.append("e2e_rest")
 
-    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+    # `Transport` is a StrEnum whose values ARE the parametrize ids ("a2a",
+    # "mcp", "rest", "e2e_rest"), so deriving them keeps ONE source for both the
+    # transport set and its spelling. A second literal list is how the ids and
+    # the transports drift apart — and the ids are what every xfail route,
+    # ledger entry and `_transport_of` call matches on.
+    metafunc.parametrize("ctx", transports, ids=[t.value for t in transports], indirect=True)
 
 
 def _ssl_failure(exc: BaseException | None, depth: int = 0) -> ssl.SSLError | None:
