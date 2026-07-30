@@ -2843,6 +2843,13 @@ def _assert_attribution_echoed_on_wire(ctx: dict, field: str) -> None:
     for window_name in ("post_click", "post_view"):
         req_window = requested.get(window_name)
         if req_window is None:
+            # INV-4: the applied window the seller echoes must not contain a
+            # lookback the buyer never asked for — fabricated conversion
+            # attribution would otherwise be graded by nothing, anywhere.
+            assert aw.get(window_name) is None, (
+                f"Valid {field}: buyer requested no {window_name}, but the response echoed "
+                f"{aw.get(window_name)} — the seller must not fabricate a lookback window"
+            )
             continue
         echoed = aw.get(window_name)
         assert echoed is not None, (
