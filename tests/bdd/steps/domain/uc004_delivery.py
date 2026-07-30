@@ -2627,7 +2627,11 @@ def then_attribution_echo(ctx: dict) -> None:
     Expected values come from what the scenario dispatched, so changing the
     scenario's requested window changes what this step demands.
 
-    Asserts exact equality for both interval and unit. ``unit=campaign`` is the
+    Asserts value equality for both interval and unit. (Exact TYPE equality is
+    not graded on a2a: its DataPart routes through protobuf Value, which widens
+    every integer to an integral float — ``14.0 == 14`` keeps the comparison
+    honest on value; see _dict_to_value in src/a2a_server/adcp_a2a_server.py
+    and tests/unit/test_a2a_numeric_wire.py.) ``unit=campaign`` is the
     one window production does NOT echo verbatim — it resolves to the flight
     length in days (src/core/tools/media_buy_delivery.py:980-990) — but no
     scenario requests campaign through this step, so there is deliberately no
