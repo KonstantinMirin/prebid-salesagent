@@ -271,12 +271,14 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
     HTTP_URL = "http://buyer.example.com/hook"
     HTTPS_URL = "https://buyer.example.com/hook"
 
-    # Both gates that share the WebhookURLValidator scheme decision. The
-    # registration gate resolves no DNS; validate_webhook_url would, but the
-    # scheme is refused before any lookup, so both stay hermetic here.
+    # The one surviving gate. There were two until gh-#1589 deleted the
+    # send-side twin (``validate_webhook_url``), which had no production callers
+    # and existed only as a patch target. Kept as a list because the scheme
+    # decision is a property of the GATE, not of this one method — if a second
+    # ingest gate ever appears it belongs here rather than in a copy of these
+    # cases. Resolves no DNS, so it stays hermetic.
     _GATES = [
         WebhookURLValidator.validate_webhook_url_registration,
-        WebhookURLValidator.validate_webhook_url,
     ]
 
     @staticmethod

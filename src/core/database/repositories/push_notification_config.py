@@ -104,11 +104,11 @@ class PushNotificationConfigRepository:
             ValueError: If ``url`` fails the *registration* SSRF gate
                 (``WebhookURLValidator.validate_webhook_url_registration`` —
                 no DNS; optional localhost under ``ADCP_TESTING``). Deliberate
-                defense-in-depth: callers also gate before upsert. Outbound
-                protocol send uses ``validate_outbound_webhook_url``;
-                application delivery (``kind="Application"``) uses the same
-                ``reject_unsafe_outbound_webhook_url`` /
-                ``validate_outbound_webhook_url`` path.
+                defense-in-depth: callers also gate before upsert. SEND time is
+                not this module's business and no longer has a gate of its own:
+                every outbound request goes through the egress seam
+                (``src.core.security.outbound_http``), which re-resolves and
+                re-judges the URL when it is actually dialled.
         """
         is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
         if not is_valid:

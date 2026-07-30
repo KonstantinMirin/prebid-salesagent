@@ -1,16 +1,18 @@
 """CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
 
-Patches: the SEAM's time.sleep and random.uniform (timing and randomness only),
-plus the send-time SSRF gate (#1697), which sits in the service above the seam.
+Patches: the SEAM's time.sleep and random.uniform — timing and randomness only.
 Delivery retries are the seam's since salesagent-4fya.10, so the schedule is
-observed where it is now decided — patching this module's names would silently
+observed where it is now decided; patching this module's names would silently
 observe nothing.
 Real: a local HTTP origin that actually serves the delivery attempts, and
       get_db_session for PushNotificationConfig queries (real DB).
 
-The SSRF gate is mocked rather than driven because the origin necessarily
-listens on loopback, which the real gate refuses; scenarios that grade the
-reject branch call ``env.set_url_invalid()``.
+Egress policy is NOT mocked here. It used to be — a ``ssrf`` patch pointed at a
+send-side validator production had already stopped calling, so the control
+intercepted nothing and the Given that used it asserted nothing (gh-#1589). The
+gate now lives on the seam and is driven by naming a destination it genuinely
+refuses; the loopback origin these scenarios need is admitted because
+``LocalOriginMixin`` opens both egress hatches for the env's lifetime.
 
 The outbound transport is NOT patched — see ``LocalOriginMixin``. Webhook
 endpoints must therefore be configured with ``env.webhook_url``, which is the
@@ -35,7 +37,6 @@ Usage::
 Available mocks via env.mock:
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
-    "ssrf"      -- send-time WebhookURLValidator.validate_outbound_webhook_url
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from sqlalchemy import select
 from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
-from tests.harness._mixins import SSRF_EXTERNAL_PATCH, CircuitBreakerMixin
+from tests.harness._mixins import CircuitBreakerMixin
 
 
 class _LogCaptureHandler(logging.Handler):
@@ -74,8 +75,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
         set_http_response(status_code)   -- answer every attempt with one status
-        set_url_invalid(msg)             -- make send-time SSRF validation refuse
-        set_url_valid()                  -- allow the URL through send-time SSRF
         call_send(...)                   -- call service.send_delivery_webhook
         make_webhook_config(...)         -- create a PushNotificationConfig in DB
         set_db_webhooks(configs)         -- replace webhook configs in DB
@@ -87,9 +86,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     EXTERNAL_PATCHES = {
         "sleep": "src.core.security.outbound_http.time.sleep",
         "random": "src.core.security.outbound_http.random.uniform",
-        # The send-time SSRF gate (#1697) still runs in the service, above the
-        # seam, so it is patched by name and not replaced by the real origin.
-        **SSRF_EXTERNAL_PATCH,
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -118,10 +114,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
-
-        # Send-time SSRF validation allows the loopback origin by default;
-        # scenarios grading the reject branch call set_url_invalid().
-        self._configure_ssrf_default()
 
         # The origin answers 200 OK unless a test programs otherwise.
         self.set_http_response(200)

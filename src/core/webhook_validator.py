@@ -5,24 +5,30 @@ Server-Side Request Forgery (SSRF) attacks where malicious users could
 trick the server into making requests to internal services.
 
 Relationship to ``src/core/security/outbound_http.py``: that module is the seam
-every outbound *request* goes through, and it delegates address policy and
-resolve-once IP pinning to the adcp SDK. It cannot serve the two gates below,
-because both of its pre-connection entry points (``send``/``asend`` and
+every outbound *request* goes through, and it owns SEND-time policy outright —
+address, TLS, redirect and retry, delegated to the adcp SDK. This module keeps
+exactly ONE gate, and only because the seam cannot yet express it: registration.
+
+Both of the seam's pre-connection entry points (``send``/``asend`` and
 ``validate_url``) go through ``adcp.signing.resolve_and_validate_host``, which
 ALWAYS resolves DNS. Registration is deliberately a no-DNS verdict — an
-unresolvable but public hostname must be accepted at registration and re-checked
-with DNS at send time — so the two-gate split here
-(``validate_webhook_url_registration`` vs ``validate_outbound_webhook_url``) is
-load-bearing and stays until the seam grows a no-DNS mode. New outbound *sends*
-should still route through the seam rather than growing another copy of address
-policy here.
+unresolvable but public hostname must be ACCEPTED at registration and re-checked
+with DNS when the callback is actually dialled — so
+``validate_webhook_url_registration`` stays until the seam grows a no-DNS mode
+(gh-#1589), at which point it and ``src/core/security/url_validator.py`` go too.
 
-The one thing the two gates here MUST NOT decide for themselves is the scheme.
-That decision belongs to the seam (``_require_tls``), and this module reads the
-seam's own flag to make it — see :meth:`WebhookURLValidator._require_https`. An
-ingest gate that admitted a scheme the seam refuses would accept a buyer's
-webhook URL with a success envelope and then never deliver to it, which is the
-one failure mode the buyer cannot see or correct.
+There is no send-side gate here any more. There used to be
+(``validate_outbound_webhook_url`` and friends); it had no production callers and
+survived only as a patch target that made test controls look live while
+intercepting nothing, so it was deleted. Any new outbound send goes through the
+seam — never a second copy of address policy here.
+
+The one thing this gate MUST NOT decide for itself is the scheme. That decision
+belongs to the seam (``_require_tls``), and this module reads the seam's own flag
+to make it — see :meth:`WebhookURLValidator._require_https`. An ingest gate that
+admitted a scheme the seam refuses would accept a buyer's webhook URL with a
+success envelope and then never deliver to it, which is the one failure mode the
+buyer cannot see or correct.
 
 ``validate_webhook_task_type`` below is an unrelated concern (SDK payload enum
 coercion) that happens to live in this file.
@@ -30,7 +36,6 @@ coercion) that happens to live in this file.
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 from urllib.parse import urlparse
@@ -160,30 +165,6 @@ def reject_unsafe_webhook_registration_url(
         )
 
 
-def reject_unsafe_outbound_webhook_url(
-    url: str,
-    *,
-    log: logging.Logger,
-    kind: str,
-) -> tuple[bool, str]:
-    """Send-time SSRF gate with standardized error logging.
-
-    Returns ``(rejected, error_msg)``. On rejection, logs once with a shared
-    message shape so protocol and application delivery paths cannot drift.
-    Callers that maintain a circuit breaker should record failure locally.
-    """
-    is_valid, error_msg = WebhookURLValidator.validate_outbound_webhook_url(url)
-    if is_valid:
-        return False, ""
-    log.error(
-        "%s webhook URL failed SSRF validation (url=%s): %s",
-        kind,
-        webhook_url_for_log(url),
-        error_msg,
-    )
-    return True, error_msg
-
-
 class WebhookURLValidator:
     """Validates webhook URLs to prevent SSRF attacks."""
 
@@ -219,27 +200,17 @@ class WebhookURLValidator:
         return not _env_flag(_ALLOW_INSECURE_ENV)
 
     @classmethod
-    def validate_webhook_url(cls, url: str) -> tuple[bool, str]:
-        """
-        Validate webhook URL for SSRF protection.
-
-        Args:
-            url: The webhook URL to validate
-
-        Returns:
-            (is_valid, error_message) - is_valid is True if safe, error_message explains failures
-        """
-        return check_url_ssrf(url, require_https=cls._require_https())
-
-    @classmethod
     def validate_webhook_url_registration(cls, url: str) -> tuple[bool, str]:
         """Registration-time SSRF gate (no DNS required).
 
         Blocks known-bad hostnames and literal private IPs. Unresolvable
-        public hostnames are allowed here; send-time re-checks with DNS
-        (``validate_outbound_webhook_url``). When ``ADCP_TESTING=true``,
-        localhost/loopback are allowed for capture servers. HTTPS is required
-        unless the seam's insecure hatch is open (:meth:`_require_https`).
+        public hostnames are allowed here; the SEAM re-checks with DNS when the
+        callback is dialled (``src.core.security.outbound_http.send``). When
+        ``ADCP_TESTING=true``, localhost/loopback are allowed for capture
+        servers — graded on both arms in
+        ``tests/unit/test_webhook_security.py::TestLocalhostAllowanceUnderTestingMode``.
+        HTTPS is required unless the seam's insecure hatch is open
+        (:meth:`_require_https`).
         """
         allow_localhost = _adcp_testing()
         is_valid, error = check_url_ssrf(
@@ -247,30 +218,4 @@ class WebhookURLValidator:
             resolve_dns=False,
             require_https=cls._require_https(),
         )
-        return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)
-
-    @classmethod
-    def validate_outbound_webhook_url(cls, url: str) -> tuple[bool, str]:
-        """Send-time SSRF gate (full DNS), with localhost allowance under ADCP_TESTING."""
-        if _adcp_testing():
-            return cls.validate_for_testing(url, allow_localhost=True)
-        return cls.validate_webhook_url(url)
-
-    @classmethod
-    def validate_for_testing(cls, url: str, allow_localhost: bool = False) -> tuple[bool, str]:
-        """
-        Validate webhook URL with optional localhost allowance for testing.
-
-        This is useful for development/testing scenarios where webhooks need to
-        point to localhost services. Production should use validate_webhook_url().
-
-        Args:
-            url: The webhook URL to validate
-            allow_localhost: If True, allows localhost and 127.0.0.1
-
-        Returns:
-            (is_valid, error_message)
-        """
-        # Testing path always allows HTTP (capture servers, local harnesses).
-        is_valid, error = check_url_ssrf(url, require_https=False)
         return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)

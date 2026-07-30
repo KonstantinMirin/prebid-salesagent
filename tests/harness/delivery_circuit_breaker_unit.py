@@ -1,14 +1,14 @@
 """CircuitBreakerEnv — unit test environment for WebhookDeliveryService and CircuitBreaker.
 
-Patches: time.sleep, random.uniform, get_db_session, the module logger, and the
-         send-time SSRF gate (``WebhookURLValidator.validate_outbound_webhook_url``).
+Patches: time.sleep, random.uniform, get_db_session, and the module logger.
 Real: a local HTTP origin that actually serves the delivery attempts — the
 outbound transport is NOT patched (see ``LocalOriginMixin``).
 
-The SSRF gate is a *decision*, not a transport, so it stays mocked: it is what
-production consults before anything leaves, and the harness has to be able to
-drive both answers. Whether delivery then happened is still read off the real
-origin (``delivery_attempts``), never off a transport mock.
+Egress policy is NOT mocked. The ``ssrf`` control that used to live here pointed
+at a send-side validator production no longer called, so it intercepted nothing
+and every assertion behind it was vacuous (gh-#1589). A refusal is now driven by
+naming a destination the real gate refuses, and whether delivery happened is
+read off the real origin (``delivery_attempts``), never off a transport mock.
 
 Usage::
 
@@ -29,7 +29,6 @@ Available mocks via env.mock:
     "random"    -- random.uniform mock
     "db"        -- get_db_session mock
     "logger"    -- module-level logger mock
-    "ssrf"      -- send-time SSRF validation mock (see set_url_valid/set_url_invalid)
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ from unittest.mock import MagicMock
 
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import BaseTestEnv
-from tests.harness._mixins import SSRF_EXTERNAL_PATCH, CircuitBreakerMixin
+from tests.harness._mixins import CircuitBreakerMixin
 
 
 class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
@@ -51,7 +50,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
         set_http_response(status_code)   -- answer every attempt with one status
-        set_url_valid() / set_url_invalid(msg) -- program the send-time SSRF gate
         call_send(...)                   -- call service.send_delivery_webhook
         delivery_attempts / last_delivery -- what the endpoint actually received
 
@@ -66,7 +64,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         "random": "src.core.security.outbound_http.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
         "logger": f"{MODULE}.logger",
-        **SSRF_EXTERNAL_PATCH,
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -77,11 +74,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
-
-        # Send-time SSRF gate: allow by default so the loopback origin and the
-        # fixture hostnames are reachable; scenarios that grade the reject
-        # branch call set_url_invalid() and then assert delivery_attempts == 0.
-        self._configure_ssrf_default()
 
         # The origin answers 200 OK unless a test programs otherwise.
         self.set_http_response(200)

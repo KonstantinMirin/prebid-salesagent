@@ -62,12 +62,16 @@ class TestCircuitBreakerEnvContract:
     def test_mock_access(self):
         """env.mock[name] provides access to all patch targets — timing only, no transport.
 
-        ``ssrf`` is the send-time SSRF gate (#1697) — a *decision* production consults
-        before anything leaves, not a transport mock; delivery itself still goes to the
-        real local origin.
+        The set is pinned rather than sampled: a patch target added here is a
+        thing production no longer decides for itself, and that deserves to be
+        noticed. ``ssrf`` was in this set until gh-#1589 — pointed at a send-side
+        validator production had already stopped calling, so it intercepted
+        nothing while making the harness look like it could drive a refusal.
+        Egress policy is now graded by naming a destination the real gate
+        refuses, not by programming a verdict.
         """
         with CircuitBreakerEnv() as env:
-            assert set(env.mock) == {"sleep", "random", "db", "logger", "ssrf"}
+            assert set(env.mock) == {"sleep", "random", "db", "logger"}
 
     def test_make_webhook_config(self):
         """make_webhook_config creates a mock with expected attributes."""
