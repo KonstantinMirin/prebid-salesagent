@@ -2562,11 +2562,24 @@ def _wire_attribution_model(ctx: dict, *, expectation: str) -> str:
 def then_attribution_model(ctx: dict, model: str) -> None:
     """Assert attribution window model matches the expected value.
 
-    Verifies the response carries an attribution_window whose model field
-    equals the expected model string.
+    The Gherkin literal and the dispatched request are cross-checked first:
+    the model this step demands must be exactly what the dispatched
+    attribution_window implies (buyer's model, else platform default). This
+    ties the scenario to INV-1 — a literal that happens to coincide with the
+    platform default while the When sends a different (or no) model is a
+    scenario bug, not a pass. The INV-1 scenario once requested last_touch,
+    which IS the default, so production ignoring the buyer's model was
+    byte-identical to applying it and this step graded nothing.
     """
+    expected_model = _expected_attribution_model(ctx)
+    assert model == expected_model, (
+        f"Scenario literal {model!r} disagrees with the dispatched request, which implies "
+        f"{expected_model!r} — the Gherkin pair must request and assert the same model"
+    )
     actual_model = _wire_attribution_model(ctx, expectation=f"expected model {model!r} to be echoed")
-    assert actual_model == model, f"attribution_window.model should be '{model}', got '{actual_model}'"
+    assert actual_model == expected_model, (
+        f"attribution_window.model should be '{expected_model}', got '{actual_model}'"
+    )
 
 
 def _dispatched_post_click(ctx: dict) -> dict:

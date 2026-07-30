@@ -598,8 +598,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports configurable attribution windows
     And the ad server adapter has delivery data for "mb-001"
-    When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 14, "unit": "days"}, "model": "last_touch"}
-    Then the response should include attribution_window with model "last_touch"
+    When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 14, "unit": "days"}, "model": "data_driven"}
+    Then the response should include attribution_window with model "data_driven"
     And the attribution_window should echo the applied post_click window
     # BR-RULE-092 INV-1: buyer provides -> seller applies requested lookback
     # BR-RULE-092 INV-3: response echoes applied attribution_window
