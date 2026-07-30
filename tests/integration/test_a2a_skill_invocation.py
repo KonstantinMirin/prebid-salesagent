@@ -403,6 +403,74 @@ class TestA2ASkillInvocation:
             assert isinstance(artifact_data["packages"], list)
 
     @pytest.mark.asyncio
+    async def test_create_with_a2a_push_config_short_credentials_still_creates(
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator, monkeypatch
+    ):
+        """A short webhook credential on the A2A protocol-layer config must not divert create.
+
+        The push config rides in ``params.configuration`` (SendMessageConfiguration) —
+        a TRANSPORT-layer parameter, never folded into request-body validation, so the
+        adcp ``Authentication.credentials`` MinLen(32) does not gate the create
+        (gh-#1299; the create skill's comment documents the decision). The webhook-URL
+        ingest verdict (src/core/webhook_ingest.py) grades ONLY the url, so this exact
+        shape — a policy-passing url plus an 18-char credential, the shape the a2a e2e
+        webhook tests send — creates the buy. A regression here surfaced only in e2e
+        when the ingest helper briefly model-validated the whole config.
+        """
+        import google.protobuf.json_format as jf
+
+        from tests.helpers.egress_hatches import egress_hatch_env
+
+        for k, v in egress_hatch_env(private=True, insecure=True).items():
+            monkeypatch.setenv(k, v)
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            from datetime import UTC, datetime, timedelta
+
+            from tests.a2a_helpers import make_a2a_context
+
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
+            start_date = datetime.now(UTC) + timedelta(days=1)
+            end_date = start_date + timedelta(days=30)
+            skill_params = {
+                "brand": {"domain": "testbrand.com"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                "packages": [
+                    {
+                        "product_id": sample_products[0],
+                        "budget": 10000.0,
+                        "pricing_option_id": "cpm_usd_fixed",
+                    }
+                ],
+                "start_time": start_date.isoformat(),
+                "end_time": end_date.isoformat(),
+            }
+            message = create_a2a_message_with_skill("create_media_buy", skill_params)
+            params = SendMessageRequest(message=message)
+            # Proto AuthenticationInfo is singular `scheme`; the skill handler
+            # translates it to AdCP's `schemes` list before injecting into params.
+            jf.ParseDict(
+                {
+                    "taskPushNotificationConfig": {
+                        "url": "http://127.0.0.1:9/webhook",
+                        "authentication": {"scheme": "Bearer", "credentials": "test-webhook-token"},
+                    }
+                },
+                params.configuration,
+            )
+
+            result = await handler.on_message_send(params, context=ctx)
+
+            assert isinstance(result, Task)
+            assert result.status.state == TaskState.TASK_STATE_COMPLETED, (
+                f"create diverted by the protocol-layer push config: task ended {result.status.state}"
+            )
+            artifact_data = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
+            assert "media_buy_id" in artifact_data
+
+    @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy_manual_approval(
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):

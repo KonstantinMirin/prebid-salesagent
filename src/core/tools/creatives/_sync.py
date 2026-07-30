@@ -117,8 +117,7 @@ def _sync_creatives_impl(
     # worker, so ingest is the only gate with a request to refuse into.
     webhook_url = None
     if push_notification_config:
-        pnc_model = validated_push_notification_config(push_notification_config)
-        webhook_url = str(pnc_model.url) if pnc_model and pnc_model.url else None
+        webhook_url = validated_push_notification_config(push_notification_config)
         logger.info(f"[sync_creatives] Push notification webhook URL: {webhook_url}")
 
     # Get tenant creative approval settings

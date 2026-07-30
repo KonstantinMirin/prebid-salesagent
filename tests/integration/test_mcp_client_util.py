@@ -4,6 +4,7 @@ These tests verify that our unified MCP client can connect to real MCP servers
 and handle various scenarios (auth, retries, errors, etc.).
 """
 
+import asyncio
 import socket
 
 import pytest
@@ -275,7 +276,12 @@ def recorded_retry_sleeps(monkeypatch):
     """
     slept: list[float] = []
     for module in (mcp_client_module, outbound_http_module):
-        monkeypatch.setattr(module, "asyncio", _SleepRecordingAsyncio(module.asyncio, slept))
+        # raising=False: mcp_client no longer imports asyncio (its retry sleep
+        # moved into the seam's sleep_backoff), so the recorder is installed
+        # unconditionally — if a local sleep ever reappears there with a fresh
+        # asyncio import, it is recorded again instead of silently unobserved.
+        real = getattr(module, "asyncio", asyncio)
+        monkeypatch.setattr(module, "asyncio", _SleepRecordingAsyncio(real, slept), raising=False)
     return slept
 
 
