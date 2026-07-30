@@ -44,7 +44,10 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/gam/client.py": 1,
     "src/adapters/gam/managers/creatives.py": 3,
     "src/adapters/gam/managers/orders.py": 11,
-    "src/adapters/gam/managers/targeting.py": 22,
+    # 22→7: the 15 buyer-correctable capability-gap sites now raise
+    # AdCPCapabilityNotSupportedError (UNSUPPORTED_FEATURE/correctable); the 7
+    # remaining ValueErrors are seller-side operational faults by design.
+    "src/adapters/gam/managers/targeting.py": 7,
     "src/adapters/gam/pricing_compatibility.py": 2,
     "src/adapters/gam_implementation_config_schema.py": 4,
     "src/adapters/xandr.py": 5,
