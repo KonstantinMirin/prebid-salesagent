@@ -101,6 +101,43 @@ const FORMAT_TEMPLATES = {
 const DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org";
 
 /**
+ * Transport path suffixes that are endpoints of the same agent, not distinct agents.
+ * Mirrors _TRANSPORT_SUFFIXES behind canonical_agent_url in src/core/schemas/_base.py.
+ */
+const TRANSPORT_SUFFIXES = ["/mcp", "/a2a", "/.well-known/adcp/sales"];
+
+/**
+ * Canonicalize an agent_url for identity comparison.
+ *
+ * The JS-side counterpart of canonical_agent_url (src/core/schemas/_base.py:184-208):
+ * strip the trailing slash, then one transport suffix. Both ends must agree or the
+ * comparison is worse than none -- the server serializes agent_url through Pydantic
+ * AnyUrl, which APPENDS a trailing slash, so a product's default-agent format arrives
+ * here as "https://creative.adcontextprotocol.org/" while the constant above has no
+ * slash. A bare === against the constant therefore matches nothing real.
+ *
+ * @param {string|null|undefined} url
+ * @returns {string} canonical form, or "" when absent
+ */
+function canonicalAgentUrl(url) {
+    if (!url) return "";
+    let stripped = String(url).replace(/\/+$/, "");
+    for (const suffix of TRANSPORT_SUFFIXES) {
+        if (stripped.endsWith(suffix)) {
+            stripped = stripped.slice(0, -suffix.length).replace(/\/+$/, "");
+            break;  // only one suffix, matching the server
+        }
+    }
+    return stripped;
+}
+
+/** True when a format belongs to the built-in AdCP catalogue the templates describe. */
+function isDefaultAgent(agentUrl) {
+    if (!agentUrl) return true;  // absent agent_url means the default catalogue
+    return canonicalAgentUrl(agentUrl) === canonicalAgentUrl(DEFAULT_CREATIVE_AGENT_URL);
+}
+
+/**
  * Format Template Picker Component
  *
  * Usage:
@@ -126,6 +163,14 @@ class FormatTemplatePicker {
         this.selectedTemplates = new Map();  // templateId -> Set of {width, height} or {duration_ms}
         this.customFormats = [];  // Legacy/custom formats: [{agent_url, id, width?, height?}]
         this.inventorySizes = new Set();  // Sizes from inventory: "300x250", "728x90"
+        // Diff state (#1796): the formats this product was loaded with, grouped by the
+        // template they matched, plus the set of templates the admin has actually edited.
+        // getSelectedFormats() re-emits an UNTOUCHED template's originals verbatim instead
+        // of regenerating them, because regeneration cannot reconstruct what was stored:
+        // the per-template state is a Set of "WxH"/"d:MS" strings, so which id carried
+        // which size is already lost, and re-expanding would emit ids x params.
+        this.initialFormatsByTemplate = new Map();  // templateId -> [original format, ...]
+        this.touchedTemplates = new Set();          // templateIds the admin edited
         this.agentFormats = {};  // Formats from creative agents: {agent_url: [Format, ...]}
         this.agentsLoaded = false;  // Track if agent formats have been loaded
 
@@ -169,9 +214,21 @@ class FormatTemplatePicker {
             const id = fmt.id || fmt.format_id;
             const agentUrl = fmt.agent_url || DEFAULT_CREATIVE_AGENT_URL;
 
-            // Check if this is a known template (direct key or expanded ID)
-            const templateId = FORMAT_TEMPLATES[id] ? id : expandedToTemplate[id];
+            // Match on the (agent_url, id) PAIR, not the id alone. AdCP format identity
+            // is both parts (core/format-id.json requires [agent_url, id]); a third-party
+            // agent publishing "video" or "display_image" is NOT the built-in template of
+            // that name, and treating it as one discards the agent that defines it.
+            // Anything not from the default catalogue routes to customFormats below, which
+            // already preserves agent_url correctly.
+            const templateId = isDefaultAgent(fmt.agent_url)
+                ? (FORMAT_TEMPLATES[id] ? id : expandedToTemplate[id])
+                : undefined;
             if (templateId) {
+                // Remember the entry verbatim so an untouched template round-trips exactly.
+                if (!this.initialFormatsByTemplate.has(templateId)) {
+                    this.initialFormatsByTemplate.set(templateId, []);
+                }
+                this.initialFormatsByTemplate.get(templateId).push({ ...fmt, id, agent_url: agentUrl });
                 if (!this.selectedTemplates.has(templateId)) {
                     this.selectedTemplates.set(templateId, new Set());
                 }
@@ -247,6 +304,7 @@ class FormatTemplatePicker {
                     this.selectedTemplates.set('display', new Set());
                 }
                 this.selectedTemplates.get('display').add(sizeStr);
+                this._markTouched('display');
             }
         });
 
@@ -290,7 +348,17 @@ class FormatTemplatePicker {
     /**
      * Toggle a template selection.
      */
+    /**
+     * Record that the admin edited this template, so getSelectedFormats() regenerates
+     * it instead of re-emitting the formats the product was loaded with (#1796).
+     */
+    _markTouched(templateId) {
+        this.touchedTemplates.add(templateId);
+    }
+
     toggleTemplate(templateId) {
+        this._markTouched(templateId);
+
         if (this.selectedTemplates.has(templateId)) {
             this.selectedTemplates.delete(templateId);
         } else {
@@ -304,6 +372,8 @@ class FormatTemplatePicker {
      * Toggle a size for a template.
      */
     toggleSize(templateId, width, height) {
+        this._markTouched(templateId);
+
         const sizeKey = `${width}x${height}`;
 
         if (!this.selectedTemplates.has(templateId)) {
@@ -325,6 +395,8 @@ class FormatTemplatePicker {
      * Toggle a duration for a template.
      */
     toggleDuration(templateId, durationMs) {
+        this._markTouched(templateId);
+
         const durationKey = `d:${durationMs}`;
 
         if (!this.selectedTemplates.has(templateId)) {
@@ -351,6 +423,7 @@ class FormatTemplatePicker {
             return;
         }
 
+        this._markTouched(templateId);
         const sizeKey = `${width}x${height}`;
 
         if (!this.selectedTemplates.has(templateId)) {
@@ -406,8 +479,23 @@ class FormatTemplatePicker {
             const template = FORMAT_TEMPLATES[templateId];
             if (!template) continue;
 
-            // Get the actual format IDs to emit
-            // Templates with expandsTo emit multiple format IDs per size
+            // UNTOUCHED template: re-emit exactly what the product was loaded with (#1796).
+            // Regenerating cannot reproduce it -- `params` is a flat Set of "WxH"/"d:MS"
+            // strings, so which id carried which size is already lost, and expanding
+            // expandsTo x params fabricates entries the product never referenced (a
+            // product storing display_image@300x250 + display_html@728x90 comes back as
+            // six). Emitting the originals preserves the stored set by construction and
+            // keeps each entry's own agent_url instead of substituting the default.
+            if (!this.touchedTemplates.has(templateId) && this.initialFormatsByTemplate.has(templateId)) {
+                for (const original of this.initialFormatsByTemplate.get(templateId)) {
+                    formats.push({ ...original });
+                }
+                continue;
+            }
+
+            // TOUCHED template (or a fresh selection with no stored originals): generate
+            // from the template. Emitting every expandsTo id is correct here -- the admin
+            // picked the template itself, not a subset of its formats.
             const formatIds = template.expandsTo || [templateId];
 
             if (params.size === 0) {
