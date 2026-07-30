@@ -1837,18 +1837,39 @@ def then_webhook_marked_failed(ctx: dict) -> None:
 
 @then("the webhook delivery should be skipped without an HTTP POST")
 def then_webhook_skipped_no_post(ctx: dict) -> None:
-    """Assert the send-time refusal: delivery failed and nothing was POSTed.
+    """Assert the refusal happened BEFORE any connection, not after a failed one.
 
-    "No POST" is read off the real origin the env is running (``delivery_attempts``
-    counts the requests that actually arrived), not off a transport mock: the
-    refusal has to mean no packet left, and a mock's call count would only say
-    that a particular symbol went uncalled.
+    The two outcome assertions are kept, and neither of them discriminates on its
+    own — that is the point of the third one:
+
+    * ``delivery_attempts`` is the hit count of the REAL local origin this env
+      runs (``LocalOriginMixin``), and this scenario deliberately points the
+      config somewhere the origin is not (the cloud-metadata address). It
+      therefore reads 0 whether production refused the destination or dialled it,
+      so on its own it states only "the origin was not the destination".
+    * ``success is False`` is the same on both sides of the gate too:
+      ``OutboundRequestBlocked`` and a dead socket are both ``OutboundError`` and
+      take the identical ``record_failure(); return False`` branch in
+      ``WebhookDeliveryService._deliver_with_backoff``.
+
+    The discriminator is the retry SCHEDULE. ``outbound_http.send`` refuses inside
+    ``_prepare``, before the attempt loop exists, so no wait is ever taken; a
+    delivery that was actually attempted against an unreachable address burns its
+    three attempts and sleeps ``_wait_seconds`` between them. ``env.mock["sleep"]``
+    IS that seam's ``time.sleep`` (``CircuitBreakerEnv.EXTERNAL_PATCHES``), so a
+    zero call count is the observable difference between "skipped" and "tried and
+    failed" — and it is what goes red if the address gate is disarmed.
     """
     env = ctx["env"]
     success = _extract_webhook_success(ctx)
     assert success is False, f"Expected SSRF-skipped delivery to return False, got success={success!r}"
     assert env.delivery_attempts == 0, (
         f"Expected no HTTP POST after SSRF rejection, the origin received {env.delivery_attempts} request(s)"
+    )
+    backoff_waits = env.mock["sleep"].call_count
+    assert backoff_waits == 0, (
+        f"Expected the refusal to happen before any connection attempt, but the seam's retry "
+        f"schedule was entered {backoff_waits} time(s) — the destination was dialled, not refused"
     )
 
 
