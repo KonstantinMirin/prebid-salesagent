@@ -1233,10 +1233,16 @@ def then_no_accounts_in_response(ctx: dict) -> None:
         error_payload = error.model_dump()
     elif hasattr(error, "__dict__"):
         error_payload = vars(error)
-    if error_payload is not None:
-        assert "accounts" not in error_payload, (
-            f"Error payload should not contain 'accounts' key, but found: {error_payload.get('accounts')}"
-        )
+    # Unconditional (GH #1751): if the error cannot be introspected at all, the claim
+    # "the error variant excludes account data" is unprovable rather than satisfied, so
+    # that is a failure — not a reason to skip the only assertion in this step.
+    assert error_payload is not None, (
+        f"Could not introspect the error to prove it carries no accounts data: "
+        f"{type(error).__name__} exposes neither model_dump() nor __dict__"
+    )
+    assert "accounts" not in error_payload, (
+        f"Error payload should not contain 'accounts' key, but found: {error_payload.get('accounts')}"
+    )
 
 
 @then("the response does not contain a dry_run field")
@@ -2628,14 +2634,32 @@ def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
 
 @then(parsers.parse('none of the returned accounts have brand domain "{domain}"'))
 def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
-    """Assert no returned account has the specified brand domain."""
+    """Assert no returned account has the specified brand domain.
+
+    DORMANT: no feature file binds this step today (nor the
+    ``re-syncs with identical billing…`` When above it). It is corrected here so
+    that wiring it produces a real grader; until then it grades nothing. Tracked
+    with the other dormant-step findings in GH #1800.
+
+    The ``hasattr`` guards it used to carry were removed per GH #1751. Two
+    separate problems lived in them: ``Account`` and ``Brand`` are Pydantic models
+    that declare ``brand`` and ``domain``, so ``hasattr`` was always true and the
+    guard was noise; and an account whose brand is absent trivially satisfies
+    "does not have domain X", so a response in which NO account carried a brand
+    would pass this cross-agent-leak check while being incapable of exhibiting a
+    leak at all. The capability assertion below closes that.
+    """
     resp = _require_response(ctx)
-    for acct in resp.accounts:
-        if hasattr(acct, "brand") and acct.brand and hasattr(acct.brand, "domain"):
-            assert acct.brand.domain != domain, (
-                f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
-                f"but should not be visible to this agent"
-            )
+    domains = [acct.brand.domain if acct.brand else None for acct in resp.accounts]
+    assert any(d is not None for d in domains), (
+        f"No returned account carries a brand domain, so 'none have brand domain {domain}' "
+        f"cannot detect a leak — {len(resp.accounts)} account(s) returned, all without a brand"
+    )
+    for acct, acct_domain in zip(resp.accounts, domains, strict=True):
+        assert acct_domain != domain, (
+            f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
+            f"but should not be visible to this agent"
+        )
 
 
 # ── delete_missing semantics steps ──────────────────────────────────

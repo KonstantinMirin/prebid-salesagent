@@ -2453,10 +2453,17 @@ def then_pricing_defaults(ctx: dict) -> None:
             if isinstance(price_breakdown, dict)
             else getattr(price_breakdown, "list_price", None)
         )
-        if list_price is not None:
-            assert float(list_price) == float(rate), (
-                f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
-            )
+        # No `if list_price is not None` guard (GH #1751): we are inside the branch where
+        # production DID echo a price_breakdown, so a breakdown that omits list_price is
+        # itself the defect — the field is what carries the applied default. `list_price`
+        # is a real field on PriceBreakdown, so this cannot fail for a misspelt read.
+        assert list_price is not None, (
+            f"price_breakdown was echoed for pricing option '{po_id}' but carries no list_price "
+            f"({price_breakdown!r}), so the default rate ({rate}) is unverifiable"
+        )
+        assert float(list_price) == float(rate), (
+            f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
+        )
     else:
         pytest.xfail(
             f"price_breakdown not populated in create response — "

@@ -1015,8 +1015,15 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
     Asserts:
     1. No error was raised (the validation stage did not reject the request)
     2. A response is present and well-formed
-    3. For account-resolution scenarios: the resolved account_id matches the
-       account set up by the Given step (not just any non-empty string)
+    3. For account-resolution scenarios: the resolved account_id is graded against
+       the Given step's reference, per union shape. ``AccountReference`` is a
+       two-member union — by ``account_id``, or by natural key (``brand`` +
+       ``operator``). The by-id shape is compared exactly. The natural-key shape
+       resolves to an id the request never named, so there is nothing to compare
+       it to; it is graded as a non-empty id plus the presence of the brand and
+       operator the Given recorded. Stated explicitly because the previous
+       ``hasattr(root, "account_id")`` guard made the natural-key shape assert
+       nothing at all while this docstring claimed it was compared (GH #1751).
     4. For full create scenarios: the response has a media_buy_id (success)
     """
     domain = _extract_validation_domain(outcome)
@@ -1025,14 +1032,31 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
     assert resp is not None, f"Expected response for '{domain}' validation pass but ctx['response'] is None"
     if isinstance(resp, str):
         assert len(resp) > 0, f"Expected non-empty account_id for '{domain}' validation pass, got empty string"
-        # Verify the resolved account_id matches the Given step's account_ref
+        # Verify the resolved account_id against the Given step's account_ref.
+        # ctx["account_ref"] is deliberately None for the scenarios that send no
+        # account at all (there the resolved id is a seller-side default with
+        # nothing in the request to compare against).
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
             root = account_ref.root
-            if hasattr(root, "account_id"):
-                assert resp == root.account_id, (
+            requested_id = getattr(root, "account_id", None)
+            if requested_id is not None:
+                assert resp == requested_id, (
                     f"Resolved account_id '{resp}' does not match requested "
-                    f"account_id '{root.account_id}' for '{domain}' validation"
+                    f"account_id '{requested_id}' for '{domain}' validation"
+                )
+            else:
+                # Natural-key shape: assert the arm is the one we think it is, and that
+                # the Given recorded the key it resolved by. No silent skip.
+                brand = getattr(root, "brand", None)
+                operator = getattr(root, "operator", None)
+                assert brand is not None and operator is not None, (
+                    f"account_ref carries neither account_id nor a brand+operator natural key "
+                    f"({root!r}) — AccountReference should have exactly one of the two shapes"
+                )
+                assert ctx.get("request_brand") and ctx.get("request_operator"), (
+                    f"'{domain}' validation resolved account '{resp}' by natural key, but the Given "
+                    "recorded no request_brand/request_operator to grade the resolution against"
                 )
     else:
         from tests.bdd.steps._outcome_helpers import _get_response_field

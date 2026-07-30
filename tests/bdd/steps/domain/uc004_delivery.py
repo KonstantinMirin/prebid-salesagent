@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require, wire_dict
+from tests.bdd.steps._outcome_helpers import _require, _require_response, dispatched_field, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -575,7 +575,8 @@ def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _WEBHOOK_URL)
+    webhook_configs: dict[str, dict[str, Any]] = ctx.get("webhook_config", {})
+    webhook_url = next(iter(webhook_configs.values()), {}).get("url", _WEBHOOK_URL)
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     if endpoint_key not in service._circuit_breakers:
         service._circuit_breakers[endpoint_key] = CircuitBreaker()
@@ -694,18 +695,22 @@ def given_seller_supports_attribution(ctx: dict) -> None:
     reconciliation note on T-UC-004-attr-unsupported), this Given fails loudly instead of letting
     the scenarios above quietly stop testing what they claim.
     """
-    from types import SimpleNamespace
-
     from adcp.types import Duration
+    from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+        AttributionWindow as RequestAttributionWindow,  # TODO: no stable alias in adcp.types
+    )
 
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
     from src.core.tools.media_buy_delivery import _resolve_attribution_window
 
-    probe = SimpleNamespace(
-        attribution_window=SimpleNamespace(
+    # A real request model, not a SimpleNamespace stand-in: the resolver is typed for
+    # GetMediaBuyDeliveryRequest, and a duck-typed probe both hid a mypy arg-type error
+    # and would keep passing if the resolver started reading a field the stand-in lacks.
+    probe = GetMediaBuyDeliveryRequest(
+        media_buy_ids=["mb-capability-probe"],
+        attribution_window=RequestAttributionWindow(
             post_click=Duration(interval=5, unit="days"),
-            post_view=None,
-            model=None,
-        )
+        ),
     )
     resolved = _resolve_attribution_window(probe, None)
     assert resolved.post_click is not None and resolved.post_click.interval == 5, (
@@ -2160,13 +2165,20 @@ def then_error_no_reveal(ctx: dict) -> None:
     leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
-    # The media_buy_id should not be echoed back in a way that confirms existence
-    # FIXME(#1749): reads ctx 'media_buy_id' / 'target_media_buy_id', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
-    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
-    if mb_id:
-        assert msg.count(mb_id.lower()) <= 1, (
+    # The media_buy_id should not be echoed back in a way that confirms existence.
+    #
+    # Sourced from what the When step actually dispatched, not from ctx keys no step
+    # writes. The previous read (`ctx["target_media_buy_id"] or ctx["media_buy_id"]`)
+    # was always empty, so the `if mb_id:` guard was never true and this half of the
+    # step asserted nothing — GH #1749 (dead ctx read) meeting GH #1751 (guard on the
+    # artifact being graded).
+    requested_ids = dispatched_field(ctx, "media_buy_ids") or []
+    assert requested_ids, (
+        "the dispatched request named no media_buy_ids, so there is no identifier whose "
+        "echo could reveal existence — this step belongs only in scenarios that query one"
+    )
+    for mb_id in requested_ids:
+        assert msg.count(str(mb_id).lower()) <= 1, (
             f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
         )
 
@@ -2415,13 +2427,28 @@ def then_geo_system(ctx: dict, system: str) -> None:
             f"PRODUCTION GAP: by_geo breakdown not populated in response — "
             f"cannot verify classification system '{system}'"
         )
-    # If geo data is present, verify system field
+    # Geo data is present (the xfail above covers its absence), so every entry must
+    # declare the system it classified by. No `if geo_system is not None` guard: the
+    # scenario NAMES the system it expects, so an entry declaring none leaves that
+    # claim ungraded, which is the whole defect class of GH #1751.
+    #
+    # GeoBreakdown.system is `str | None` in the schema, but AdCP 3.1.1 requires it in
+    # the field description for the metro/postal_area levels this step runs for, and
+    # the step text asserts a specific system either way.
+    checked = 0
     for pkg in packages:
         by_geo = getattr(pkg, "by_geo", None) or []
         for entry in by_geo:
             geo_system = entry.get("system") if isinstance(entry, dict) else getattr(entry, "system", None)
-            if geo_system is not None:
-                assert geo_system == system, f"Geo breakdown system mismatch: expected '{system}', got '{geo_system}'"
+            assert geo_system == system, (
+                f"Geo breakdown system mismatch in package {getattr(pkg, 'package_id', '?')!r}: "
+                f"expected {system!r}, got {geo_system!r}"
+            )
+            checked += 1
+    assert checked >= 1, (
+        f"No by_geo entries were graded, so 'uses classification system {system}' asserted nothing "
+        f"— {len(packages)} package(s) reported a by_geo list, all empty"
+    )
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}" (fallback)'))
@@ -2476,6 +2503,10 @@ def _wire_attribution_window(ctx: dict, *, expectation: str) -> dict:
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     wire = wire_dict(ctx)
+    # A 200 can still carry advisory errors (media_buy_delivery.py:689 populates
+    # `errors` on partial success). Without this, such a response graded as a clean
+    # echo — the absence of ctx["error"] only rules out a raised exception.
+    assert not wire.get("errors"), f"Response carries advisory errors, so it is not a clean echo: {wire.get('errors')}"
     assert wire.get("media_buy_deliveries"), "Expected non-empty media_buy_deliveries"
     assert "attribution_window" in wire, f"Response omits attribution_window — {expectation}. Wire keys: {sorted(wire)}"
     aw = wire["attribution_window"]
@@ -2505,16 +2536,11 @@ def then_attribution_model(ctx: dict, model: str) -> None:
 def _dispatched_post_click(ctx: dict) -> dict:
     """Return the post_click window this scenario actually dispatched.
 
-    Derived from ``ctx["dispatched_kwargs"]`` (recorded by ``dispatch_request``),
-    never from a literal default: a ``.get(key, 7)`` style fallback silently turns
-    an echo assertion into a constant, which is what salesagent-1zy8 was.
+    Derived from the ``dispatched_kwargs`` channel, never from a literal default:
+    a ``.get(key, 7)`` style fallback silently turns an echo assertion into a
+    constant (GH #1749).
     """
-    dispatched = _require(
-        ctx,
-        "dispatched_kwargs",
-        hint="no request was dispatched — the When step must call dispatch_request()",
-    )
-    window = dispatched.get("attribution_window")
+    window = dispatched_field(ctx, "attribution_window")
     assert window is not None, (
         "the dispatched request carried no attribution_window, so there is nothing to echo — "
         "this step belongs only in scenarios whose When step requests one"
@@ -2657,19 +2683,23 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
 
 @then("no real billing records should have been created")
 def then_no_billing(ctx: dict) -> None:
-    """Assert sandbox mode — verify via response flag and absence of billing adapter calls."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    """Assert sandbox mode via the response's own sandbox flag."""
+    resp = _require_response(ctx)
     sandbox = getattr(resp, "sandbox", None)
     assert sandbox is True, (
         f"Expected sandbox=True in response indicating no real billing records were created, got sandbox={sandbox!r}"
     )
-    # Secondary: no adapter billing/charge methods should have been called
-    env = ctx["env"]
-    for mock_name in ("charge", "create_billing_record", "bill"):
-        mock = env.mock.get(mock_name)
-        if mock is not None:
-            assert not mock.called, f"Billing adapter method '{mock_name}' was called in sandbox mode"
+    # REMOVED (GH #1751): a "secondary" loop over env.mock.get(name) for
+    # ("charge", "create_billing_record", "bill"), each assertion nested under
+    # `if mock is not None`. No harness env has ever exposed a mock by any of those
+    # names — DeliveryPollEnv patches exactly one external, "adapter" — so all three
+    # lookups returned None and the loop body never executed. It read as a second
+    # line of defence while grading nothing.
+    #
+    # Not replaced with an "adapter was not called" assertion: sandbox delivery still
+    # calls the adapter to fetch metrics, so that would assert the opposite of the
+    # contract. The response flag above is the real grader; when a billing side effect
+    # becomes observable in the harness, assert on it here unconditionally.
 
 
 # ── Partition/boundary outcome assertions ─────────────────────────────
@@ -2736,12 +2766,7 @@ def _dispatched_attribution_window(ctx: dict) -> dict:
     record: ``dispatched_kwargs`` itself is required, so a scenario that never
     dispatched fails loudly rather than silently grading against a default.
     """
-    dispatched = _require(
-        ctx,
-        "dispatched_kwargs",
-        hint="no request was dispatched — the When step must call dispatch_request()",
-    )
-    return dispatched.get("attribution_window") or {}
+    return dispatched_field(ctx, "attribution_window") or {}
 
 
 def _expected_attribution_model(ctx: dict) -> str:
@@ -2857,13 +2882,8 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         # adcp.types.ByPackageItem (the field is `daily_breakdown`), so the guard was
         # unconditionally false and the assertion was dead by construction — no production change
         # of any kind could reach it. Proven by mutation: `assert False` inside that guard left
-        # all 18 daily-breakdown rows passing. See GH #1751 (twin of salesagent-ymvg).
-        dispatched = _require(
-            ctx,
-            "dispatched_kwargs",
-            hint="the include_package_daily_breakdown When step must dispatch before this assertion",
-        )
-        requested = dispatched.get("include_package_daily_breakdown")
+        # all 18 daily-breakdown rows passing. See GH #1751.
+        requested = dispatched_field(ctx, "include_package_daily_breakdown")
         for d in deliveries:
             for pkg in getattr(d, "by_package", None) or []:
                 pkg_id = getattr(pkg, "package_id", "?")

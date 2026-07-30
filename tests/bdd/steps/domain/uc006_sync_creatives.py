@@ -19,7 +19,7 @@ import pytest
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import is_e2e
+from tests.bdd.steps._outcome_helpers import _require, is_e2e
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.creative_asset import (
@@ -2363,7 +2363,13 @@ def given_assignments_to_nonexistent_package(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
     creative_id = ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: ["pkg-nonexistent-lzhr-404"]}
+    # Recorded so the Then steps can assert the error names THIS package (GH #1749).
+    # Its sibling Given ("two packages: one valid and one non-existent") already wrote
+    # this key; this one did not, so `then_assignment_processing_should_abort` skipped
+    # its package-reference check for every scenario routed through here.
+    bad_package_id = "pkg-nonexistent-lzhr-404"
+    ctx["nonexistent_package_id"] = bad_package_id
+    ctx["assignments"] = {creative_id: [bad_package_id]}
 
 
 @then(parsers.parse('the assignment result should be "{outcome}"'))
@@ -2432,15 +2438,20 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
         or "not_found" in getattr(error, "error_code", "").lower()
         or "not found" in str(error).lower()
     ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
-    # Verify the error references the bad package from the Given step
-    # FIXME(#1749): reads ctx 'bad_package_id', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
-    bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
-    if bad_package:
-        assert bad_package in str(error), (
-            f"Error should reference the missing package '{bad_package}', but message is: {error}"
-        )
+    # Verify the error references the bad package from the Given step.
+    #
+    # Unconditional (GH #1751). The dead `ctx["bad_package_id"]` read is gone and both
+    # Givens now record `nonexistent_package_id`, so there is no shape in which the
+    # identifier is unavailable — previously the `if bad_package:` guard silently
+    # skipped this for the one Given that never wrote the key.
+    bad_package = _require(
+        ctx,
+        "nonexistent_package_id",
+        hint="the Given that seeds a non-existent package assignment must record its id",
+    )
+    assert bad_package in str(error), (
+        f"Error should reference the missing package '{bad_package}', but message is: {error}"
+    )
 
 
 @then("the behavior should match strict mode")
@@ -4589,13 +4600,17 @@ def _assert_standard_processing(ctx: dict) -> None:
     assert any(a in ("created", "updated", "unchanged") for a in actions), (
         f"Expected created/updated/unchanged for static processing, got {actions}"
     )
-    # Verify generative build was NOT invoked
+    # Verify generative build was NOT invoked.
+    #
+    # No `if hasattr(registry.build_creative, "called")` guard (GH #1751). registry is a
+    # MagicMock, so that attribute always exists and the guard was unconditionally true —
+    # noise that read like a safety check. Were the object ever a real one lacking the
+    # attribute, the guard would have silently skipped the only assertion in this block.
     env = ctx["env"]
     registry = env.mock["registry"].return_value
-    if hasattr(registry.build_creative, "called"):
-        assert not registry.build_creative.called, (
-            "build_creative should NOT be called for static (non-generative) creatives"
-        )
+    assert not registry.build_creative.called, (
+        "build_creative should NOT be called for static (non-generative) creatives"
+    )
 
 
 def _assert_generative_build(ctx: dict, prompt_source: str) -> None:

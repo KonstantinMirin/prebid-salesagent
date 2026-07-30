@@ -27,16 +27,16 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
     Records what was dispatched in ``ctx["dispatched_kwargs"]`` so Then steps can
     derive their expected values from the request instead of hardcoding them. An
     oracle built on a literal default is indistinguishable from no assertion at
-    all — see #1462-adjacent salesagent-1zy8, where a step compared against the
-    constants 7/"days" that happened to match its only scenario.
+    all — see GH #1749, where a step compared against the constants 7/"days" that
+    happened to match its only scenario.
 
     This is a DISTINCT channel. Do not conflate it with:
 
     - ``ctx["request_params"]`` — an EXPECTATION channel. It deliberately holds
       values that were never dispatched (``["(field absent)"]``) and, in
       ``_dispatch_resolution``, deliberately fewer ids than were sent.
-    - ``ctx["request_kwargs"]`` — the request-builder channel, which several UCs
-      ``pop`` to reset between requests and assert on directly.
+    - ``ctx["request_kwargs"]`` — the request-builder channel, which UC-026
+      ``pop``s to reset between requests and asserts on directly.
 
     The recorded dict is HETEROGENEOUS — readers must not assume flat kwargs. It
     may hold plain kwargs, a whole Pydantic request object (``req=``), or be empty

@@ -64,19 +64,19 @@ _ALLOWED_DEFAULTED_ORPHANS: set[str] = set()
 # TIER 2 -- orphan key read with NO default. These yield None or raise rather than
 # silently constant-ing, so they are dead branches rather than vacuous oracles.
 # Shrink-only: never add. Tracked by GH #1749.
+# Retired: bad_package_id (both Givens now record nonexistent_package_id),
+# media_buy_id + target_media_buy_id (then_error_no_reveal now reads the dispatched
+# media_buy_ids instead of two keys no step ever wrote).
 _ALLOWED_ORPHANS: frozenset[str] = frozenset(
     {
-        "bad_package_id",
         "captured_logs",
         "dispatched_pipeline",
         "existing_product",
         "expected_existing_package_id",
         "explicit_buying_mode",
         "last_order_name",
-        "media_buy_id",
         "request_push_config",
         "seeded_task_count",
-        "target_media_buy_id",
     }
 )
 
