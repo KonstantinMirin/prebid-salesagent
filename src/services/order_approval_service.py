@@ -331,6 +331,31 @@ def _mark_approval_failed(
         logger.error(f"Failed to mark approval failed: {e}")
 
 
+def _build_approval_webhook_headers(tenant_id: str, principal_id: str, webhook_url: str) -> dict[str, str]:
+    """Build webhook headers, adding auth from the matching PushNotificationConfig."""
+    from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+
+    with get_db_session() as db:
+        configs = PushNotificationConfigRepository(db, tenant_id).list_active_by_principal(principal_id)
+    config = next((c for c in configs if c.url == webhook_url), None)
+
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)",
+    }
+
+    if config:
+        if config.authentication_type == "bearer" and config.authentication_token:
+            headers["Authorization"] = f"Bearer {config.authentication_token}"
+        elif config.authentication_type == "basic" and config.authentication_token:
+            headers["Authorization"] = f"Basic {config.authentication_token}"
+
+        if config.validation_token:
+            headers["X-Webhook-Token"] = config.validation_token
+
+    return headers
+
+
 def _send_approval_webhook(
     webhook_url: str,
     tenant_id: str,
@@ -371,29 +396,7 @@ def _send_approval_webhook(
         if attempts is not None:
             payload["attempts"] = attempts
 
-        # Get webhook authentication from push notification config
-        from src.core.database.models import PushNotificationConfig
-
-        with get_db_session() as db:
-            stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, url=webhook_url, is_active=True
-            )
-            config = db.scalars(stmt).first()
-
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)",
-        }
-
-        # Add authentication if configured
-        if config:
-            if config.authentication_type == "bearer" and config.authentication_token:
-                headers["Authorization"] = f"Bearer {config.authentication_token}"
-            elif config.authentication_type == "basic" and config.authentication_token:
-                headers["Authorization"] = f"Basic {config.authentication_token}"
-
-            if config.validation_token:
-                headers["X-Webhook-Token"] = config.validation_token
+        headers = _build_approval_webhook_headers(tenant_id, principal_id, webhook_url)
 
         # Send webhook with retries
         max_retries = 3

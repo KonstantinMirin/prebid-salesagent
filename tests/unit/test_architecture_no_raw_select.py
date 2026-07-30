@@ -338,7 +338,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
     ("src/services/order_approval_service.py", "_mark_approval_failed"),
     # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
-    ("src/services/order_approval_service.py", "_send_approval_webhook"),
+    # _send_approval_webhook removed — auth lookup moved to _build_approval_webhook_headers
+    # which routes through PushNotificationConfigRepository (C901 ratchet fix)
     ("src/services/order_approval_service.py", "_update_approval_progress"),
     ("src/services/order_approval_service.py", "get_approval_status"),
     ("src/services/order_approval_service.py", "start_order_approval_background"),

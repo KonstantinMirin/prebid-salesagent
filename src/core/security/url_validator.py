@@ -51,6 +51,21 @@ def is_reserved_tld_host(hostname: str) -> bool:
     return any(lowered == tld.lstrip(".") or lowered.endswith(tld) for tld in RESERVED_TLDS)
 
 
+def _ip_range_error(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, verb: str) -> str | None:
+    """Error message if *ip* falls in a blocked/private range, else None.
+
+    ``verb`` distinguishes the literal-host case ("targets") from the
+    resolved-host case ("resolves to") so both callers keep their exact
+    pre-extraction messages.
+    """
+    for network in BLOCKED_NETWORKS:
+        if ip in network:
+            return f"URL {verb} blocked IP range {network} (private/internal network)"
+    if ip.is_loopback or ip.is_link_local or ip.is_private:
+        return f"URL {verb} private/internal IP address: {ip}"
+    return None
+
+
 def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, str]:
     """Check a URL's SHAPE without resolving DNS.
 
@@ -100,11 +115,9 @@ def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, st
         except ValueError:
             return True, ""
 
-        for network in BLOCKED_NETWORKS:
-            if literal_ip in network:
-                return False, f"URL targets blocked IP range {network} (private/internal network)"
-        if literal_ip.is_loopback or literal_ip.is_link_local or literal_ip.is_private:
-            return False, f"URL targets private/internal IP address: {literal_ip}"
+        range_error = _ip_range_error(literal_ip, "targets")
+        if range_error:
+            return False, range_error
 
         return True, ""
 
@@ -149,12 +162,9 @@ def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]
         except ValueError as e:
             return False, f"Invalid IP address from hostname resolution: {e}"
 
-        for network in BLOCKED_NETWORKS:
-            if ip in network:
-                return False, f"URL resolves to blocked IP range {network} (private/internal network)"
-
-        if ip.is_loopback or ip.is_link_local or ip.is_private:
-            return False, f"URL resolves to private/internal IP address: {ip}"
+        range_error = _ip_range_error(ip, "resolves to")
+        if range_error:
+            return False, range_error
 
         return True, ""
 
