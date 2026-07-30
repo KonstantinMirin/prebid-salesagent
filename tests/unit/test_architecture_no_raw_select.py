@@ -160,16 +160,15 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     ("src/admin/blueprints/principals.py", "delete_principal"),
-    ("src/admin/blueprints/principals.py", "delete_webhook"),
+    # delete_webhook / register_webhook / toggle_webhook removed — rewired onto
+    # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg)
     ("src/admin/blueprints/principals.py", "edit_principal"),
     ("src/admin/blueprints/principals.py", "get_gam_advertisers"),
     ("src/admin/blueprints/principals.py", "get_principal"),
     ("src/admin/blueprints/principals.py", "get_principal_config"),
     ("src/admin/blueprints/principals.py", "list_principals"),
     ("src/admin/blueprints/principals.py", "manage_webhooks"),
-    ("src/admin/blueprints/principals.py", "register_webhook"),
     ("src/admin/blueprints/principals.py", "save_testing_config"),
-    ("src/admin/blueprints/principals.py", "toggle_webhook"),
     ("src/admin/blueprints/principals.py", "update_mappings"),
     ("src/admin/blueprints/products.py", "_render_add_product_form"),
     ("src/admin/blueprints/products.py", "add_product"),

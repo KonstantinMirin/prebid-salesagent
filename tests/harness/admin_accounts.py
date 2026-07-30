@@ -235,15 +235,9 @@ class AdminAccountEnv:
 
     def _auth_integration(self, tenant_id: str) -> None:
         """Session-based auth for Flask test_client."""
-        with self._flask_client.session_transaction() as sess:
-            sess["authenticated"] = True
-            sess["user"] = {"email": "test@example.com", "is_super_admin": True}
-            sess["email"] = "test@example.com"
-            sess["tenant_id"] = tenant_id
-            sess["test_user"] = "test@example.com"
-            sess["test_user_role"] = "super_admin"
-            sess["test_user_name"] = "Test User"
-            sess["test_tenant_id"] = tenant_id
+        from tests.helpers.admin_session import admin_auth_session
+
+        admin_auth_session(self._flask_client, tenant_id)
 
     def _auth_e2e(self, tenant_id: str) -> None:
         """Cookie-based auth via /test/auth endpoint on Docker stack."""

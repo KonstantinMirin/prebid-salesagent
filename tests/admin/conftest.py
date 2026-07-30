@@ -16,6 +16,27 @@ from tests.conftest_db import factory_session, integration_db  # noqa: F401
 
 
 @pytest.fixture
+def admin_client(monkeypatch):
+    """Flask test client against the REAL admin app (no DB mocking, CSRF off).
+
+    Canonical client for blueprint integration tests; enables the global test
+    auth mode so ``require_tenant_access`` accepts the ``admin_auth_session``
+    populated session (``tests.helpers.admin_auth_session``). Older blueprint
+    test modules still build their own module-level app + client copies
+    (pre-existing duplication debt); new modules must use this fixture.
+    """
+    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+    from src.admin.app import create_app
+
+    app = create_app()
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.config["SESSION_COOKIE_PATH"] = "/"
+    with app.test_client() as client:
+        yield client
+
+
+@pytest.fixture
 def ui_test_mode():
     """Enable UI test authentication mode."""
     os.environ["ADCP_AUTH_TEST_MODE"] = "true"

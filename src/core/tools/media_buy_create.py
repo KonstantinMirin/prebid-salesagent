@@ -117,7 +117,6 @@ from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
-from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -2132,8 +2131,8 @@ async def _create_media_buy_impl(
         # Register push notification config if provided (MCP/A2A protocol support)
         # Skip for dry_run mode (no database writes)
         if push_notification_config:
-            # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
-            from src.core.database.repositories import MediaBuyUoW
+            # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
+            from src.core.database.repositories import PushNotificationConfigUoW
 
             logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
 
@@ -2150,40 +2149,20 @@ async def _create_media_buy_impl(
                 # Generate config ID
                 config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
 
-                # Save to database
-                with MediaBuyUoW(tenant["tenant_id"]) as pnc_uow:
-                    # FIXME(salesagent-9f2): push notification config should use a repository
-                    assert pnc_uow.session is not None
-                    db = pnc_uow.session
-                    # Check if config already exists
-                    stmt = select(DBPushNotificationConfig).filter_by(
-                        id=config_id, tenant_id=tenant["tenant_id"], principal_id=principal_id
+                # Save to database. validation_token/session_id are omitted on
+                # purpose: upsert preserves them on an existing row (a token set
+                # via A2A set_push_notification_config must survive this path).
+                with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
+                    assert pnc_uow.push_notification_configs is not None
+                    _config, created = pnc_uow.push_notification_configs.upsert(
+                        config_id=config_id,
+                        principal_id=principal_id,
+                        url=url,
+                        authentication_type=auth_type,
+                        authentication_token=credentials,
                     )
-                    existing_config = db.scalars(stmt).first()
-
-                    if existing_config:
-                        # Update existing
-                        existing_config.url = url
-                        existing_config.authentication_type = auth_type
-                        existing_config.authentication_token = credentials
-                        # updated_at automatically updated via onupdate=func.now()
-                        existing_config.is_active = True
-                    else:
-                        # Create new
-                        new_config = DBPushNotificationConfig(
-                            id=config_id,
-                            tenant_id=tenant["tenant_id"],
-                            principal_id=principal_id,
-                            url=url,
-                            authentication_type=auth_type,
-                            authentication_token=credentials,
-                            is_active=True,
-                        )
-                        db.add(new_config)
-
-                    # UoW auto-commits on clean exit
                     logger.info(
-                        f"[MCP/A2A] Push notification config {'updated' if existing_config else 'created'}: {config_id}"
+                        f"[MCP/A2A] Push notification config {'created' if created else 'updated'}: {config_id}"
                     )
 
     try:
