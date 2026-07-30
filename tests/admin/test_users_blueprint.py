@@ -17,6 +17,7 @@ from sqlalchemy import select
 from src.admin.app import create_app
 from src.admin.blueprints import users as users_module
 from src.core.database.models import Tenant, TenantAuthConfig, User
+from src.core.database.repositories import uow as uow_module
 from tests.factories import TenantAuthConfigFactory, TenantFactory, UserFactory
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
 
@@ -189,6 +190,65 @@ class TestAuthorizedDomains:
         )
         assert response.status_code == 400
         assert "already exists" in response.get_json()["error"].lower()
+
+    def test_concurrent_adds_do_not_lose_a_domain(self, client, factory_session):
+        """A concurrent add landing inside the handler's window must not be
+        overwritten (salesagent-v8dt).
+
+        The old handler loaded the whole JSON list, appended in Python, and
+        wrote the whole list back — a rival add committing between its read
+        and its write was erased (reproduced red with the rival fired at the
+        ``commit`` instant). The fix collapses check and write into ONE
+        UPDATE, which takes the row lock at ``execute`` — so the rival now
+        fires at that instant (the write window moved; the assertion did not):
+        both domains must survive, whatever the interleaving.
+        """
+        tenant = TenantFactory(authorized_domains=["example.com"])
+        _auth_session(client, tenant.tenant_id)
+
+        def commit_rival_add():
+            rival_tenant = factory_session.get(Tenant, tenant.tenant_id)
+            rival_tenant.authorized_domains = [*rival_tenant.authorized_domains, "rival.example.com"]
+            factory_session.commit()
+
+        with concurrent_commit_in_write_window(uow_module, commit_rival_add, trigger="execute"):
+            response = client.post(
+                f"/tenant/{tenant.tenant_id}/users/domains",
+                json={"domain": "mine.example.com"},
+            )
+
+        assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert set(refreshed.authorized_domains) == {
+            "example.com",
+            "mine.example.com",
+            "rival.example.com",
+        }
+
+    def test_concurrent_remove_and_add_both_apply(self, client, factory_session):
+        """A rival add landing in the remove handler's write window survives
+        alongside the removal — neither whole-list write erases the other."""
+        tenant = TenantFactory(authorized_domains=["example.com", "old.example.com"])
+        _auth_session(client, tenant.tenant_id)
+
+        def commit_rival_add():
+            rival_tenant = factory_session.get(Tenant, tenant.tenant_id)
+            rival_tenant.authorized_domains = [*rival_tenant.authorized_domains, "rival.example.com"]
+            factory_session.commit()
+
+        with concurrent_commit_in_write_window(uow_module, commit_rival_add, trigger="execute"):
+            response = client.delete(
+                f"/tenant/{tenant.tenant_id}/users/domains",
+                json={"domain": "old.example.com"},
+            )
+
+        assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert set(refreshed.authorized_domains) == {"example.com", "rival.example.com"}
 
 
 class TestDisableSetupModeAuth:

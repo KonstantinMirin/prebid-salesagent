@@ -167,15 +167,19 @@ def create_tenant():
                 billing_contact=data.get("billing_contact"),
                 # Note: max_daily_budget moved to currency_limits table (per models.py line 55)
                 enable_axe_signals=data.get("enable_axe_signals", True),
-                authorized_emails=json.dumps(email_list),
-                authorized_domains=json.dumps(domain_list),
+                # JSONType/JSONB columns take lists/dicts directly. json.dumps
+                # here hands the type a STRING, which its bind coerces to {} —
+                # an object the tenants array CHECK constraints reject, so on a
+                # migrated schema these writes failed outright.
+                authorized_emails=email_list,
+                authorized_domains=domain_list,
                 slack_webhook_url=data.get("slack_webhook_url"),
                 slack_audit_webhook_url=data.get("slack_audit_webhook_url"),
                 hitl_webhook_url=data.get("hitl_webhook_url"),
                 admin_token=admin_token,
-                auto_approve_format_ids=json.dumps(data.get("auto_approve_format_ids", ["display_300x250"])),
+                auto_approve_format_ids=data.get("auto_approve_format_ids", ["display_300x250"]),
                 human_review_required=data.get("human_review_required", True),
-                policy_settings=json.dumps(data.get("policy_settings", {})),
+                policy_settings=data.get("policy_settings", {}),
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
                 # Set default measurement provider (Publisher Ad Server)
@@ -428,10 +432,13 @@ def update_tenant(tenant_id):
             # Note: max_daily_budget moved to currency_limits table (per models.py line 55)
             if "enable_axe_signals" in data:
                 tenant.enable_axe_signals = data["enable_axe_signals"]
+            # JSONType/JSONB columns take the list directly — json.dumps here
+            # stores a JSON-encoded STRING, which breaks the jsonb operators
+            # behind TenantConfigRepository's atomic list mutations.
             if "authorized_emails" in data:
-                tenant.authorized_emails = json.dumps(data["authorized_emails"])
+                tenant.authorized_emails = data["authorized_emails"]  # noqa: authorized-list-assign — whole-list REPLACE semantics of the management API
             if "authorized_domains" in data:
-                tenant.authorized_domains = json.dumps(data["authorized_domains"])
+                tenant.authorized_domains = data["authorized_domains"]  # noqa: authorized-list-assign — whole-list REPLACE semantics of the management API
             if "slack_webhook_url" in data:
                 tenant.slack_webhook_url = data["slack_webhook_url"]
             if "slack_audit_webhook_url" in data:
@@ -439,11 +446,11 @@ def update_tenant(tenant_id):
             if "hitl_webhook_url" in data:
                 tenant.hitl_webhook_url = data["hitl_webhook_url"]
             if "auto_approve_format_ids" in data:
-                tenant.auto_approve_format_ids = json.dumps(data["auto_approve_format_ids"])
+                tenant.auto_approve_format_ids = data["auto_approve_format_ids"]
             if "human_review_required" in data:
                 tenant.human_review_required = data["human_review_required"]
             if "policy_settings" in data:
-                tenant.policy_settings = json.dumps(data["policy_settings"])
+                tenant.policy_settings = data["policy_settings"]
 
             # Always update the updated_at timestamp
             tenant.updated_at = datetime.now(UTC)

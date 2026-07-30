@@ -1,6 +1,5 @@
 """User management blueprint for admin UI."""
 
-import json
 import logging
 from datetime import UTC, datetime
 
@@ -13,6 +12,7 @@ from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User
+from src.core.database.repositories.uow import TenantConfigUoW
 
 logger = logging.getLogger(__name__)
 
@@ -208,27 +208,18 @@ def add_domain(tenant_id):
         if "." not in domain or domain.startswith(".") or domain.endswith("."):
             return jsonify({"success": False, "error": "Invalid domain format"}), 400
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+        # Atomic append: the membership check rides in the UPDATE's WHERE
+        # clause, so a concurrent add can be neither lost nor duplicated.
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            outcome = uow.tenant_config.add_to_authorized_list("authorized_domains", domain)
 
-            # Get current domains
-            domains = tenant.authorized_domains or []
-            if isinstance(domains, str):
-                domains = json.loads(domains)
-            domains = list(domains)
+        if outcome == "missing_tenant":
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
+        if outcome == "duplicate":
+            return jsonify({"success": False, "error": "Domain already exists"}), 400
 
-            # Check if already exists
-            if domain in domains:
-                return jsonify({"success": False, "error": "Domain already exists"}), 400
-
-            # Add domain
-            domains.append(domain)
-            tenant.authorized_domains = domains
-            db_session.commit()
-
-            return jsonify({"success": True, "domain": domain})
+        return jsonify({"success": True, "domain": domain})
 
     except Exception as e:
         logger.error(f"Error adding domain: {e}", exc_info=True)
@@ -247,24 +238,15 @@ def remove_domain(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain is required"}), 400
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            outcome = uow.tenant_config.remove_from_authorized_list("authorized_domains", domain)
 
-            # Get current domains
-            domains = tenant.authorized_domains or []
-            if isinstance(domains, str):
-                domains = json.loads(domains)
-            domains = list(domains)
+        if outcome == "missing_tenant":
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            # Remove domain
-            if domain in domains:
-                domains.remove(domain)
-                tenant.authorized_domains = domains
-                db_session.commit()
-
-            return jsonify({"success": True})
+        # "removed" and "absent" both answer success — removal is idempotent.
+        return jsonify({"success": True})
 
     except Exception as e:
         logger.error(f"Error removing domain: {e}", exc_info=True)

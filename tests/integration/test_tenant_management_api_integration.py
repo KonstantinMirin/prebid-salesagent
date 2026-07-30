@@ -173,6 +173,53 @@ class TestTenantManagementAPIIntegration:
         assert data["name"] == "Test News Publisher"
         assert data["subdomain"] == "test-news"
 
+    def test_authorized_lists_persist_through_create_and_update(self, client, mock_api_key_auth):
+        """Authorized lists survive the round trip as real arrays.
+
+        Both writers used to pass ``json.dumps(list)`` into the JSONB columns;
+        JSONType's bind coerced that string to ``{}``, which the GET endpoint
+        masked back to ``[]`` — so the values silently vanished (and on a
+        migrated schema, the tenants array CHECK constraints made the write a
+        500 instead). The GET assertions below fail against either behavior.
+        """
+        create_response = client.post(
+            "/api/v1/tenant-management/tenants",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json={
+                "name": "Test AuthList Publisher",
+                "subdomain": "test-authlist",
+                "ad_server": "mock",
+                "authorized_emails": ["ops@authlist.com"],
+                "authorized_domains": ["authlist.com"],
+            },
+        )
+        assert create_response.status_code == 201
+        tenant_id = create_response.json["tenant_id"]
+
+        detail = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        ).json
+        assert detail["settings"]["authorized_emails"] == ["ops@authlist.com"]
+        assert detail["settings"]["authorized_domains"] == ["authlist.com"]
+
+        update_response = client.put(
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+            json={
+                "authorized_emails": ["ops@authlist.com", "eng@authlist.com"],
+                "authorized_domains": ["authlist.com", "eng.authlist.com"],
+            },
+        )
+        assert update_response.status_code == 200
+
+        detail = client.get(
+            f"/api/v1/tenant-management/tenants/{tenant_id}",
+            headers={"X-Tenant-Management-API-Key": mock_api_key_auth},
+        ).json
+        assert detail["settings"]["authorized_emails"] == ["ops@authlist.com", "eng@authlist.com"]
+        assert detail["settings"]["authorized_domains"] == ["authlist.com", "eng.authlist.com"]
+
     def test_duplicate_subdomain_returns_409(self, client, mock_api_key_auth):
         """A subdomain that is already taken answers 409, not 500.
 

@@ -1,6 +1,5 @@
 """Core application routes blueprint."""
 
-import json
 import logging
 import os
 import secrets
@@ -500,14 +499,16 @@ def create_tenant():
             if creator_email and creator_email not in email_list:
                 email_list.append(creator_email)
 
+            # JSONType/JSONB columns take the list directly — json.dumps here
+            # stores a JSON-encoded STRING, which breaks the jsonb operators
+            # behind TenantConfigRepository's atomic list mutations.
             if email_list:
-                new_tenant.authorized_emails = json.dumps(email_list)
+                new_tenant.authorized_emails = email_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
 
             authorized_domains = request.form.get("authorized_domains", "")
             if authorized_domains:
-                new_tenant.authorized_domains = json.dumps(
-                    [d.strip() for d in authorized_domains.split(",") if d.strip()]
-                )
+                domain_list = [d.strip() for d in authorized_domains.split(",") if d.strip()]
+                new_tenant.authorized_domains = domain_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
 
             conflict = resolve_or_write(
                 db_session,

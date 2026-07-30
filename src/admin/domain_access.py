@@ -12,6 +12,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User
+from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.domain_config import get_super_admin_domain
 
 logger = logging.getLogger(__name__)
@@ -257,6 +258,31 @@ def get_user_tenant_access(email: str) -> dict:
     return result
 
 
+def _mutate_authorized_list(op, column, tenant_id: str, value: str) -> bool:
+    """Shared atomic add/remove on a tenant authorized list.
+
+    Both mutations go through TenantConfigRepository's single-statement
+    UPDATE (membership test in the WHERE clause), so concurrent edits cannot
+    erase each other. These helpers keep their historical contract: idempotent
+    True on duplicate/absent, False only when the tenant is missing or the
+    write errors.
+    """
+    try:
+        outcome: str
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            if op == "add":
+                outcome = uow.tenant_config.add_to_authorized_list(column, value)
+            else:
+                outcome = uow.tenant_config.remove_from_authorized_list(column, value)
+        if outcome in ("added", "removed"):
+            logger.info(f"{op} {value} on {column} for tenant {tenant_id}")
+        return outcome != "missing_tenant"
+    except Exception as e:
+        logger.error(f"Error on {op} {value} ({column}) for tenant {tenant_id}: {e}")
+        return False
+
+
 def add_authorized_domain(tenant_id: str, domain: str) -> bool:
     """
     Add domain to tenant's authorized_domains list.
@@ -276,34 +302,7 @@ def add_authorized_domain(tenant_id: str, domain: str) -> bool:
         logger.error(f"Attempted to add super admin domain {domain} to tenant {tenant_id}")
         return False
 
-    with get_db_session() as session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = session.scalars(stmt).first()
-        if not tenant:
-            return False
-
-        try:
-            # Get current domains
-            if tenant.authorized_domains:
-                if isinstance(tenant.authorized_domains, str):
-                    domains = json.loads(tenant.authorized_domains)
-                else:
-                    domains = list(tenant.authorized_domains)
-            else:
-                domains = []
-
-            # Add new domain if not already present
-            if domain_lower not in domains:
-                domains.append(domain_lower)
-                tenant.authorized_domains = domains
-                session.commit()
-                logger.info(f"Added domain {domain} to tenant {tenant_id}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error adding domain {domain} to tenant {tenant_id}: {e}")
-            return False
+    return _mutate_authorized_list("add", "authorized_domains", tenant_id, domain_lower)
 
 
 def remove_authorized_domain(tenant_id: str, domain: str) -> bool:
@@ -317,36 +316,7 @@ def remove_authorized_domain(tenant_id: str, domain: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    domain_lower = domain.lower()
-
-    with get_db_session() as session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = session.scalars(stmt).first()
-        if not tenant:
-            return False
-
-        try:
-            # Get current domains
-            if tenant.authorized_domains:
-                if isinstance(tenant.authorized_domains, str):
-                    domains = json.loads(tenant.authorized_domains)
-                else:
-                    domains = list(tenant.authorized_domains)
-            else:
-                return True  # Nothing to remove
-
-            # Remove domain if present
-            if domain_lower in domains:
-                domains.remove(domain_lower)
-                tenant.authorized_domains = domains
-                session.commit()
-                logger.info(f"Removed domain {domain} from tenant {tenant_id}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error removing domain {domain} from tenant {tenant_id}: {e}")
-            return False
+    return _mutate_authorized_list("remove", "authorized_domains", tenant_id, domain.lower())
 
 
 def add_authorized_email(tenant_id: str, email: str) -> bool:
@@ -368,34 +338,7 @@ def add_authorized_email(tenant_id: str, email: str) -> bool:
         logger.error(f"Attempted to add super admin domain email {email} to tenant {tenant_id}")
         return False
 
-    with get_db_session() as session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = session.scalars(stmt).first()
-        if not tenant:
-            return False
-
-        try:
-            # Get current emails
-            if tenant.authorized_emails:
-                if isinstance(tenant.authorized_emails, str):
-                    emails = json.loads(tenant.authorized_emails)
-                else:
-                    emails = list(tenant.authorized_emails)
-            else:
-                emails = []
-
-            # Add new email if not already present
-            if email_lower not in [e.lower() for e in emails]:
-                emails.append(email_lower)
-                tenant.authorized_emails = emails
-                session.commit()
-                logger.info(f"Added email {email} to tenant {tenant_id}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error adding email {email} to tenant {tenant_id}: {e}")
-            return False
+    return _mutate_authorized_list("add", "authorized_emails", tenant_id, email_lower)
 
 
 def remove_authorized_email(tenant_id: str, email: str) -> bool:
@@ -409,32 +352,4 @@ def remove_authorized_email(tenant_id: str, email: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    email_lower = email.lower()
-
-    with get_db_session() as session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = session.scalars(stmt).first()
-        if not tenant:
-            return False
-
-        try:
-            # Get current emails
-            if tenant.authorized_emails:
-                if isinstance(tenant.authorized_emails, str):
-                    emails = json.loads(tenant.authorized_emails)
-                else:
-                    emails = list(tenant.authorized_emails)
-            else:
-                return True  # Nothing to remove
-
-            # Remove email if present (case-insensitive)
-            emails = [e for e in emails if e.lower() != email_lower]
-            tenant.authorized_emails = emails
-            session.commit()
-            logger.info(f"Removed email {email} from tenant {tenant_id}")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error removing email {email} from tenant {tenant_id}: {e}")
-            return False
+    return _mutate_authorized_list("remove", "authorized_emails", tenant_id, email.lower())

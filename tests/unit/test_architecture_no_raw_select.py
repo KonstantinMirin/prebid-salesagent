@@ -209,26 +209,23 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/tenants.py", "update_favicon_url"),
     ("src/admin/blueprints/tenants.py", "update_slack"),
     ("src/admin/blueprints/tenants.py", "upload_favicon"),
-    ("src/admin/blueprints/users.py", "add_domain"),
+    # add_domain/remove_domain removed — atomic authorized-list mutation via
+    # TenantConfigRepository/TenantConfigUoW (salesagent-v8dt); ditto the four
+    # domain_access add/remove_authorized_* helpers.
     ("src/admin/blueprints/users.py", "add_user"),
     ("src/admin/blueprints/users.py", "disable_setup_mode"),
     ("src/admin/blueprints/users.py", "enable_setup_mode"),
     ("src/admin/blueprints/users.py", "list_users"),
-    ("src/admin/blueprints/users.py", "remove_domain"),
     ("src/admin/blueprints/users.py", "toggle_user"),
     ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "approve_workflow_step"),  # select(CreativeAssignment) — no creative repo yet
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Admin services / utils ──
-    ("src/admin/domain_access.py", "add_authorized_domain"),
-    ("src/admin/domain_access.py", "add_authorized_email"),
     ("src/admin/domain_access.py", "ensure_user_in_tenant"),
     ("src/admin/domain_access.py", "find_tenant_by_authorized_domain"),
     ("src/admin/domain_access.py", "find_tenants_by_authorized_email"),
     ("src/admin/domain_access.py", "find_tenants_by_user_record"),
-    ("src/admin/domain_access.py", "remove_authorized_domain"),
-    ("src/admin/domain_access.py", "remove_authorized_email"),
     ("src/admin/services/business_activity_service.py", "get_business_activities"),
     ("src/admin/services/dashboard_service.py", "get_tenant"),
     ("src/admin/services/media_buy_readiness_service.py", "get_readiness_state"),

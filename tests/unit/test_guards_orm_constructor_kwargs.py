@@ -1,8 +1,8 @@
 """Guard: ORM constructions must only use kwargs the mapper actually has.
 
-Disease (salesagent-tayg / salesagent-3pj8): code constructs a models.py class
-with kwargs from an OLD schema (``PushNotificationConfig(config_id=...,
-auth_type=...)``, ``GAMLineItem(currency_code=...)``). SQLAlchemy's declarative
+Disease: code constructs a models.py class with kwargs from an OLD schema
+(``PushNotificationConfig(config_id=..., auth_type=...)``,
+``GAMLineItem(currency_code=...)``). SQLAlchemy's declarative
 constructor raises ``TypeError`` at runtime, a blanket ``except`` turns it into
 an error flash, and the route ships broken — the admin webhook family was dead
 in production this way with zero test coverage.
@@ -28,8 +28,9 @@ MODELS_MODULE = "src.core.database.models"
 
 # (file, class, kwarg) triples permitted to violate — shrink-only.
 ALLOWLIST: set[tuple[str, str]] = {
-    # Whole 'fetch from GAM' fallback constructs a display object against a
-    # drifted schema — tracked in salesagent-3pj8; remove when it lands.
+    # view_gam_line_item's 'fetch from GAM' fallback constructs a display
+    # object against a drifted schema (7 phantom kwargs; the branch TypeErrors
+    # today). Tracked as its own bug; remove this entry when that fix lands.
     ("src/admin/blueprints/gam.py", "GAMLineItem"),
 }
 
