@@ -66,6 +66,17 @@ services:
       # already sets the same value for the direct integration tests.
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
       CREATE_DEMO_TENANT: "true"
+      # The LIVE server needs the same signing KEK the dev stack has (#1291 D1).
+      # A scenario's Given mints a tenant signing key through production, which
+      # stores the private PEM encrypted under this KEK; the server then has to
+      # DECRYPT it to derive webhook_signing.supported. Without these two lines the
+      # server cannot open a key the runner just minted, derives supported=false,
+      # and the e2e_rest leg of every key-dependent capability row fails against a
+      # key that genuinely exists — a failure that no in-process run can reproduce,
+      # because only e2e_rest crosses into this container.
+      # Same worthless value as docker-compose.yml, and for the same reason.
+      ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
+      ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
