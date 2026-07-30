@@ -78,6 +78,23 @@ services:
       # grading stays in-process (integration + BDD), where set_flags() in
       # tests/integration/test_outbound_http.py monkeypatches both variables to
       # the literal "false" per case and is therefore immune to this ambient env.
+      #
+      # That constraint is a property of BOTH hatches being open, not of the
+      # in-network stack, and it is narrower than it looks. Two refusal classes
+      # are or could be gradeable here (verified by probe, not inferred):
+      #   * CLOUD METADATA is refused UNCONDITIONALLY — the SDK's metadata check
+      #     runs before the allow_private gate, so 169.254.169.254 is rejected
+      #     even with ADCP_OUTBOUND_ALLOW_PRIVATE=true. Gradeable in this stack
+      #     TODAY; we simply do not yet have a scenario that does it.
+      #   * SCHEME becomes gradeable the moment ALLOW_INSECURE can be closed,
+      #     which needs a real https origin on the compose network. PR #1757
+      #     adds exactly that (an ADDITIVE second nginx listener on :8443 at the
+      #     dotted name proxy.adcp.test, with a generated private CA). Once it
+      #     merges, this stack can drop ALLOW_INSECURE and grade http refusal
+      #     end to end through nginx.
+      # What can NEVER be graded in-network is the general private-range refusal:
+      # every origin on a compose network resolves to a bridge address, so
+      # ALLOW_PRIVATE has to stay open regardless.
       ADCP_OUTBOUND_ALLOW_PRIVATE: "true"
       ADCP_OUTBOUND_ALLOW_INSECURE: "true"
       # The SERVER must know about the pinned in-network creative agent: sync/
