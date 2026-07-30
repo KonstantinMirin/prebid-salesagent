@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 8 e2e_rest nodeids remaining, ALL of them production code gaps:
-#   5  uc004 invalid-input rows the live server still accepts
+# The 9 e2e_rest nodeids remaining, ALL of them production code gaps:
+#   6  uc004 invalid-input rows the live server still accepts
 #   1  push-notification ack (inline-xfail in the step body)
 #   2  daily-breakdown rows — GH #1776
 # None is a harness artifact and none masks a regression this suite introduced. Where an
@@ -65,6 +65,12 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
+        # Added 2026-07-30 (GH #1740 fallout) — the partition twin of the boundary metro row
+        # above, SAME pre-existing gap (metro/postal system requirement lives only in the
+        # field description; no validator anywhere — debt item C10). NOT newly broken:
+        # removing the vacuous _UC004_PARTITION_SELECTIVE strict=False blanket unmasked it
+        # on e2e_rest (in-process transports carry the precise strict=True row).
+        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-geo_metro_missing_system-{"geo": {"geo_level": "metro"}}-error "INVALID_REQUEST" with suggestion]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
         # RETIRED (GH #1726, 2026-07-28): T-UC-004-attr-unsupported was reconciled away.
         # AdCP 3.1.1 says sellers that do NOT support configurable attribution windows ignore the
