@@ -2558,6 +2558,24 @@ def _wire_attribution_model(ctx: dict, *, expectation: str) -> str:
     return model
 
 
+def _campaign_flight_days() -> int:
+    """The seeded flight length a campaign-unit window must resolve to, in days.
+
+    given_media_buy_with_status passes no dates, so MediaBuyFactory's defaults
+    (2025-01-01 → 2027-12-31) define the flight. Sourced from the FIXTURE, not
+    from the response's own dates — an oracle that mirrored production's
+    subtraction of response fields could not catch a wrong flight, a fallback,
+    or a clamp. (It still shares production's `.days` subtraction, the accepted
+    tradeoff over pinning a literal that breaks when the fixture moves.)
+    """
+    from tests.factories import MediaBuyFactory
+
+    return (MediaBuyFactory.end_date - MediaBuyFactory.start_date).days
+
+
+_CAMPAIGN_FLIGHT_DAYS = _campaign_flight_days()
+
+
 @then(parsers.parse('the response should include attribution_window with model "{model}"'))
 def then_attribution_model(ctx: dict, model: str) -> None:
     """Assert attribution window model matches the expected value.
@@ -2680,7 +2698,7 @@ def then_attribution_campaign_length(ctx: dict) -> None:
     When the buyer requests post_click with unit=campaign and interval=1,
     production resolves this to unit=days with interval=campaign_length_days.
     The response must carry an attribution_window with a post_click whose
-    unit is 'days' and interval >= 1.
+    unit is 'days' and interval equal to the seeded flight length.
     """
     aw = _wire_attribution_window(ctx, expectation="production should resolve the campaign-unit window and echo it")
     assert aw.get("model") is not None, "attribution_window.model is None — must carry the attribution model"
@@ -2693,8 +2711,10 @@ def then_attribution_campaign_length(ctx: dict) -> None:
     assert pc["unit"] == "days", (
         f"attribution_window.post_click.unit should be 'days' (resolved from 'campaign'), got '{pc['unit']}'"
     )
-    assert pc["interval"] >= 1, (
-        f"attribution_window.post_click.interval should be >= 1 (campaign length in days), got {pc['interval']}"
+    assert pc["interval"] == _CAMPAIGN_FLIGHT_DAYS, (
+        f"attribution_window.post_click.interval should be the seeded flight length "
+        f"({_CAMPAIGN_FLIGHT_DAYS} days), got {pc['interval']} — a campaign-unit window "
+        f"must span the full flight, not a collapsed or clamped lookback"
     )
 
 
@@ -2873,8 +2893,10 @@ def _assert_attribution_echoed_on_wire(ctx: dict, field: str) -> None:
             assert echoed["unit"] == "days", (
                 f"Valid {field}: a campaign-unit {window_name} must be echoed resolved to days, got {echoed['unit']!r}"
             )
-            assert echoed["interval"] >= 1, (
-                f"Valid {field}: resolved campaign {window_name} must span >= 1 day, got {echoed['interval']}"
+            assert echoed["interval"] == _CAMPAIGN_FLIGHT_DAYS, (
+                f"Valid {field}: resolved campaign {window_name} must span the seeded flight "
+                f"({_CAMPAIGN_FLIGHT_DAYS} days), got {echoed['interval']} — a collapsed or "
+                f"clamped lookback silently shortens the buyer's attribution"
             )
         else:
             assert echoed == req_window, (
