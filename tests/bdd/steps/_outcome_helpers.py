@@ -10,8 +10,9 @@ the repository owns the query, the helper owns the assertion.
 Accessor helpers here return ``Any``, not ``object``. They read out of the untyped
 heterogeneous ``ctx`` dict or off ORM/Pydantic instances, and every caller
 immediately indexes or attribute-accesses the result — ``object`` turned each of
-those into a mypy ``attr-defined`` error while adding no real type safety. See
-GH #1800 on bringing ``tests/`` under mypy at all.
+those into a mypy ``attr-defined`` error while adding no real type safety. Note
+that nothing type-checks ``tests/`` today: the Makefile runs ``mypy src/``, the
+untyped-defs ratchet hard-codes ``SRC_DIR``, and pre-commit excludes ``tests/``.
 """
 
 from __future__ import annotations

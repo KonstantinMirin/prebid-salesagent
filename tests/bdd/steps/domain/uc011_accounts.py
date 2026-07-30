@@ -2638,8 +2638,8 @@ def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
 
     DORMANT: no feature file binds this step today (nor the
     ``re-syncs with identical billing…`` When above it). It is corrected here so
-    that wiring it produces a real grader; until then it grades nothing. Tracked
-    with the other dormant-step findings in GH #1800.
+    that wiring it produces a real grader; until then it grades nothing — wire it
+    to the cross-agent isolation scenario that needs it, or delete it.
 
     The ``hasattr`` guards it used to carry were removed per GH #1751. Two
     separate problems lived in them: ``Account`` and ``Brand`` are Pydantic models
