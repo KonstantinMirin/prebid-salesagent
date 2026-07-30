@@ -509,17 +509,24 @@ class TestForbiddenRefSchemeRefusesBeforeAnyKeyMaterialExists:
 
 
 class TestKeylessWire:
-    """Acceptance 3 -- EXPECTED TO PASS TODAY. A pin, not a red test.
+    """Acceptance 3 -- a pin on what a KEYLESS tenant's capabilities wire says.
 
-    Production already emits ``{supported: false}`` on both capabilities paths.
-    The v3.1.1 schema also permits omitting the blocks entirely, which is why this
-    is pinned: D1 (``salesagent-z6nr.20``) makes the family declarable, and the
-    one change it must not make silently is swapping an explicit false for
-    silence. Silence is the dishonest declaration the epic's STRICT policy exists
-    to prevent.
+    The v3.1.1 schema permits omitting the signing blocks entirely, so what this pins is
+    that neither is ever omitted: an explicit ``false`` may become a different VALUE, but
+    it may never become SILENCE. A receiver cannot tell "this seller does not sign" from
+    "this seller did not say", which is the dishonest declaration the epic's STRICT policy
+    exists to prevent.
+
+    #1291 D1 changed one of the three values, deliberately and in the direction the pin
+    allows: ``request_signing.supported`` follows ``SigningConfig.verifier_enabled``
+    because the pin defines the field as whether this agent VERIFIES signatures on
+    INCOMING requests -- using the COUNTERPARTY's keys, so it was never key-backed. The
+    other two stand: no key means we do not SIGN, and nothing obliges a trust root.
     """
 
-    def test_keyless_tenant_declares_unsupported_and_omits_identity(self, signing_tenant):
+    def test_keyless_tenant_verifies_but_neither_signs_nor_publishes(self, signing_tenant):
+        from src.core.config import get_config
+
         env, tenant, client = signing_tenant
         assert _rows(env, tenant.tenant_id) == [], "this tenant must have no signing key"
 
@@ -536,16 +543,21 @@ class TestKeylessWire:
             "this must be the TENANT-RESOLVED response, not the no-tenant minimal one"
         )
 
-        assert data["request_signing"]["supported"] is False, (
-            "a keyless tenant declares request_signing.supported false explicitly, never silence; "
-            f"got {data.get('request_signing')!r}"
+        verifier_enabled = get_config().signing.verifier_enabled
+        assert data["request_signing"]["supported"] is verifier_enabled, (
+            "request_signing is NOT key-backed -- it declares that this agent verifies signatures "
+            f"on incoming requests with the counterparty's keys -- so a keyless tenant still "
+            f"declares SigningConfig.verifier_enabled ({verifier_enabled}), explicitly and never as "
+            f"silence; got {data.get('request_signing')!r}"
         )
         assert data["webhook_signing"]["supported"] is False, (
-            "...and webhook_signing.supported false explicitly; got {}".format(data.get("webhook_signing"))
+            "...and webhook_signing.supported false explicitly, because it IS key-backed and this "
+            "tenant holds no key; got {}".format(data.get("webhook_signing"))
         )
         assert data.get("identity") is None, (
             "no identity block for a tenant with no keys: identity.key_origins has nothing to "
-            f"anchor the verifier's consistency check against; got {data.get('identity')!r}"
+            f"anchor the verifier's consistency check against, and with every request_signing "
+            f"bucket empty no required_when trigger fires; got {data.get('identity')!r}"
         )
 
 

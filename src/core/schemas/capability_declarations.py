@@ -20,10 +20,14 @@ model whose ``validate_backing()`` raises ``AdCPConfigurationError`` rather than
 silently clamping or emitting a non-conformant response.
 """
 
-from typing import Any
+from typing import Any, NamedTuple
 
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import ExperimentalFeature, SupportedProtocol
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    ExperimentalFeature,
+    ReportingDeliveryMethod,
+    SupportedProtocol,
+)
 
 # `Measurement` is aliased `LibraryMeasurementDeclaration`, NOT the conventional
 # `LibraryMeasurement`: the SDK has TWO distinct `Measurement` types, and
@@ -40,34 +44,61 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-# Blocks the AdCP schema defines but this deployment does NOT back, mapped to the
-# GitHub issue that will implement them. Declaring one is rejected by name so the
-# operator gets an actionable error instead of pydantic's generic "extra fields
-# not permitted". Every entry here is a promise we would otherwise make to buyers
-# and could not keep.
+from src.core.signing.posture import (
+    IdentityDeclaration,
+    RequestSigningPosture,
+    bucket_names,
+    request_signing_buckets_declared,
+    requires_trust_root,
+)
+
+# Two refusal tables, for two genuinely different reasons. Both make
+# ``is_block_declarable`` False, and both name the block explicitly so the operator
+# gets an actionable error instead of pydantic's generic "extra fields not permitted".
 #
-# RFC 9421 message signing (#1291) gates the signing family: request_signing and
-# webhook_signing directly, identity because its brand_json_url/key_origins
-# subfields exist only to anchor signing keys, and
-# content_standards.supports_webhook_delivery because the schema's must_equal_when
-# rule forces webhook_signing.supported=true the moment it is declared. That rule's
-# any_of lists exactly three triggers -- reporting_delivery_methods contains
-# "webhook", content_standards.supports_webhook_delivery, wholesale_feed_webhooks
-# -- so offline delivery is NOT signing-gated and is tracked separately (#1729).
+# _UNBACKED_BLOCKS -- the AdCP schema defines it, this deployment does not IMPLEMENT
+# it, and the entry names the GitHub issue that will. Every entry is a promise we
+# would otherwise make to buyers and could not keep.
 #
-# reporting_delivery_methods carries one member per gate: [webhook] fires
-# must_equal_when (#1291), [offline] promises bucket delivery we do not implement
-# (#1729). It stays unbacked until BOTH land.
+# _DERIVED_BLOCKS -- we DO implement it, but its value is platform state rather than
+# operator configuration, so there is nothing for a tenant to declare. Same
+# philosophy the ``_DERIVATION_ONLY_BUILDERS`` guard encodes for ``account.*`` and
+# ``adcp.*``; a different message because the fix for the operator is different.
+#
+# The signing family (#1291 D1) is now backed: request_signing and identity are
+# declarable fields below, reporting_delivery_methods is member-gated in
+# ``validate_backing``, and webhook_signing is derived. What stays refused here is
+# refused for reasons that OUTLIVE #1291 -- content_standards and
+# wholesale_feed_webhooks have no implementation of ANY kind, so signing landing does
+# not make either declarable and an entry citing #1291 would point at a closed issue
+# the moment it merges. Re-homing them is the same fix commit 3b92577b0 applied to
+# offline_delivery_protocols; each reason therefore names the MISSING SURFACE rather
+# than a ticket, and a tracking issue is filed alongside this change.
+#
+# wholesale_feed_webhooks has no field on the model either -- it is listed here so the
+# operator learns why rather than reading pydantic's generic extra-field error, and
+# because it is the third ``must_equal_when`` trigger.
 _UNBACKED_BLOCKS: dict[str, str] = {
-    "request_signing": "#1291 (RFC 9421 request signing is not implemented)",
-    "webhook_signing": "#1291 (RFC 9421 webhook signing is not implemented)",
-    "identity": "#1291 (identity.brand_json_url/key_origins anchor signing keys we do not publish)",
-    "content_standards": "#1291 (supports_webhook_delivery forces webhook_signing.supported=true)",
-    "reporting_delivery_methods": (
-        "#1291 for [webhook] (forces webhook_signing.supported=true) and #1729 for [offline] "
-        "(no bucket report delivery is implemented)"
+    "content_standards": (
+        "no content-standards surface exists in this deployment: nothing implements local "
+        "evaluation, artifacts, verdicts or artifact_webhook delivery"
+    ),
+    "wholesale_feed_webhooks": (
+        "no wholesale feed surface exists in this deployment, so no feed webhooks are ever emitted"
     ),
     "offline_delivery_protocols": "#1729 (no offline report delivery is implemented; see reporting_bucket)",
+}
+
+# Blocks whose value this deployment DERIVES and therefore refuses to take from
+# configuration. ``webhook_signing`` comes from key material plus trust-root
+# publishability (``webhook_signing_posture``), and C1's outbound sender reads that
+# same object -- so a declared value could only ever contradict what we actually do.
+_DERIVED_BLOCKS: dict[str, str] = {
+    "webhook_signing": (
+        "it is DERIVED from this tenant's signing keys and the origin its trust root is served "
+        "from, and the outbound webhook sender reads the same value, so a declaration could only "
+        "contradict what this agent actually signs (#1291)"
+    ),
 }
 
 
@@ -135,16 +166,20 @@ _EXPERIMENTAL_FEATURE_BY_BLOCK: dict[str, str] = {
 
 
 def is_block_declarable(block: str) -> bool:
-    """Whether a tenant may declare *block* — i.e. whether this deployment backs it.
+    """Whether a tenant may declare *block* — i.e. whether a stored value can exist.
 
     Public read of the STRICT policy above, for consumers that must know whether a
     stored declaration can exist at all. The inbound signature verifier (#1291 B1) uses
-    it to skip resolving a tenant whose posture cannot yet differ from the default: an
-    unbacked block means no tenant can have declared one, so the read could not change
-    any decision. Removing an entry from ``_UNBACKED_BLOCKS`` therefore switches those
+    it to skip resolving a tenant whose posture cannot differ from the default: an
+    undeclarable block means no tenant can have declared one, so the read could not
+    change any decision. Removing an entry from either table therefore switches those
     consumers on by itself, with no second flag to remember.
+
+    BOTH tables answer False. The reason differs (unimplemented vs derived) and the
+    operator-facing message differs with it, but the consumers only ever ask "can a
+    stored value exist", so they keep reading ONE predicate.
     """
-    return block not in _UNBACKED_BLOCKS
+    return block not in _UNBACKED_BLOCKS and block not in _DERIVED_BLOCKS
 
 
 class MeasurementDeclaration(LibraryMeasurementDeclaration):
@@ -175,6 +210,21 @@ class TrustedMatchDeclaration(LibraryTrustedMatch):
     """
 
 
+class SigningPlatformBacking(NamedTuple):
+    """The platform facts the signing relation rules are checked AGAINST.
+
+    Resolved by the caller that owns a session (``src/core/tools/capabilities.py``,
+    inside its unit of work) and passed in, so this module keeps its zero DB access and
+    the ASGI verifier middleware -- which parses the same store on every request -- pays
+    for no key or tenant read it does not need.
+    """
+
+    #: ``webhook_signing.supported`` as DERIVED from key material plus publishability.
+    webhook_signing_supported: bool
+    #: ``identity.brand_json_url`` as DERIVED from ``src/core/agent_identity.py``.
+    brand_json_url: str
+
+
 class CapabilityDeclarations(BaseModel):
     """Implementation-backed capability blocks for one tenant.
 
@@ -193,12 +243,32 @@ class CapabilityDeclarations(BaseModel):
     supported_protocols: list[SupportedProtocol] | None = None
     specialisms: list[AdcpSpecialism] | None = None
 
+    # The signing family (#1291 D1). ``request_signing`` is typed as the EXISTING
+    # posture class rather than a parallel declaration model, which is what makes the
+    # advertised block and the ``VerifierCapability`` the middleware enforces one
+    # object -- and gets the namespace split, the protocol-method pattern and the
+    # covers_content_digest enum from the SDK for free.
+    #
+    # There is deliberately NO ``webhook_signing`` field: it is derived platform state
+    # (see ``_DERIVED_BLOCKS``). ``reporting_delivery_methods`` is MEMBER-gated in
+    # ``validate_backing`` rather than block-gated, because ``[webhook]`` has real
+    # backing while ``[offline]`` does not.
+    request_signing: RequestSigningPosture | None = None
+    identity: IdentityDeclaration | None = None
+    reporting_delivery_methods: list[ReportingDeliveryMethod] | None = None
+
     @classmethod
     def from_tenant(cls, declared: Any) -> "CapabilityDeclarations | None":
         """Parse a tenant's stored declarations, or ``None`` when nothing is declared.
 
         ``None``/empty reproduces the pre-#1592 wire exactly, which is what every
         tenant that never declared anything must keep seeing.
+
+        Runs the SPEC-coherence and no-DB backing rules only. The two rules that need
+        platform state -- ``webhook_signing``'s ``must_equal_when`` and the
+        declared-vs-derived ``brand_json_url`` cross-check -- are
+        :meth:`validate_signing_platform_backing`, called by the one caller that owns a
+        session.
         """
         from src.core.exceptions import AdCPConfigurationError
 
@@ -210,16 +280,24 @@ class CapabilityDeclarations(BaseModel):
                 details={"capability_declarations": repr(declared)},
             )
 
-        # Name unbacked blocks explicitly, before pydantic's generic extra-field
-        # error, so the operator learns WHICH promise they cannot keep and where
-        # the work is tracked.
+        # Name undeclarable blocks explicitly, before pydantic's generic extra-field
+        # error, so the operator learns WHICH block they cannot declare and why.
+        # Unbacked first: "we do not implement this" is the more fundamental answer
+        # than "this one is ours to derive".
         for block in sorted(_UNBACKED_BLOCKS):
             if block in declared:
                 raise AdCPConfigurationError(
                     f"capability_declarations.{block} cannot be declared: this deployment does not "
                     f"implement it, and advertising it would promise buyers behavior that does not "
-                    f"exist. Tracked by {_UNBACKED_BLOCKS[block]}.",
+                    f"exist. Reason: {_UNBACKED_BLOCKS[block]}.",
                     details={"block": block, "tracked_by": _UNBACKED_BLOCKS[block]},
+                )
+        for block in sorted(_DERIVED_BLOCKS):
+            if block in declared:
+                raise AdCPConfigurationError(
+                    f"capability_declarations.{block} cannot be declared: {_DERIVED_BLOCKS[block]}. "
+                    f"Remove the block — this agent emits the derived value.",
+                    details={"block": block, "derived_because": _DERIVED_BLOCKS[block]},
                 )
 
         # ValidationError only -- never a broad `except Exception`, which would
@@ -241,16 +319,24 @@ class CapabilityDeclarations(BaseModel):
         """Cross-field and platform-backing rules the JSON Schema cannot express.
 
         Rule ORDER is load-bearing: spec cross-field coherence runs BEFORE platform
-        backing, so when the signing family lands under #1291 an identity rejection
-        still names ``brand_json_url`` rather than being pre-empted by a backing
-        error. No rule lands here without a scenario that executes it.
+        backing, so an identity rejection still names ``brand_json_url`` rather than
+        being pre-empted by a backing error. No rule lands here without a scenario that
+        executes it.
         """
+        self._validate_signing_relations()
+
+        # Platform backing: ``[webhook]`` report delivery is real -- the delivery
+        # webhook scheduler sends daily reports through ``protocol_webhook_service``,
+        # which #1291 C1 routes and signs. ``[offline]`` is bucket delivery nothing
+        # implements. MEMBER-level rather than block-level, because a block-level
+        # refusal cannot express "half of this is backed" -- and the member split is
+        # what lets the webhook-only row be graded on its own terms.
+        self._validate_reporting_delivery_methods()
+
         from src.core.exceptions import AdCPConfigurationError
 
-        # Platform backing: a tenant may only claim protocols this deployment
-        # actually serves. Advertising an unserved protocol is the exact
-        # over-promise STRICT exists to prevent -- the buyer would route traffic
-        # for a domain we cannot answer.
+        # Advertising an unserved protocol is the exact over-promise STRICT exists to
+        # prevent -- the buyer would route traffic for a domain we cannot answer.
         unbacked = sorted({p.value for p in (self.supported_protocols or []) if p not in _BACKED_PROTOCOLS})
         if unbacked:
             backed = sorted(p.value for p in _BACKED_PROTOCOLS)
@@ -299,6 +385,251 @@ class CapabilityDeclarations(BaseModel):
                     "orphaned_specialisms": orphaned,
                     "emitted_protocols": sorted(p.value for p in emitted_protocols),
                 },
+            )
+
+    # -- the signing family's relation rules (#1291 D1) ------------------------
+    #
+    # Ordered as the pin orders them, because the order decides WHICH field a
+    # rejection names and the graded rows depend on the name:
+    #   (a) namespace split          -- on RequestSigningPosture itself (inherited)
+    #   (b) required_for  subset of supported_for  (both namespaces)
+    #   (c) warn_for      subset of supported_for, disjoint from required_for
+    #   (d) must_equal_when          -- needs platform state, see
+    #                                   validate_signing_platform_backing
+    #   (e) required_when            -- identity.brand_json_url obliged
+    #   (f) brand_json_url ^https:// (pattern here, equality in the platform pass)
+    #   (g) key_origins purpose_anchoring
+    # (e) MUST pre-empt (g), or a declaration missing brand_json_url is rejected
+    # naming key_origins instead of the field the operator has to add.
+
+    def _reject(self, field: str, message: str, **details: Any) -> None:
+        """Raise the one error shape every rule above uses, naming *field*."""
+        from src.core.exceptions import AdCPConfigurationError
+
+        raise AdCPConfigurationError(
+            f"capability_declarations.{field} {message}",
+            details={"field": f"capability_declarations.{field}", **details},
+        )
+
+    def _validate_signing_relations(self) -> None:
+        """Rules (b), (c), (e), (f-pattern) and (g) — everything with no DB read."""
+        posture = self.request_signing
+        if posture is not None:
+            self._validate_bucket_monotonicity(posture)
+        self._validate_identity_relations(posture)
+
+    def _validate_bucket_monotonicity(self, posture: RequestSigningPosture) -> None:
+        """``required_for``/``warn_for`` may only name what a DECLARED ``supported_for`` does.
+
+        ``x-adcp-validation.subset_of`` on both namespaces: "an operation can't be
+        required without being supported". The rule bites only where the operator actually
+        WROTE the narrowing bucket, which is why the loop keys on ``model_fields_set``
+        rather than on the value:
+
+        * an ABSENT ``supported_for`` means "wherever a signature appears" — the same
+          reading ``_bucket_for`` gives a null ``supported_for``, and the reading the pin's
+          own graded corpus requires: ``negative/028-unsigned-protocol-method-required``
+          declares ``protocol_methods_required_for: ["tasks/cancel"]`` and NO
+          ``protocol_methods_supported_for``, and is graded as a LEGAL declaration whose
+          unsigned request must be rejected. Keying on the value would have refused that
+          declaration, because the SDK defaults that bucket to ``[]`` (not ``None``) and an
+          empty list read as a narrowing forbids every required method.
+        * an EXPLICIT ``supported_for: []`` alongside a non-empty ``required_for`` IS the
+          contradiction the rule exists for, and is rejected.
+
+        ``warn_for`` disjoint from ``required_for``: an operation cannot be both graded
+        in shadow mode and rejected outright, and silently letting one win would enforce
+        a rule the buyer was never told.
+        """
+        for subset_field, superset_field in (
+            ("required_for", "supported_for"),
+            ("protocol_methods_required_for", "protocol_methods_supported_for"),
+            ("warn_for", "supported_for"),
+        ):
+            narrowed = getattr(posture, superset_field)
+            if superset_field not in posture.model_fields_set or narrowed is None:
+                continue
+            extra = sorted(bucket_names(getattr(posture, subset_field)) - bucket_names(narrowed))
+            if extra:
+                self._reject(
+                    f"request_signing.{subset_field}",
+                    f"names {', '.join(extra)}, which request_signing.{superset_field} does not: an "
+                    f"operation cannot be required or warned on without being supported "
+                    f"(get-adcp-capabilities-response.json x-adcp-validation.subset_of).",
+                    unsupported_operations=extra,
+                    superset_field=f"capability_declarations.request_signing.{superset_field}",
+                )
+
+        both = sorted(bucket_names(posture.warn_for) & bucket_names(posture.required_for))
+        both += sorted(
+            bucket_names(posture.protocol_methods_warn_for) & bucket_names(posture.protocol_methods_required_for)
+        )
+        if both:
+            self._reject(
+                "request_signing.warn_for",
+                f"and request_signing.required_for both name {', '.join(both)}: an operation is "
+                f"graded in shadow mode or rejected outright, never both.",
+                overlapping_operations=both,
+            )
+
+    def _validate_identity_relations(self, posture: RequestSigningPosture | None) -> None:
+        """Rules (e), (f-pattern) and (g) — the trust-root pointer's obligations.
+
+        ``webhook_signing.supported`` is one of the six ``required_when`` triggers but is
+        DERIVED, so it cannot be evaluated here; the declaration-time half covers the
+        four ``request_signing`` bucket triggers, and the derived trigger is checked in
+        :meth:`validate_signing_platform_backing`. That split is why a keyed tenant that
+        declares nothing at all is still obliged to emit ``brand_json_url`` -- the
+        obligation is on the EMITTED document, and emission derives it.
+        """
+        declared_url = str(self.identity.brand_json_url) if self.identity and self.identity.brand_json_url else None
+
+        # (e) required_when. ``identity: {}`` alongside a posture is rejected as missing
+        # brand_json_url, not accepted as "an identity block was supplied" -- that is
+        # prose in the identity object's own description rather than a schema keyword,
+        # so it is ours to implement.
+        if posture is not None and requires_trust_root(posture, webhook_signing_supported=False) and not declared_url:
+            self._reject(
+                "identity.brand_json_url",
+                "is required when request_signing names any operation or protocol method: a "
+                "counterparty resolves this agent's signing keys through the brand.json served "
+                "there, so a posture with no trust-root pointer cannot be verified "
+                "(get-adcp-capabilities-response.json x-adcp-validation.required_when).",
+                declared_identity=self.identity.model_dump(mode="json") if self.identity else None,
+            )
+
+        # (f) pattern. The SDK types brand_json_url as a bare AnyUrl -- the schema's
+        # ``pattern: "^https://"`` was dropped in generation, so enforcing it is ours.
+        # security.mdx restates it normatively: a non-HTTPS value is rejected with
+        # request_signature_brand_json_url_missing. A host that cannot serve https
+        # therefore cannot carry a declared signing posture at all, which is the honest
+        # answer -- a trust root nothing can fetch is not a trust root.
+        if declared_url is not None and not declared_url.startswith("https://"):
+            self._reject(
+                "identity.brand_json_url",
+                f"is {declared_url!r}, which is not an https:// URL. The pinned schema fixes the "
+                f"pattern to ^https:// and a verifier rejects anything else with "
+                f"request_signature_brand_json_url_missing, so a trust root served over plain HTTP "
+                f"anchors nothing.",
+                declared_brand_json_url=declared_url,
+            )
+
+        # (g) purpose_anchoring: "every entry listed MUST have a corresponding signing
+        # posture declared elsewhere". Checked AFTER required_when so a declaration
+        # missing the pointer is told to add the pointer.
+        self._validate_key_origin_anchoring(posture)
+
+    def _validate_key_origin_anchoring(self, posture: RequestSigningPosture | None) -> None:
+        """Rule (g) — a declared ``key_origins`` entry needs the posture that anchors it.
+
+        ``#/properties/identity/properties/key_origins/x-adcp-validation
+        .verifier_constraints.purpose_anchoring``, restated normatively in security.mdx:
+        without the posture "the consistency check at signature-verification time has
+        nothing to anchor against".
+
+        ``webhook_signing`` is NOT checked here: its anchor
+        (``webhook_signing.supported === true``) is derived, so it belongs to the
+        platform pass. ``governance_signing`` needs governance in
+        ``supported_protocols``; ``tmp_signing`` needs a non-empty
+        ``trusted_match.surfaces``.
+        """
+        origins = self.identity.key_origins if self.identity else None
+        if origins is None:
+            return
+
+        anchors: list[tuple[Any, str, bool, str]] = [
+            (
+                origins.request_signing,
+                "request_signing",
+                posture is not None and request_signing_buckets_declared(posture),
+                "request_signing must name at least one operation or protocol method",
+            ),
+            (
+                origins.governance_signing,
+                "governance_signing",
+                SupportedProtocol.governance in (self.supported_protocols or []),
+                "supported_protocols must include governance",
+            ),
+            (
+                origins.tmp_signing,
+                "tmp_signing",
+                bool(self.trusted_match and self.trusted_match.surfaces),
+                "trusted_match.surfaces must be non-empty",
+            ),
+        ]
+        for value, purpose, anchored, requirement in anchors:
+            if value is not None and not anchored:
+                self._reject(
+                    f"identity.key_origins.{purpose}",
+                    f"declares an origin with no posture to anchor it: {requirement}. Without the "
+                    f"posture the verifier's origin-separation check has nothing to compare against "
+                    f"(x-adcp-validation.verifier_constraints.purpose_anchoring).",
+                    unanchored_purpose=purpose,
+                )
+
+    def _validate_reporting_delivery_methods(self) -> None:
+        """``[webhook]`` is backed; any list containing ``offline`` is not (#1729)."""
+        declared = self.reporting_delivery_methods or []
+        if ReportingDeliveryMethod.offline in declared:
+            self._reject(
+                "reporting_delivery_methods",
+                "cannot claim 'offline': no bucket report delivery is implemented, so a buyer "
+                "polling an offline destination would find nothing there. Tracked by #1729. "
+                "'webhook' delivery is backed and may be declared.",
+                unbacked_methods=[ReportingDeliveryMethod.offline.value],
+            )
+
+    def validate_signing_platform_backing(self, platform: SigningPlatformBacking) -> None:
+        """Rules (d) and (f-equality) — the two that need resolved platform state.
+
+        Split from :meth:`validate_backing` rather than folded into it because the OTHER
+        caller of the store is the ASGI verifier middleware, which parses a declaration
+        on every AdCP request and must not pay for a signing-key read plus a tenant read
+        to answer a question that cannot change its decision. The capabilities read path
+        owns a unit of work already and calls this inside it.
+        """
+        # (d) must_equal_when: declaring any webhook-emitting surface forces
+        # ``webhook_signing.supported == true``. Checked against the DERIVED value, so a
+        # keyless tenant declaring webhook report delivery is REFUSED rather than
+        # resolved by lying in either direction -- neither silently promoting the
+        # derivation nor silently dropping the declaration.
+        #
+        # The pin lists three triggers; only ``reporting_delivery_methods`` is declarable
+        # here. ``content_standards.supports_webhook_delivery`` and
+        # ``wholesale_feed_webhooks`` are in ``_UNBACKED_BLOCKS``, so they are
+        # structurally absent rather than unchecked -- the loop is written over all three
+        # so that un-gating either one lands the rule with it.
+        triggers = {
+            "reporting_delivery_methods": ReportingDeliveryMethod.webhook in (self.reporting_delivery_methods or []),
+            "content_standards.supports_webhook_delivery": False,
+            "wholesale_feed_webhooks.supported": False,
+        }
+        fired = sorted(name for name, present in triggers.items() if present)
+        if fired and not platform.webhook_signing_supported:
+            self._reject(
+                "webhook_signing.supported",
+                f"must be true because {', '.join(fired)} declares webhook delivery, but this tenant "
+                f"has no ACTIVE signing key it can open on a trust root it can publish, so this agent "
+                f"derives false (x-adcp-validation.must_equal_when). Provision a signing key, or drop "
+                f"the webhook delivery declaration.",
+                fired_triggers=fired,
+                derived_webhook_signing_supported=platform.webhook_signing_supported,
+            )
+
+        # (f) equality. The verifier byte-matches the origin our keys resolved at against
+        # the one we published, so a declared pointer that differs from the derived one is
+        # a request_signature_key_origin_mismatch by construction -- and the emitted value
+        # is always the derived one, which would make the declaration silently inert.
+        declared_url = str(self.identity.brand_json_url) if self.identity and self.identity.brand_json_url else None
+        if declared_url is not None and declared_url.rstrip("/") != platform.brand_json_url.rstrip("/"):
+            self._reject(
+                "identity.brand_json_url",
+                f"is declared as {declared_url!r} but this agent serves its brand.json at "
+                f"{platform.brand_json_url!r}. A counterparty byte-matches the origin it resolved a "
+                f"key at against the one we published, so a second value is a "
+                f"request_signature_key_origin_mismatch waiting to happen.",
+                declared_brand_json_url=declared_url,
+                derived_brand_json_url=platform.brand_json_url,
             )
 
     def emitted_specialisms(self, defaults: list[AdcpSpecialism]) -> list[AdcpSpecialism]:

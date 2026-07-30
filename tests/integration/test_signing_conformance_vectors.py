@@ -129,6 +129,7 @@ pytestmark = [pytest.mark.requires_db, pytest.mark.xdist_group("adcp_replay")]
 #: (see the ``xdist_group`` note above). The counterparty it signs AS is the
 #: shared one — same ``agent_url``, same key origin, same jwks_uri.
 _TENANT_ID = "b3_conformance_tenant"
+_AGENT_HOST = "b3-conformance-seller.example.com"
 _PRINCIPAL_ID = "b3_conformance_principal"
 
 #: Above the kit's ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5``,
@@ -307,8 +308,23 @@ def conformance_app() -> Iterator[tuple[Any, Any]]:
         yield app, client.portal
 
 
-def _seed_principal(with_agent_url: bool = True) -> str:
-    tenant = TenantFactory(tenant_id=_TENANT_ID, subdomain="seller")
+def _seed_tenant() -> Any:
+    """The SELLER, which exists whether or not this vector's caller authenticated.
+
+    Seeded for every vector since #1291 D1, because the posture is now a REAL stored
+    declaration on this row rather than a substituted reader — the three vectors whose
+    caller carries no principal token (``negative/001``, ``/027``, ``/028``) still need a
+    seller to have declared one.
+
+    ``virtual_host`` is DOTTED so ``canonical_agent_url`` derives ``https://``: a
+    non-empty bucket obliges an ``identity.brand_json_url`` that the pin fixes to
+    ``^https://``, so on a single-label host the declaration would be refused and every
+    vector would grade the refusal path instead of the checklist.
+    """
+    return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
+
+
+def _seed_principal(tenant: Any, with_agent_url: bool = True) -> str:
     principal = PrincipalFactory(
         tenant=tenant,
         principal_id=_PRINCIPAL_ID,
@@ -438,13 +454,14 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
         pairs = pairs + [(_ED25519_KEYID, f"b3-cap-{index:02d}") for index in range(_RATE_ABUSE_CAP)]
 
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-        token = _seed_principal() if plan.credential is Credential.PRINCIPAL_TOKEN else None
+        tenant = _seed_tenant()
+        token = _seed_principal(tenant) if plan.credential is Credential.PRINCIPAL_TOKEN else None
         _forget(env, pairs)
         if plan.harness_state is HarnessState.CAP_OVERRIDE:
             _claim(env, pairs[-_RATE_ABUSE_CAP:])
         try:
             with (
-                declared_posture(**vector["verifier_capability"]),
+                declared_posture(tenant_id=_TENANT_ID, **vector["verifier_capability"]),
                 counterparty_key(_jwks_for(vector)),
                 _config_for(plan),
                 _frozen_verifier_clock(vector["reference_now"]),

@@ -27,8 +27,23 @@ I/O in the request path:
     already persisted (the spec's proof-reuse allowance);
   - fail-closed: anything other than a clear success is "not proven".
 
-RFC 9421 signing of the challenge is NOT implemented. Under the STRICT capability
-policy that means we also declare no signing capability -- see FIXME(#1291).
+## The challenge is still UNSIGNED, and that gap is not webhook_signing's
+
+RFC 9421 signing of the challenge is NOT implemented. What that does NOT mean is
+that this agent declares no signing capability: #1291 D1 made
+``webhook_signing.supported`` derived from real key material, and security.mdx @
+v3.1.1 scopes that block to "any seller that emits webhooks", reserving ``false``
+for the unsafe posture of emitting UNSIGNED webhooks. A keyed tenant's AdCP
+notification surface IS signed, so ``true`` is the honest declaration there and
+this unsigned challenge does not make it dishonest.
+
+The obligation this challenge misses is a DIFFERENT one: security.mdx @ v3.1.1
+requires that a seller complete an RFC 9421-signed activation challenge or
+equivalent proof-of-control before treating a new or changed active subscriber as
+active, AND that the receiver verify the seller identity before echoing the
+challenge. Tracked as #1291 C2. The residual risk while it is open: a conformant
+receiver cannot verify seller identity on an unsigned challenge and may refuse to
+echo it, failing subscriber activation. It is a MUST.
 """
 
 import logging

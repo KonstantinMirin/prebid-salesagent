@@ -167,6 +167,24 @@ def legacy_auth_mode(config: PushNotificationConfig | None) -> str | None:
     return LEGACY_HMAC
 
 
+def legacy_hmac_fallback_supported() -> bool:
+    """Whether this agent falls back to HMAC-SHA256 — ``webhook_signing.legacy_hmac_fallback``.
+
+    v3.1.1 defines the field as whether this agent falls back to HMAC-SHA256 on the
+    legacy ``push_notification_config.authentication`` paths. The SDK model DEFAULTS it
+    to false, which for this deployment is a FALSE declaration: :func:`legacy_auth_mode`
+    selects :data:`LEGACY_HMAC` for any registration naming a scheme in
+    :data:`_HMAC_SCHEMES`, and :func:`build_webhook_sender` answers that mode with
+    ``WebhookSender.from_adcp_legacy_hmac``. Both are unconditional.
+
+    Derived from :data:`_HMAC_SCHEMES` — the same table the selector reads — rather than
+    written as ``True`` on the capabilities wire, and owned HERE rather than in
+    ``posture.py``, so it sits beside the arm it describes: emptying that table or
+    deleting the arm (AdCP 4.0 removes legacy HMAC) makes the declaration follow.
+    """
+    return bool(_HMAC_SCHEMES)
+
+
 def _log_legacy_registration(config: PushNotificationConfig, mode: str) -> None:
     """security.mdx @ v3.1.1 :1464 — "Sellers MUST log" every legacy registration.
 
@@ -216,6 +234,25 @@ def _unauthenticated_sender(client: httpx.AsyncClient | None) -> WebhookSender:
     )
 
 
+def _agent_origin(repo: SigningKeyRepository, tenant_id: str) -> str | None:
+    """This tenant's canonical origin, read on the session *repo* already holds.
+
+    ``canonical_agent_url`` (``src/core/agent_identity.py``) is the ONE agent-URL
+    derivation — a second literal here is a ``request_signature_key_origin_mismatch``
+    waiting to happen, because the verifier byte-matches the origin our keys resolved
+    at against the one we published.
+
+    ``None`` when there is no tenant row: unknown origin is not a publishable one, so
+    the RFC 9421 arm closes. Reads through ``TenantConfigRepository`` on the caller's
+    session rather than opening a second one — the delivery path already owns it.
+    """
+    from src.core.agent_identity import canonical_agent_url
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+    tenant = TenantConfigRepository(repo.session, tenant_id).get_tenant()
+    return canonical_agent_url(tenant) if tenant is not None else None
+
+
 def _rfc9421_sender(
     *,
     tenant_id: str | None,
@@ -225,17 +262,24 @@ def _rfc9421_sender(
 ) -> WebhookSender:
     """The RFC 9421 arm: the tenant's own key, or an honest unsigned delivery.
 
-    The algorithm about to go on the wire is checked against the posture this tenant
-    could honestly DECLARE before the sender is handed back — declaring an algorithm
-    we never emit, or emitting one we never declared, is the dishonesty the STRICT
-    declaration policy exists to prevent, and it is cheaper to refuse here than to
-    have every receiver reject the delivery.
+    The posture read here is the SAME object ``get_adcp_capabilities`` serializes
+    (#1291 D1), which is what makes the advertised ``webhook_signing.supported`` and
+    this branch one decision rather than two. It therefore inherits the publishability
+    gate: on an origin that cannot serve https there is no conformant
+    ``identity.brand_json_url`` for a receiver to resolve our key through, so the arm is
+    dropped and the delivery goes out unauthenticated. That removes an UNVERIFIABLE
+    signature rather than withdrawing a capability.
+
+    The algorithm about to go on the wire is still checked against that posture before
+    the sender is handed back. After D1 the check is unreachable by construction — both
+    sides read one object — which is the point: it is the belt to the derivation's
+    braces, and a future second derivation trips it instead of shipping.
     """
     if repo is None or tenant_id is None:
         _warn_keyless_once(tenant_id)
         return _unauthenticated_sender(client)
 
-    posture = webhook_signing_posture(repo, now=now)
+    posture = webhook_signing_posture(repo, now=now, origin=_agent_origin(repo, tenant_id))
     if not posture.supported:
         _warn_keyless_once(tenant_id)
         return _unauthenticated_sender(client)

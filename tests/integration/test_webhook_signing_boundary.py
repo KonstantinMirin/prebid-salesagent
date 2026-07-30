@@ -116,6 +116,20 @@ class _Seeded(NamedTuple):
     principal: Any
 
 
+#: A DOTTED host, so ``canonical_agent_url`` derives ``https://`` for it.
+#:
+#: Load-bearing, not decoration. #1291 D1 put the publishability gate on the ONE posture
+#: object this factory's sender reads: ``webhook_signing.supported`` requires an active key
+#: AND an origin that can serve https, because key discovery for our outbound signatures
+#: runs through ``identity.brand_json_url`` and the pin fixes that to ``^https://``. With
+#: no ``virtual_host`` and no ``SALES_AGENT_DOMAIN`` (which no integration env sets),
+#: ``canonical_agent_url`` returns ``http://localhost:8080`` and the RFC 9421 arm is
+#: unreachable — so every test in this file would grade the unsigned branch while reading
+#: like it graded the signed one. The precedent is ``tls_trust_root_tenant(netloc)``
+#: (``tests/e2e/test_trust_root_e2e.py``).
+_AGENT_HOST = "seller-webhook-boundary.example.com"
+
+
 def _seed_tenant_with_key(env: BareIntegrationEnv) -> _Seeded:
     """Create the tenant/principal and mint their signing key through production.
 
@@ -124,7 +138,7 @@ def _seed_tenant_with_key(env: BareIntegrationEnv) -> _Seeded:
     """
     from tests.factories import PrincipalFactory, TenantFactory
 
-    tenant = TenantFactory(tenant_id=_TENANT_ID)
+    tenant = TenantFactory(tenant_id=_TENANT_ID, virtual_host=_AGENT_HOST)
     principal = PrincipalFactory(tenant=tenant, principal_id=_PRINCIPAL_ID)
 
     repo = signing_key_repo(env, _TENANT_ID)

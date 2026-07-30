@@ -783,6 +783,57 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 ]
 
 
+# UC-010 scenarios that are PARKED WITH A REASON rather than silently unwired.
+#
+# Before this table, a scenario missing from _UC010_WIRED_TAGS xfailed with the blanket
+# "UC-010 wiring batch 2/3 pending" message whether it was merely un-got-to or genuinely
+# blocked on unimplemented backing. That is indistinguishable from the dormant-scenario
+# defect: nobody reading the ledger could tell "no one has written the steps" from "the
+# steps cannot be written honestly yet".
+#
+# Every entry names WHAT is missing and WHERE it is tracked. An entry leaves this table
+# only when production backs the block — never by weakening the scenario.
+_UC010_PARKED_TAGS: dict[str, str] = {
+    # #1291 D1 made the signing family declarable, and four of its main-flow scenarios are
+    # wired as a result (see _UC010_WIRED_TAGS batch 14). These three CANNOT be wired
+    # honestly, and each for a reason that has nothing to do with signing:
+    "T-UC-010-v31-identity-brand-json-url": (
+        "the scenario's second Given declares sponsored_intelligence.brand_url, so its "
+        "distinct_from assertion is non-vacuous. Nothing in src/ implements the "
+        "sponsored_intelligence surface, so under the STRICT capability policy the block is "
+        "undeclarable and unemitted: the Given cannot be realized, and wiring it anyway "
+        "would compare the emitted trust root against an ABSENT value and pass vacuously. "
+        "Needs a backed sponsored_intelligence block. The brand_json_url half it shares "
+        "with -identity-brand-json-url-bounds IS graded (#1291 D1)"
+    ),
+    "T-UC-010-v31-identity-key-origins": (
+        "three of the four rows declare a key-origin purpose this deployment does not back: "
+        "governance_signing and tmp_signing need a separate governance/TMP signing JWKS "
+        "origin that nothing serves, and webhook_signing names a delivery-surface origin we "
+        "do not publish separately. Emitting any of them would break the pin's "
+        "purpose_anchoring constraint (x-adcp-validation.verifier_constraints), which "
+        "requires a declared origin to have its posture. The request_signing row IS "
+        "gradable today — key_origins.request_signing is emitted from jwks_origin() exactly "
+        "when a bucket is declared — so this graduates row-by-row, not as a scenario"
+    ),
+    "T-UC-010-v31-identity-compromise-notification": (
+        "asserts the seller declares identity.compromise_notification.emits=true, i.e. that "
+        "it emits the compromise-notification webhook on revocation-due-to-compromise. "
+        "Zero implementation exists (no hits for 'compromise' anywhere in src/), so "
+        "declaring it would be exactly the over-promise the STRICT policy exists to "
+        "prevent. Needs the compromise-notification webhook event itself"
+    ),
+    # content_standards is refused by _UNBACKED_BLOCKS for a reason that OUTLIVES #1291:
+    # nothing implements local evaluation, artifacts, verdicts or artifact_webhook
+    # delivery, so signing landing does not make the block declarable.
+    "T-UC-010-v31-content-standards-block": (
+        "media_buy.content_standards is undeclarable and unemitted — no content-standards "
+        "surface exists in this deployment (no local evaluation, artifacts, verdicts or "
+        "artifact_webhook delivery). Re-homed off #1291, which does not unblock it"
+    ),
+}
+
+
 # MCP selective xfails: previously the MCP wrapper did not accept the
 # disclosure_positions keyword. #1417 added disclosure_positions +
 # disclosure_persistence to the MCP list_creative_formats wrapper, so the param
@@ -3905,8 +3956,22 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-local-unbacked-specialism",
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
+            # Batch 14 — the signing family's MAIN-FLOW scenarios (#1291 D1). These four
+            # were dormant TWICE over: their Givens had no step definition anywhere (which
+            # pytest_runtest_makereport converts to xfail) AND their tags were absent from
+            # this set (which xfails at fixture setup, before a single step runs). Both
+            # halves are fixed; `request_signing` is now a real tenant declaration and
+            # `webhook_signing` is realized as platform state.
+            "T-UC-010-v31-request-signing-posture",
+            "T-UC-010-v31-request-signing-namespace-split",
+            "T-UC-010-v31-request-signing-subset",
+            "T-UC-010-v31-webhook-signing",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
+        parked = marker_names & _UC010_PARKED_TAGS.keys()
+        if parked:
+            tag = sorted(parked)[0]
+            pytest.xfail(f"{tag}: {_UC010_PARKED_TAGS[tag]}")
         if not (marker_names & _UC010_WIRED_TAGS):
             pytest.xfail("UC-010 wiring batch 2/3 pending (#1592, salesagent-4sn7)")
 

@@ -632,6 +632,25 @@ class TestWebhookAuthenticationForcesASignature:
             config["authentication"] = dict(_WEBHOOK_AUTHENTICATION)
         return json.dumps({"push_notification_config": config}).encode()
 
+    @staticmethod
+    def _account_webhook_body() -> bytes:
+        """The SECOND escalation trigger, factored out because two tests now send it."""
+        return json.dumps(
+            {
+                "accounts": [
+                    {
+                        "account_id": "acct-signature-probe",
+                        "notification_configs": [
+                            {
+                                "url": "https://buyer.example.com/account-webhook",
+                                "authentication": dict(_WEBHOOK_AUTHENTICATION),
+                            }
+                        ],
+                    }
+                ]
+            }
+        ).encode()
+
     def test_push_notification_authentication_rejects_an_authenticated_caller(self, integration_db):
         """The case vector 027 structurally CANNOT grade, and therefore the
         case B3 green will never prove.
@@ -669,21 +688,7 @@ class TestWebhookAuthenticationForcesASignature:
         handling only ``push_notification_config`` passes all 40 vectors and
         is still wrong.
         """
-        body = json.dumps(
-            {
-                "accounts": [
-                    {
-                        "account_id": "acct-signature-probe",
-                        "notification_configs": [
-                            {
-                                "url": "https://buyer.example.com/account-webhook",
-                                "authentication": dict(_WEBHOOK_AUTHENTICATION),
-                            }
-                        ],
-                    }
-                ]
-            }
-        ).encode()
+        body = self._account_webhook_body()
 
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
             token = seed_principal(env)
@@ -720,6 +725,43 @@ class TestWebhookAuthenticationForcesASignature:
                 response,
                 "a push_notification_config with no authentication block carries no "
                 "credentials; escalating it would 401 ordinary webhook registrations",
+            )
+
+    def test_the_escalation_fires_for_a_tenant_that_DECLARED_NOTHING(self, integration_db):
+        """The newly-reachable case, and the only one with no declaration at all.
+
+        Every other test in this class establishes an explicit posture through
+        ``_declared_posture``. That leaves the case #1291 D1 created unguarded: a tenant
+        that declares NOTHING now resolves to the AGENT-LEVEL posture
+        (``posture_for_tenant`` -> ``agent_level_posture``, ``supported`` =
+        ``SigningConfig.verifier_enabled``, every bucket empty), which puts every operation
+        in the ``supported`` bucket rather than ``none`` — so :1465's escalation binds this
+        deployment for ordinary traffic, not only for tenants who opted into a posture.
+
+        That is not a hypothetical: it is exactly what turned a green UC-011 scenario red
+        the moment D1 landed, and the escalation branch had no test that would have
+        predicted it. security.mdx @ v3.1.1's "Downgrade and injection resistance" block
+        binds "sellers that support request signing", and D1 is what made this deployment
+        one; the unsigned-seller fallback there is explicitly "a 3.0 migration note, not an
+        exemption".
+
+        No ``_declared_posture`` context by design — substituting one would recreate the
+        gap this test exists to close.
+        """
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            client = _client(env)
+
+            response = client.post(
+                _SYNC_ACCOUNTS_PATH, content=self._account_webhook_body(), headers=_json_headers(token)
+            )
+
+            _assert_rejected(
+                response,
+                "a tenant that declared no posture at all still SUPPORTS request signing "
+                "after #1291 D1 (the agent-level default is supported=verifier_enabled), so "
+                "accounts[].notification_configs[].authentication must force a signature "
+                "here exactly as it does under an explicitly declared posture",
             )
 
     def test_the_escalation_does_not_fire_under_an_unsupported_posture(self, integration_db):

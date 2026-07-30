@@ -42,6 +42,21 @@ class SigningKeyRepository:
     def tenant_id(self) -> str:
         return self._tenant_id
 
+    @property
+    def session(self) -> Session:
+        """The session this repository reads on, for a SIBLING repository only.
+
+        Exposed for the outbound webhook boundary (#1291 C1/D1), which must resolve
+        this tenant's canonical origin — a ``tenants`` read — inside the transaction
+        that already produced the key row it is about to sign with. Opening a second
+        session there could observe a rotation from one side and the host from the
+        other.
+
+        It is a seam for constructing another repository, never for raw queries: the
+        no-raw-select guards still apply to whoever borrows it.
+        """
+        return self._session
+
     def _scope_prefix(self) -> tuple[ColumnElement[bool], ...]:
         """The tenant isolation term EVERY query composes.
 

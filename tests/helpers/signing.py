@@ -70,6 +70,18 @@ COUNTERPARTY_KID = "buyer-request-signing-1"
 SIGNING_TENANT_ID = "sig_tenant"
 SIGNING_PRINCIPAL_ID = "sig_principal"
 
+#: The seller's own host, DOTTED so ``canonical_agent_url`` derives ``https://`` for it.
+#:
+#: Load-bearing since #1291 D1: a stored ``request_signing`` declaration with any
+#: non-empty bucket fires the pinned ``identity.brand_json_url`` ``required_when``, and
+#: the pin fixes that pointer to ``^https://``. ``_get_protocol_for_domain``
+#: deliberately derives ``http`` for localhost and single-label hosts, so on the default
+#: integration host every declaration :func:`declared_posture` writes would be REFUSED —
+#: and the suites would grade the refusal path while reading like they graded the
+#: declared one. Requests still reach this tenant by the ``x-adcp-tenant`` header
+#: (:func:`request_headers`), so the host is identity, not routing.
+SIGNING_AGENT_HOST = "seller-signing.example.com"
+
 #: An AdCP surface path with no request body — the cheapest place to grade the
 #: header-presence branches. Auth-optional, so any 401 seen on it came from the
 #: verifier and not from the route's own auth dependency.
@@ -189,36 +201,72 @@ def resolve_provider(
 
 
 @contextmanager
-def declared_posture(**declaration: Any) -> Iterator[None]:
-    """Substitute the tenant's ``request_signing`` DECLARATION, not the decision.
+def declared_posture(*, tenant_id: str = SIGNING_TENANT_ID, **declaration: Any) -> Iterator[None]:
+    """Store *declaration* as *tenant_id*'s REAL ``request_signing`` declaration.
 
     Takes the schema's own property names (``supported``,
     ``covers_content_digest``, ``required_for``, ``warn_for``, ``supported_for``,
-    ``protocol_methods_*``) and builds a real ``RequestSigningPosture`` from them,
-    so production's ``bucket_for`` precedence and ``to_verifier_capability()``
-    projection run for real. Only the READER (``posture_for_tenant``) is replaced.
+    ``protocol_methods_*``) and writes them onto ``tenants.capability_declarations``
+    through the repository, exactly as an operator would. Production then does all
+    the rest for real: ``CapabilityDeclarations.from_tenant`` parses and
+    relation-checks the document, ``posture_for_tenant`` reads it,
+    ``bucket_for`` applies precedence, and ``to_verifier_capability`` projects it.
 
-    ``request_signing_is_declarable`` is substituted TRUE alongside it: that flag
-    gates the body BUFFER and the operation RESOLVE, and it is False in production
-    today (``request_signing`` is still in ``_UNBACKED_BLOCKS``), so without this
-    line every bucket is ``none``, the middleware verifies nothing, and everything
-    downstream passes vacuously. Declaring a posture and not making it declarable
-    is not a state any tenant can be in.
+    #1291 D1 is what made this possible: ``request_signing`` left
+    ``_UNBACKED_BLOCKS``, so ``request_signing_is_declarable()`` is True on its own
+    and there is a DB path for the declaration to travel. Until then this helper
+    substituted BOTH ``posture_for_tenant`` and that predicate, and B3's green
+    therefore said only "GIVEN a posture, the checklist behaves" — nothing about
+    where the posture came from, which is B3 design step 12's obligation 1 and is
+    what this rewrite discharges. There is no ``patch`` left in it.
 
-    White-box in EXACTLY one respect, stated rather than glossed: the DB path that
-    would carry the declaration does not exist yet. D1 (``salesagent-z6nr.20``)
-    owns re-running these suites through the real ``CapabilityDeclarations
-    .from_tenant`` path once the block is backed.
+    ``identity.brand_json_url`` is written alongside the posture and is DERIVED from
+    ``src.core.agent_identity``, never a literal: any non-empty bucket fires the
+    pinned ``required_when`` trigger, and the capabilities read path additionally
+    cross-checks a declared pointer against the served one. That is why
+    :func:`seed_principal` gives the tenant a DOTTED ``virtual_host`` — on
+    ``localhost`` the derived pointer is ``http://`` and the pin's ``^https://``
+    would (correctly) refuse the whole declaration.
+
+    Restores the previous stored value on exit, so a suite that declares different
+    postures across tests does not inherit the last one.
     """
-    from src.core.signing import request_verifier_middleware as mw
-    from src.core.signing.posture import RequestSigningPosture
-
-    posture = RequestSigningPosture(**declaration)
-    with (
-        patch.object(mw, "posture_for_tenant", lambda _tenant: posture),
-        patch.object(mw, "request_signing_is_declarable", lambda: True),
-    ):
+    previous = _declare(tenant_id, declaration)
+    try:
         yield
+    finally:
+        _restore_declarations(tenant_id, previous)
+
+
+def _declare(tenant_id: str, declaration: dict[str, Any]) -> dict[str, Any] | None:
+    """Write the posture + derived identity onto the tenant; return what was there."""
+    from src.core.agent_identity import brand_json_url
+    from src.core.database.repositories.uow import TenantConfigUoW
+
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.get_tenant()
+        assert tenant is not None, (
+            f"declared_posture needs tenant {tenant_id!r} to exist before a declaration can be stored "
+            "on it — seed it (seed_principal / TenantFactory) first"
+        )
+        previous = tenant.capability_declarations
+        tenant.capability_declarations = {
+            "request_signing": declaration,
+            "identity": {"brand_json_url": brand_json_url(tenant)},
+        }
+        return previous
+
+
+def _restore_declarations(tenant_id: str, previous: dict[str, Any] | None) -> None:
+    """Put the tenant's declaration document back the way the test found it."""
+    from src.core.database.repositories.uow import TenantConfigUoW
+
+    with TenantConfigUoW(tenant_id) as uow:
+        assert uow.tenant_config is not None
+        tenant = uow.tenant_config.get_tenant()
+        if tenant is not None:
+            tenant.capability_declarations = previous
 
 
 @contextmanager
@@ -395,7 +443,7 @@ def seed_principal(env: Any, *, agent_url: str | None = COUNTERPARTY_AGENT_URL) 
     """
     from tests.factories import PrincipalFactory, TenantFactory
 
-    tenant = TenantFactory(tenant_id=SIGNING_TENANT_ID)
+    tenant = TenantFactory(tenant_id=SIGNING_TENANT_ID, virtual_host=SIGNING_AGENT_HOST)
     principal = PrincipalFactory(
         tenant=tenant,
         principal_id=SIGNING_PRINCIPAL_ID,

@@ -536,6 +536,43 @@ def _fail_closed_bucket(posture: RequestSigningPosture, bucket: PostureBucket) -
     return bucket
 
 
+def _detect_tenant_for_posture(headers: dict[str, str]) -> tuple[str | None, dict[str, Any] | None]:
+    """The seller's tenant, or ``(None, None)`` if it cannot be read at all.
+
+    ``_detect_tenant`` opens a database session. Since #1291 D1 made ``request_signing``
+    declarable that read happens on EVERY AdCP request, and this function runs in an
+    ``asyncio.to_thread`` hop with no envelope translation above it (``src/app.py`` mounts
+    the verifier under ``UnifiedAuthMiddleware``/CORS only, and ``_reject`` emits a
+    signature-specific 401, not a general AdCP error). So an uncaught raise here would
+    answer get_products, create_media_buy and everything else with a bare 500 — a
+    Postgres blip taking down every protocol surface because signatures are OPTIONAL for
+    this deployment.
+
+    Falling back to no tenant means :func:`posture_for_tenant` returns the AGENT-level
+    posture, which enforces nothing per-tenant. State the security consequence rather than
+    hiding it: for the interval of the failure, a tenant that declared ``required_for``
+    stops having it required. That is the same trade ``posture_for_tenant`` already makes
+    for an unreadable declaration and for the same reason — the middleware must not INVENT
+    enforcement it cannot read, and the loud alternative (401 on every AdCP surface
+    whenever the tenant lookup hiccups) converts an infrastructure blip into an outage.
+    ``_fail_closed_bucket`` is unaffected: it covers a READABLE posture plus an unnameable
+    request.
+
+    A bare ``Exception`` here, deliberately, unlike ``posture_for_tenant``'s
+    ``AdCPError``-only catch: this is an INFRASTRUCTURE read whose failure modes are the
+    driver's, not ours, and the WARNING carries them.
+    """
+    try:
+        return _detect_tenant(headers)
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve the seller tenant for signature-posture purposes, so no "
+            "per-tenant request_signing posture is enforced for this request: %s",
+            exc,
+        )
+        return None, None
+
+
 def _resolve_request_context(
     *,
     headers: Mapping[str, str],
@@ -547,20 +584,20 @@ def _resolve_request_context(
 
     Runs in one thread hop because both lookups are synchronous DB work — and does
     NEITHER unless the answer can change an outcome. That is R-H3's rule applied to the
-    whole middleware rather than just to the buffering step: B1 shipped alone must cost
-    production nothing, and "one extra uncached tenant round trip on every AdCP request"
-    is not nothing.
+    whole middleware rather than just to the buffering step.
 
     * the tenant is read only while a posture is DECLARABLE
-      (:func:`~src.core.signing.posture.request_signing_is_declarable`) — until D1 backs
-      the block, every tenant's posture is the unsupported default and the read could
-      not change it;
+      (:func:`~src.core.signing.posture.request_signing_is_declarable`). That is True
+      since #1291 D1 backed the block, so the read is now paid on every AdCP request —
+      the cost R-H3 gated deliberately, now spent on purpose because a declared posture
+      is the thing being enforced. It is read through
+      :func:`_detect_tenant_for_posture`, which is where the failure mode is decided;
     * the principal is read only when its answer matters: on a signed request that will
       actually be verified (its ``agent_url`` is the key-resolution input), or on an
       unsigned request to a ``required_for`` operation (the composition rule's
       credential test).
     """
-    tenant_id, tenant = _detect_tenant(dict(headers)) if request_signing_is_declarable() else (None, None)
+    tenant_id, tenant = _detect_tenant_for_posture(dict(headers)) if request_signing_is_declarable() else (None, None)
     posture = posture_for_tenant(tenant)
     bucket = posture.bucket_for(resolved.operation, resolved.protocol_method)
     if not resolved.resolvable:

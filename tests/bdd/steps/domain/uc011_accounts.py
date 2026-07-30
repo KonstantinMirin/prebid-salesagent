@@ -3372,27 +3372,6 @@ def given_account_with_notif_subscriber(ctx: dict, domain: str, sub: str, url: s
 
 @when(
     parsers.re(
-        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
-        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)", '
-        r'event_types "(?P<ets>[^"]+)", and legacy Bearer authentication'
-    )
-)
-def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
-    """Provision an account with one paused (active:false) subscriber carrying legacy Bearer auth.
-
-    The authentication block (Bearer scheme + a 32-char write-only credential per
-    core/notification-config.json#/properties/authentication/properties/credentials)
-    gives the credentials-omitted echo assertion teeth: the input declares a
-    credential, so an echo that returns it is a real write-only leak.
-    """
-    ctx["notif_domain"] = domain
-    auth = {"schemes": ["Bearer"], "credentials": "x" * 32}
-    cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
-    _dispatch_sync_notification(ctx, domain, [cfg])
-
-
-@when(
-    parsers.re(
         r'the Buyer Agent sends a sync_accounts request re-sending subscriber "(?P<sub>[^"]+)" '
         r'as paused with url "(?P<url>[^"]+)" and event_types "(?P<ets>[^"]+)"'
     )
@@ -3466,24 +3445,6 @@ def then_echoed_subscriber_event_types(ctx: dict, ets: str) -> None:
     expected = _parse_event_types(ets)
     actual = [str(e) for e in (_sub_attr(subs[0], "event_types") or [])]
     assert actual == expected, f"Expected event_types {expected}, got {actual}"
-
-
-@then(parsers.parse('the echoed subscriber\'s authentication object omits "{field}"'))
-def then_echoed_subscriber_auth_omits(ctx: dict, field: str) -> None:
-    """Assert the echoed authentication object does not carry the write-only field.
-
-    Spec: core/notification-config.json top-level — "Credentials and shared secrets
-    in authentication.credentials are write-only — sellers MUST NOT echo them back";
-    sync-accounts-response notification_configs — "authentication.credentials is
-    omitted on every entry (write-only)."
-    """
-    subs = _echoed_subscribers(ctx)
-    assert subs, f"No echoed subscribers to check authentication on: {subs!r}"
-    auth = _sub_attr(subs[0], "authentication")
-    if auth is None:
-        return  # no authentication block echoed at all → the write-only field is not leaked
-    auth_dict = auth if isinstance(auth, dict) else auth.model_dump(exclude_none=True)
-    assert field not in auth_dict, f"authentication echoed write-only {field!r}: {auth_dict!r}"
 
 
 @then(
@@ -3562,9 +3523,13 @@ def given_account_with_paused_notif_subscriber(ctx: dict, domain: str, sub: str,
 def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
     """Provision an account with one paused subscriber whose event_types are under test.
 
-    Distinct from the ``…, event_types "…", and legacy Bearer authentication`` When
-    (which also declares an auth block): this variant carries only the event_types so
-    the scenario grades event-scope rejection, not credential handling.
+    Serves both the event-scope scenarios and the register-and-read-back one. It used to
+    have an auth-carrying sibling; #1291 D1 retired that, because a seller supporting
+    request signing must reject an UNSIGNED request carrying
+    ``accounts[].notification_configs[].authentication`` — so no BDD scenario may register
+    a credential over the unsigned dispatch every transport here uses. Credential handling
+    is graded at integration level instead (see the comment on the register-and-read-back
+    scenario in the feature).
 
     Spec: core/notification-config.json#/properties/event_types — media-buy-anchored
     types (scheduled, final, delayed, adjusted, impairment) "are invalid on this

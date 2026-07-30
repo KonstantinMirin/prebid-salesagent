@@ -344,6 +344,38 @@ class SigningKeyUoW(BaseUoW):
         self.signing_keys = None
 
 
+class CapabilitiesUoW(BaseUoW):
+    """Unit of Work for one ``get_adcp_capabilities`` request (#1291 D1).
+
+    ONE session for everything the capabilities response reads from the database: the
+    tenant's publisher partners, its signing keys, and the ``tenants`` row itself —
+    whose stored host IS the agent identity the ``identity`` block points at.
+
+    One session because the ORM ``Tenant`` must stay attached while the identity URLs
+    are derived from it: no session in this codebase sets ``expire_on_commit=False``, so
+    handing the row out to the response-construction site would raise
+    ``DetachedInstanceError`` on the first attribute read.
+
+    Deliberately NOT :class:`TrustRootUoW`, which carries the same two repositories plus
+    ``authorized_properties``: its name asserts a different purpose, and its third
+    repository is dead weight on a per-request read path.
+
+    Added for #1291 D1 (the declarable signing family).
+    """
+
+    tenant_config: TenantConfigRepository | None
+    signing_keys: SigningKeyRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
+        self.signing_keys = SigningKeyRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.tenant_config = None
+        self.signing_keys = None
+
+
 class TrustRootUoW(BaseUoW):
     """Unit of Work for the trust-root documents this agent publishes (#1291 A3).
 

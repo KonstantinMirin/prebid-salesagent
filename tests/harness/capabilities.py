@@ -45,6 +45,17 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 #: comment ("fixture seeds channels 'display, social, ctv' on the adapter").
 DEFAULT_ADAPTER_CHANNELS = ["display", "social", "ctv"]
 
+#: The tenant's own host for every signing scenario, DOTTED on purpose — see
+#: :meth:`CapabilitiesEnv.declare_signing`. A single-label host derives ``http://``,
+#: which no conformant ``identity.brand_json_url`` can be built from.
+SIGNING_AGENT_HOST = "seller-capabilities.example.com"
+
+#: The deployment key encryption key used while minting a test signing key. A ``db:``
+#: mint refuses outright without one, so this is what makes the KEYED rows reach the
+#: behaviour they grade instead of failing in provisioning.
+_KEK_ENV_NAME = "ADCP_BDD_SIGNING_KEK"
+_KEK_VALUE = "correct-horse-battery-staple"
+
 #: Default pricing models seeded on the adapter mock -- mirrors the REAL
 #: MockAdServerAdapter.get_supported_pricing_models() set (mock_ad_server.py),
 #: so the harness's MagicMock stand-in doesn't silently degrade to an empty
@@ -118,6 +129,102 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         self._capability_declarations.update(blocks)
         self.configure_tenant_field("capability_declarations", dict(self._capability_declarations))
+
+    def declare_signing(
+        self,
+        *,
+        request_signing: dict[str, Any] | None = None,
+        keyed_alg: str | None = None,
+        host: str = SIGNING_AGENT_HOST,
+    ) -> None:
+        """Put this tenant in a state where a signing posture is real (#1291 D1).
+
+        ONE helper for every signing Given, because all of them need the same three
+        things and each one is load-bearing:
+
+        1. **A DOTTED ``virtual_host``.** ``canonical_agent_url`` derives the scheme from
+           the host, and ``_get_protocol_for_domain`` deliberately answers ``http`` for
+           localhost and single-label hosts — neither can present a publicly-trusted
+           certificate. The pin fixes ``identity.brand_json_url`` to ``^https://``, so on
+           the default integration host every declaration below would be REFUSED and the
+           scenario would grade the refusal path while reading like it graded the declared
+           one. This is the mechanism on the in-process transports, which have no host of
+           their own at all.
+        2. **A provisioned key, when the row needs a KEYED tenant.** ``webhook_signing``
+           is DERIVED platform state since D1 — ``_DERIVED_BLOCKS`` refuses a declaration
+           of it — so "the tenant declares webhook_signing supported=true with
+           algorithms=[X]" is realized by MINTING a key of algorithm X through production
+           (``provision_signing_key``), never by writing a declaration. The deployment KEK
+           is configured first because a ``db:`` mint refuses without it; both env writes
+           go through the env's own patcher list, so they are undone at teardown.
+        3. **A DERIVED ``identity.brand_json_url``** whenever the posture names an
+           operation. A non-empty bucket fires the pinned ``required_when``, and the
+           capabilities read path cross-checks a declared pointer against the one it
+           actually serves — so the value has to come from
+           ``src.core.agent_identity.brand_json_url``, never a literal.
+
+        Not decorated with ``@realize_e2e``: every step is a real write (the ``tenants``
+        row, the ``signing_keys`` row) that a live server reads back through its own
+        session, so no test-only injection seam is needed and the e2e escape-hatch pin
+        does not grow. The KEK env vars are process-local, so an out-of-process e2e server
+        needs its own (``docker-compose.yml`` sets one).
+        """
+        from src.core.agent_identity import brand_json_url
+        from src.core.database.models import Tenant
+        from src.core.signing.posture import request_signing_buckets_declared
+
+        self.configure_tenant_field("virtual_host", host)
+        if keyed_alg is not None:
+            self._provision_signing_key(keyed_alg)
+        if request_signing is None:
+            return
+
+        from src.core.signing.posture import RequestSigningPosture
+
+        blocks: dict[str, Any] = {"request_signing": request_signing}
+        # The pointer is declared ONLY where the posture obliges one, so a row that
+        # declares `supported` and nothing else keeps grading the conservative default
+        # (which fires no required_when trigger) rather than a trust-root-bearing posture.
+        if request_signing_buckets_declared(RequestSigningPosture(**request_signing)):
+            tenant = self.get_one(Tenant, tenant_id=self._tenant_id)
+            assert tenant is not None, "the tenants row must exist before its identity URLs are derived"
+            blocks["identity"] = {"brand_json_url": brand_json_url(tenant)}
+        self.declare_capabilities(**blocks)
+
+    def _provision_signing_key(self, alg: str) -> None:
+        """Mint one ACTIVE signing key of *alg* through production, under a test KEK.
+
+        ``provision_signing_key`` stamps ``not_before`` from the wall clock, so the key is
+        active by the time the When step calls ``get_adcp_capabilities``. Key PRESENCE is
+        then derived by production's ``signing_key_backed`` — this method never asserts a
+        posture, it only creates the platform state one is derived from.
+        """
+        import os
+        from unittest.mock import patch
+
+        from src.core.database.repositories.signing_key import SigningKeyRepository
+        from src.core.signing.keys import provision_signing_key
+
+        for patcher in (
+            patch.dict(
+                os.environ,
+                {"ADCP_SIGNING_KEY_PASSPHRASE_ENV": _KEK_ENV_NAME, _KEK_ENV_NAME: _KEK_VALUE},
+            ),
+            # The AppConfig carrying `key_passphrase_env` is a process global and is
+            # already cached by the time a Given runs; the passphrase itself is re-read
+            # from the environment on every use.
+            patch("src.core.config._config", None),
+        ):
+            patcher.start()
+            self._patchers.append(patcher)
+
+        self._commit_factory_data()
+        provision_signing_key(
+            SigningKeyRepository(self.get_session(), self._tenant_id),
+            tenant_id=self._tenant_id,
+            alg=alg,
+            kid=f"{self._tenant_id}-{alg}-1",
+        )
 
     @realize_e2e(
         e2e_unsupported(
@@ -241,15 +348,17 @@ class CapabilitiesEnv(IntegrationEnv):
         e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
     )
     def break_tenant_config_db(self) -> None:
-        """Make the publisher-partner DB read fail — production degrades to placeholder.
+        """Make the capabilities DB reads fail — production degrades to placeholder.
 
-        Patches TenantConfigUoW at the capabilities module seam. Tracked on
+        Patches CapabilitiesUoW at the capabilities module seam, so BOTH reads it owns
+        fail: the publisher partners (placeholder domain) and, since #1291 D1, the
+        signing-key backing (keyless posture, no identity block). Tracked on
         ctx-independent env teardown via the standard patcher list. In-process
         only — no server-side DB-fault-injection surface exists (e2e branch
         declares E2EUnsupportedSetup).
         """
         patcher = patch(
-            "src.core.tools.capabilities.TenantConfigUoW",
+            "src.core.tools.capabilities.CapabilitiesUoW",
             side_effect=Exception("tenant config DB failure (harness)"),
         )
         self.mock["tenant_config_uow"] = patcher.start()

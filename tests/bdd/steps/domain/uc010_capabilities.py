@@ -2244,10 +2244,16 @@ def _assert_request_signing_relations(ctx: dict) -> None:
 def then_request_signing_relations(ctx: dict, expected: str) -> None:
     """valid → schema-valid success whose request_signing satisfies every subset/disjoint
     relation; invalid → the builder rejects the relation-violating config with
-    CONFIGURATION_ERROR (recovery terminal) rather than emitting the violating posture."""
+    CONFIGURATION_ERROR (recovery terminal) rather than emitting the violating posture.
+
+    The invalid branch names ``request_signing`` in the message (#1291 D1). Without it any
+    CONFIGURATION_ERROR satisfied the row — including the unbacked-block and pydantic
+    extra-field rejections that fire before the relation is ever evaluated — so a
+    graduation could be bought by the WRONG refusal instead of the rule under test.
+    """
     expected = expected.strip()
     if expected == "invalid":
-        _assert_capabilities_config_error(ctx)
+        _assert_capabilities_config_error(ctx, message_substr="request_signing")
         return
     assert expected == "valid", f"unrecognized expected column: {expected!r}"
     _assert_capabilities_success(ctx)
@@ -2374,10 +2380,15 @@ def then_webhook_signing_bounds(ctx: dict, expected: str) -> None:
     and algorithms — when present — is a non-empty, unique array drawn from the closed enum
     {ed25519, ecdsa-p256-sha256}. invalid → the builder rejects the posture (must_equal_when
     fired with supported != true, or an algorithm outside the closed enum) with
-    CONFIGURATION_ERROR (recovery terminal) rather than emitting a non-conformant block."""
+    CONFIGURATION_ERROR (recovery terminal) rather than emitting a non-conformant block.
+
+    The invalid branch names ``webhook_signing`` in the message (#1291 D1) for the same
+    reason as ``then_request_signing_relations``: an un-named CONFIGURATION_ERROR is
+    equally satisfied by the refusal of a block the row never meant to test.
+    """
     expected = expected.strip()
     if expected == "invalid":
-        _assert_capabilities_config_error(ctx)
+        _assert_capabilities_config_error(ctx, message_substr="webhook_signing")
         return
     assert expected == "valid", f"unrecognized expected column: {expected!r}"
     _assert_capabilities_success(ctx)
@@ -2442,3 +2453,285 @@ def then_trusted_match_surfaces_in_enum(ctx: dict, allowed: str) -> None:
     surfaces = wire_field(ctx, "media_buy.execution.trusted_match.surfaces")
     invalid = set(surfaces) - TRUSTED_MATCH_SURFACE_ENUM
     assert not invalid, f"trusted_match.surfaces carries non-enum values: {sorted(invalid)}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# D1 (#1291): the signing family reaches the wire, so its MAIN-FLOW scenarios
+# stop being dormant.
+#
+# Every Given here is a REAL state change through the shared env
+# (CapabilitiesEnv.declare_signing), so the same scenario runs identically on
+# a2a/mcp/rest: production resolves the tenant itself on every transport. None
+# of them records intent in ctx, and none of them is transport-aware.
+#
+# `request_signing` is DECLARED (a tenant posture); `webhook_signing` is
+# DERIVED from key material plus trust-root publishability and `_DERIVED_BLOCKS`
+# refuses a declaration of it — so the webhook Givens MINT A KEY instead of
+# declaring a block. That asymmetry is the Core Invariant of the family, not an
+# implementation detail of these steps.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _parse_declared_list(token: str) -> list[str]:
+    """A Gherkin ``[...]`` fragment as bare names, quoted or not.
+
+    The feature writes operation buckets QUOTED (``supported_for=["create_media_buy"]``)
+    and algorithm sets BARE (``algorithms=[ed25519]``), and both have to arrive as the
+    plain strings the schema carries — ``'"create_media_buy"'`` would be declared verbatim
+    and then never match an operation name on the wire.
+    """
+    return [item.strip('"') for item in _parse_bracket_list(token)]
+
+
+def _parse_posture_fragment(text: str) -> dict[str, Any]:
+    """Parse a ``key=value`` posture fragment into declaration kwargs.
+
+    Handles the three value shapes the feature's ``<posture>`` columns use:
+    booleans (``supported=true``), bare strings (``covers_content_digest=either``)
+    and bracketed lists (``algorithms=[ed25519]``). Deliberately strict — an
+    unparsed token would silently drop a field the row exists to grade.
+    """
+    posture: dict[str, Any] = {}
+    for key, raw in re.findall(r"(\w+)=(\[[^\]]*\]|\S+)", text.strip()):
+        if raw in ("true", "false"):
+            posture[key] = raw == "true"
+        elif raw.startswith("["):
+            posture[key] = _parse_declared_list(raw)
+        else:
+            posture[key] = raw
+    assert posture, f"posture fragment {text!r} parsed to nothing"
+    return posture
+
+
+@given(parsers.re(r"the tenant declares request_signing posture (?P<posture>supported=.+)$"))
+def given_request_signing_posture(ctx: dict, posture: str) -> None:
+    """Store a real ``request_signing`` declaration on the tenant.
+
+    The whole block is the tenant's to declare since #1291 D1, and the field type IS
+    ``RequestSigningPosture`` — the same object the verifier enforces — so what reaches
+    the wire and what the middleware applies cannot be two different readings of this
+    row.
+    """
+    ctx["env"].declare_signing(request_signing=_parse_posture_fragment(posture))
+
+
+@given(parsers.re(r"the tenant declares (?P<fragment>request_signing\.\w+=\[.+)$"))
+def given_request_signing_buckets(ctx: dict, fragment: str) -> None:
+    """Store a ``request_signing`` declaration written as ``request_signing.<bucket>=[...]``.
+
+    One step for every bucket-set Given in the feature rather than one per scenario:
+    the namespace-split and subset scenarios differ only in WHICH buckets they name, and
+    a step per literal sentence is the duplication the BDD guards flag.
+
+    ``supported`` is forced true because a bucket-naming posture with ``supported: false``
+    enforces nothing — every operation resolves to the ``none`` bucket — so the scenario
+    would grade an inert declaration.
+
+    The ``request_signing.`` prefix is OPTIONAL per bucket, because the feature writes it
+    on the first bucket only (``request_signing.supported_for=[…] required_for=[…]``). A
+    prefix-requiring pattern silently kept just the first bucket and the declaration
+    reached the wire with empty ``required_for``/``warn_for`` — caught by the
+    grades-nothing guards in the Thens below, which is what they are for.
+    """
+    declaration: dict[str, Any] = {"supported": True}
+    for field, raw_list in re.findall(r"(?:request_signing\.)?(\w+)=(\[[^\]]*\])", fragment):
+        declaration[field] = _parse_declared_list(raw_list)
+    assert len(declaration) > 1, f"no request_signing buckets parsed from {fragment!r}"
+    ctx["env"].declare_signing(request_signing=declaration)
+
+
+@given(parsers.re(r"the tenant declares webhook_signing posture (?P<posture>supported=.+)$"))
+def given_webhook_signing_posture(ctx: dict, posture: str) -> None:
+    """Realize a ``webhook_signing`` posture as PLATFORM state, never as a declaration.
+
+    ``webhook_signing`` is derived (``_DERIVED_BLOCKS``): ``supported`` from an active key
+    this deployment can open AND a trust root it can publish, ``algorithms`` from the
+    ACTIVE key row's own ``alg``, ``profile`` from the SDK tag the signer emits. So
+    ``supported=true algorithms=[ed25519]`` is realized by MINTING an ed25519 key on a
+    publishable host, and ``supported=false`` by leaving the tenant keyless — which is
+    what makes the emitted block gradable against what the sender would actually do.
+
+    ``legacy_hmac_fallback`` needs no realization: it describes the legacy arm's
+    reachability in ``webhook_sender_factory``, which is unconditional and independent of
+    our key material.
+    """
+    parsed = _parse_posture_fragment(posture)
+    algorithms = parsed.get("algorithms") or []
+    assert parsed.get("supported") is not True or algorithms, (
+        f"a supported=true webhook_signing row must name the algorithm to mint a key of: {posture!r}"
+    )
+    ctx["env"].declare_signing(keyed_alg=algorithms[0] if parsed.get("supported") else None)
+
+
+# ── Thens: the emitted request_signing block ──────────────────────────────
+
+
+def _request_signing_bucket(ctx: dict, field: str) -> set[str]:
+    """One emitted ``request_signing`` bucket as a set, absent -> empty."""
+    value = wire_lookup(ctx, f"request_signing.{field}")
+    return set() if value is WIRE_MISSING or value is None else set(value)
+
+
+@then(parsers.parse("request_signing.supported should equal {expected}"))
+def then_request_signing_supported(ctx: dict, expected: str) -> None:
+    """The emitted ``supported`` echoes the declared one exactly."""
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    actual = wire_field(ctx, "request_signing.supported")
+    assert actual is (expected.strip() == "true"), (
+        f"request_signing.supported on the wire is {actual!r}, declared {expected.strip()!r}"
+    )
+
+
+@then(parsers.parse("request_signing.covers_content_digest should be {expected}"))
+def then_covers_content_digest(ctx: dict, expected: str) -> None:
+    """``covers_content_digest`` is the rule a buyer's Content-Digest is graded against.
+
+    Two ``<expected_digest>`` shapes in the outline, and the difference is the point: the
+    three ``supported=true`` rows demand an EXACT echo of the declared policy, while the
+    ``supported=false`` row allows absence — a seller that verifies nothing has no digest
+    policy to state, and the schema default is buyer interpretation rather than a seller
+    emission obligation. Absence is accepted ONLY there, and only for a value inside the
+    closed enum.
+    """
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    expected = expected.strip()
+    actual = wire_lookup(ctx, "request_signing.covers_content_digest")
+
+    if expected.startswith("equal to"):
+        wanted = _quoted_list(expected)[0]
+        assert actual == wanted, f"request_signing.covers_content_digest is {actual!r}, expected {wanted!r}"
+        return
+
+    allowed = set(_quoted_list(expected))
+    assert allowed, f"unparsed expected_digest column: {expected!r}"
+    assert actual is WIRE_MISSING or actual in allowed, (
+        f"request_signing.covers_content_digest is {actual!r}, which is neither absent nor one of {sorted(allowed)}"
+    )
+
+
+@then('request_signing.required_for should contain only AdCP tool names without "/"')
+def then_required_for_has_no_protocol_methods(ctx: dict) -> None:
+    """The namespace split, on the wire.
+
+    security.mdx :1045-1059 — ``required_for`` carries AdCP operation names only; a name
+    containing ``/`` is a JSON-RPC protocol method and belongs in the
+    ``protocol_methods_*`` bucket, and the spec requires a CONFIGURATION-time rejection
+    rather than coercion. Non-vacuous because the Given declares both namespaces at once:
+    a builder that merged them would put ``tasks/cancel`` here.
+    """
+    _assert_capabilities_success(ctx)
+    required = _request_signing_bucket(ctx, "required_for")
+    assert required, "request_signing.required_for is empty, so the no-slash rule grades nothing"
+    slashed = sorted(name for name in required if "/" in name)
+    assert not slashed, (
+        f"request_signing.required_for names JSON-RPC protocol methods {slashed}; they belong in "
+        "protocol_methods_required_for (security.mdx :1045-1059)"
+    )
+
+
+@then(parsers.parse('request_signing.protocol_methods_required_for should match pattern "{pattern}"'))
+def then_protocol_methods_match_pattern(ctx: dict, pattern: str) -> None:
+    """Every emitted protocol method matches the schema's own item pattern."""
+    _assert_capabilities_success(ctx)
+    methods = sorted(_request_signing_bucket(ctx, "protocol_methods_required_for"))
+    assert methods, "request_signing.protocol_methods_required_for is empty, so the pattern grades nothing"
+    bad = [method for method in methods if not re.match(pattern, method)]
+    assert not bad, f"protocol_methods_required_for entries {bad} do not match {pattern!r}"
+
+
+@then(parsers.parse("request_signing.{subset_field} should be a subset of request_signing.{superset_field}"))
+def then_request_signing_bucket_subset(ctx: dict, subset_field: str, superset_field: str) -> None:
+    """``x-adcp-validation.subset_of`` on the EMITTED buckets, either namespace.
+
+    One step for all four subset assertions in the two scenarios — they differ only in the
+    pair of bucket names, which is exactly what a parametrized step is for.
+    """
+    _assert_capabilities_success(ctx)
+    subset = _request_signing_bucket(ctx, subset_field)
+    superset = _request_signing_bucket(ctx, superset_field)
+    assert subset, f"request_signing.{subset_field} is empty, so the subset relation grades nothing"
+    extra = sorted(subset - superset)
+    assert not extra, (
+        f"request_signing.{subset_field} names {extra}, which request_signing.{superset_field} "
+        f"({sorted(superset)}) does not: an operation cannot be required or warned on without "
+        "being supported"
+    )
+
+
+@then("request_signing.warn_for should be disjoint from request_signing.required_for")
+def then_warn_disjoint_from_required(ctx: dict) -> None:
+    """An operation is graded in shadow mode or rejected outright, never both."""
+    _assert_capabilities_success(ctx)
+    warn = _request_signing_bucket(ctx, "warn_for")
+    required = _request_signing_bucket(ctx, "required_for")
+    assert warn and required, (
+        f"warn_for ({sorted(warn)}) and required_for ({sorted(required)}) must both be non-empty "
+        "for the disjointness relation to grade anything"
+    )
+    both = sorted(warn & required)
+    assert not both, f"request_signing.warn_for and required_for both name {both} (must be disjoint)"
+
+
+# ── Thens: the emitted webhook_signing block ──────────────────────────────
+
+
+@then(parsers.parse("webhook_signing.supported should equal {expected}"))
+def then_webhook_signing_supported_equals(ctx: dict, expected: str) -> None:
+    """The emitted ``supported`` equals what this tenant's platform state backs.
+
+    Distinct from ``then_webhook_signing_supported`` above, which grades the
+    ``should be <equal to true | true or false>`` phrasing of the ``must_equal_when``
+    outline. Same field, two different obligations: this one is an exact equality against
+    the platform state the Given built, that one is a conditional invariant.
+
+    Not an echo of a declaration — there is none. security.mdx @ v3.1.1 reserves ``false``
+    for the posture of EMITTING UNSIGNED webhooks, so the value has to follow the key
+    material and the trust root, which is what the Given put in place.
+    """
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    actual = wire_field(ctx, "webhook_signing.supported")
+    assert actual is (expected.strip() == "true"), (
+        f"webhook_signing.supported on the wire is {actual!r}, expected {expected.strip()!r}"
+    )
+
+
+def _assert_webhook_extra(ctx: dict, block: dict, clause: str) -> None:
+    """Grade ONE ``<expected_extras>`` clause against the emitted block."""
+    clause = clause.strip()
+    if clause.endswith("absent"):
+        field = clause.rsplit(" ", 1)[0].strip()
+        assert field not in block, (
+            f"webhook_signing.{field} is present ({block[field]!r}) but this posture does not sign, "
+            "so it names a Signature-Input header that never goes out"
+        )
+        return
+
+    field, _, wanted = clause.partition(" equals ")
+    field, wanted = field.strip(), wanted.strip()
+    if wanted in ("true", "false"):
+        expected: Any = wanted == "true"
+    elif wanted.startswith("["):
+        expected = _parse_bracket_list(wanted)
+    else:
+        expected = _quoted_list(wanted)[0]
+    assert block.get(field) == expected, f"webhook_signing.{field} is {block.get(field)!r}, expected {expected!r}"
+
+
+@then(parsers.parse("webhook_signing should satisfy {expected_extras}"))
+def then_webhook_signing_extras(ctx: dict, expected_extras: str) -> None:
+    """Grade the row's ``profile`` / ``algorithms`` / ``legacy_hmac_fallback`` expectations.
+
+    ``profile`` MUST match the ``tag=`` the signer emits, and ``algorithms`` is the set we
+    WILL sign with (derived from the ACTIVE key row, never the ALLOWED set) — so both are
+    exact value comparisons. The ``supported=false`` row asserts BOTH are ABSENT: with no
+    ``Signature-Input`` on the wire there is no ``tag=`` to match and no algorithm we would
+    use, so declaring either would be a claim about a header we promise not to send.
+    """
+    _assert_capabilities_success(ctx)
+    _assert_schema_valid(ctx)
+    block = wire_dict(ctx, "webhook_signing")
+    for clause in expected_extras.split(" and "):
+        _assert_webhook_extra(ctx, block, clause)

@@ -9,7 +9,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 from adcp.types import ContextObject, Error, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
@@ -28,18 +28,17 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     MediaBuy,
     Portfolio,
     PublisherDomain,
-    RequestSigning,
     Targeting,
-    WebhookSigning,
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from src.core.agent_identity import brand_json_url, canonical_agent_url, jwks_origin
 from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_supported_billing
-from src.core.database.repositories.uow import TenantConfigUoW
-from src.core.exceptions import normalize_advisory_errors
+from src.core.database.repositories.uow import CapabilitiesUoW
+from src.core.exceptions import AdCPConfigurationError, normalize_advisory_errors
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant, get_targeting_capabilities_override
@@ -48,6 +47,18 @@ from src.core.schemas.capability_declarations import (
     DEFAULT_SPECIALISMS,
     DEFAULT_SUPPORTED_PROTOCOLS,
     CapabilityDeclarations,
+    SigningPlatformBacking,
+)
+from src.core.signing.posture import (
+    IdentityDeclaration,
+    RequestSigningPosture,
+    WebhookSigningPosture,
+    emitted_identity,
+    origin_is_publishable,
+    posture_for_tenant,
+    posture_from_declarations,
+    unsupported_webhook_signing_posture,
+    webhook_signing_posture,
 )
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
@@ -57,31 +68,6 @@ from src.core.version_negotiation import negotiate_adcp_version
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
-
-# webhook_signing / request_signing: declared identically on every response,
-# in-process and no-tenant alike (salesagent-3s5a).
-#
-# These are literals, and `supported: false` is the HONEST value for a tenant with
-# no signing key of its own — never omission, which the v3.1.1 schema also permits
-# and which is the dishonest declaration the epic's STRICT policy exists to
-# prevent. tests/integration/test_signing_key_provisioning.py::TestKeylessWire pins
-# that.
-#
-# What they are NOT is a statement that no signing exists: src/app.py mounts
-# RequestSignatureMiddleware with SigningConfig.verifier_enabled defaulting True
-# (#1291 B1), and the trust root publishes this tenant's JWKS (A3). So while a key
-# is provisioned (salesagent-7x8t) these two fields UNDER-declare what the agent
-# does. Making them tenant-derived is D1's scope (salesagent-z6nr.20) --
-# `request_signing` is still refused by name in `_UNBACKED_BLOCKS`, so no tenant can
-# declare one yet. When D1 lands, BOTH construction sites below (the no-tenant
-# response and the tenant-resolved one) must go through ONE _build_signing_blocks()
-# in the exact shape of _build_adcp_block: two independent literals for one wire
-# field is the drift bug that extraction already exists to prevent (salesagent-rldj).
-#
-# The must_equal_when(webhook emission -> supported=true) x-adcp-validation invariant
-# is satisfied vacuously today because production emits no webhook-triggering fields.
-_WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
-_REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
 
 # The baseline protocol/specialism sets every response advertises before any tenant
 # declaration is applied. ONE source consumed by both the no-tenant minimal response
@@ -144,6 +130,107 @@ def _build_adcp_block(tenant: Mapping | None) -> Adcp:
         major_versions=[MajorVersion(root=m) for m in SUPPORTED_ADCP_MAJORS],
         supported_versions=list(SUPPORTED_ADCP_VERSIONS),
         idempotency=posture.to_sdk_union(),
+    )
+
+
+class SigningBlocks(NamedTuple):
+    """The three signing-family blocks one response carries."""
+
+    request_signing: RequestSigningPosture
+    webhook_signing: WebhookSigningPosture
+    identity: IdentityDeclaration | None
+
+
+def _build_signing_blocks(
+    *,
+    posture: RequestSigningPosture,
+    webhook_signing: WebhookSigningPosture,
+    brand_json_url: str | None,
+    jwks_origin: str | None,
+) -> SigningBlocks:
+    """The ONE builder for request_signing / webhook_signing / identity (#1291 D1).
+
+    Single source for BOTH construction sites — the no-tenant minimal response and the
+    tenant-resolved one — in the exact shape of :func:`_build_adcp_block`. The two
+    independent ``WebhookSigning(supported=False)`` / ``RequestSigning(supported=False)``
+    literals this replaces are the drift class that extraction already exists to prevent
+    (#1592 C4): a keyed tenant's webhooks have been RFC 9421-signed since #1291 C1
+    while both sites declared ``supported: false``.
+
+    Every parameter is a RESOLVED value — two frozen posture objects and two plain
+    strings — so this builder reads no store, opens no session and touches no ORM row.
+    That is what makes its entry in ``_DERIVATION_ONLY_BUILDERS`` truthful: single-source
+    for ``request_signing`` is enforced UPSTREAM, by ``posture_for_tenant`` being the sole
+    reader of the declaration, not by this function refusing to see one.
+
+    Passing the ORM ``Tenant`` in instead would raise ``DetachedInstanceError``: the
+    identity URLs are ORM attribute reads and no session here sets
+    ``expire_on_commit=False``, so the row must be read inside the unit of work that owns
+    it (``src/routes/well_known.py`` says the same thing in its own words).
+    """
+    return SigningBlocks(
+        request_signing=posture,
+        webhook_signing=webhook_signing,
+        identity=emitted_identity(
+            posture=posture,
+            webhook_signing_supported=webhook_signing.supported,
+            brand_json_url=brand_json_url,
+            jwks_origin=jwks_origin,
+        ),
+    )
+
+
+def _resolve_signing_blocks(
+    uow: CapabilitiesUoW,
+    declarations: CapabilityDeclarations | None,
+    *,
+    now: datetime,
+) -> SigningBlocks:
+    """Resolve every signing input INSIDE *uow*, then build the blocks.
+
+    Both DB reads and every ORM attribute access happen here, on the one session the
+    capabilities request owns: the tenant row (whose stored host IS the agent identity),
+    and the signing keys behind ``webhook_signing``. Only resolved values leave.
+
+    The declared-vs-derived cross-checks run here too, for the same reason — they are the
+    two relation rules that need platform state, and this is the only caller that has it.
+    """
+    assert uow.tenant_config is not None
+    assert uow.signing_keys is not None
+
+    posture = posture_from_declarations(declarations)
+    agent = uow.tenant_config.get_tenant()
+    if agent is None:
+        # The identity dict resolved a tenant that the tenants table does not carry.
+        # Nothing to publish a trust root for, and nothing to sign with.
+        return _build_signing_blocks(
+            posture=posture,
+            webhook_signing=unsupported_webhook_signing_posture(),
+            brand_json_url=None,
+            jwks_origin=None,
+        )
+
+    origin = canonical_agent_url(agent)
+    webhook_signing = webhook_signing_posture(uow.signing_keys, now=now, origin=origin)
+
+    # The derived pointer is handed to the validator UNCONDITIONALLY, including on a host
+    # that cannot serve https: a declared `https://elsewhere/...` on such a host must be
+    # rejected as a mismatch, not waved through because we happen to emit nothing.
+    # Publishability gates only the EMISSION.
+    if declarations is not None:
+        declarations.validate_signing_platform_backing(
+            SigningPlatformBacking(
+                webhook_signing_supported=webhook_signing.supported,
+                brand_json_url=brand_json_url(agent),
+            )
+        )
+
+    publishable = origin_is_publishable(origin)
+    return _build_signing_blocks(
+        posture=posture,
+        webhook_signing=webhook_signing,
+        brand_json_url=brand_json_url(agent) if publishable else None,
+        jwks_origin=jwks_origin(agent) if publishable else None,
     )
 
 
@@ -279,13 +366,23 @@ def _get_adcp_capabilities_impl(
     tenant = identity.tenant if identity else None
 
     if not tenant:
-        # Return minimal capabilities if no tenant context
+        # Return minimal capabilities if no tenant context. `request_signing` is an
+        # AGENT-level fact and stays honest here (the verifier middleware is mounted
+        # process-wide); `webhook_signing` is per-tenant, and with no tenant there is no
+        # key, so `supported: false` is the honest answer rather than dead config.
+        no_tenant_signing = _build_signing_blocks(
+            posture=posture_for_tenant(None),
+            webhook_signing=unsupported_webhook_signing_posture(),
+            brand_json_url=None,
+            jwks_origin=None,
+        )
         return GetAdcpCapabilitiesResponse(
             adcp=_build_adcp_block(None),
             supported_protocols=list(_DEFAULT_SUPPORTED_PROTOCOLS),
             specialisms=list(_DEFAULT_SPECIALISMS),
-            webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
-            request_signing=_REQUEST_SIGNING_UNSUPPORTED,
+            webhook_signing=no_tenant_signing.webhook_signing,
+            request_signing=no_tenant_signing.request_signing,
+            identity=no_tenant_signing.identity,
             context=req.context if req else None,
         )
 
@@ -297,6 +394,18 @@ def _get_adcp_capabilities_impl(
 
     # Log activity
     log_tool_activity(identity, "get_adcp_capabilities")
+
+    # Per-tenant capability declarations (#1592 T1a). Parsed and backing-checked on
+    # the read path: the graded observable in every rejection scenario is the
+    # get_adcp_capabilities response, so an invalid declaration must surface as a
+    # terminal CONFIGURATION_ERROR here rather than being discovered only at some
+    # future write surface. `None` (nothing declared) reproduces the pre-#1592 wire.
+    #
+    # Parsed BEFORE the degradation blocks below (#1291 D1): each of those swallows
+    # Exception to degrade, and a relation-violating declaration must propagate as
+    # CONFIGURATION_ERROR rather than be reported to the buyer as "we could not resolve
+    # your adapter channels".
+    declarations = CapabilityDeclarations.from_tenant(tenant.get("capability_declarations"))
 
     # Get adapter CLASS to determine channels and capabilities. Tenant-only,
     # principal-free: capabilities describe the SELLER (tenant), not the
@@ -341,17 +450,43 @@ def _get_adcp_capabilities_impl(
         except Exception as e:
             _record_degradation(advisories, "supported pricing models", e)
 
-    # Get publisher domains from database
+    # ONE session for every database read this response needs: the publisher partners,
+    # and the signing family's key + tenant-host reads. Two `try`s inside it, each with
+    # its OWN degradation label, because a signing-key failure advertised as "could not
+    # resolve publisher domains" tells the buyer the wrong thing. Neither swallows
+    # AdCPConfigurationError: a rejected declaration is a terminal error, not a partial
+    # result (#1291 D1).
     publisher_domains: list[PublisherDomain] = []
+    signing = _build_signing_blocks(
+        posture=posture_from_declarations(declarations),
+        webhook_signing=unsupported_webhook_signing_posture(),
+        brand_json_url=None,
+        jwks_origin=None,
+    )
     try:
-        with TenantConfigUoW(tenant_id) as uow:
+        with CapabilitiesUoW(tenant_id) as uow:
             assert uow.tenant_config is not None
-            partners = uow.tenant_config.list_publisher_partners()
-            for partner in partners:
-                if partner.publisher_domain:
-                    publisher_domains.append(PublisherDomain(root=partner.publisher_domain))
+            try:
+                partners = uow.tenant_config.list_publisher_partners()
+                for partner in partners:
+                    if partner.publisher_domain:
+                        publisher_domains.append(PublisherDomain(root=partner.publisher_domain))
+            except AdCPConfigurationError:
+                raise
+            except Exception as e:
+                _record_degradation(advisories, "publisher domains", e)
+
+            try:
+                signing = _resolve_signing_blocks(uow, declarations, now=datetime.now(UTC))
+            except AdCPConfigurationError:
+                raise
+            except Exception as e:
+                _record_degradation(advisories, "signing key backing", e)
+    except AdCPConfigurationError:
+        raise
     except Exception as e:
-        _record_degradation(advisories, "publisher domains", e)
+        # The session itself could not be opened, so neither read happened.
+        _record_degradation(advisories, "tenant configuration", e)
 
     # If no domains found, use a placeholder
     if not publisher_domains:
@@ -441,13 +576,6 @@ def _get_adcp_capabilities_impl(
         geo_postal_areas=geo_postal_areas,
     )
 
-    # Per-tenant capability declarations (#1592 T1a). Parsed and backing-checked on
-    # the read path: the graded observable in every rejection scenario is the
-    # get_adcp_capabilities response, so an invalid declaration must surface as a
-    # terminal CONFIGURATION_ERROR here rather than being discovered only at some
-    # future write surface. `None` (nothing declared) reproduces the pre-#1592 wire.
-    declarations = CapabilityDeclarations.from_tenant(tenant.get("capability_declarations"))
-
     # Build execution capabilities. Declared blocks merge in; undeclared stay absent
     # (honest omission, never an empty object).
     execution = Execution(
@@ -472,12 +600,17 @@ def _get_adcp_capabilities_impl(
     creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
 
     # Build media_buy capabilities
+    # reporting_delivery_methods reaches the wire from the declaration store, which is
+    # what makes webhook_signing's `must_equal_when` rule non-vacuous: before #1291 D1
+    # no webhook-triggering field was ever emitted, so the invariant held only because
+    # nothing could fire it.
     media_buy = MediaBuy(
         portfolio=portfolio,
         features=features,
         execution=execution,
         supported_pricing_models=supported_pricing_models,
         creative_approval_mode=creative_approval_mode,
+        reporting_delivery_methods=declarations.reporting_delivery_methods if declarations else None,
     )
 
     # Build response
@@ -508,8 +641,9 @@ def _get_adcp_capabilities_impl(
         experimental_features=declarations.emitted_experimental_features() if declarations else None,
         media_buy=media_buy,
         account=_build_account_block(tenant),
-        webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
-        request_signing=_REQUEST_SIGNING_UNSUPPORTED,
+        webhook_signing=signing.webhook_signing,
+        request_signing=signing.request_signing,
+        identity=signing.identity,
         errors=normalize_advisory_errors(advisories) or None,
         last_updated=datetime.now(UTC),
         context=req.context if req else None,

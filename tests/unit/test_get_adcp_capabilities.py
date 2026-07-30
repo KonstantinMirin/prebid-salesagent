@@ -217,7 +217,7 @@ class TestGetAdcpCapabilitiesWithTenant:
         current_tenant.set(mock_tenant)
 
         try:
-            # Mock TenantConfigUoW to avoid actual DB calls
+            # Mock CapabilitiesUoW to avoid actual DB calls
             mock_repo = MagicMock()
             mock_repo.list_publisher_partners.return_value = []
             mock_uow = MagicMock()
@@ -226,7 +226,7 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.tenant_config = mock_repo
 
             with (
-                patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+                patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow),
                 patch(
                     "src.core.tools.capabilities.get_adapter_class_for_tenant",
                     side_effect=Exception("adapter unavailable (test)"),
@@ -309,7 +309,7 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow.tenant_config = mock_repo
 
-            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+            with patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow):
                 from tests.factories import PrincipalFactory
 
                 identity = PrincipalFactory.make_identity(
@@ -410,14 +410,21 @@ def _patch_capabilities_deps(
 
     stack = ExitStack()
 
-    # Mock TenantConfigUoW — the repository pattern replacement for get_db_session
+    # Mock CapabilitiesUoW — the ONE session a capabilities request opens (#1291 D1
+    # widened TenantConfigUoW into it so the signing-key and tenant-host reads share it).
     mock_repo = MagicMock()
     mock_repo.list_publisher_partners.return_value = db_partners or []
+    # No ORM tenant row: these unit tests drive the impl from a tenant DICT, and the
+    # identity block is derived from the ROW. Returning None takes the documented
+    # "resolved a tenant the tenants table does not carry" branch — keyless, no trust
+    # root — rather than letting a MagicMock fabricate a host and a key.
+    mock_repo.get_tenant.return_value = None
     mock_uow = MagicMock()
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.tenant_config = mock_repo
-    stack.enter_context(patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow))
+    mock_uow.signing_keys = MagicMock()
+    stack.enter_context(patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow))
 
     # Mock log_tool_activity (no-op)
     stack.enter_context(patch("src.core.tools.capabilities.log_tool_activity"))
@@ -535,7 +542,7 @@ class TestGracefulDegradation:
         mock_uow.tenant_config = mock_repo
 
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+            patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow),
             patch("src.core.tools.capabilities.log_tool_activity"),
             patch(
                 "src.core.tools.capabilities.get_adapter_class_for_tenant",
@@ -557,7 +564,7 @@ class TestGracefulDegradation:
         )
 
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
+            patch("src.core.tools.capabilities.CapabilitiesUoW", side_effect=Exception("DB down")),
             patch("src.core.tools.capabilities.log_tool_activity"),
             patch(
                 "src.core.tools.capabilities.get_adapter_class_for_tenant",
@@ -729,21 +736,28 @@ class TestAccountBlockAndSigningDeclarations:
     Core Invariant (salesagent-3s5a): every field capabilities.py emits is either
     (a) read from the exact tenant config the corresponding enforcement path reads
     (supported_billing via resolve_supported_billing, mirroring _check_billing_policy),
-    or (b) a true constant of the current architecture (require_operator_auth=False,
-    webhook_signing/request_signing supported=False) -- never fabricated.
+    or (b) a true constant of the current architecture (require_operator_auth=False)
+    -- never fabricated.
 
-    These are RED until src/core/tools/capabilities.py emits account/webhook_signing/
-    request_signing (salesagent-becl.15 implements this).
+    The two signing blocks moved from category (b) to category (a) under #1291 D1: they
+    are no longer constants at all. ``request_signing.supported`` is
+    ``SigningConfig.verifier_enabled`` (the pin defines the field as "whether this agent
+    VERIFIES signatures on incoming requests", and the middleware is mounted
+    process-wide), while ``webhook_signing.supported`` is derived from THIS tenant's
+    signing keys plus trust-root publishability. What has NOT changed is that both are
+    always PRESENT: an explicit false may become a different value, never silence.
     """
 
-    def test_no_tenant_response_omits_account_but_declares_signing_false(self):
-        """No-tenant (minimal) path: account block absent, signing blocks present and False.
+    def test_no_tenant_response_omits_account_and_declares_the_agent_level_posture(self):
+        """No-tenant (minimal) path: account absent, both signing blocks present.
 
-        webhook_signing/request_signing are agent-level facts (not tenant-dependent),
-        so they must appear on BOTH the no-tenant and tenant-resolved paths. account
-        stays absent on the no-tenant path (BR-RULE-052 / ext-a: no tenant to derive
-        billing/sandbox from).
+        ``request_signing`` is an AGENT-level fact and stays honest with no tenant
+        resolved -- the verifier really does run for that caller, so a literal false
+        would under-declare it (#1291 D1). ``webhook_signing`` is the opposite case:
+        no tenant means no key, so false is the honest value. account stays absent
+        (BR-RULE-052 / ext-a: no tenant to derive billing/sandbox from).
         """
+        from src.core.config import get_config
         from src.core.config_loader import current_tenant
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -757,7 +771,8 @@ class TestAccountBlockAndSigningDeclarations:
         assert response.webhook_signing.supported is False
 
         assert response.request_signing is not None
-        assert response.request_signing.supported is False
+        assert response.request_signing.supported is get_config().signing.verifier_enabled
+        assert response.identity is None, "no tenant means no trust root to point a key origin at"
 
     def test_account_block_present_with_tenant_and_honest_constants(self):
         """Tenant-resolved path: account block present with the exact honest-constant shape.
@@ -857,12 +872,17 @@ class TestAccountBlockAndSigningDeclarations:
 
         assert response.account.sandbox is False
 
-    def test_webhook_signing_and_request_signing_declared_false_with_tenant(self):
-        """Tenant-resolved path also declares webhook_signing/request_signing supported=False.
+    def test_signing_blocks_split_the_agent_level_fact_from_the_per_tenant_one(self):
+        """Tenant-resolved path: verify true (agent-level), sign false (no key).
 
-        Built once (DRY) and shared with the no-tenant path -- these are agent-level
-        facts, not tenant config.
+        Both blocks come from ONE builder shared with the no-tenant path (DRY), but they
+        are backed by different things and a keyless tenant is where that shows.
+        ``request_signing`` declares that we verify with the COUNTERPARTY's keys, so it is
+        not key-backed; ``webhook_signing`` declares that we sign with OUR OWN, so it is.
+        Collapsing them onto one literal is what made a keyless tenant and a keyed one
+        indistinguishable on the wire while #1291 C1 was already signing (D1).
         """
+        from src.core.config import get_config
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         tenant = {
@@ -880,7 +900,11 @@ class TestAccountBlockAndSigningDeclarations:
         assert response.webhook_signing.supported is False
 
         assert response.request_signing is not None
-        assert response.request_signing.supported is False
+        assert response.request_signing.supported is get_config().signing.verifier_enabled
+        assert not response.request_signing.required_for, (
+            "the default posture ships an EMPTY required_for -- a non-empty default would "
+            "reject every existing buyer at once"
+        )
 
 
 class TestGeoPostalAreas:

@@ -452,22 +452,78 @@ existing `_UNBACKED_BLOCKS` loop in
 ### 9.2 Tenant-level — typed fields on `CapabilityDeclarations`
 
 Stored inside the existing `tenants.capability_declarations` `JSONType` column
-(`src/core/database/models.py:112`). **No migration.**
+(`src/core/database/models.py`). **No migration.**
+
+Two of the three signing blocks are DECLARED; one is DERIVED. That split is the Core
+Invariant of the family, not a convenience — see §9.4.
 
 | Field | Why it varies per tenant |
 |---|---|
 | `request_signing.supported` | a seller may run the verifier but not offer it to this counterparty |
-| `request_signing.covers_content_digest` | per-counterparty digest policy; graded at `:1043` |
-| `request_signing.supported_for` / `warn_for` / `required_for` | **the rollout dial**; graded at `:1064`, `:1081` |
-| `request_signing.protocol_methods_{supported,warn,required}_for` | same dial, JSON-RPC namespace; graded at `:1064` |
-| `webhook_signing.{supported,profile,algorithms,legacy_hmac_fallback}` | per-receiver RFC 9421 vs legacy HMAC; graded at `:1094` |
-| `identity.brand_json_url` | per-tenant `virtual_host` ⇒ per-tenant trust root; graded at `:1521` |
+| `request_signing.covers_content_digest` | per-counterparty digest policy; graded by `@T-UC-010-v31-request-signing-posture` |
+| `request_signing.supported_for` / `warn_for` / `required_for` | **the rollout dial**; graded by `@T-UC-010-v31-request-signing-subset` and `@T-UC-010-v31-request-signing-monotonicity` |
+| `request_signing.protocol_methods_{supported,warn,required}_for` | same dial, JSON-RPC namespace; graded by `@T-UC-010-v31-request-signing-namespace-split` |
+| `identity.brand_json_url` | per-tenant `virtual_host` ⇒ per-tenant trust root; graded by `@T-UC-010-v31-identity-brand-json-url` |
 | `identity.{per_principal_key_isolation,key_origins,compromise_notification}` | advisory posture, per operator |
-| `media_buy.content_standards.supports_webhook_delivery` | declarable **only once C1 signs** — declaring it fires `must_equal_when` |
-| `media_buy.reporting_delivery_methods` | `[webhook]` declarable after C1; `[offline]` stays unbacked under **#1729**, not this epic |
+| `media_buy.reporting_delivery_methods` | `[webhook]` is backed and declarable; any list containing `offline` is refused under **#1729** |
 
-`media_buy.offline_delivery_protocols` is **#1729 only** and does not become declarable here. The
-`T-UC-010-v31-reporting-delivery-methods` `offline_only` row does not graduate under #1291.
+The field type for `request_signing` is `RequestSigningPosture` — the EXISTING posture class
+from `src/core/signing/posture.py`, not a parallel declaration model. That is what makes the
+block the wire carries and the `VerifierCapability` the middleware enforces two views of one
+object, and it inherits the namespace split, the protocol-method pattern and the
+`covers_content_digest` enum from the SDK. `identity` is `IdentityDeclaration`, a
+`Library*`-alias subclass that RESTATES `extra="forbid"` because the SDK's `Identity` is
+`extra="allow"` and would otherwise swallow an operator's typo.
+
+`webhook_signing` has **no field**. Its four properties are platform state:
+`supported` from `KeyBacking.signs` AND trust-root publishability, `algorithms` from the
+ACTIVE key row's `alg`, `profile` from the SDK's `WEBHOOK_TAG`, `legacy_hmac_fallback` from
+the legacy arm's own reachability in `webhook_sender_factory`. `webhook_signing_posture()` is
+the one producer, and C1's `_rfc9421_sender` consumes that same object — so the wire and the
+socket cannot disagree about whether we sign or with what. Graded by
+`@T-UC-010-v31-webhook-signing`.
+
+`identity` is declared for VALIDATION and derived for EMISSION, and neither substitutes for
+the other. The store carries the block so a declaration naming a posture without
+`brand_json_url` is rejectable at all; the value put on the wire comes from
+`src/core/agent_identity.py`, so an emitted posture always carries a conformant pointer. A
+declared value that differs from the derived one is a `CONFIGURATION_ERROR` naming the field.
+
+`media_buy.content_standards` and `wholesale_feed_webhooks` stay refused, with reasons that
+outlive #1291: nothing in `src/` implements a content-standards surface or a wholesale feed of
+any kind. `media_buy.offline_delivery_protocols` is **#1729 only**. The
+`@T-UC-010-v31-reporting-delivery-methods` `offline_only` row does not graduate under #1291.
+
+**The publishability gate.** `webhook_signing.supported` additionally requires
+`canonical_agent_url(tenant)` to start `https://`, and the gate sits on the SHARED posture
+object — so a keyed tenant on a non-https origin both advertises `false` AND has its sender
+take the unauthenticated arm. This is a deliberate change to C1's landed behaviour for such
+tenants, and it is the honest one: key discovery for our outbound signatures runs through
+`identity.brand_json_url`, which the pin fixes to `^https://` and which security.mdx rejects
+otherwise (`request_signature_brand_json_url_missing`). On such a host every signature we
+emitted would be one no conformant receiver can resolve a key for, so stopping removes an
+unverifiable signature rather than withdrawing a capability. Production tenants with a
+`virtual_host` or `SALES_AGENT_DOMAIN` are dotted and unaffected; the consequence for the test
+stacks is that any suite needing a live declared posture sets a dotted `virtual_host`.
+
+`request_signing.supported` is NOT gated: it declares that we VERIFY with the COUNTERPARTY's
+keys and needs no trust root of ours, so the conservative default stays emittable on
+`http://localhost:8080`. Its BUCKETS are effectively gated by the `identity` rules instead — a
+non-empty bucket fires `required_when`, and on a non-https host no conformant `brand_json_url`
+exists, so the declaration is REFUSED rather than silently narrowed.
+
+**The no-tenant response** declares `request_signing.supported = SigningConfig.verifier_enabled`
+with every bucket empty, `webhook_signing.supported: false`, and no `identity`. The pin defines
+`request_signing.supported` as *"whether this agent VERIFIES RFC 9421 signatures on incoming
+requests"* — an AGENT-level fact, and `RequestSignatureMiddleware` is mounted process-wide, so a
+literal `false` there under-declares something true. `webhook_signing` is the opposite case: no
+tenant means no key.
+
+**The default posture** is `supported: true` with `required_for` EMPTY and every other bucket
+empty. The schema says `required_for` is *"empty in 3.0 by default; sellers populate selectively
+during per-counterparty pilots"*, and per the `required_when` trigger list an all-empty posture
+fires nothing — so it stays emittable for a keyless tenant with no trust root at all. Promotion
+runs `supported_for → warn_for → required_for` (§10).
 
 ### 9.3 Agent-level — one `SigningConfig(BaseSettings)` on `AppConfig`
 
@@ -559,35 +615,75 @@ publish** (A3); Group C is about **the counterparty's**, which we fetch.
 and ≥1,000,000 in production. Model it as an agent-level default plus a **per-keyid counterparty
 override**, never a tenant field and never a global lowering.
 
-### 9.4 The bridge — `_UNBACKED_BLOCKS` generalizes
+### 9.4 The two refusal tables, and why there are two
 
-Today `_UNBACKED_BLOCKS` means *"this block has no field at all"*. It becomes *"this block's field
-exists but the running process does not back it"*. A tenant declaring
-`request_signing.supported=true` while the verifier is unmounted is refused **by name**, exactly as
-today. Same for `webhook_signing.supported=true` without a provisioned webhook key, and for a
-`brand_json_url` whose origin this deployment does not serve.
+`is_block_declarable(block)` is the ONE predicate every consumer reads — the middleware's body
+buffer and operation resolve, and the two `*_is_declarable()` wrappers. It answers False off
+either of two tables, because the reason differs and so does the fix the operator needs:
 
-### 9.5 The failure mode this creates, and the decision about it
+- **`_UNBACKED_BLOCKS`** — the schema defines it, this deployment does not IMPLEMENT it. Holds
+  `content_standards` and `wholesale_feed_webhooks` (no surface of any kind exists for either;
+  both were re-homed off #1291 because signing landing does not make them declarable and an
+  entry citing #1291 would point at a closed issue) and `offline_delivery_protocols` (#1729).
+  `wholesale_feed_webhooks` has no model field either; it is listed so the operator gets a
+  reason rather than pydantic's generic extra-field error, and because it is the third
+  `must_equal_when` trigger.
+- **`_DERIVED_BLOCKS`** — we DO implement it, but the value is platform state, so there is
+  nothing for a tenant to declare. Holds `webhook_signing` alone. Same philosophy the
+  `_DERIVATION_ONLY_BUILDERS` guard already encodes for `account.*` and `adcp.*`.
 
-`from_tenant()` → `validate_backing()` runs on the **read** path, per request
-(`src/core/tools/capabilities.py:433`). Today it is checked against a **static table**, so it can
-only fail for a declaration an operator wrote. Checked against **mutable process config**,
-unmounting the verifier — or rolling back the B1 middleware — would turn `get_adcp_capabilities`
-into `CONFIGURATION_ERROR` for every tenant that declared `supported=true`. **Discovery would break
-on rollback, for tenants who changed nothing.**
+`request_signing` and `identity` are in NEITHER: they are declarable fields (§9.2).
+`reporting_delivery_methods` is MEMBER-gated in `validate_backing` rather than block-gated,
+which is what lets the `webhook_only` row be graded on its own terms while `offline_only` stays
+refused.
 
-**Decision: the read path degrades; only the write path raises.**
+### 9.5 Three paths, three failure modes — all decided
 
-- **Read path:** when agent-level backing is absent, the emitted posture degrades to
-  `supported=false` — the honest wire fact, since the verifier really is not running — and the
-  response succeeds. Log at WARNING with the tenant and the missing backing.
-- **Write/config path:** keeps raising `AdCPConfigurationError` → `CONFIGURATION_ERROR`. That is
-  where STRICT matters: an operator still cannot *declare* an unbacked posture.
-- **Unchanged:** a **schema-relation** violation (`required_for ⊄ supported_for`, `warn_for ∩
-  required_for ≠ ∅`) is a bad declaration and raises on **both** paths. The graded "invalid" rows at
-  `:1064`/`:1081` depend on that. Only the **agent-backing** check degrades.
+`CapabilityDeclarations.from_tenant()` RAISES. It has three callers, and each needs a different
+answer:
 
-D1 must not pick one of these silently.
+- **The capabilities READ path** (`src/core/tools/capabilities.py`) — raises. A malformed or
+  relation-violating declaration surfaces as a terminal `CONFIGURATION_ERROR` naming the
+  offending field, because the graded observable in every rejection scenario is the
+  `get_adcp_capabilities` response. The parse happens BEFORE the degradation blocks, and the
+  signing reads get their own `try` with their own advisory label, so a signing-key failure is
+  never reported to the buyer as "could not resolve publisher domains".
+- **The write/config path** — raises, for the same reason and more strongly: STRICT exists so an
+  operator cannot *declare* an unbacked posture.
+- **The ASGI verifier MIDDLEWARE** (`src/core/signing/request_verifier_middleware.py`) —
+  degrades. `_resolve_request_context` runs in an `asyncio.to_thread` hop with nothing above it
+  that translates `AdCPError`: `src/app.py` mounts the verifier under
+  `UnifiedAuthMiddleware`/CORS only, and `_reject` emits a signature-specific 401 rather than a
+  general envelope. Uncaught, ONE relation-violating declaration would answer EVERY AdCP request
+  — get_products, create_media_buy, all of them — with a bare 500. So `posture_for_tenant`
+  catches `AdCPError` (never a bare `Exception`), logs WARNING naming the tenant, and returns
+  `UNSUPPORTED_POSTURE`. The same misconfiguration is loud on the surface whose job is to report
+  it, and the fallback does not INVENT enforcement the tenant never declared. The rejected
+  alternative — promoting an unreadable posture to `required` — turns a config typo into a 401
+  on every AdCP surface. `_fail_closed_bucket` is unchanged: it covers the different case of a
+  READABLE posture plus an unnameable request.
+
+  `_detect_tenant_for_posture` extends the same trade one step out: the tenant READ itself can
+  fail (a Postgres blip), on the same line, with the same absent envelope. It degrades to no
+  tenant, hence to the agent-level posture. The security consequence is stated rather than
+  hidden: for the interval of the failure, a tenant that declared `required_for` stops having it
+  required.
+
+**Agent-level backing degrades rather than raising, on every path.** A DECLARED posture with
+`SigningConfig.verifier_enabled` false resolves to `supported=false` with a WARNING. Rolling the
+verifier back is then a flag flip that makes the wire honest, not one that turns discovery into
+`CONFIGURATION_ERROR` for every tenant that changed nothing. Because it is ONE object, the
+middleware then also declines to enforce — which is correct, the verifier is not running.
+
+**Schema-RELATION violations raise** (`required_for ⊄ supported_for`, `warn_for ∩ required_for ≠
+∅`, `required_when`, `purpose_anchoring`, the declared-vs-derived `brand_json_url` mismatch).
+Those are bad declarations, not absent backing, and the graded "invalid" rows depend on it.
+
+**The cost this turns on, paid on purpose.** `request_signing` leaving the refusal tables flips
+`request_signing_is_declarable()` True, which enables per-request body buffering, operation
+resolution and a tenant read for ALL AdCP traffic — the expense R-H3 gated deliberately while B1
+shipped alone. A declared posture is the thing being enforced, so the read is now worth its
+price.
 
 ---
 
