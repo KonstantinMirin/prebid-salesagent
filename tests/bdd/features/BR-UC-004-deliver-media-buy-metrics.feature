@@ -716,7 +716,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | both_windows | {"post_click": {"interval": 14, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}, "model": "last_touch"} | valid |
       | campaign_unit | {"post_click": {"interval": 1, "unit": "campaign"}} | valid |
       | model_only | {"model": "data_driven"} | valid |
-      | seller_ignores | {"post_click": {"interval": 30, "unit": "days"}} | valid |
+      | post_click_30d_echoed_verbatim | {"post_click": {"interval": 30, "unit": "days"}} | valid |
 
     Examples: Invalid partitions
       | partition | value | expected |
@@ -746,7 +746,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | interval=1 (minimum boundary) | {"post_click": {"interval": 1, "unit": "days"}} | valid |
       | unit=weeks (not in enum) | {"post_click": {"interval": 1, "unit": "weeks"}} | error "VALIDATION_ERROR" |
       | model=last_click (not in enum) | {"model": "last_click"} | error "VALIDATION_ERROR" |
-      | seller ignores field (no configurable window support) | {"post_click": {"interval": 30, "unit": "days"}} | valid |
+      | post_click 30-day window echoed verbatim (no model) | {"post_click": {"interval": 30, "unit": "days"}} | valid |
 
   @T-UC-004-partition-daily-breakdown @partition @include_package_daily_breakdown
   Scenario Outline: Include package daily breakdown partition - <partition>
