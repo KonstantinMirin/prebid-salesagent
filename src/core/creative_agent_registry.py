@@ -27,7 +27,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
+from adcp import (
+    ADCPMultiAgentClient,  # noqa: TID251 - SDK dials un-pinned; injection blocked by adcp 6.6.0 (GH #1589)
+    ListCreativeFormatsRequest,
+)
 from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
@@ -898,8 +901,12 @@ class CreativeAgentRegistry:
         """Get a specific format from an agent.
 
         ``agent_url`` here is an arbitrary URL handed in by a caller, not one of
-        this tenant's registered agents — which is why this entry point always
-        fetches through the egress seam rather than the SDK client.
+        this tenant's registered agents. Which path dials depends on ``field``:
+        with ``field`` set (a counterparty supplied the URL), the fetch goes
+        through the egress seam (``asend``); with ``field=None`` — e.g. the
+        registered-agent-gated caller in ``media_buy_create.py`` — it rides the
+        SDK client path, which dials un-pinned until adcp grows a transport
+        injection point (GH #1589).
 
         Args:
             agent_url: URL of the creative agent

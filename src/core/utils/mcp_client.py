@@ -27,7 +27,9 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
+from fastmcp.client.transports import (
+    StreamableHttpTransport,  # noqa: TID251 - the MCP seam; construction is factory-pinned below (GH #1589)
+)
 
 from src.core.security.outbound_http import guarded_client_factory, sleep_backoff, validate_url
 

@@ -31,7 +31,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient
+from adcp import ADCPMultiAgentClient  # noqa: TID251 - SDK dials un-pinned; injection blocked by adcp 6.6.0 (GH #1589)
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError
 
 from src.core.exceptions import AdCPAdapterError

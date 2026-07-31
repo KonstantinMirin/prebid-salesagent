@@ -23,6 +23,7 @@ from src.core.creative_agent_registry import (
     CreativeAgentRegistry,
     _connection_agent_url,
 )
+from tests.factories.format import FormatFactory
 
 _PINNED = "http://creative-agent:8080/api/creative-agent"
 
@@ -99,3 +100,94 @@ class TestRegistryConnectionRouting:
             "agent_url": PUBLIC_DEFAULT_AGENT_URL + "/",
             "id": "display_300x250",
         }
+
+
+async def _fetch_formats_with_mocked_sdk(registry, agent):
+    """Drive registry.get_formats_for_agent twice with only the SDK dial mocked.
+
+    The swap itself (_connection_agent_url / _build_adcp_client) and the real
+    build_agent_config run unmocked; only ADCPMultiAgentClient — the true
+    external that would dial the network — is replaced. Returns the patched
+    constructor (transport-config evidence), the list_creative_formats
+    AsyncMock (fetch count), and both call results.
+    """
+    sdk_client = MagicMock()
+    sdk_client.agent.return_value.list_creative_formats = AsyncMock(
+        return_value=MagicMock(status="completed", data=MagicMock(formats=[FormatFactory.build()]))
+    )
+    with patch("src.core.creative_agent_registry.ADCPMultiAgentClient", return_value=sdk_client) as constructor:
+        first = await registry.get_formats_for_agent(agent)
+        second = await registry.get_formats_for_agent(agent)
+    return constructor, sdk_client.agent.return_value.list_creative_formats, first, second
+
+
+class TestAliasPreservesIdentity:
+    """Executable behavioural exemption for the sanctioned env-driven host swap.
+
+    _connection_agent_url (creative_agent_registry.py) returns a DIFFERENT
+    string for the public default agent when CREATIVE_AGENT_URL is set — a
+    destination change ahead of the seam that the destination-rewrite guard
+    cannot see (no urlunparse/._replace spelling). This class is the
+    exemption's executable justification (GH #1589 / salesagent-9qe2): the
+    swap touches ONLY the transport config of ONLY the public default agent,
+    while the identity/cache-key URL stays byte-identical to the canonical
+    public URL — graded through the registry's real fetch surface.
+    """
+
+    @pytest.mark.asyncio
+    async def test_aliased_fetch_keeps_cache_identity_on_canonical_url(self, monkeypatch):
+        from src.core.creative_agent_registry import CreativeAgent
+        from src.core.schemas import canonical_agent_url
+
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        monkeypatch.setenv("CREATIVE_AGENT_URL", _PINNED)
+        registry = CreativeAgentRegistry()
+        agent = CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="AdCP Standard Creative Agent")
+
+        constructor, fetch, first, second = await _fetch_formats_with_mocked_sdk(registry, agent)
+
+        # Transport: the constructed SDK config dials the pinned alias.
+        assert [cfg.agent_uri for cfg in constructor.call_args.kwargs["agents"]] == [_PINNED]
+
+        # Identity: the cache key is byte-identical to the CANONICAL public
+        # URL — the alias appears nowhere in the cache.
+        assert set(registry._format_cache) == {canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL)}
+        assert canonical_agent_url(_PINNED) not in registry._format_cache
+
+        # And that identity is load-bearing: the second call under the
+        # canonical URL is a cache hit — exactly one fetch went out.
+        assert fetch.await_count == 1
+        assert second == first
+
+    @pytest.mark.asyncio
+    async def test_non_default_agent_dials_and_caches_its_own_url(self, monkeypatch):
+        """With the env set, a NON-default agent is untouched end to end."""
+        from src.core.creative_agent_registry import CreativeAgent
+        from src.core.schemas import canonical_agent_url
+
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        monkeypatch.setenv("CREATIVE_AGENT_URL", _PINNED)
+        registry = CreativeAgentRegistry()
+        partner_url = "https://partner-agent.example.com"
+        agent = CreativeAgent(agent_url=partner_url, name="Partner Agent")
+
+        constructor, fetch, first, second = await _fetch_formats_with_mocked_sdk(registry, agent)
+
+        assert [cfg.agent_uri for cfg in constructor.call_args.kwargs["agents"]] == [partner_url]
+        assert set(registry._format_cache) == {canonical_agent_url(partner_url)}
+        assert fetch.await_count == 1
+        assert second == first
+
+    @pytest.mark.asyncio
+    async def test_env_unset_public_agent_dials_canonical_url(self, monkeypatch):
+        """Without the env var, even the public default agent is not rerouted."""
+        from src.core.creative_agent_registry import CreativeAgent
+
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        monkeypatch.delenv("CREATIVE_AGENT_URL", raising=False)
+        registry = CreativeAgentRegistry()
+        agent = CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="AdCP Standard Creative Agent")
+
+        constructor, _fetch, _first, _second = await _fetch_formats_with_mocked_sdk(registry, agent)
+
+        assert [cfg.agent_uri for cfg in constructor.call_args.kwargs["agents"]] == [PUBLIC_DEFAULT_AGENT_URL]

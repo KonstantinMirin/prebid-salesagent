@@ -74,7 +74,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-import httpx
+import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
 from adcp.signing import (
     SSRFValidationError,
     build_async_ip_pinned_transport,

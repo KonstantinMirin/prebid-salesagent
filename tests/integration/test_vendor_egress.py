@@ -11,7 +11,7 @@ What this file grades is the one property the seam CANNOT decide for a call
 site: **how many times the site is willing to hit the origin**. The seam takes
 ``max_attempts`` as an argument, so a migration that passes the wrong number —
 or that leaves a second attempt-count wrapped around the method, where neither
-``test_architecture_no_raw_egress`` nor ``test_architecture_no_call_site_backoff``
+the ``ruff-egress.toml`` import bans nor ``test_architecture_no_call_site_backoff``
 can see it — turns one failed campaign create into three. Campaign, flight and
 creative creation are POSTs; they are not idempotent; a buyer pays for the
 duplicates.

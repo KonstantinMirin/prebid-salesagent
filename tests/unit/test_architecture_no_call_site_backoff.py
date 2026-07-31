@@ -9,8 +9,9 @@ and slept 2/4, and the seam itself slept 0.1/0.2/0.4 with no jitter at all. The
 BDD step that was supposed to catch it only compared successive delays as a
 ratio, so every one of those schedules passed.
 
-This is the class-level counterpart to ``test_architecture_no_raw_egress.py``.
-That guard stops a call site owning the *transport*; this one stops it owning
+This is the class-level counterpart to the egress import bans in
+``ruff-egress.toml`` (TID251, run over ``src/`` by ``make quality-ci``).
+Those bans stop a call site owning the *transport*; this one stops it owning
 the *schedule*. They are separate diseases: a site can route through the seam
 and still wrap it in its own retry loop (``src/core/utils/mcp_client.py`` does).
 

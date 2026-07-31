@@ -1,0 +1,42 @@
+# Src-scoped egress import bans (GH #1589).
+#
+# Run as its own quality line: `uv run ruff check --config ruff-egress.toml src/`
+# (see Makefile `quality` / `quality-ci`). Scope is src/ ONLY — tests import
+# httpx/requests freely (TestClient, annotations, local origins); the seam
+# architecture governs production egress, not test tooling.
+#
+# This table replaces the deleted AST scans #1 (raw network libs) and #2
+# (SDK/MCP client constructors) of tests/unit/test_architecture_no_raw_egress.py.
+# Non-vacuity is proven executable by tests/unit/test_ruff_egress_bans.py: every
+# entry must fire on every resolving import spelling, every `# noqa: TID251`
+# exemption must cover a live violation when stripped, and the exempt set is
+# closed to the recorded constant there.
+#
+# Symbol bans enumerate EVERY resolving import path (banned-api matches the
+# written path textually — a single-path ban is bypassable via re-exports).
+
+[lint]
+select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+# --- Module bans: the bare import fires, so verb/class enumeration is moot ---
+"httpx".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
+"requests".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
+"aiohttp".msg = "aiohttp is a dropped dependency; outbound HTTP goes through src/core/security/outbound_http.py (GH #1589)."
+"urllib.request".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend), never urlopen (GH #1589)."
+
+# --- MCP transports: construct via the MCP seam (src/core/utils/mcp_client.py),
+# which validates the URL once and pins it with guarded_client_factory ---
+"fastmcp.client.transports.StreamableHttpTransport".msg = "Construct via src.core.utils.mcp_client.create_mcp_client — the MCP seam pins the validated URL with src.core.security.outbound_http.guarded_client_factory (GH #1589)."
+"fastmcp.client.StreamableHttpTransport".msg = "Construct via src.core.utils.mcp_client.create_mcp_client — the MCP seam pins the validated URL with src.core.security.outbound_http.guarded_client_factory (GH #1589)."
+"fastmcp.client.transports.http.StreamableHttpTransport".msg = "Construct via src.core.utils.mcp_client.create_mcp_client — the MCP seam pins the validated URL with src.core.security.outbound_http.guarded_client_factory (GH #1589)."
+"fastmcp.client.transports.SSETransport".msg = "Construct via src.core.utils.mcp_client.create_mcp_client — the MCP seam pins the validated URL with src.core.security.outbound_http.guarded_client_factory (GH #1589)."
+"fastmcp.client.SSETransport".msg = "Construct via src.core.utils.mcp_client.create_mcp_client — the MCP seam pins the validated URL with src.core.security.outbound_http.guarded_client_factory (GH #1589)."
+"fastmcp.client.transports.sse.SSETransport".msg = "Construct via src.core.utils.mcp_client.create_mcp_client — the MCP seam pins the validated URL with src.core.security.outbound_http.guarded_client_factory (GH #1589)."
+
+# --- adcp SDK clients: constructing one dials, on an un-pinned path (adcp 6.6.0
+# exposes no transport injection point — tracked by GH #1589) ---
+"adcp.ADCPClient".msg = "Constructing an adcp client dials un-pinned (no transport injection point in adcp 6.6.0). Sanctioned sites carry a line-scoped noqa; see tests/unit/test_ruff_egress_bans.py (GH #1589)."
+"adcp.client.ADCPClient".msg = "Constructing an adcp client dials un-pinned (no transport injection point in adcp 6.6.0). Sanctioned sites carry a line-scoped noqa; see tests/unit/test_ruff_egress_bans.py (GH #1589)."
+"adcp.ADCPMultiAgentClient".msg = "Constructing an adcp client dials un-pinned (no transport injection point in adcp 6.6.0). Sanctioned sites carry a line-scoped noqa; see tests/unit/test_ruff_egress_bans.py (GH #1589)."
+"adcp.client.ADCPMultiAgentClient".msg = "Constructing an adcp client dials un-pinned (no transport injection point in adcp 6.6.0). Sanctioned sites carry a line-scoped noqa; see tests/unit/test_ruff_egress_bans.py (GH #1589)."
