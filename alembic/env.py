@@ -19,8 +19,12 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# disable_existing_loggers=False: fileConfig's default (True) silently disables
+# every already-created logger in the process. When a migration runs in-process
+# (tests, app startup), that muted all src.* loggers — audit-log assertions then
+# failed in whichever xdist worker happened to run a migration first.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support
