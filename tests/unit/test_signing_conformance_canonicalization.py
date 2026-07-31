@@ -1,54 +1,41 @@
-"""L1(b) — the 31 URL-canonicalization cases, through OUR seam.
+"""L1(b) — the 31 URL-canonicalization cases, through the signing layer's PUBLIC surface.
 
-#1291 B3 (``salesagent-z6nr.14``), design step 4. ``chopmob-cloud`` noted on #1291
-that cross-implementation signing-base parity is where RFC 9421 implementations
-actually break; ``canonicalization.json`` pins exactly that, so it runs as its own
-parametrized case set rather than folded into the request vectors.
+#1291 B3 (``salesagent-z6nr.14``), re-scoped by ``salesagent-z6nr.33``. ``chopmob-cloud``
+noted on #1291 that cross-implementation signing-base parity is where RFC 9421
+implementations actually break; ``canonicalization.json`` pins exactly that, so it runs
+as its own parametrized case set rather than folded into the request vectors.
 
-The graded surface is ``src/core/signing/canonical.py`` — our THIN seam — not
-``adcp.signing.canonical`` directly. Asserting straight against the SDK would keep 8
-assertions permanently red no matter what we implement, since the divergence is
-upstream. The seam's hard boundary::
-
-    REQUEST_TARGET_URI_MALFORMED = "request_target_uri_malformed"
-    def reject_malformed_target(url: str) -> None   # the spec's rejection set, and NOTHING else
-    def canonical_target_uri(url: str) -> str       # reject_malformed_target(url) then DELEGATE
-    def canonical_authority(url: str) -> str        # reject_malformed_target(url) then DELEGATE
-
-It MUST NOT re-derive ``@target-uri`` or ``@authority``. Two canonicalizers in one
-verify path is the exact divergence this feature exists to prevent; the seam adds a
-gate in front of the SDK and nothing else.
+The graded surface is the facade — ``src.core.signing`` — whose canonicalizers
+delegate to the layer's VENDORED copy of the merged upstream fixes
+(``src/core/signing/_upstream/canonical.py``, upstream #977/#978/#979, byte-equal per
+unit) behind the comparer-side gate. Asserting straight against ``adcp.signing`` would
+keep assertions permanently red until an SDK bump; asserting against the facade grades
+what callers actually get, whichever side provides it — which is the layer's whole
+contract. The layer still never RE-DERIVES a canonical form: the vendored module is
+upstream's own code, not a third canonicalizer.
 
 Arithmetic, said out loud so nothing is quietly dropped
 ------------------------------------------------------
-**28 of 31 cases run as conformance through the seam; 3 run as our-obligation
-blocker tests with a filed upstream issue. 31 accounted for, 0 skipped, 0 xfailed.**
+**29 of 31 cases run as conformance through the facade; 2 run as our-obligation
+blocker tests. 31 accounted for, 0 skipped, 0 xfailed.**
 
-The 3 are not implementable at OUR boundary:
+The 2 are comparer-obligation cases, deliberately not implementable as written:
 
 * ``idn-to-punycode`` and ``idn-mixed-case-to-punycode`` are SIGNER-side.
   ``url-canonicalization.mdx`` step 2: a host containing raw non-ASCII bytes "MUST be
   rejected by the comparer — receivers do not silently re-normalize". The
-  punycode-MAPPING half is upstream's; OUR obligation is the REJECTION, and that is
+  punycode-MAPPING half is the signing path's (the vendored ``_canon_host`` performs
+  it there); OUR surface is the comparer, whose obligation is the REJECTION — that is
   what the blocker tests below assert. (Same obligation request vector 026 grades.)
-* ``trailing-empty-query-preserved`` is unobservable here: ASGI ``query_string`` is
-  ``b""`` for both "no query" and "``?``", so our boundary is never handed the
-  distinction. Its blocker test PROVES the unobservability instead of asserting a
-  behavior we cannot have.
+
+``trailing-empty-query-preserved`` GRADUATED to conformance with the vendored #979
+fix (``salesagent-z6nr.33``): the seam receives URL strings and now preserves the
+trailing ``?``. The ASGI boundary still collapses the distinction — see
+``test_trailing_empty_query_is_collapsed_at_the_asgi_boundary``, which records that
+asymmetry deliberately.
 
 Neither blocker test asserts the SDK's current output. A test that pins today's wrong
 answer locks the bug in — that is the one thing this file must never do.
-
-Measured against ``adcp==6.6.0`` (SDK divergence #6, filed upstream): 23 of 31 pass
-straight through, and the 8 failures split 5 + 1 + 3 —
-
-* 5 reject cases the SDK ACCEPTS: ``malformed-port-without-host``,
-  ``malformed-userinfo-without-host``, ``malformed-empty-authority``,
-  ``malformed-bare-ipv6``, ``malformed-ipv6-zone-identifier``;
-* 1 reject case the SDK refuses with the WRONG TYPE:
-  ``malformed-ipv6-missing-closing-bracket`` raises a bare ``ValueError`` — the seam
-  must normalize it, or the case passes on the wrong exception;
-* 3 not implementable at our boundary (above).
 
 Error code: the 6 ``reject: true`` cases expect ``request_target_uri_malformed``
 (the DATA), grounded at ``url-canonicalization.mdx`` — "Malformed authorities are
@@ -57,7 +44,7 @@ README's worked example is STALE and shows ``request_signature_header_malformed`
 the data wins, so do not "correct" these assertions from the prose. Keep the two
 codes apart: request vector ``negative/026`` legitimately expects
 ``request_signature_header_malformed``. The ``request_target_uri_malformed`` constant
-is ABSENT from ``adcp==6.6.0`` (SDK divergence #7), which is why the seam defines it.
+is ABSENT from ``adcp==6.6.0``, which is why the layer defines it.
 """
 
 from __future__ import annotations
@@ -68,11 +55,12 @@ import pytest
 
 from tests.helpers.signing_vectors import load_canonicalization_cases
 
-#: Not implementable at our verifier boundary — each has a named blocker test below.
+#: Comparer-obligation cases — each has a named blocker test below.
+#: ``trailing-empty-query-preserved`` graduated to conformance with the vendored
+#: upstream #979 fix (salesagent-z6nr.33).
 _UPSTREAM_ONLY = {
     "idn-to-punycode",
     "idn-mixed-case-to-punycode",
-    "trailing-empty-query-preserved",
 }
 
 _CASES = {case["name"]: case for case in load_canonicalization_cases()}
@@ -82,10 +70,14 @@ _REJECT = [name for name in _CONFORMANCE if _CASES[name].get("reject")]
 
 
 def _seam() -> Any:
-    """Import the seam lazily so a missing module fails PER CASE, not at collection."""
-    from src.core.signing import canonical
+    """Import the facade lazily so a missing module fails PER CASE, not at collection.
 
-    return canonical
+    The PUBLIC surface is the graded artifact (acceptance: "the conformance vectors
+    grade green through the layer's public surface") — not the submodule behind it.
+    """
+    import src.core.signing
+
+    return src.core.signing
 
 
 @pytest.mark.parametrize("case_name", _ACCEPT)
@@ -154,14 +146,14 @@ def test_the_seam_names_the_spec_code_the_sdk_does_not_define() -> None:
 
 
 def test_every_canonicalization_case_is_accounted_for() -> None:
-    """31 = 28 conformance + 3 named blocker tests. 0 skipped, 0 xfailed."""
+    """31 = 29 conformance + 2 named blocker tests. 0 skipped, 0 xfailed."""
     assert len(_CASES) == 31
-    assert len(_CONFORMANCE) == 28, sorted(_CONFORMANCE)
+    assert len(_CONFORMANCE) == 29, sorted(_CONFORMANCE)
     assert _UPSTREAM_ONLY <= set(_CASES)
 
 
 # ---------------------------------------------------------------------------
-# The 3 upstream-only cases, as OUR-obligation blocker tests
+# The 2 comparer-obligation cases, as OUR-obligation blocker tests
 # ---------------------------------------------------------------------------
 
 
@@ -188,17 +180,21 @@ def test_raw_u_label_authority_is_rejected_not_normalized(case_name: str) -> Non
     )
 
 
-def test_trailing_empty_query_is_unobservable_at_the_asgi_boundary() -> None:
-    """``trailing-empty-query-preserved`` cannot be graded here, and this proves why.
+def test_trailing_empty_query_is_collapsed_at_the_asgi_boundary() -> None:
+    """The seam preserves a trailing ``?``; the ASGI boundary provably cannot. Recorded.
 
-    ASGI hands us ``query_string=b""`` for BOTH ``/p`` and ``/p?``: the distinction is
-    destroyed before our boundary, so ``_verify_url`` provably cannot preserve it. The
-    case is recorded as upstream-only (SDK divergence #6 — ``canonicalize_target_uri``
-    drops a trailing empty query) rather than asserted as a behavior we could have.
+    ``trailing-empty-query-preserved`` is GRADED as conformance above: the seam takes
+    URL strings and the vendored #979 fix preserves the distinction. But ASGI hands the
+    middleware ``query_string=b""`` for BOTH ``/p`` and ``/p?`` — the distinction is
+    destroyed before ``_verify_url`` — so the layer's two surfaces deliberately
+    DISAGREE on that one URL shape: string-fed callers (the seam, ``canonical_agent_url``)
+    see ``/p?`` preserved, while the verify path reconstructs ``/p``. A signer that
+    covers ``/p?`` against this server fails closed as a signature-base mismatch, never
+    verifies against the wrong bytes (salesagent-z6nr.33 boundary-wrap contract).
 
     Asserted as an EQUALITY between two scopes, not as a truthy check: if a future ASGI
-    server or driver ever did carry the distinction, this test fails and the case
-    becomes gradeable — which is the outcome we want to be told about.
+    server or driver ever did carry the distinction, this test fails — telling us the
+    asymmetry is gone and ``_verify_url`` can carry the real request target.
     """
     from src.core.signing.request_verifier_middleware import _verify_url
 
@@ -207,7 +203,6 @@ def test_trailing_empty_query_is_unobservable_at_the_asgi_boundary() -> None:
     with_empty_query = {"scheme": "https", "path": "/p", "query_string": b"", "raw_path": b"/p?"}
 
     assert _verify_url(without_query, headers) == _verify_url(with_empty_query, headers), (
-        "The trailing '?' became observable at our ASGI boundary. "
-        "canonicalization.json's trailing-empty-query-preserved case is now gradeable in-repo "
-        "and must be moved out of the upstream-only set."
+        "The trailing '?' became observable at our ASGI boundary. _verify_url can now "
+        "carry the real request target and the boundary-wrap note in this docstring is stale."
     )

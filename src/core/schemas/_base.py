@@ -156,25 +156,33 @@ def url(value: str) -> AnyUrl:
 def canonical_agent_url(agent_url: object) -> str:
     """Canonicalize an agent_url for identity comparison (spec MUST canonicalization).
 
-    Delegates to the SDK's ``adcp.signing.canonicalize_target_uri`` so federation
-    identity uses the *same* canonical form the spec mandates for target URIs —
-    lowercased scheme/host, dropped default ports, normalized percent-encoding, and
-    stripped userinfo + fragment (a hand-rolled normalizer such as yarl keeps those,
-    diverging from the spec). The SDK preserves a trailing slash, so we additionally
-    strip it to keep ``https://x.org`` and ``https://x.org/`` equal. This is the
-    single canonical form used both to compare two FormatId references for federation
-    identity (see ``format_id_identity``) and to key the creative-agent format cache
-    (``CreativeAgentRegistry._cache_key``).
+    Delegates to the signing layer's GATED ``canonical_target_uri`` so federation
+    identity uses the *same* canonical form — and the same REJECTION set — the spec
+    mandates for target URIs: lowercased scheme/host, dropped default ports,
+    normalized percent-encoding, stripped userinfo + fragment, and refusal of the
+    authority shapes url-canonicalization.mdx requires a comparer to reject (no host,
+    raw non-ASCII hosts, IPv6 zone identifiers, ...). Identity comparison is
+    comparer-side work, so the rejections apply: a malformed reference raises rather
+    than silently canonicalizing to a comparable key. The canonicalizer preserves a
+    trailing slash, so we additionally strip it to keep ``https://x.org`` and
+    ``https://x.org/`` equal. This is the single canonical form used both to compare
+    two FormatId references for federation identity (see ``format_id_identity``) and
+    to key the creative-agent format cache (``CreativeAgentRegistry._cache_key``).
 
     Args:
         agent_url: A URL string or ``AnyUrl`` (FormatId.agent_url, CreativeAgent.agent_url).
 
     Returns:
         The canonicalized URL string with any trailing slash removed.
-    """
-    from adcp.signing import canonicalize_target_uri
 
-    return canonicalize_target_uri(str(agent_url)).rstrip("/")
+    Raises:
+        ValueError: for a malformed authority — specifically the layer's
+            ``TargetUriMalformedError`` (a ``ValueError`` subclass) carrying the
+            graded ``request_target_uri_malformed`` as ``.code``.
+    """
+    from src.core.signing import canonical_target_uri
+
+    return canonical_target_uri(str(agent_url)).rstrip("/")
 
 
 def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:

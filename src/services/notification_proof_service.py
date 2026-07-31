@@ -178,7 +178,7 @@ class NotificationProofService:
             return False
 
         try:
-            from src.core.signing.webhook_sender_factory import send_signed_challenge
+            from src.core.signing import send_signed_challenge
 
             challenge, body = _build_challenge(account_id, config, signing.seller_agent_url)
             # The sign and the POST are the boundary's, so this service holds no raw POST at
@@ -210,7 +210,7 @@ def _has_uncredentialed_legacy_auth(config: object) -> bool:
     inline shape test, and so it derives from the ONE shared auth pluck rather than a second
     reading of ``authentication``.
     """
-    from src.core.signing.webhook_sender_factory import declared_auth
+    from src.core.signing import declared_auth
 
     auth = declared_auth(getattr(config, "authentication", None))
     return auth.scheme is not None and auth.credential is None
@@ -252,7 +252,7 @@ def _build_challenge(account_id: str, config: object, seller_agent_url: str) -> 
     from adcp.types.generated_poc.core.webhook_challenge import DeliveryAuth, WebhookChallenge
     from adcp.webhooks import generate_webhook_challenge_value
 
-    from src.core.signing.webhook_sender_factory import credential_fingerprint, declared_auth, delivery_auth_mode
+    from src.core.signing import credential_fingerprint, declared_auth, delivery_auth_mode
 
     auth = declared_auth(getattr(config, "authentication", None))
     challenge = WebhookChallenge(

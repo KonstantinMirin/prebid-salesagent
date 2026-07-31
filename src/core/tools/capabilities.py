@@ -49,7 +49,7 @@ from src.core.schemas.capability_declarations import (
     CapabilityDeclarations,
     SigningPlatformBacking,
 )
-from src.core.signing.posture import (
+from src.core.signing import (
     IdentityDeclaration,
     RequestSigningPosture,
     WebhookSigningPosture,

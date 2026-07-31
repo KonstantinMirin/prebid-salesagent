@@ -28,7 +28,7 @@ import httpx
 from adcp import get_adcp_spec_version
 from adcp.webhooks import generate_webhook_idempotency_key
 
-from src.core.signing.webhook_sender_factory import deliver_adcp_webhook_sync
+from src.core.signing import deliver_adcp_webhook_sync
 
 logger = logging.getLogger(__name__)
 

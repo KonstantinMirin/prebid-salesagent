@@ -160,7 +160,7 @@ from src.core.metrics import record_request_unsigned, record_signature_failed, r
 # it validates the credential and raises, which at this layer would turn an auth
 # failure into a signature rejection.
 from src.core.resolved_identity import _detect_tenant, _extract_auth_token
-from src.core.signing.canonical import malformed_authority_reason
+from src.core.signing.canonical import malformed_authority_reason, reject_malformed_target
 from src.core.signing.operations import (
     UNNAMED_OPERATION,
     OperationResolver,
@@ -434,11 +434,22 @@ class RequestSignatureMiddleware:
             # request that cannot be accepted. ``_resolution_for`` never raises this
             # exception — it is inside the block so there is ONE handler, not two.
             _strict_header_precheck(scope)
+            # The layer's target-URI gate, in front of the SDK verifier (the
+            # "boundary wrap" of salesagent-z6nr.33): the SDK's 6.6.0 verifier
+            # canonicalizes internally WITHOUT the vendored upstream fixes, so the
+            # layer gates the effective request URI with its own comparer semantics
+            # first. Every divergence between the vendored and the SDK canonicalizer
+            # is thereby either rejected here with the graded code, or fails CLOSED
+            # inside the SDK as a signature-base mismatch — never accepted. On the
+            # ASGI path the server has already resolved most malformed shapes, so
+            # this gate is defense-in-depth, not a hot path.
+            url = _verify_url(scope, headers)
+            reject_malformed_target(url)
             resolution = await _resolution_for(context.agent_url, config)
             signer = await asyncio.to_thread(
                 _run_verifier,
                 method=scope.get("method", "GET"),
-                url=_verify_url(scope, headers),
+                url=url,
                 headers=headers,
                 body=buffered.body,
                 capability=context.posture.to_verifier_capability(),

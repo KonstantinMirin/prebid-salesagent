@@ -50,7 +50,7 @@ from src.core.http_utils import get_header_case_insensitive as _get_header_case_
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import resolve_identity
-from src.core.signing.request_verifier_middleware import RequestSignatureMiddleware
+from src.core.signing import RequestSignatureMiddleware
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error
 from src.landing import generate_tenant_landing_page
 from src.landing.landing_page import generate_fallback_landing_page

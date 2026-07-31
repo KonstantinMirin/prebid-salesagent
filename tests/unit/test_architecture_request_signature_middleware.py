@@ -36,14 +36,14 @@ Covers: salesagent-z6nr.12 (Refinement R-M4, R-M5(a)).
 from __future__ import annotations
 
 import pytest
-from src.core.signing.request_verifier_middleware import (
-    ADCP_SURFACE_PREFIXES,
-    RequestSignatureMiddleware,
-)
 from starlette.middleware.cors import CORSMiddleware
 
 from src.app import app
 from src.core.auth_middleware import UnifiedAuthMiddleware
+from src.core.signing.request_verifier_middleware import (
+    ADCP_SURFACE_PREFIXES,
+    RequestSignatureMiddleware,
+)
 from src.routes.rest_compat_middleware import RestCompatMiddleware
 
 #: Execution order, outermost first. ``app.add_middleware`` inserts at index 0,

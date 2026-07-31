@@ -15,7 +15,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from src.core.request_compat import normalize_request_params
-from src.core.signing.operations import operation_for_rest_route
+from src.core.signing import operation_for_rest_route
 
 logger = logging.getLogger(__name__)
 

@@ -36,7 +36,7 @@ from src.core.config import get_config
 from src.core.database.models import AuthorizedProperty, SigningKey, Tenant
 from src.core.database.repositories.uow import TrustRootUoW
 from src.core.domain_routing import route_landing_page
-from src.core.signing.trust_root import (
+from src.core.signing import (
     CACHE_MAX_AGE_SECONDS,
     build_adagents_json,
     build_brand_json,

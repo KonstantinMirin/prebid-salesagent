@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from src.core.signing.trust_root import CACHE_MAX_AGE_SECONDS
+from src.core.signing import CACHE_MAX_AGE_SECONDS
 
 # AdCP 3.1.1 `security.mdx` §per-keyid cap, restated by the signed-requests test-kit
 # as `production_min_per_keyid_cap_requests: 1000000`.

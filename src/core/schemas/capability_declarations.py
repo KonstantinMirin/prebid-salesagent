@@ -44,7 +44,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from src.core.signing.posture import (
+from src.core.signing import (
     IdentityDeclaration,
     RequestSigningPosture,
     bucket_names,

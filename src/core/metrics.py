@@ -29,7 +29,6 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 :func:`record_request_unsigned`, so the bounding logic lives in exactly one place.
 """
 
-from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
 from src.core.exceptions import (
@@ -37,6 +36,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
+from src.core.signing import REQUEST_TO_WEBHOOK_CODE
 
 # ---------------------------------------------------------------------------
 # Bounded label vocabularies

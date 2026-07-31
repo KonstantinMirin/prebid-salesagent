@@ -39,7 +39,7 @@ from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.json_type import JSONType
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
-from src.core.signing.algorithms import (
+from src.core.signing import (
     MINTABLE_PURPOSES,
     REQUEST_SIGNING,
     SIGNING_ALG_VALUES,

@@ -23,7 +23,7 @@ from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import SigningKey
-from src.core.signing.algorithms import REQUEST_SIGNING
+from src.core.signing import REQUEST_SIGNING
 
 
 class SigningKeyRepository:

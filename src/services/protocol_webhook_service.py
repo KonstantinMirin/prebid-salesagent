@@ -34,7 +34,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
-from src.core.signing.webhook_sender_factory import deliver_adcp_webhook
+from src.core.signing import deliver_adcp_webhook
 
 logger = logging.getLogger(__name__)
 

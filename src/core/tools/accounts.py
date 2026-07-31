@@ -1228,7 +1228,7 @@ def _challenge_signing(tenant_id: str, protocol: str) -> Any:
     from src.core.agent_identity import agent_endpoint_urls
     from src.core.database.repositories.uow import TrustRootUoW
     from src.core.exceptions import AdCPError
-    from src.core.signing.webhook_sender_factory import adcp_challenge_signer
+    from src.core.signing import adcp_challenge_signer
     from src.services.notification_proof_service import ChallengeSigning
 
     try:

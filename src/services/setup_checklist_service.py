@@ -24,7 +24,7 @@ from src.core.database.models import (
     TenantAuthConfig,
 )
 from src.core.database.repositories.signing_key import SigningKeyRepository
-from src.core.signing.posture import KeyBacking, signing_key_backed
+from src.core.signing import KeyBacking, signing_key_backed
 
 logger = logging.getLogger(__name__)
 
