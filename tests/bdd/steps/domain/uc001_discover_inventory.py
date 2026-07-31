@@ -17,7 +17,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response, wire_field
+from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 
@@ -117,13 +117,6 @@ def when_send_get_products(ctx: dict, datatable: list) -> None:
 def _wire_products(ctx: dict) -> list[dict[str, Any]]:
     """The products array as the buyer sees it on the serialized wire."""
     return wire_field(ctx, "products")
-
-
-@then(parsers.parse('the response status should be "completed"'))
-def then_status_completed(ctx: dict) -> None:
-    """get_products succeeded — a completed synchronous discovery response."""
-    assert ctx.get("error") is None, f"Request failed: {ctx.get('error')}"
-    assert _require_response(ctx).products is not None
 
 
 @then('the response should contain "products" array')
