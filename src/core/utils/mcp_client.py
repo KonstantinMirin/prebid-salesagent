@@ -29,7 +29,7 @@ from typing import Any
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from src.core.security.outbound_http import sleep_backoff, validate_url
+from src.core.security.outbound_http import guarded_client_factory, sleep_backoff, validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -179,8 +179,18 @@ async def create_mcp_client(
 
         for attempt in range(attempts):
             try:
-                # Create transport and client
-                transport = StreamableHttpTransport(url=current_url, headers=headers)
+                # Create transport and client. The httpx_client_factory pins the
+                # connection to current_url's validated IP and refuses redirects:
+                # without it fastmcp falls back to mcp.shared._httpx_utils's
+                # create_mcp_http_client, which follows redirects with no pin, so a
+                # counterparty answering `302 -> http://169.254.169.254/` reaches an
+                # address the :157 pre-check never saw. Pinning current_url — the URL
+                # actually dialed — also means validate-and-dial cannot diverge.
+                transport = StreamableHttpTransport(
+                    url=current_url,
+                    headers=headers,
+                    httpx_client_factory=guarded_client_factory(current_url),
+                )
                 client = Client(transport=transport)
 
                 # Use client's built-in context manager

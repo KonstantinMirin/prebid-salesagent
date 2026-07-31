@@ -517,6 +517,66 @@ def validate_url(url: str, *, field: str | None = None) -> None:
     _prepare(url, resolve_and_validate_host, field)
 
 
+def guarded_async_client(
+    url: str,
+    *,
+    headers: Any = None,
+    timeout: Any = None,
+    auth: Any = None,
+    **client_kwargs: Any,
+) -> httpx.AsyncClient:
+    """An ``httpx.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
+
+    For the one library seam whose stateful client this module's one-shot
+    :func:`asend` cannot carry — fastmcp's ``StreamableHttpTransport``, which
+    owns a long-lived MCP session — this hands over a client that makes the SAME
+    pre-connection decision :func:`asend` makes: ``adcp.signing`` resolves ``url``
+    once and pins every connect to that IP (spec points 2-3), and
+    ``follow_redirects=False`` refuses the 30x a counterparty uses to reach an
+    address the pin never saw (point 4). ``trust_env=False`` so an ambient
+    ``HTTP(S)_PROXY`` cannot route around the pin.
+
+    It is a client BUILDER, not a send loop, precisely because the caller owns
+    the request/response lifecycle the send functions own for their own callers;
+    everything up to the socket is still decided here, once, through
+    :func:`_prepare`. Raises :class:`OutboundRequestBlocked` before returning if
+    the scheme or address is refused — the identical verdict :func:`validate_url`
+    and :func:`asend` reach, because all three go through :func:`_prepare`.
+    """
+    transport = _prepare(url, build_async_ip_pinned_transport)
+    kwargs: dict[str, Any] = {**client_kwargs}
+    if headers is not None:
+        kwargs["headers"] = headers
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if auth is not None:
+        kwargs["auth"] = auth
+    # The pin, the redirect refusal and the proxy bypass are the reason this
+    # function exists, so they are applied LAST and are not negotiable — a caller
+    # cannot pass them away. fastmcp does exactly that: it invokes the factory
+    # with a hard-coded ``follow_redirects=True`` (mcp/client/streamable_http.py),
+    # which would otherwise land in ``client_kwargs`` and re-open the bypass.
+    kwargs.update(transport=transport, follow_redirects=False, trust_env=False)
+    return httpx.AsyncClient(**kwargs)
+
+
+def guarded_client_factory(url: str) -> Callable[..., httpx.AsyncClient]:
+    """A ``(headers, timeout, auth) -> AsyncClient`` factory pinned to ``url``.
+
+    The shape fastmcp's ``StreamableHttpTransport(httpx_client_factory=...)`` and
+    the MCP SDK's ``create_mcp_http_client`` share. The default factory the SDK
+    falls back to when none is supplied builds ``follow_redirects=True`` with no
+    pin — the live redirect bypass this closes. Pinning ``url`` here, the SAME
+    ``url`` the transport is constructed to dial, puts the pin on the dialed host
+    by construction: there is no validate-one/dial-another gap to reopen.
+    """
+
+    def factory(headers: Any = None, timeout: Any = None, auth: Any = None, **extra: Any) -> httpx.AsyncClient:
+        return guarded_async_client(url, headers=headers, timeout=timeout, auth=auth, **extra)
+
+    return factory
+
+
 def send(
     url: str,
     *,
