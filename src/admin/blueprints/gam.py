@@ -529,8 +529,8 @@ def view_gam_line_item(tenant_id, line_item_id):
     """View details of a GAM line item."""
     try:
         with get_db_session() as db_session:
-            # Get the line item
-            line_item = db_session.scalars(
+            # Get the line item (falls back to a live-GAM display view below)
+            line_item: GAMLineItem | _GamLineItemView | None = db_session.scalars(
                 select(GAMLineItem).filter_by(tenant_id=tenant_id, line_item_id=line_item_id)
             ).first()
 
