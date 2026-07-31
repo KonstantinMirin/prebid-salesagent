@@ -6,7 +6,7 @@ adapter creative module. Depending on the reaching surface the buyer then got
 either SERVICE_UNAVAILABLE / transient (retry-the-unretryable) or a reasonless
 per-asset ``status="failed"`` — never the CREATIVE_REJECTED / correctable
 family the pinned spec (v3.1.1 enums/error-code.json) assigns to creative
-rejections (salesagent-z06g).
+rejections.
 
 Scope: ``creatives*.py`` modules under ``src/adapters``. Creative-input
 rejections raise ``AdCPCreativeRejectedError`` (or another typed ``AdCPError``

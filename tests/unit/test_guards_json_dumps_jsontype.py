@@ -4,7 +4,7 @@ Disease: a writer passes ``json.dumps(...)`` into a JSONType (JSONB) column —
 constructor kwarg or attribute assignment. The column type takes dicts/lists
 directly; the str used to be silently coerced to ``{}`` (audit details,
 principal platform_mappings, and self-serve signup tenant fields were all
-emptied this way — salesagent-akjc), and now raises TypeError at runtime.
+emptied this way), and now raises TypeError at runtime.
 This guard catches the mistake at test time instead.
 
 The JSONType column inventory is mapper-derived (``Base.registry.mappers``),

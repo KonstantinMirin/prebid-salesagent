@@ -5,7 +5,7 @@ Disease: code appends to ``Context.conversation_history`` or
 ``.append()`` (which SQLAlchemy never even flushes without Mutable
 instrumentation), copy-append-reassign, or ``flag_modified`` after an in-place
 append. Concurrent appenders read the same snapshot and the later commit
-erases the earlier append (salesagent-pgqs). The correct mechanism is the
+erases the earlier append. The correct mechanism is the
 single-statement atomic append: ``append_step_comment`` /
 ``jsonb_list_append`` (src/core/database/jsonb_append.py).
 
