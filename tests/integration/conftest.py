@@ -513,6 +513,7 @@ def mcp_server(integration_db):
     import socket
     import subprocess
     import sys
+    import tempfile
     import time
 
     # Find an available port
@@ -564,12 +565,21 @@ from src.core.main import mcp
 mcp.run(transport='http', host='0.0.0.0', port={port})
 """
 
+    # Server output goes to a FILE, never a PIPE. An undrained PIPE fills at the
+    # kernel buffer (~64KB of log output) and the server's next logging write then
+    # blocks the asyncio event-loop thread mid-request — the server freezes, the
+    # client awaits forever, and the whole integration suite hangs at its tail.
+    server_log = tempfile.NamedTemporaryFile(mode="w+b", prefix=f"mcp-server-{port}-", suffix=".log", delete=False)
+
+    def server_output() -> str:
+        with open(server_log.name, "rb") as fh:
+            return fh.read().decode(errors="replace") or "N/A"
+
     process = subprocess.Popen(
         [sys.executable, "-c", server_script],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=1,  # Line buffered
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
     )
 
     # Wait for server to be ready.
@@ -593,29 +603,13 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
         except (ConnectionRefusedError, OSError):
             # Check if process has died
             if process.poll() is not None:
-                stdout, stderr = process.communicate()
-                raise RuntimeError(
-                    f"MCP server process died unexpectedly.\n"
-                    f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
-                    f"STDERR: {stderr.decode() if stderr else 'N/A'}"
-                )
+                raise RuntimeError(f"MCP server process died unexpectedly.\nOUTPUT: {server_output()}")
             time.sleep(0.3)
 
     if not server_ready:
-        # Capture output for debugging
-        try:
-            stdout, stderr = process.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate()
-
-        process.terminate()
+        process.kill()
         process.wait(timeout=5)
-        raise RuntimeError(
-            f"MCP server failed to start on port {port} within {max_wait}s.\n"
-            f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
-            f"STDERR: {stderr.decode() if stderr else 'N/A'}"
-        )
+        raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\nOUTPUT: {server_output()}")
 
     # Return server info
     class ServerInfo:
@@ -635,10 +629,8 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-    if process.stdout:
-        process.stdout.close()
-    if process.stderr:
-        process.stderr.close()
+    server_log.close()
+    os.unlink(server_log.name)
 
     # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
 
