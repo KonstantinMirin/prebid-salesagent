@@ -143,8 +143,11 @@ def test_transport_of_resolves_e2e_rest_before_rest():
     is always four characters later, so reordering cannot break it (verified by
     mutation). What this pins is the derivation's CONTRACT against a
     reimplementation that drops the bracket discipline: a bare `if t in nodeid`
-    or a naive split-on-"-" returns "rest"/"e2e" for the real-HTTP leg, which is
-    the live bug in scripts/graduate_pending.py:27-33. Roughly 25 predicates in
+    misses the real-HTTP leg entirely (`"[rest" in "…[e2e_rest-row]"` is False),
+    and a membership test against a set that omits `e2e_rest` drops it — the two
+    shapes found in the graduation tool that has since been retired. (A naive
+    split-on-"-" does NOT mis-route here: `"e2e_rest-row".split("-", 1)[0]` is
+    `"e2e_rest"`, so that reading, once recorded here, was wrong.) Roughly 25 predicates in
     the conftest branch on `is_rest` and several deliberately exclude e2e_rest
     (`_rdim_non_impl_fail` is `(is_mcp or is_rest)` because the real-HTTP leg is
     NOT excused), so a mis-route silently excuses a transport from a gap it was
