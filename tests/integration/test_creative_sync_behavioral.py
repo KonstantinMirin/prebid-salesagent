@@ -10,13 +10,19 @@ Covers: salesagent-xwkj, salesagent-11th, salesagent-0m59, salesagent-mi8l
 from __future__ import annotations
 
 import json
-from datetime import UTC
+from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import pytest
 from adcp.types import CreativeAction
 from adcp.types import FormatId as AdcpFormatId
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPCreativeRejectedError, AdCPNotFoundError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPCreativeRejectedError,
+    AdCPNotFoundError,
+    AdCPPackageNotFoundError,
+)
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_test_banner_creative
 from tests.harness import CreativeSyncEnv, make_identity
@@ -734,7 +740,33 @@ class TestDryRunMode:
             assert rows == [], f"dry_run wrote {len(rows)} creative_assignments row(s) — a preview must not mutate"
 
 
-def _sync_wire(slug: str, *, dry_run: bool, seed: list | tuple = (), **kwargs) -> list[dict]:
+# Product-side format_id dicts for _seed_assignment_targets. _FMT_BANNER matches
+# make_test_banner_creative's default format; _FMT_IMAGE is a different format the
+# same agent serves (the ProductFactory default), used for mismatch/update cases.
+_FMT_BANNER = {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"}
+_FMT_IMAGE = {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"}
+
+
+@contextmanager
+def _seeded_env(slug: str, *, setup=None, seed: list | tuple = ()):
+    """Open a CreativeSyncEnv in its own tenant, apply the seeding hook, seed creatives.
+
+    ``setup`` is called with ``(tenant, principal)`` after both exist and before any
+    sync runs — the hook for assignment fixtures (media buy, package, product).
+    ``seed`` is synced LIVE first (that is how a creative becomes persisted).
+    """
+    tenant_id, principal_id = f"t_{slug}", f"p_{slug}"
+    with CreativeSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
+        tenant = TenantFactory(tenant_id=tenant_id)
+        principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
+        if setup is not None:
+            setup(tenant, principal)
+        if seed:
+            env.call_impl(creatives=list(seed))
+        yield env
+
+
+def _sync_wire(slug: str, *, dry_run: bool, seed: list | tuple = (), setup=None, **kwargs) -> list[dict]:
     """Run ONE sync in its own tenant and return the wire dumps of its results.
 
     ``seed`` is synced LIVE first (that is how a creative becomes persisted), then
@@ -743,14 +775,68 @@ def _sync_wire(slug: str, *, dry_run: bool, seed: list | tuple = (), **kwargs) -
     the dump grades the WIRE result and cannot fail on an internal field a preview
     legitimately cannot know for an entry that has no row.
     """
-    tenant_id, principal_id = f"t_{slug}", f"p_{slug}"
-    with CreativeSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
-        tenant = TenantFactory(tenant_id=tenant_id)
-        PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        if seed:
-            env.call_impl(creatives=list(seed))
+    with _seeded_env(slug, setup=setup, seed=seed) as env:
         response = env.call_impl(dry_run=dry_run, **kwargs)
     return [r.model_dump(mode="json") for r in response.creatives]
+
+
+def _sync_raises(slug: str, *, dry_run: bool, exc_type: type, seed: list | tuple = (), setup=None, **kwargs):
+    """Run ONE sync expecting *exc_type* and return the raised exception.
+
+    Sibling of ``_sync_wire`` for the strict-mode arms: a raise produces no results
+    list, so the wire-list oracle cannot express the case. ``call_impl`` has no wire
+    — impl-level exception assertions are the sanctioned form here (tests/CLAUDE.md,
+    Error Verification Policy: "acceptable ONLY in _impl-level tests").
+    """
+    with _seeded_env(slug, setup=setup, seed=seed) as env:
+        with pytest.raises(exc_type) as excinfo:
+            env.call_impl(dry_run=dry_run, **kwargs)
+    return excinfo.value
+
+
+def _seed_assignment_targets(
+    package_id: str, *, product_format_ids: list[dict], media_buy_overrides: dict | None = None
+):
+    """Seeding hook: media buy + package (pinned id) + the product the package points at.
+
+    MediaPackageFactory hardcodes ``package_config.product_id='prod_001'``
+    (tests/factories/media_buy.py) — WITHOUT a matching Product row,
+    ``get_product_by_id`` misses and the whole format-validation block
+    (_assignments.py:151-225) silently skips, so any format-parity case would pass
+    vacuously. The hook therefore always creates ProductFactory(product_id='prod_001')
+    with an EXPLICIT ``format_ids`` so each case states what the product supports.
+    """
+
+    def setup(tenant, principal) -> None:
+        media_buy = MediaBuyFactory(tenant=tenant, principal=principal, **(media_buy_overrides or {}))
+        MediaPackageFactory(media_buy=media_buy, package_id=package_id)
+        ProductFactory(tenant=tenant, product_id="prod_001", format_ids=product_format_ids)
+
+    return setup
+
+
+@contextmanager
+def _assignments_repo(slug: str):
+    """Open the assignment repository for the tenant ``_sync_wire`` used for *slug*."""
+    from src.core.database.repositories.uow import CreativeUoW
+
+    with CreativeUoW(f"t_{slug}") as uow:
+        assert uow.assignments is not None
+        yield uow.assignments
+
+
+def _assignment_rows(slug: str, creative_id: str) -> list:
+    """creative_assignments rows actually stored for *creative_id* in *slug*'s tenant."""
+    with _assignments_repo(slug) as repo:
+        return repo.get_by_creative(creative_id)
+
+
+def _media_buy_status(slug: str, package_id: str) -> str:
+    """Persisted status of the media buy owning *package_id* in *slug*'s tenant."""
+    with _assignments_repo(slug) as repo:
+        found = repo.find_package_with_media_buy(package_id)
+        assert found is not None, f"package {package_id} was not seeded for tenant t_{slug}"
+        return found[1].status
 
 
 def _preview_and_live(slug: str, **kwargs) -> tuple[list[dict], list[dict]]:
@@ -932,6 +1018,219 @@ class TestDryRunPreviewMatchesLiveRun:
 
         assert sorted(_actions(live)) == ["created", "deleted", "deleted"], (
             f"precondition: live must create the new creative and archive both unlisted ones, got {live}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    # -- Assignment outcomes (salesagent-58rs) ------------------------------
+    # dry_run currently skips _process_assignments entirely (_sync.py:427), so
+    # the preview omits assigned_to / assignment_errors / synthesized entries a
+    # real run returns. Spec (AdCP 3.1.1, sync-creatives-request.json
+    # #/properties/dry_run): "preview changes without applying them" — the
+    # response schema marks neither assigned_to nor assignment_errors live-only.
+
+    def test_existing_creative_valid_assignment_previews_assigned_to_and_writes_nothing(self, integration_db):
+        """Case (a): the preview must echo assigned_to yet persist no assignment.
+
+        The live tenant is the oracle AND the non-vacuity control: it must have
+        written the creative_assignments row and transitioned its media buy
+        (draft -> pending_creatives), proving the negative assertions on the dry
+        tenant grade real write paths, not dead code.
+        """
+        pkg = "pkg_asg_a"
+        setup = _seed_assignment_targets(
+            pkg,
+            product_format_ids=[_FMT_BANNER],
+            media_buy_overrides={"status": "draft", "approved_at": datetime(2025, 1, 1, tzinfo=UTC)},
+        )
+        seed = [_make_creative_asset(creative_id="asg_a", name="Existing")]
+        payload = [_make_creative_asset(creative_id="asg_a", name="Existing")]
+
+        preview, live = _preview_and_live(
+            "asg_a",
+            seed=seed,
+            setup=setup,
+            creatives=payload,
+            assignments={"asg_a": [pkg]},
+            validation_mode="lenient",
+        )
+
+        assert live[0].get("assigned_to") == [pkg], (
+            f"precondition: the live run must report the assignment it made, got {live[0]}"
+        )
+        assert len(_assignment_rows("asg_a_live", "asg_a")) == 1, (
+            "precondition: the live run must persist exactly one creative_assignments row"
+        )
+        assert _media_buy_status("asg_a_live", pkg) == "pending_creatives", (
+            "precondition: the live run must transition the approved draft media buy"
+        )
+
+        _assert_preview_matches_live(preview, live)
+        assert _assignment_rows("asg_a_dry", "asg_a") == [], (
+            "dry_run wrote creative_assignments row(s) — a preview must not mutate"
+        )
+        assert _media_buy_status("asg_a_dry", pkg) == "draft", (
+            "dry_run transitioned the media buy status — a preview must not mutate"
+        )
+
+    def test_new_creative_synced_and_assigned_in_one_payload_previews_the_live_outcome(self, integration_db):
+        """Case (b): a creative created in THIS payload is assignable in the same payload.
+
+        Live, the sync UoW commits the new creative before assignments run, so the
+        assignment lookup finds it. The preview persists nothing — it must resolve
+        the creative from the request-local ``previewed`` state instead of reporting
+        an outcome (no assignment, or 'Creative not found') a real run cannot produce.
+        """
+        pkg = "pkg_asg_b"
+        setup = _seed_assignment_targets(pkg, product_format_ids=[_FMT_BANNER])
+        payload = [_make_creative_asset(creative_id="asg_b", name="Brand New")]
+
+        preview, live = _preview_and_live(
+            "asg_b",
+            setup=setup,
+            creatives=payload,
+            assignments={"asg_b": [pkg]},
+            validation_mode="lenient",
+        )
+
+        assert _actions(live) == ["created"], f"precondition: live must create the creative, got {_actions(live)}"
+        assert live[0].get("assigned_to") == [pkg], (
+            f"precondition: live must assign the just-created creative, got {live[0]}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_format_update_and_assignment_in_one_payload_grades_the_post_sync_state(self, integration_db):
+        """Case (b2): previewed state takes PRECEDENCE over the persisted row.
+
+        The seeded creative carries a format the product does NOT support; the same
+        payload updates it to the one format the product supports AND assigns it.
+        Live, the sync UoW commits the format update before assignments run, so the
+        format check reads the POST-sync state and the assignment succeeds. A preview
+        that grades the STALE row would report a format rejection live never produces.
+        """
+        pkg = "pkg_asg_b2"
+        setup = _seed_assignment_targets(pkg, product_format_ids=[_FMT_IMAGE])
+        seed = [
+            _make_creative_asset(
+                creative_id="asg_b2",
+                name="Reformat Me",
+                format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
+            )
+        ]
+        payload = [
+            _make_creative_asset(
+                creative_id="asg_b2",
+                name="Reformat Me",
+                format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250_image"),
+            )
+        ]
+
+        preview, live = _preview_and_live(
+            "asg_b2",
+            seed=seed,
+            setup=setup,
+            creatives=payload,
+            assignments={"asg_b2": [pkg]},
+            validation_mode="lenient",
+        )
+
+        assert _actions(live) == ["updated"], (
+            f"precondition: live must update the seeded creative, got {_actions(live)}"
+        )
+        assert "format" in (live[0].get("changes") or []), (
+            f"precondition: the live update must report the format change, got {live[0].get('changes')}"
+        )
+        assert live[0].get("assigned_to") == [pkg], (
+            f"precondition: live must assign against the POST-sync format, got {live[0]}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_package_not_found_lenient_previews_the_live_assignment_errors(self, integration_db):
+        """Case (c): assignment_errors must reach the preview, not only the live run."""
+        payload = [_make_creative_asset(creative_id="asg_c", name="Orphaned")]
+
+        preview, live = _preview_and_live(
+            "asg_c",
+            creatives=payload,
+            assignments={"asg_c": ["pkg_void_c"]},
+            validation_mode="lenient",
+        )
+
+        assert live[0].get("assignment_errors") == {"pkg_void_c": "Package not found: pkg_void_c"}, (
+            f"precondition: live must record the package-not-found error, got {live[0]}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_assignment_only_missing_creative_previews_the_synthesized_failure(self, integration_db):
+        """Case (d): the synthesized action=failed entry (#1430 orphan-assignment
+        visibility) must appear in the preview exactly as in the live response."""
+        preview, live = _preview_and_live(
+            "asg_d",
+            creatives=[],
+            assignments={"asg_d_ghost": ["pkg_asg_d"]},
+            validation_mode="lenient",
+        )
+
+        assert _actions(live) == ["failed"], (
+            f"precondition: live must synthesize a failed entry for the unknown creative, got {live}"
+        )
+        assert live[0].get("assignment_errors") == {"pkg_asg_d": "Creative not found: asg_d_ghost"}, (
+            f"precondition: live must record why the assignment was skipped, got {live[0]}"
+        )
+        _assert_preview_matches_live(preview, live)
+
+    def test_strict_package_not_found_raises_identically_on_both_arms(self, integration_db):
+        """Case (e): strict-mode assignment errors are graded identically under dry_run.
+
+        'Graded identically, writes nothing' (accounts previewed_by_key discipline):
+        the preview must raise the SAME buyer-facing error a live run raises, not
+        soften it into success. Today dry_run+strict+bad assignment returns success
+        because the assignment call is skipped entirely.
+        """
+        payload = [_make_creative_asset(creative_id="asg_e", name="Strict")]
+        kwargs = {
+            "creatives": payload,
+            "assignments": {"asg_e": ["pkg_void_e"]},
+            "validation_mode": "strict",
+        }
+
+        live_exc = _sync_raises("asg_e_live", dry_run=False, exc_type=AdCPPackageNotFoundError, **kwargs)
+        dry_exc = _sync_raises("asg_e_dry", dry_run=True, exc_type=AdCPPackageNotFoundError, **kwargs)
+
+        assert (dry_exc.error_code, dry_exc.recovery, str(dry_exc)) == (
+            live_exc.error_code,
+            live_exc.recovery,
+            str(live_exc),
+        ), "dry_run raised a different error than the live run for the same payload"
+
+    def test_format_mismatch_fires_and_previews_identically(self, integration_db):
+        """Case (f): negative control — the format-validation branch must actually fire.
+
+        The creative's format is NOT in the product's format_ids, so the live run
+        must record a format rejection and assign nothing. If the seeding hook were
+        broken (no prod_001 Product row), get_product_by_id would miss, the format
+        block would silently skip, and this precondition — assigned_to populated
+        instead of an error — fails loudly, proving the format-parity cases above
+        cannot pass vacuously.
+        """
+        pkg = "pkg_asg_f"
+        setup = _seed_assignment_targets(pkg, product_format_ids=[_FMT_IMAGE])
+        payload = [_make_creative_asset(creative_id="asg_f", name="Wrong Format")]
+
+        preview, live = _preview_and_live(
+            "asg_f",
+            setup=setup,
+            creatives=payload,
+            assignments={"asg_f": [pkg]},
+            validation_mode="lenient",
+        )
+
+        assert live[0].get("assigned_to") is None, (
+            f"precondition: live must NOT assign a format-mismatched creative, got {live[0]}"
+        )
+        live_errors = live[0].get("assignment_errors") or {}
+        assert pkg in live_errors and "is not supported by product" in live_errors[pkg], (
+            f"precondition: live must record the format rejection (proves the product "
+            f"row was seeded and the format branch fired), got {live_errors}"
         )
         _assert_preview_matches_live(preview, live)
 
