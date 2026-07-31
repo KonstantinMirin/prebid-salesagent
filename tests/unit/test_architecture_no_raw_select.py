@@ -258,7 +258,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/config_loader.py", "get_tenant_by_subdomain"),
     ("src/core/config_loader.py", "get_tenant_by_virtual_host"),
     ("src/core/context_manager.py", "_send_push_notifications"),
-    ("src/core/context_manager.py", "add_message"),
     ("src/core/context_manager.py", "get_context"),
     ("src/core/context_manager.py", "get_context_status"),
     ("src/core/context_manager.py", "get_contexts_for_principal"),
