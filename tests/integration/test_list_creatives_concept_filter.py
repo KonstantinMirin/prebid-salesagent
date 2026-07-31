@@ -29,15 +29,18 @@ per-transport serialization claim, so REST-only would leave the MCP/A2A wire unp
 Spec (coercion targets): pinned AdCP 3.1.1 (``adcp==6.6.0``, per docs/adcp-spec-version.md)
 ``creative/list-creatives-response.json`` types ``creatives[].tags`` as a non-nullable
 ``array<string>`` and ``creatives[].assets`` as an ``object`` — both optional (not in
-``required``), so omission is conformant while ``null`` is not. Dropping corrupt internal
-blob data to absent keeps the response conformant; it is robustness, not a contract change.
+``required``), so omission is conformant while ``null`` is not. Dropping a corrupt
+(non-list ``tags`` / non-dict ``assets``) blob value to absent keeps the response's
+top-level shape conformant; it is robustness, not a contract change. The ``assets``
+coercion guarantees dict-ness only — a well-formed dict's inner asset-union values are
+validated separately (#1779).
 """
 
 import pytest
 
 from tests.harness import CreativeListEnv, TransportResult
 from tests.harness.transport import Transport
-from tests.helpers import assert_envelope_shape
+from tests.helpers import assert_envelope_shape, rendered_log_calls
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -94,13 +97,10 @@ def _list_single_creative_with_data(data: dict, transport: Transport) -> tuple[T
     # real coercion regression must surface as this is-error failure (the listing crash the
     # guards exist to catch), not as a format-string error from the renderer below.
     assert not result.is_error, f"{transport}: listing errored on data={data!r}: {result.error!r}"
-    # Render each warning to its final message. Guard the ``%`` substitution on presence of
-    # format args (stdlib LogRecord.getMessage does the same via ``if self.args``) so a
+    # Render each warning to its final message via the shared helper, which guards the ``%``
+    # substitution on presence of format args (as stdlib LogRecord.getMessage does) so a
     # legal zero/one-arg warning carrying a literal ``%`` cannot raise and mask the signal.
-    warnings_text = " ".join(
-        (call.args[0] % call.args[1:]) if len(call.args) > 1 else call.args[0]
-        for call in mock_logger.warning.call_args_list
-    )
+    warnings_text = " ".join(rendered_log_calls(mock_logger.warning))
     return result, warnings_text
 
 
@@ -160,7 +160,8 @@ class TestNonScalarConceptValueDropped:
     """A non-scalar concept_id/concept_name (corrupt external value) is dropped to
     null and logged, not projected as a repr and not crashed on — regression guard
     for the _coerce_blob_scalar non-scalar branch (the symmetric half of the
-    numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
+    numeric-coercion fix: reverting `return None` to a passthrough fails the listing with a
+    400 ``VALIDATION_ERROR``)."""
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_non_scalar_concept_value_is_dropped(self, integration_db, transport):
@@ -244,8 +245,10 @@ class TestMalformedTagsBlobCoerced:
     #1508, the list-field sibling of the concept coercion guards above.
 
     ``Creative.tags`` is typed ``list[str] | None`` but read straight from the blob, so
-    a bare string or a list carrying numeric/object elements would 500 the entire
-    listing (``VALIDATION_ERROR``) during response construction. Reverting the
+    a bare string or a list carrying numeric/object elements would fail the entire
+    listing with a 400 ``VALIDATION_ERROR`` during response construction (the pre-fix
+    envelope even blames the buyer — ``correctable`` — for a seller-side blob defect).
+    Reverting the
     ``_coerce_blob_str_list`` call at the ``tags=`` site back to the raw
     ``data.get("tags")`` reddens these tests (the listing raises mid-build)."""
 
@@ -307,7 +310,8 @@ class TestMalformedAssetsBlobCoerced:
 
     ``Creative.assets`` is typed ``dict[str, Any] | None`` but read straight from the same
     blob, so a stored non-dict (a list/string written by the same out-of-band producer)
-    would 500 the entire listing during response construction. Reverting the
+    would fail the entire listing with a 400 ``VALIDATION_ERROR`` during response
+    construction. Reverting the
     ``_coerce_blob_dict`` call at the ``assets=`` site back to the raw ``assets_dict``
     reddens this (the listing raises mid-build)."""
 
@@ -319,3 +323,55 @@ class TestMalformedAssetsBlobCoerced:
         assert "assets" not in creative
         # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
         assert "Dropping non-dict assets value" in warnings
+
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    def test_empty_assets_dict_is_preserved_on_wire(self, integration_db, transport):
+        """A stored empty ``assets`` dict is preserved on every wire as ``assets: {}``, NOT
+        omitted: the object field *preserves* ``{}`` (``assets`` is required on the sync input,
+        so ``{}`` is the presence-preserving projection), unlike the tags list which collapses
+        empty→absent.
+
+        This pins the object-field empty policy production made — ``{} -> {}`` had a coercer-level
+        oracle but no wire oracle before this. Collapsing ``{}`` to absent (mutating
+        ``_coerce_blob_dict`` to return ``None`` on an empty dict) reddens this."""
+        result, warnings = _list_single_creative_with_data({"assets": {}}, transport)
+        creative = result.wire_response["creatives"][0]
+        assert creative["assets"] == {}
+        assert warnings == "", f"{transport}: empty-assets preservation must not warn: {warnings!r}"
+
+
+class TestCoercionDropIdentifiesTheRow:
+    """A coercion drop warning names the corrupt row — creative/tenant/principal id, each under
+    its own label — so an operator can find and repair it. Pins the ``_blob_log_context`` call-site
+    wiring (which row, correct arg order) that the coercion-behavior guards above don't: they
+    assert the drop *text*, not *which row* it names, so a swapped call-site (or ``_blob_log_context``)
+    argument order would pass every one of them. Values are distinct per slot (``creative_NNNN`` /
+    ``test_tenant`` / ``test_principal``), so any transposition reddens."""
+
+    def test_drop_warning_names_the_corrupt_row(self, integration_db):
+        from unittest.mock import patch
+
+        from tests.factories import CreativeFactory
+
+        with CreativeListEnv() as env:
+            tenant, principal = _seed_authenticated_principal(env)
+            creative = CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                format="display_300x250",
+                status="approved",
+                data={"assets": {}, "tags": "premium"},  # non-list tags → drop + warn
+            )
+            # Capture the ids inside the session block (ORM attrs detach once env exits).
+            creative_id, tenant_id, principal_id = creative.creative_id, env._tenant_id, env._principal_id
+            with patch("src.core.tools.creatives.listing.logger") as mock_logger:
+                result = env.call_via(Transport.REST)
+
+        assert not result.is_error, f"listing errored: {result.error!r}"
+        warnings = " ".join(rendered_log_calls(mock_logger.warning))
+        assert "Dropping non-list tags value" in warnings
+        # Each id under its correct label — a swapped call-site/_blob_log_context arg order (e.g.
+        # creative_id rendered as the principal_id) reddens because the three values differ.
+        assert f"creative_id={creative_id}" in warnings
+        assert f"tenant_id={tenant_id}" in warnings
+        assert f"principal_id={principal_id}" in warnings

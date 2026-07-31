@@ -35,7 +35,7 @@ from src.core.validation_helpers import adcp_validation_boundary
 logger = logging.getLogger(__name__)
 
 
-def _coerce_blob_scalar(value: Any, field_label: str) -> str | None:
+def _coerce_blob_scalar(value: Any, field_label: str, *, log_context: str = "") -> str | None:
     """Coerce an untyped JSON-blob value to a spec string field.
 
     Fields like ``concept_id``/``concept_name`` are strings per the AdCP response
@@ -46,17 +46,27 @@ def _coerce_blob_scalar(value: Any, field_label: str) -> str | None:
     as a Python repr — instead of crashing the whole listing on one bad row.
 
     ``field_label`` is required (never defaulted) so a dropped value names its own field
-    in the log rather than borrowing a sibling's attribution.
+    in the log rather than borrowing a sibling's attribution. ``log_context`` is an optional
+    operator-attribution suffix (the corrupt row's creative/tenant/principal ids, built by
+    :func:`_blob_log_context`) appended to the drop warning so the bad row can be traced and
+    repaired; it defaults to empty for the pure-function callers (unit tests). Surfacing the
+    drop to the buyer as a response advisory (``ListCreativesResponse.errors[]``) instead of
+    log-only is a deliberate deferral, tracked in #1779.
     """
     if value is None or isinstance(value, str):
         return value
     if isinstance(value, (int, float)):  # bool is an int subclass; str(True)="True" is acceptable
         return str(value)
-    logger.warning("Dropping non-scalar %s value of type %s from creative listing", field_label, type(value).__name__)
+    logger.warning(
+        "Dropping non-scalar %s value of type %s from creative listing%s",
+        field_label,
+        type(value).__name__,
+        log_context,
+    )
     return None
 
 
-def _coerce_blob_dict(value: Any, field_label: str) -> dict[str, Any] | None:
+def _coerce_blob_dict(value: Any, field_label: str, *, log_context: str = "") -> dict[str, Any] | None:
     """Coerce an untyped JSON-blob value to a spec object (dict) field.
 
     ``Creative.assets`` is typed ``dict[str, Any] | None`` but is read from the untyped
@@ -64,15 +74,29 @@ def _coerce_blob_dict(value: Any, field_label: str) -> dict[str, Any] | None:
     list fields may write a non-object value. A non-dict is corrupt for an object field
     and dropped to ``None`` with a warning (No Quiet Failures) instead of failing
     Creative validation and crashing the whole listing on one bad row — the object-field
-    sibling of :func:`_coerce_blob_scalar` / :func:`_coerce_blob_str_list`.
+    sibling of :func:`_coerce_blob_scalar` / :func:`_coerce_blob_str_list`. ``log_context``
+    is the same optional operator-attribution suffix documented on :func:`_coerce_blob_scalar`.
+
+    This guarantees dict-*ness* only: a well-formed ``dict`` passes through unvalidated, so a
+    corrupt inner value (a ``null`` asset value, a non-``^[a-z0-9_]+$`` key) still reaches the
+    wire — inner asset-union validation against ``core/creative-asset.json`` is tracked in
+    #1779. Unlike the empty-list collapse in :func:`_coerce_blob_str_list`, an empty ``{}`` is
+    *preserved* (not collapsed to absent): ``assets`` is required on the sync input
+    (``core/creative-asset.json``), so ``{}`` is the presence-preserving projection and
+    ``exclude_none`` keeps it on the wire.
     """
     if value is None or isinstance(value, dict):
         return value
-    logger.warning("Dropping non-dict %s value of type %s from creative listing", field_label, type(value).__name__)
+    logger.warning(
+        "Dropping non-dict %s value of type %s from creative listing%s",
+        field_label,
+        type(value).__name__,
+        log_context,
+    )
     return None
 
 
-def _coerce_blob_str_list(value: Any, field_label: str) -> list[str] | None:
+def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = "") -> list[str] | None:
     """Coerce an untyped JSON-blob value to a spec ``list[str]`` field.
 
     ``Creative.tags`` is typed ``list[str] | None`` but is read from the untyped
@@ -84,31 +108,49 @@ def _coerce_blob_str_list(value: Any, field_label: str) -> list[str] | None:
     ``items: {type: string}`` list (a JSON ``null`` is not an absent value here) and is
     dropped with a warning; every other element is coerced via :func:`_coerce_blob_scalar`
     (scalars stringified, non-scalars dropped+logged), so ``[1, 2] -> ["1", "2"]`` and
-    ``[{...}]`` drops the bad element.
+    ``[{...}]`` drops the bad element. ``log_context`` is the same optional
+    operator-attribution suffix documented on :func:`_coerce_blob_scalar`.
 
     Finally an empty (or fully-emptied) list collapses to ``None`` so ``exclude_none``
     omits the key: the pinned 3.1.1 ``creative/list-creatives-response`` schema permits
-    both ``[]`` and omission and we standardize on omission. That collapse is a
-    valid-input serialization choice, not a corruption drop, so — unlike the drops above
-    — it is logged at ``debug`` (traceability), never ``warning``.
+    both ``[]`` and omission, and this list field standardizes on omission (the object-field
+    sibling :func:`_coerce_blob_dict` instead *preserves* an empty ``{}`` — see its docstring).
+    That collapse is a valid-input serialization choice, not a corruption drop, so — unlike
+    the drops above — it is logged at ``debug`` (traceability), never ``warning``.
     """
     if value is None:
         return None
     if not isinstance(value, list):
-        logger.warning("Dropping non-list %s value of type %s from creative listing", field_label, type(value).__name__)
+        logger.warning(
+            "Dropping non-list %s value of type %s from creative listing%s",
+            field_label,
+            type(value).__name__,
+            log_context,
+        )
         return None
     coerced: list[str] = []
     for element in value:
         if element is None:
-            logger.warning("Dropping null %s element from creative listing", field_label)
+            logger.warning("Dropping null %s element from creative listing%s", field_label, log_context)
             continue
-        scalar = _coerce_blob_scalar(element, field_label)
+        scalar = _coerce_blob_scalar(element, field_label, log_context=log_context)
         if scalar is not None:
             coerced.append(scalar)
     if not coerced:
         logger.debug("Collapsing empty %s list to absent in creative listing", field_label)
         return None
     return coerced
+
+
+def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> str:
+    """Operator-attribution suffix appended to a blob-coercion drop warning.
+
+    Names the corrupt row (creative/tenant/principal) so an operator can trace and repair the
+    out-of-band data defect — the drop warnings are otherwise per-field but per-*row* anonymous.
+    Passed by the ``_list_creatives_impl`` row loop; the coercers default the suffix to empty so
+    their pure-function unit tests stay attribution-free.
+    """
+    return f" (creative_id={creative_id} tenant_id={tenant_id} principal_id={principal_id})"
 
 
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
@@ -410,6 +452,15 @@ def _list_creatives_impl(
             # field's own label) rather than letting a non-string value fail Creative
             # validation and crash the whole listing.
             data_blob = db_creative.data or {}
+            # Operator-attribution for any coercion drop below: names this row so a corrupt
+            # blob value can be traced and repaired (the drops are otherwise per-row anonymous).
+            # Keyword args so the id→label mapping is explicit at the call site (a transposition
+            # would be a visible mislabel, and the wiring test pins it either way).
+            row_log_context = _blob_log_context(
+                creative_id=db_creative.creative_id,
+                tenant_id=tenant["tenant_id"],
+                principal_id=db_creative.principal_id,
+            )
 
             creative = Creative(
                 creative_id=db_creative.creative_id,
@@ -419,19 +470,21 @@ def _list_creatives_impl(
                 # would fail Creative validation and crash the whole listing, so coerce
                 # it (drop+log a non-dict) — the object-field sibling of the tags/concept
                 # coercion (#1508).
-                assets=_coerce_blob_dict(assets_dict, "assets"),
+                assets=_coerce_blob_dict(assets_dict, "assets", log_context=row_log_context),
                 # tags is typed list[str] but read from the untyped blob, where an
                 # external producer may write a malformed value (a bare string, or
                 # [1, 2]) that would fail Creative validation and crash the whole
                 # listing — coerce it (stringify scalars, drop+log corrupt data), the
                 # same hazard _coerce_blob_scalar handles for the concept fields (#1508).
-                tags=_coerce_blob_str_list(data_blob.get("tags"), "tags"),
+                tags=_coerce_blob_str_list(data_blob.get("tags"), "tags", log_context=row_log_context),
                 # AdCP spec fields (listing Creative)
                 status=status_enum,
                 created_date=created_at_dt,
                 updated_date=updated_at_dt,
-                concept_id=_coerce_blob_scalar(data_blob.get("concept_id"), "concept_id"),
-                concept_name=_coerce_blob_scalar(data_blob.get("concept_name"), "concept_name"),
+                concept_id=_coerce_blob_scalar(data_blob.get("concept_id"), "concept_id", log_context=row_log_context),
+                concept_name=_coerce_blob_scalar(
+                    data_blob.get("concept_name"), "concept_name", log_context=row_log_context
+                ),
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )

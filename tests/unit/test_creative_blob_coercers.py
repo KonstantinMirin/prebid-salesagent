@@ -22,10 +22,12 @@ from unittest.mock import patch
 import pytest
 
 from src.core.tools.creatives.listing import (
+    _blob_log_context,
     _coerce_blob_dict,
     _coerce_blob_scalar,
     _coerce_blob_str_list,
 )
+from tests.helpers import rendered_log_calls
 
 
 @pytest.fixture
@@ -38,12 +40,10 @@ def mock_logger():
 def _warnings(mock) -> list[str]:
     """Render the captured ``logger.warning`` calls to their final messages.
 
-    The coercers pass the field label as a ``%s`` arg (not baked into the format string),
-    so substitute before asserting. The ``%`` is guarded on presence of format args (as
-    stdlib ``LogRecord.getMessage`` does via ``if self.args``)."""
-    return [
-        (call.args[0] % call.args[1:]) if len(call.args) > 1 else call.args[0] for call in mock.warning.call_args_list
-    ]
+    Thin adapter over the shared ``rendered_log_calls`` helper (``tests/helpers``), which owns
+    the ``fmt % args`` substitution and its ``if self.args`` guard so the idiom lives in one
+    place rather than being copy-pasted here and in the integration guards."""
+    return rendered_log_calls(mock.warning)
 
 
 class TestCoerceBlobScalar:
@@ -116,6 +116,9 @@ class TestCoerceBlobStrList:
             "Dropping null tags element from creative listing",
             "Dropping null tags element from creative listing",
         ]
+        # Both nulls drop, the emptied list then collapses to None — that collapse logs once
+        # at debug (matching the sibling collapse tests), never a drop-warning.
+        assert mock_logger.debug.call_count == 1
 
     def test_empty_list_collapses_to_none_at_debug_not_warning(self, mock_logger):
         # A well-formed empty list is valid input, not corruption: collapse to None so
@@ -163,5 +166,55 @@ class TestFieldLabelIsRequired:
         ],
     )
     def test_field_label_has_no_default(self, coercer, arg):
-        with pytest.raises(TypeError):
+        # match on the arg name so an UNRELATED TypeError can't satisfy the oracle: the intended
+        # failure is the missing-required-positional, and restoring a ``field_label`` default
+        # makes the call return instead of raise — which then reddens here.
+        with pytest.raises(TypeError, match="field_label"):
             coercer(arg)  # missing required field_label
+
+
+class TestLogContextAttribution:
+    """The optional ``log_context`` suffix (the corrupt row's creative/tenant/principal ids) is
+    appended to every drop-warning so an operator can trace the bad row and repair it. Default-
+    empty keeps the pure-branch tests above attribution-free; the listing loop passes the real
+    suffix (built by ``_blob_log_context``). Dropping the ``log_context`` arg from any warning
+    (or its ``%s`` from the format string) reddens here."""
+
+    _CTX = " (creative_id=c1 tenant_id=t1 principal_id=p1)"
+
+    def test_scalar_non_scalar_drop_carries_context(self, mock_logger):
+        _coerce_blob_scalar(["x"], "concept_id", log_context=self._CTX)
+        assert _warnings(mock_logger) == [
+            f"Dropping non-scalar concept_id value of type list from creative listing{self._CTX}"
+        ]
+
+    def test_dict_non_dict_drop_carries_context(self, mock_logger):
+        _coerce_blob_dict(["x"], "assets", log_context=self._CTX)
+        assert _warnings(mock_logger) == [
+            f"Dropping non-dict assets value of type list from creative listing{self._CTX}"
+        ]
+
+    def test_list_non_list_drop_carries_context(self, mock_logger):
+        _coerce_blob_str_list("premium", "tags", log_context=self._CTX)
+        assert _warnings(mock_logger) == [f"Dropping non-list tags value of type str from creative listing{self._CTX}"]
+
+    def test_null_and_forwarded_element_drops_carry_context(self, mock_logger):
+        # The list coercer must forward log_context to BOTH its own null-element warning and the
+        # per-element scalar coercion it delegates to — so a corrupt element names its row too.
+        _coerce_blob_str_list([None, {"k": "v"}], "tags", log_context=self._CTX)
+        assert _warnings(mock_logger) == [
+            f"Dropping null tags element from creative listing{self._CTX}",
+            f"Dropping non-scalar tags value of type dict from creative listing{self._CTX}",
+        ]
+
+
+class TestBlobLogContext:
+    """``_blob_log_context`` builds the attribution suffix that ``TestLogContextAttribution`` feeds
+    the coercers as a literal — so without this, no test exercises the builder itself, and a
+    transposed field (a creative_id rendered under the ``tenant_id`` label, say) would pass every
+    other test. Distinct value per slot so any transposition reddens."""
+
+    def test_names_each_id_under_its_own_label(self):
+        assert _blob_log_context("creative_9", "tenant_9", "principal_9") == (
+            " (creative_id=creative_9 tenant_id=tenant_9 principal_id=principal_9)"
+        )
