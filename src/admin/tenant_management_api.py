@@ -1,6 +1,5 @@
 """Tenant Management API for managing tenants - Using direct SQL queries."""
 
-import json
 import logging
 import os
 import secrets
@@ -277,7 +276,7 @@ def create_tenant():
                     tenant_id=tenant_id,
                     principal_id=principal_id,
                     name=f"{data['name']} Default Principal",
-                    platform_mappings=json.dumps(default_mappings),
+                    platform_mappings=default_mappings,
                     access_token=principal_token,
                     created_at=datetime.now(UTC),
                 )

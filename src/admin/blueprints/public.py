@@ -1,6 +1,5 @@
 """Public routes blueprint for self-service tenant signup."""
 
-import json
 import logging
 import secrets
 import string
@@ -163,20 +162,18 @@ def provision_tenant():
                 enable_axe_signals=True,
                 human_review_required=True,
                 admin_token=admin_token,
-                auto_approve_format_ids=json.dumps(["display_300x250", "display_728x90"]),
+                auto_approve_format_ids=["display_300x250", "display_728x90"],
                 # Access control
-                authorized_emails=json.dumps([user_email.lower()]),
-                authorized_domains=json.dumps([email_domain]) if email_domain else None,
+                authorized_emails=[user_email.lower()],
+                authorized_domains=[email_domain] if email_domain else None,
                 # Default policy settings
-                policy_settings=json.dumps(
-                    {
-                        "enabled": True,
-                        "require_manual_review": False,
-                        "prohibited_advertisers": [],
-                        "prohibited_categories": [],
-                        "prohibited_tactics": [],
-                    }
-                ),
+                policy_settings={
+                    "enabled": True,
+                    "require_manual_review": False,
+                    "prohibited_advertisers": [],
+                    "prohibited_categories": [],
+                    "prohibited_tactics": [],
+                },
             )
             # Both ids are freshly generated above (a uuid4 and its first 8 chars), so a
             # collision here would be a generator accident, not two users racing for the
@@ -269,14 +266,12 @@ def provision_tenant():
                 principal_id=f"{tenant_id}_default",
                 name=f"{publisher_name} Demo Principal",
                 access_token=admin_token,
-                platform_mappings=json.dumps(
-                    {
-                        "mock": {
-                            "advertiser_id": f"default_{tenant_id[:8]}",
-                            "advertiser_name": f"{publisher_name} Demo",
-                        }
+                platform_mappings={
+                    "mock": {
+                        "advertiser_id": f"default_{tenant_id[:8]}",
+                        "advertiser_name": f"{publisher_name} Demo",
                     }
-                ),
+                },
                 created_at=now,
             )
             db_session.add(default_principal)
