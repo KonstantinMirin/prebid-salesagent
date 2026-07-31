@@ -36,10 +36,7 @@ _CAPABILITY_PHRASES = re.compile(
 # bug in the creative-rejection family, but their phrasing — "missing
 # required ..." — never matches the capability anchors, so they need no
 # entry here.)
-ALLOWLIST_PREFIXES: set[str] = {
-    # GAM pricing-model gap — tracked as its own bug (pricing family).
-    "Pricing model '",
-}
+ALLOWLIST_PREFIXES: set[str] = set()
 
 
 def _literal_text(node: ast.expr) -> str | None:
