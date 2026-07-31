@@ -53,6 +53,45 @@ def operator_answer(client: Any, response: Any) -> tuple[int, str | None, list[A
 
 
 @contextmanager
+def rival_fires_in_session_write_window(
+    session: Any,
+    rival: Callable[[], object],
+    *,
+    trigger: str = "commit",
+) -> Iterator[None]:
+    """Fire ``rival`` once, at a LIVE session's write instant.
+
+    Sibling of :func:`concurrent_commit_in_write_window` for managers that hold
+    a long-lived session (``DatabaseManager.session``) instead of opening one
+    per call via ``get_db_session`` — there is no module attribute to patch, so
+    the trigger method is patched on the session object itself. ``rival`` must
+    run on its OWN session (e.g. inside a fresh thread, whose thread-local
+    scoped session is a genuinely separate transaction).
+
+    ``trigger`` marks the write instant and moves with the code under test:
+    ``"commit"`` grades a read-modify-write handler (rival lands between the
+    read and the write-back); ``"execute"`` grades a single-statement atomic
+    write (rival lands before the statement, which must still not lose it).
+    """
+    unbound = getattr(type(session), trigger)
+    fired = False
+
+    def racing_method(*args: Any, **kwargs: Any) -> Any:
+        nonlocal fired
+        if not fired:
+            fired = True
+            rival()
+        return unbound(session, *args, **kwargs)
+
+    setattr(session, trigger, racing_method)
+    try:
+        yield
+    finally:
+        # Restore the class method on the (pooled, scoped) session.
+        delattr(session, trigger)
+
+
+@contextmanager
 def concurrent_commit_in_write_window(
     module: ModuleType,
     commit_conflicting_row: Callable[[], object],

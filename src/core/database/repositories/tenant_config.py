@@ -15,12 +15,12 @@ from __future__ import annotations
 from typing import Any, Literal
 from typing import cast as type_cast
 
-from sqlalchemy import cast, literal, select, update
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+from src.core.database.jsonb_append import jsonb_list
 from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
@@ -79,8 +79,7 @@ class TenantConfigRepository:
     def _authorized_list_col(self, column: AuthorizedListColumn):
         if column not in ("authorized_domains", "authorized_emails"):
             raise ValueError(f"Not an authorized-list column: {column}")
-        col = getattr(Tenant, column)
-        return func.coalesce(cast(col, JSONB), func.jsonb_build_array())
+        return jsonb_list(getattr(Tenant, column))
 
     def add_to_authorized_list(self, column: AuthorizedListColumn, value: str) -> AddOutcome:
         """Atomically append ``value`` to the tenant's list if not present."""
