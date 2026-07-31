@@ -27,12 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MODELS_MODULE = "src.core.database.models"
 
 # (file, class, kwarg) triples permitted to violate — shrink-only.
-ALLOWLIST: set[tuple[str, str]] = {
-    # view_gam_line_item's 'fetch from GAM' fallback constructs a display
-    # object against a drifted schema (7 phantom kwargs; the branch TypeErrors
-    # today). Tracked as its own bug; remove this entry when that fix lands.
-    ("src/admin/blueprints/gam.py", "GAMLineItem"),
-}
+ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _mapped_attrs() -> dict[str, set[str]]:

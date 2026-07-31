@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from flask import Blueprint, jsonify, render_template, request, session
@@ -22,6 +23,38 @@ logger = logging.getLogger(__name__)
 
 # Create blueprint
 gam_bp = Blueprint("gam", __name__, url_prefix="/tenant/<tenant_id>/gam")
+
+
+@dataclass(frozen=True)
+class _GamLineItemView:
+    """Display-only view of a line item fetched live from GAM.
+
+    NOT an ORM instance on purpose: the fetch-from-GAM fallback of
+    ``view_gam_line_item`` only needs attribute access for the template and
+    the order lookup, and constructing a ``GAMLineItem`` here both risked
+    accidental persistence and drifted from the mapper (seven phantom kwargs
+    raised TypeError — salesagent-3pj8). Attribute names mirror the real
+    ``GAMLineItem`` columns so templates cannot tell the two apart.
+    """
+
+    tenant_id: str
+    line_item_id: str
+    name: str
+    order_id: str
+    status: str
+    start_date: object
+    end_date: object
+    line_item_type: str
+    priority: int | None
+    cost_type: str | None
+    cost_per_unit: int | None
+    goal_type: str | None
+    primary_goal_units: int | None
+    stats_impressions: int
+    stats_clicks: int
+    stats_ctr: float
+    targeting: dict | None
+    last_synced: datetime
 
 
 def _validate_gam_config(session, tenant_id: str) -> tuple[AdapterConfig | None, str | None]:
@@ -525,8 +558,10 @@ def view_gam_line_item(tenant_id, line_item_id):
                 if not line_item_data:
                     return render_template("error.html", error="Line item not found in GAM"), 404
 
-                # Create a temporary line item object for display
-                line_item = GAMLineItem(
+                # Display-only view — deliberately not an ORM instance (see
+                # _GamLineItemView). No delivery stats: this item was never
+                # synced locally.
+                line_item = _GamLineItemView(
                     tenant_id=tenant_id,
                     line_item_id=line_item_id,
                     name=line_item_data.get("name", "Unknown"),
@@ -538,15 +573,13 @@ def view_gam_line_item(tenant_id, line_item_id):
                     priority=line_item_data.get("priority"),
                     cost_type=line_item_data.get("costType"),
                     cost_per_unit=line_item_data.get("costPerUnit", {}).get("microAmount"),
-                    currency_code=line_item_data.get("costPerUnit", {}).get("currencyCode"),
                     goal_type=line_item_data.get("primaryGoal", {}).get("goalType"),
-                    goal_units=line_item_data.get("primaryGoal", {}).get("units"),
-                    units_delivered=0,
-                    impressions_delivered=0,
-                    clicks_delivered=0,
-                    ctr=0.0,
+                    primary_goal_units=line_item_data.get("primaryGoal", {}).get("units"),
+                    stats_impressions=0,
+                    stats_clicks=0,
+                    stats_ctr=0.0,
+                    targeting=line_item_data.get("targeting"),
                     last_synced=datetime.now(UTC),
-                    raw_data=json.dumps(line_item_data),
                 )
 
                 # Get the order if available
@@ -576,6 +609,9 @@ def view_gam_line_item(tenant_id, line_item_id):
                 "gam_line_item_viewer.html",
                 tenant={"tenant_id": tenant_obj.tenant_id, "name": tenant_obj.name},
                 tenant_id=tenant_id,
+                # Prefills the viewer's input and arms its auto-load fetch —
+                # without it the page rendered permanently empty.
+                line_item_id=line_item_id,
                 line_item=line_item,
                 order=order,
             )
