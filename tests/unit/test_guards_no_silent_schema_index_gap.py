@@ -30,7 +30,12 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, format_failure, safe_parse
+from tests.unit._architecture_helpers import (
+    REPO_ROOT,
+    format_failure,
+    iter_src_and_test_python_files,
+    safe_parse,
+)
 
 GUARD_FILE = "tests/unit/test_guards_no_silent_schema_index_gap.py"
 
@@ -93,23 +98,9 @@ def find_warn_and_skip_violations(tree: ast.Module) -> list[int]:
     return violations
 
 
-def _iter_scanned_files():
-    repo = REPO_ROOT
-    for scan_root in (repo / "src", repo / "tests"):
-        if not scan_root.exists():
-            continue
-        for path in sorted(scan_root.rglob("*.py")):
-            if "__pycache__" in str(path):
-                continue
-            rel = str(path.relative_to(repo))
-            if rel == GUARD_FILE:
-                continue
-            yield path, rel
-
-
 def test_no_hardcoded_schema_section_lookup():
     violations: list[str] = []
-    for path, rel in _iter_scanned_files():
+    for path, rel in iter_src_and_test_python_files(REPO_ROOT, exclude=frozenset({GUARD_FILE})):
         tree = safe_parse(path)
         if tree is None:
             continue
@@ -126,7 +117,7 @@ def test_no_hardcoded_schema_section_lookup():
 
 def test_no_warn_and_skip_on_schema_miss():
     violations: list[str] = []
-    for path, rel in _iter_scanned_files():
+    for path, rel in iter_src_and_test_python_files(REPO_ROOT, exclude=frozenset({GUARD_FILE})):
         tree = safe_parse(path)
         if tree is None:
             continue

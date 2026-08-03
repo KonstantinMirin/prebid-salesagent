@@ -24,6 +24,7 @@ import pytest
 from tests.e2e._compliance_report import ComplianceReportBase
 from tests.e2e.adcp_request_builder import build_a2a_message_send
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 from .conftest import e2e_host
@@ -121,19 +122,7 @@ class A2AAdCPComplianceClient:
             "payload_extracted": False,
         }
 
-        # Map skill to AdCP schema
-        # Note: signals skills removed - should come from dedicated signals agents
-        skill_to_schema = {
-            "get_products": "get-products",
-            "create_media_buy": "create-media-buy",
-            "add_creative_assets": "add-creative-assets",
-            # Skills without AdCP schemas
-            "approve_creative": None,  # Schema may not be available yet
-            "get_media_buy_status": None,
-            "optimize_media_buy": None,
-        }
-
-        schema_task = skill_to_schema.get(skill_name)
+        schema_task = SKILL_TO_ADCP_TASK.get(skill_name)
         if not schema_task:
             result["warnings"].append(f"No AdCP schema mapping for skill '{skill_name}'")
             return result

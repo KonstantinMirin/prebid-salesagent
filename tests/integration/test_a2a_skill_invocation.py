@@ -16,6 +16,7 @@ from adcp.types import AccountReference as LibraryAccountReference
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 from tests.utils.a2a_helpers import (
     assert_delivery_forwarded_account,
     create_a2a_message_with_skill,
@@ -42,20 +43,8 @@ logger = logging.getLogger(__name__)
 class A2AAdCPValidator:
     """Helper class to validate A2A responses against AdCP schemas."""
 
-    # Map A2A skill names to AdCP schema task names
-    # Note: signals skills removed - should come from dedicated signals agents
-    SKILL_TO_SCHEMA_MAP = {
-        "get_products": "get-products",
-        "create_media_buy": "create-media-buy",
-        "update_media_buy": "update-media-buy",  # AdCP v2.0+ endpoint
-        "get_media_buy_delivery": "get-media-buy-delivery",  # AdCP delivery metrics
-        "sync_creatives": "sync-creatives",  # New AdCP spec endpoint
-        "list_creatives": "list-creatives",  # New AdCP spec endpoint
-        "approve_creative": "approve-creative",  # When schema becomes available
-        # Skills without AdCP schemas yet
-        "get_media_buy_status": None,
-        "optimize_media_buy": None,
-    }
+    # Single source of truth for skill-name -> AdCP-task-name resolution.
+    SKILL_TO_SCHEMA_MAP = SKILL_TO_ADCP_TASK
 
     def __init__(self):
         self.validator = None
