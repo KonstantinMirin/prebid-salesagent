@@ -1,0 +1,365 @@
+"""Transport-generic AdCP test client — one ``call()``, all transports.
+
+Implements the design at ``.claude/notes/storyboard-conformance/
+sb2a-transport-generic-client-design.md`` (beads ``salesagent-xxa1``, this
+file is ``salesagent-geru``/SB-2b). ``AdCPTestClient.call(tool, payload,
+transport)`` replaces the per-tool ``call_a2a``/``call_mcp``/
+``build_rest_body``/``parse_rest_response`` quartet that today is
+hand-written on every one of the 33 ``tests/harness/*.py`` env classes
+(``MediaBuyDualEnv`` is the worst offender — see design doc §1).
+
+ADDRESS (tool -> address) is fully derived — see ``tests/harness/
+address_table.py``. WRAP (payload -> transport envelope) and UNWRAP
+(transport envelope -> normalized ``TransportResult``) are the only
+per-transport code, and are transport-**family** functions: the same
+function object serves both an in-process transport and its E2E sibling
+(design doc §5), because the wire format is identical either way — only
+DELIVER (how bytes reach the server) differs.
+
+DELIVER reuses the SAME env primitives ``_run_mcp_client`` /
+``_run_a2a_handler`` / ``_prepare_rest_request`` that the per-env dispatch
+methods already call (design doc §5 table) — this is deliberate: those
+methods own the real auth-chain / factory-commit / FastMCP-middleware
+plumbing, and duplicating that here would violate this project's DRY
+invariant for no benefit. ``client.py`` only adds the tool-name-generic
+glue around them; passing ``response_cls=dict`` gets a plain dict back
+from ``_run_mcp_client``/``_run_a2a_handler`` instead of the per-tool
+Pydantic model those methods normally parse into (this is why ``call()``
+does not need a ``response_cls`` parameter — see the "typed payload"
+docstring note on ``TransportResult.payload`` below for the tradeoff).
+
+E2E delivery (``Transport.E2E_REST``/``E2E_MCP``/``E2E_A2A``) is NOT
+implemented here — this is a documented, deliberate deferral (design doc
+§7 "Two placeholder E2E dispatchers"), matching the beads tasks this one
+blocks: ``salesagent-uz00`` (SB-3a, e2e_rest), ``salesagent-wu78``
+(SB-3b, e2e_mcp), ``salesagent-tisr`` (SB-3c, e2e_a2a). WRAP is already
+written per transport *family*, so those follow-ups only need to add a
+DELIVER function — ADDRESS and WRAP need no changes.
+
+Usage::
+
+    from tests.harness.client import AdCPTestClient
+    from tests.harness.transport import Transport
+
+    client = AdCPTestClient(env)
+    result = client.call("get_products", {"brief": "video ads"}, Transport.MCP)
+    assert result.is_success
+    result.assert_wire_error(...)  # on the error path — unchanged from env.call_via
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
+
+from tests.harness.address_table import ADDRESS_TABLE, ToolAddress
+from tests.harness.transport import Transport, TransportResult
+
+if TYPE_CHECKING:
+    from tests.harness._base import BaseTestEnv
+
+# NoAddressForTransport re-exported here for callers that only import
+# tests.harness.client (design doc §3 cites both this module and
+# address_table.py as "new files, SB-2b builds it" — callers should not
+# need to know the map lives in a separate module).
+from tests.harness.address_table import NoAddressForTransport  # noqa: F401  (re-export)
+
+# Sentinel distinguishing "identity not passed" (fall back to
+# env.identity_for(transport), the DELIVER functions' own default) from an
+# EXPLICIT identity=None (deliberately unauthenticated dispatch — the same
+# meaning env._run_mcp_client / _run_a2a_handler / _prepare_rest_request
+# already give identity=None, and RestE2EDispatcher.dispatch documents this
+# convention explicitly). The design doc's pseudocode used a plain
+# ``identity: Any = None`` default; that would collide with the "explicit
+# unauthenticated" meaning identity=None already carries throughout
+# tests/harness, so this client uses a private sentinel instead — same
+# pattern _base.py's own dispatch primitives already use internally
+# (``_NO_OVERRIDE``).
+_NO_IDENTITY_OVERRIDE = object()
+
+
+def _with_identity(payload: dict[str, Any], identity: Any) -> dict[str, Any]:
+    """Copy *payload* and, unless *identity* is the no-override sentinel, add it.
+
+    Shared by all three WRAP-family functions below — the identity-forwarding
+    rule is identical regardless of transport (MCP/A2A/REST-family), only the
+    DELIVER function that consumes the resulting kwargs differs.
+    """
+    kwargs = dict(payload)
+    if identity is not _NO_IDENTITY_OVERRIDE:
+        kwargs["identity"] = identity
+    return kwargs
+
+
+# -- WRAP: payload (flat AdCP request dict) -> transport envelope -----------
+#
+# One function per transport FAMILY (design doc §5) — MCP/A2A/REST all
+# accept the same flat dict shape on the wire (FastMCP call_tool arguments,
+# A2A skill parameters, REST JSON body), so WRAP for the in-process transport
+# and its E2E sibling is the literal same function object.
+
+
+def _wrap_mcp(address: ToolAddress, payload: dict[str, Any]) -> dict[str, Any]:
+    """MCP WRAP: no transformation — payload IS the FastMCP call_tool arguments dict."""
+    return dict(payload)
+
+
+def _wrap_a2a(address: ToolAddress, payload: dict[str, Any]) -> dict[str, Any]:
+    """A2A WRAP: no transformation — payload becomes the skill ``parameters`` dict.
+
+    Limitation (design doc §7 "A2A push-notification injection"): production's
+    ``_handle_explicit_skill`` (``src/a2a_server/adcp_a2a_server.py:1491``)
+    injects ``push_notification_config`` from the A2A protocol-layer
+    ``SendMessageConfiguration``, not from the skill ``parameters`` dict — a
+    caller putting ``push_notification_config`` in *payload* here reaches the
+    skill as an ordinary parameter, NOT through that protocol-layer injection
+    path. Reproducing the injection itself needs ``_run_a2a_handler`` (or its
+    caller, ``on_message_send``) to accept a push-notification config
+    argument, which it does not today — flagged as a follow-up, not silently
+    faked here.
+    """
+    return dict(payload)
+
+
+def _wrap_rest(address: ToolAddress, payload: dict[str, Any]) -> dict[str, Any]:
+    """REST WRAP: peel ``{name}`` path params out of *payload* into the URL.
+
+    Generalizes what ``MediaBuyDualEnv._run_update_rest_request`` hand-codes
+    for exactly one route (``media_buy_id``) into one rule that covers every
+    path-parameterized route (design doc §4). The remaining payload keys
+    become the JSON body — sent as-is; production's per-route Pydantic
+    ``Body`` class (not this WRAP function) is what validates/rejects fields
+    that drift from the AdCP request schema (design doc §7 "REST body != raw
+    request model 1:1"), surfacing as a real 422, not a client-side KeyError.
+
+    Returns ``{"url": concrete_path, "body": remaining_payload}`` — ``method``
+    lives on *address* already and DELIVER reads it directly.
+    """
+    body = dict(payload)
+    url = address.path_template or ""
+    for param in address.path_params:
+        if param in body:
+            url = url.replace(f"{{{param}}}", str(body.pop(param)))
+    return {"url": url, "body": body}
+
+
+WRAP: dict[Transport, Callable[[ToolAddress, dict[str, Any]], Any]] = {
+    Transport.MCP: _wrap_mcp,
+    Transport.E2E_MCP: _wrap_mcp,
+    Transport.A2A: _wrap_a2a,
+    Transport.E2E_A2A: _wrap_a2a,
+    Transport.REST: _wrap_rest,
+    Transport.E2E_REST: _wrap_rest,
+}
+
+
+# -- DELIVER: wrapped request -> raw transport response (or raise) ----------
+#
+# In-process DELIVER reuses the env primitives cited in the design doc §5
+# table verbatim (``_run_mcp_client``, ``_run_a2a_handler``,
+# ``_prepare_rest_request``) — these already own auth-chain / factory-commit
+# / middleware plumbing; DELIVER only adds the tool-name-generic call shape.
+
+
+def _deliver_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+    kwargs = _with_identity(wrapped, identity)
+    # response_cls=dict: _run_mcp_client ends with `response_cls(**structured_content)`;
+    # `dict(**d)` is `d`, so this yields the raw structured_content dict instead of a
+    # per-tool Pydantic model the client has no way to know generically.
+    return env._run_mcp_client(address.name, dict, **kwargs)
+
+
+def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+    kwargs = _with_identity(wrapped, identity)
+    return env._run_a2a_handler(address.name, dict, **kwargs)
+
+
+def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
+    kwargs = _with_identity({}, identity)
+    client, _resolved_identity = env._prepare_rest_request(kwargs)
+    method = address.method or "post"
+    return getattr(client, method)(wrapped["url"], json=wrapped["body"])
+
+
+def _deliver_e2e_not_implemented(transport: Transport, follow_up: str) -> Callable[..., Any]:
+    def _deliver(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
+        raise NotImplementedError(
+            f"{transport} delivery is not yet implemented on AdCPTestClient — "
+            f"see {follow_up} (design doc §7 'Two placeholder E2E dispatchers'). "
+            "WRAP/ADDRESS need no changes; only a DELIVER function is missing."
+        )
+
+    return _deliver
+
+
+DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = {
+    Transport.MCP: _deliver_mcp,
+    Transport.A2A: _deliver_a2a,
+    Transport.REST: _deliver_rest,
+    Transport.E2E_REST: _deliver_e2e_not_implemented(Transport.E2E_REST, "salesagent-uz00 (SB-3a)"),
+    Transport.E2E_MCP: _deliver_e2e_not_implemented(Transport.E2E_MCP, "salesagent-wu78 (SB-3b)"),
+    Transport.E2E_A2A: _deliver_e2e_not_implemented(Transport.E2E_A2A, "salesagent-tisr (SB-3c)"),
+}
+
+
+# -- UNWRAP: raw transport response -> normalized TransportResult -----------
+#
+# Success-path UNWRAP for MCP/A2A assumes DELIVER already raised on error
+# (mirrors McpDispatcher/A2ADispatcher in tests/harness/dispatchers.py — the
+# exception path is handled once, in AdCPTestClient.call, using the SAME
+# module-level envelope-extraction helpers those dispatchers use, imported
+# below rather than re-implemented). REST's UNWRAP inspects the response
+# status itself (TestClient/httpx do not raise on 4xx/5xx), matching
+# RestDispatcher.
+
+
+def _unwrap_mcp_success(env: BaseTestEnv, raw: dict[str, Any]) -> TransportResult:
+    # cast: TransportResult.payload is typed BaseModel | None — see the "typed
+    # payload" docstring note on AdCPTestClient.call for why this client
+    # deliberately puts a flat dict there instead (no per-tool response schema).
+    return TransportResult(payload=cast(Any, raw), envelope={"transport": "mcp"}, wire_response=env._last_wire_response)
+
+
+def _unwrap_a2a_success(env: BaseTestEnv, raw: dict[str, Any]) -> TransportResult:
+    return TransportResult(payload=cast(Any, raw), envelope={"transport": "a2a"}, wire_response=env._last_wire_response)
+
+
+def _unwrap_rest(env: BaseTestEnv, raw: Any) -> TransportResult:
+    envelope = {
+        "transport": "rest",
+        "status_code": raw.status_code,
+        "content_type": raw.headers.get("content-type", ""),
+    }
+    body = raw.json()
+    if raw.status_code >= 400:
+        error = env.parse_rest_error(raw.status_code, body)
+        return TransportResult(error=error, envelope=envelope, raw_response=raw, wire_error_envelope=body)
+    return TransportResult(payload=body, envelope=envelope, raw_response=raw, wire_response=body)
+
+
+class AdCPTestClient:
+    """One client, all transports, in-process and e2e (design doc §5).
+
+    Constructed per-env — it needs the env's identity resolution + factory-
+    bound session + e2e_config, exactly what ``BaseTestEnv`` already carries.
+    The address map it consults (``tests.harness.address_table.ADDRESS_TABLE``)
+    IS a process-wide, lazily-built singleton (cheap: no I/O, just reads three
+    live registration objects) — but auth/session/e2e state stays per-scenario
+    on ``env``, so a fresh ``AdCPTestClient(env)`` per scenario is correct and
+    matches every existing env's per-scenario construction.
+    """
+
+    def __init__(self, env: BaseTestEnv) -> None:
+        self._env = env
+
+    def call(
+        self,
+        tool: str,
+        payload: dict[str, Any],
+        transport: Transport,
+        *,
+        identity: Any = _NO_IDENTITY_OVERRIDE,
+    ) -> TransportResult:
+        """Address -> wrap -> deliver -> unwrap -> ``TransportResult``.
+
+        *payload* is always the flat AdCP request payload as a dict (the same
+        shape ``req.model_dump(mode="json", exclude_none=True)`` already
+        produces across every env's ``build_rest_body``/``_flatten_request``).
+
+        Raises :class:`~tests.harness.address_table.NoAddressForTransport`
+        when *tool* has no registered address on *transport* — expected for
+        tools that are not exposed on every transport (e.g. A2A-only skills).
+
+        Note on ``TransportResult.payload``: this client has no per-tool
+        response schema to parse into (the whole point is not hand-maintaining
+        one), so on success ``payload`` holds the same flat dict as
+        ``wire_response`` rather than a parsed Pydantic model — every existing
+        Then-step helper that only checks ``is_success``/``is_error``/
+        ``wire_response``/``wire_error_envelope`` (i.e. ``assert_wire_error``)
+        is unaffected; a step that reaches into ``result.payload.<field>``
+        attribute-style needs ``result.payload["<field>"]`` instead, or a
+        follow-up can add an optional ``response_cls`` parameter to ``call()``
+        for typed parsing (not needed by any caller yet).
+        """
+        address = ADDRESS_TABLE.resolve(tool, transport)
+        wrapped = WRAP[transport](address, payload)
+        try:
+            raw = DELIVER[transport](self._env, address, wrapped, identity)
+        except NotImplementedError:
+            # Missing delivery support — an E2E delivery gap (§7) or an env
+            # that doesn't implement REST (get_rest_client) — must surface as
+            # a hard failure, not get silently downgraded into a
+            # TransportResult error a test could mistake for a real AdCP
+            # rejection.
+            raise
+        except Exception as exc:
+            return UNWRAP_ERROR[transport](exc)
+        return UNWRAP_SUCCESS[transport](self._env, raw)
+
+
+def _mcp_error_to_result(exc: Exception) -> TransportResult:
+    """Error-path ``TransportResult`` for MCP DELIVER failures.
+
+    Composes the SAME module-level envelope-extraction helpers
+    ``tests/harness/dispatchers.py``'s ``McpDispatcher`` already uses
+    (imported here, not re-implemented) so a wire-envelope regression is
+    caught identically whether dispatch went through an env's own
+    ``call_mcp`` or through this generic client.
+    """
+    from tests.harness._base import _unwrap_mcp_tool_error
+    from tests.harness.dispatchers import _envelope_from_adcp_error, _envelope_from_mcp_error
+
+    # _run_mcp_client already unwraps ToolError -> AdCPError internally
+    # (stashing _wire_error_envelope when reconstruction succeeds); this
+    # mirrors McpDispatcher.dispatch's except block for the rare case where
+    # that internal unwrap left a raw ToolError untouched.
+    wire = _envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None)
+    error = _unwrap_mcp_tool_error(exc) if _envelope_from_mcp_error(exc) is not None else exc
+    return TransportResult(
+        error=error,
+        wire_error_envelope=wire,
+        synthesized_error_envelope=_envelope_from_adcp_error(exc),
+    )
+
+
+def _a2a_error_to_result(exc: Exception) -> TransportResult:
+    """Error-path ``TransportResult`` for A2A DELIVER failures.
+
+    ``_run_a2a_handler`` already reconstructs ``AdCPError`` with
+    ``_wire_error_envelope`` stashed (via ``_envelope_to_adcp_error``) before
+    raising, so ``_wire_envelope_from_exception``'s getattr fast-path covers
+    it — same helper ``A2ADispatcher.dispatch`` uses.
+    """
+    from tests.harness.dispatchers import _wire_envelope_from_exception
+
+    return TransportResult(error=exc, wire_error_envelope=_wire_envelope_from_exception(exc))
+
+
+def _rest_error_to_result(exc: Exception) -> TransportResult:
+    """Error-path ``TransportResult`` for REST DELIVER failures.
+
+    Genuine exceptions only (e.g. ``_prepare_rest_request`` failing before an
+    HTTP call is even made) — ordinary 4xx/5xx responses do not raise and are
+    handled by ``_unwrap_rest`` instead, mirroring ``RestDispatcher``'s
+    outer catch-all (``dispatchers.py``, ``RestDispatcher.dispatch``).
+    """
+    return TransportResult(error=exc)
+
+
+UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any], TransportResult]] = {
+    Transport.MCP: _unwrap_mcp_success,
+    Transport.E2E_MCP: _unwrap_mcp_success,
+    Transport.A2A: _unwrap_a2a_success,
+    Transport.E2E_A2A: _unwrap_a2a_success,
+    Transport.REST: _unwrap_rest,
+    Transport.E2E_REST: _unwrap_rest,
+}
+
+UNWRAP_ERROR: dict[Transport, Callable[[Exception], TransportResult]] = {
+    Transport.MCP: _mcp_error_to_result,
+    Transport.E2E_MCP: _mcp_error_to_result,
+    Transport.A2A: _a2a_error_to_result,
+    Transport.E2E_A2A: _a2a_error_to_result,
+    Transport.REST: _rest_error_to_result,
+    Transport.E2E_REST: _rest_error_to_result,
+}
