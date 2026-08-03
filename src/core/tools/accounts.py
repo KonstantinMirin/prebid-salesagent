@@ -2,7 +2,7 @@
 
 Handles account management per AdCP spec (UC-011):
 - Agent-scoped results (BR-RULE-054)
-- Auth-optional list with empty fallback (BR-RULE-055)
+- Both list and sync require authentication (BR-RULE-055)
 - Upsert by natural key (BR-RULE-056)
 - Atomic XOR response (BR-RULE-057)
 - Brand echo (BR-RULE-058)

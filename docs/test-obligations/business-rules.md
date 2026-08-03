@@ -931,7 +931,7 @@ Then an empty accounts array is returned (not an error)
 ### BR-RULE-055: Account Operation Authentication Policy
 **Obligation ID** BR-RULE-055-01
 **Layer** behavioral
-**Invariant:** sync_accounts requires valid auth. list_accounts works without auth but scopes results. Unauthenticated list returns empty array.
+**Invariant:** Both sync_accounts and list_accounts require valid auth. Per the pinned AdCP spec (v3.1.0-beta.3, docs/building/by-layer/L2/authentication.mdx "Public Operations (No Authentication Required)"), the only auth-optional operations are get_adcp_capabilities, list_creative_formats, and get_products — list_accounts is not among them, and the task doc (docs/accounts/tasks/list_accounts.mdx) frames the whole operation around "the authenticated agent" with no mention of an anonymous/scoped-empty path. This entry previously claimed the opposite ("list_accounts works without auth but scopes results, unauthenticated list returns empty array"); that was stale bootstrap documentation that never got reconciled after the generated BR-UC-011 feature was authored — the generated feature's @T-UC-011-list-unauth scenario (AUTH_REQUIRED) is correct and is what production implements.
 **Scenario:**
 ```gherkin
 Given no valid authentication
@@ -940,7 +940,7 @@ Then AUTH_REQUIRED error is returned
 
 Given no authentication
 When list_accounts is called
-Then an empty accounts array is returned (not an error)
+Then AUTH_REQUIRED error is returned
 ```
 **Priority:** P0
 **Affected by 3.6:** Yes -- accounts domain is new in v3
