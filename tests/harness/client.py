@@ -28,15 +28,17 @@ Pydantic model those methods normally parse into (this is why ``call()``
 does not need a ``response_cls`` parameter — see the "typed payload"
 docstring note on ``TransportResult.payload`` below for the tradeoff).
 
-E2E_REST delivery is implemented (``_deliver_e2e_rest`` below,
-salesagent-uz00/SB-3a) — real HTTP through nginx to the live Docker stack,
-reused verbatim by ``RestE2EDispatcher`` (``tests/harness/dispatchers.py``)
-so there is one delivery implementation, not two. E2E_MCP/E2E_A2A delivery
-is still NOT implemented here — a documented, deliberate deferral (design
-doc §7 "Two placeholder E2E dispatchers") tracked by ``salesagent-wu78``
-(SB-3b, e2e_mcp) and ``salesagent-tisr`` (SB-3c, e2e_a2a). WRAP is already
-written per transport *family*, so those follow-ups only need to add a
-DELIVER function — ADDRESS and WRAP need no changes.
+E2E_REST and E2E_A2A delivery are implemented (``_deliver_e2e_rest`` and
+``_deliver_e2e_a2a`` below, salesagent-uz00/SB-3a and salesagent-tisr/SB-3c
+respectively) — real HTTP through nginx to the live Docker stack.
+``_deliver_e2e_rest`` is reused verbatim by ``RestE2EDispatcher``
+(``tests/harness/dispatchers.py``) so there is one e2e_rest delivery
+implementation, not two; ``A2AE2EDispatcher`` likewise delegates to
+``AdCPTestClient`` for e2e_a2a. E2E_MCP delivery is still NOT implemented
+here — a documented, deliberate deferral (design doc §7 "Two placeholder E2E
+dispatchers") tracked by ``salesagent-wu78`` (SB-3b, e2e_mcp). WRAP is
+already written per transport *family*, so that follow-up only needs to add
+a DELIVER function — ADDRESS and WRAP need no changes.
 
 Usage::
 
@@ -256,13 +258,170 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
         return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
 
 
+# -- E2E_A2A DELIVER: real JSON-RPC message/send over HTTP ------------------
+#
+# salesagent-tisr (SB-3c). Same message shape ``_run_a2a_handler`` builds
+# in-process (design doc §5 table row) — only how it reaches the server
+# differs: a real ``POST /a2a`` JSON-RPC 2.0 request instead of a direct
+# ``AdCPRequestHandler().on_message_send()`` call. The route is mounted at
+# ``rpc_url="/a2a"`` by ``create_jsonrpc_routes`` (``src/app.py``), and
+# resolves identity through the SAME ``UnifiedAuthMiddleware`` REST uses
+# (``src/core/auth_middleware.py`` — x-adcp-auth / x-adcp-tenant / x-dry-run
+# headers), via ``AdCPCallContextBuilder`` (``src/a2a_server/
+# context_builder.py``). Push-notification injection
+# (``_handle_explicit_skill``, ``adcp_a2a_server.py:1491``) is out of scope —
+# see ``_wrap_a2a``'s docstring; this DELIVER function sends whatever
+# ``_wrap_a2a`` produced unchanged, same limitation.
+
+
+def _e2e_a2a_headers(identity: Any) -> dict[str, str]:
+    """Auth/tenant/dry-run headers for a real HTTP A2A request.
+
+    ``identity`` here is already the RESOLVED identity (sentinel already
+    substituted by the caller) — ``None`` means "send unauthenticated"
+    (explicit no-auth dispatch), matching the same meaning ``identity=None``
+    carries throughout ``tests/harness`` (see ``_NO_IDENTITY_OVERRIDE``
+    module docstring above). ``UnifiedAuthMiddleware`` reads x-adcp-auth /
+    x-adcp-tenant / x-dry-run off ANY route it wraps — REST and A2A share
+    the exact same middleware, so the header contract here must match
+    REST's e2e header construction (``RestE2EDispatcher.dispatch``,
+    ``tests/harness/dispatchers.py:257-268``) field-for-field.
+    """
+    headers = {"Content-Type": "application/json"}
+    if identity is None:
+        return headers
+    if identity.auth_token:
+        headers["x-adcp-auth"] = identity.auth_token
+    tenant = getattr(identity, "tenant", None)
+    subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
+    if subdomain:
+        headers["x-adcp-tenant"] = subdomain
+    testing_context = getattr(identity, "testing_context", None)
+    if getattr(testing_context, "dry_run", False):
+        headers["x-dry-run"] = "true"
+    return headers
+
+
+def _build_a2a_jsonrpc_body(skill_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    """JSON-RPC 2.0 envelope for a ``message/send`` (``SendMessage``) call.
+
+    Builds the SAME protobuf ``Message`` in-process dispatch uses
+    (``create_a2a_message_with_skill``, ``tests/utils/a2a_helpers.py:67`` —
+    the exact helper ``_run_a2a_handler`` calls, ``tests/harness/_base.py:692``)
+    and serializes it through the real proto JSON mapping
+    (``google.protobuf.json_format``) so the wire body is byte-for-byte what
+    a real A2A client would send — not a hand-rolled approximation. Method
+    name ``"SendMessage"`` and the ``params.message`` shape are dictated by
+    ``a2a.server.routes.jsonrpc_dispatcher.JsonRpcDispatcher.METHOD_TO_MODEL``
+    and ``SendMessageRequest``'s proto fields, confirmed by direct
+    inspection, not assumed.
+    """
+    import uuid
+
+    from a2a.types.a2a_pb2 import SendMessageRequest
+    from google.protobuf import json_format
+
+    from tests.utils.a2a_helpers import create_a2a_message_with_skill
+
+    message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
+    params = json_format.MessageToDict(SendMessageRequest(message=message))
+    return {"jsonrpc": "2.0", "id": str(uuid.uuid4()), "method": "SendMessage", "params": params}
+
+
+def _artifact_data_from_json(artifact: dict[str, Any]) -> dict[str, Any]:
+    """First ``data`` Part's payload from a JSON-decoded A2A artifact dict.
+
+    Mirrors ``extract_data_from_artifact`` (``tests/utils/a2a_helpers.py:39``)
+    for the case where the artifact already went through
+    ``response.json()`` (real HTTP) instead of being read off a live
+    protobuf ``Artifact`` object (in-process) — same field, same shape,
+    only the decoding step differs.
+    """
+    for part in artifact.get("parts", []):
+        if "data" in part:
+            data = part["data"]
+            return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+    """Real HTTP delivery: POST a JSON-RPC ``message/send`` request to the live
+    A2A endpoint, then walk the same Task-state branches ``_run_a2a_handler``
+    walks in-process (``tests/harness/_base.py:705-752``) — FAILED raises the
+    reconstructed ``AdCPError`` (real wire envelope stashed via
+    ``_envelope_to_adcp_error``, same helper the in-process path uses),
+    SUBMITTED synthesizes the manual-approval wire, otherwise the first
+    artifact's ``data`` Part is the success payload.
+    """
+    import httpx
+
+    from tests.harness._base import _envelope_to_adcp_error
+
+    if not env.e2e_config:
+        raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
+
+    kwargs = _with_identity(wrapped, identity)
+    _NO_OVERRIDE = object()
+    resolved_identity = kwargs.pop("identity", _NO_OVERRIDE)
+    if resolved_identity is _NO_OVERRIDE:
+        resolved_identity = env.identity_for(Transport.E2E_A2A)
+
+    headers = _e2e_a2a_headers(resolved_identity)
+    rpc_body = _build_a2a_jsonrpc_body(address.name, kwargs)
+
+    with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as http_client:
+        response = http_client.post("/a2a", json=rpc_body, headers=headers)
+    response.raise_for_status()
+    body = response.json()
+
+    if "error" in body:
+        rpc_error = body["error"]
+        error_data = rpc_error.get("data")
+        fallback_message = rpc_error.get("message") or "A2A JSON-RPC request failed"
+        reconstructed = _envelope_to_adcp_error(error_data, fallback_message=fallback_message)
+        if reconstructed is not None:
+            raise reconstructed
+        raise RuntimeError(f"A2A JSON-RPC error {rpc_error.get('code')}: {fallback_message}")
+
+    result = body.get("result") or {}
+    task = result.get("task")
+    if task is None:
+        raise TypeError(f"Expected a Task in the A2A JSON-RPC result, got: {result!r}")
+
+    state = task.get("status", {}).get("state")
+    if state == "TASK_STATE_FAILED":
+        artifacts = task.get("artifacts") or []
+        if artifacts:
+            envelope = _artifact_data_from_json(artifacts[0])
+            reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
+            if reconstructed is not None:
+                raise reconstructed
+        raise RuntimeError(f"A2A task failed: {task.get('status')}")
+
+    if state == "TASK_STATE_SUBMITTED":
+        submitted_wire = {"status": "submitted", "task_id": task.get("id")}
+        env._last_wire_response = dict(submitted_wire)
+        return submitted_wire
+
+    artifacts = task.get("artifacts") or []
+    if not artifacts:
+        raise ValueError(f"Task has no artifacts. Status: {task.get('status')}")
+    artifact_data = _artifact_data_from_json(artifacts[0])
+    # Real A2A wire, unstripped — captured BEFORE stripping (mirrors
+    # _run_a2a_handler's own capture order, tests/harness/_base.py:743-746).
+    env._last_wire_response = dict(artifact_data)
+    artifact_data.pop("message", None)
+    artifact_data.pop("success", None)
+    return artifact_data
+
+
 DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = {
     Transport.MCP: _deliver_mcp,
     Transport.A2A: _deliver_a2a,
     Transport.REST: _deliver_rest,
     Transport.E2E_REST: _deliver_e2e_rest,
     Transport.E2E_MCP: _deliver_e2e_not_implemented(Transport.E2E_MCP, "salesagent-wu78 (SB-3b)"),
-    Transport.E2E_A2A: _deliver_e2e_not_implemented(Transport.E2E_A2A, "salesagent-tisr (SB-3c)"),
+    Transport.E2E_A2A: _deliver_e2e_a2a,
 }
 
 

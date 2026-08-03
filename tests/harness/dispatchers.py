@@ -342,12 +342,57 @@ class McpE2EDispatcher:
 
 
 class A2AE2EDispatcher:
-    """Placeholder for real A2A E2E dispatch (not yet implemented)."""
+    """Dispatch via a real JSON-RPC ``message/send`` HTTP request to the live A2A endpoint.
+
+    Unlike ``RestE2EDispatcher`` (which reuses each env's hand-written
+    ``REST_ENDPOINT``/``build_rest_body``/``parse_rest_response`` overrides),
+    this delegates entirely to ``AdCPTestClient``/``_deliver_e2e_a2a``
+    (``tests/harness/client.py``, salesagent-tisr / SB-3c) — the address,
+    JSON-RPC envelope construction, and Task-state handling all live there,
+    derived from the live ``create_agent_card()`` registration
+    (``tests/harness/address_table.py``), not re-implemented per-env.
+
+    Tool-name threading: unlike ``AdCPTestClient.call(tool, payload,
+    transport)`` (which takes the tool name explicitly), the legacy
+    ``env.call_via(transport, **kwargs)`` entry point this dispatcher is
+    reached through carries no tool-name parameter — every OTHER dispatcher
+    sidesteps this because the env subclass's own ``call_a2a``/``call_mcp``/
+    ``call_rest`` override already has the tool name hard-coded in its body
+    (e.g. ``self._run_a2a_handler("get_products", ...)``). Since this
+    dispatcher must call the generic client instead of an env override, the
+    caller supplies the tool name explicitly via a ``tool_name=`` kwarg (or
+    an ``env.A2A_SKILL`` class attribute, for envs that want to declare it
+    once) — same open question SB-3b's ``McpE2EDispatcher`` faces for
+    ``Transport.E2E_MCP``, resolved independently here since neither
+    dispatcher's fix depends on the other's.
+    """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
-        raise NotImplementedError(
-            "E2E_A2A dispatcher is not yet implemented. Use Transport.A2A for in-process A2A dispatch."
-        )
+        from tests.harness.client import AdCPTestClient
+        from tests.harness.transport import Transport
+
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        tool_name = kwargs.pop("tool_name", None) or getattr(env, "A2A_SKILL", None)
+        if not tool_name:
+            raise NotImplementedError(
+                "A2AE2EDispatcher.dispatch() needs a tool/skill name to resolve an address via "
+                "AdCPTestClient — pass tool_name=... to env.call_via(Transport.E2E_A2A, ...) (or "
+                "declare env.A2A_SKILL), or call AdCPTestClient(env).call(tool, payload, "
+                "Transport.E2E_A2A) directly instead — the primary path this design promotes "
+                "(sb2a-transport-generic-client-design.md §6 'Migration story')."
+            )
+
+        req = kwargs.pop("req", None)
+        if req is not None and hasattr(req, "model_dump"):
+            payload = {**req.model_dump(mode="json", exclude_none=True), **kwargs}
+        else:
+            payload = dict(kwargs)
+
+        client = AdCPTestClient(env)
+        if identity is _NO_OVERRIDE:
+            return client.call(tool_name, payload, Transport.E2E_A2A)
+        return client.call(tool_name, payload, Transport.E2E_A2A, identity=identity)
 
 
 DISPATCHERS: dict[

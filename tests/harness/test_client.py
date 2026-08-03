@@ -14,6 +14,8 @@ design (§1 "MediaBuyDualEnv is the reductio").
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from tests.harness._base import BareIntegrationEnv, BaseTestEnv
@@ -117,15 +119,18 @@ class TestClientRestWrapPathParamPeeling:
 
 
 class TestClientE2eDeliveryDeferred:
-    """E2E_MCP/E2E_A2A delivery is a documented, deliberate gap (design doc §7)
-    — must raise NotImplementedError loudly, never get silently swallowed into
-    a TransportResult a caller could mistake for a real AdCP rejection.
-    E2E_REST delivery is implemented (salesagent-uz00/SB-3a) — see
-    TestClientE2eRestDelivery below."""
+    """E2E_MCP delivery is a documented, deliberate gap (design doc §7) — must
+    raise NotImplementedError loudly, never get silently swallowed into a
+    TransportResult a caller could mistake for a real AdCP rejection.
+
+    E2E_REST graduated out of this list (salesagent-uz00 / SB-3a) — see
+    TestClientE2eRestDelivery below. E2E_A2A graduated out of this list
+    (salesagent-tisr / SB-3c) — see TestClientE2eA2aDelivery below.
+    """
 
     @pytest.mark.parametrize(
         "transport",
-        [Transport.E2E_MCP, Transport.E2E_A2A],
+        [Transport.E2E_MCP],
     )
     def test_e2e_delivery_raises_not_implemented(self, transport):
         class _UnitEnv(BaseTestEnv):
@@ -251,6 +256,245 @@ class TestClientE2eRestDelivery:
             address = ToolAddress(Transport.E2E_REST, name="/api/v1/products", method="post")
             with pytest.raises(RuntimeError, match="e2e_config"):
                 _deliver_e2e_rest(env, address, {"url": "/api/v1/products", "body": {}}, None)
+
+
+class TestClientE2eA2aDelivery:
+    """``_deliver_e2e_a2a`` (salesagent-tisr / SB-3c) — real JSON-RPC
+    ``message/send`` HTTP delivery, HTTP layer mocked (unit-level; genuine
+    e2e-with-real-server verification happens in tests/e2e/ against a live
+    Docker stack, per this task's scope)."""
+
+    @staticmethod
+    def _rpc_success_body(*, task_id: str = "task_abc123", state: str = "TASK_STATE_COMPLETED", artifact_data: dict):
+        return {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {
+                "task": {
+                    "id": task_id,
+                    "contextId": "ctx_1",
+                    "status": {"state": state},
+                    "artifacts": [{"artifactId": "art-1", "parts": [{"data": artifact_data}]}],
+                }
+            },
+        }
+
+    def test_success_posts_jsonrpc_and_returns_stripped_artifact_data(self):
+        from unittest.mock import MagicMock, patch
+
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        artifact_data = {"products": [{"product_id": "prod_001"}], "message": "ok", "success": True}
+        rpc_response = self._rpc_success_body(artifact_data=artifact_data)
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            client = AdCPTestClient(env)
+            with patch("httpx.Client") as mock_client_cls:
+                mock_response = MagicMock()
+                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
+                mock_response.raise_for_status.return_value = None
+                mock_post = mock_client_cls.return_value.__enter__.return_value.post
+                mock_post.return_value = mock_response
+
+                result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_A2A)
+
+        assert result.is_success, result.error
+        assert result.payload == {"products": [{"product_id": "prod_001"}]}
+        assert result.wire_response == artifact_data  # unstripped — captured before pop
+        assert env._last_wire_response == artifact_data
+
+        # POST went to the real A2A JSON-RPC endpoint with a well-formed envelope.
+        call_args = mock_post.call_args
+        assert call_args.args[0] == "/a2a"
+        rpc_body = call_args.kwargs["json"]
+        assert rpc_body["jsonrpc"] == "2.0"
+        assert rpc_body["method"] == "SendMessage"
+        skill_part = rpc_body["params"]["message"]["parts"][0]["data"]
+        assert skill_part["skill"] == "get_products"
+        assert skill_part["parameters"] == {"brief": "video ads"}
+
+    def test_identity_maps_to_auth_and_tenant_headers(self):
+        from unittest.mock import MagicMock, patch
+
+        from tests.factories.principal import PrincipalFactory
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1", tenant_id="t1", protocol="a2a", auth_token="tok_123"
+        )
+        rpc_response = self._rpc_success_body(artifact_data={"message": "ok", "success": True})
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            client = AdCPTestClient(env)
+            with patch("httpx.Client") as mock_client_cls:
+                mock_response = MagicMock()
+                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
+                mock_response.raise_for_status.return_value = None
+                mock_post = mock_client_cls.return_value.__enter__.return_value.post
+                mock_post.return_value = mock_response
+
+                result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, identity=identity)
+
+        assert result.is_success, result.error
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers["x-adcp-auth"] == "tok_123"
+        assert headers["x-adcp-tenant"] == identity.tenant["subdomain"]
+
+    def test_unauthenticated_dispatch_sends_no_auth_header(self):
+        from unittest.mock import MagicMock, patch
+
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        rpc_response = self._rpc_success_body(artifact_data={"message": "ok", "success": True})
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            client = AdCPTestClient(env)
+            with patch("httpx.Client") as mock_client_cls:
+                mock_response = MagicMock()
+                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
+                mock_response.raise_for_status.return_value = None
+                mock_post = mock_client_cls.return_value.__enter__.return_value.post
+                mock_post.return_value = mock_response
+
+                client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, identity=None)
+
+        headers = mock_post.call_args.kwargs["headers"]
+        assert "x-adcp-auth" not in headers
+        assert "x-adcp-tenant" not in headers
+
+    def test_task_state_failed_reconstructs_wire_error(self):
+        from unittest.mock import MagicMock, patch
+
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        envelope = {"adcp_error": {"code": "PRODUCT_NOT_FOUND", "message": "no such product", "recovery": "retry"}}
+        rpc_response = {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {
+                "task": {
+                    "id": "task_fail",
+                    "status": {"state": "TASK_STATE_FAILED"},
+                    "artifacts": [{"artifactId": "art-1", "parts": [{"data": envelope}]}],
+                }
+            },
+        }
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            client = AdCPTestClient(env)
+            with patch("httpx.Client") as mock_client_cls:
+                mock_response = MagicMock()
+                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
+                mock_response.raise_for_status.return_value = None
+                mock_post = mock_client_cls.return_value.__enter__.return_value.post
+                mock_post.return_value = mock_response
+
+                result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A)
+
+        assert result.is_error
+        assert result.wire_error_envelope == envelope
+
+    def test_task_state_submitted_synthesizes_submitted_wire(self):
+        from unittest.mock import MagicMock, patch
+
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        rpc_response = {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {
+                "task": {
+                    "id": "task_submitted_1",
+                    "status": {"state": "TASK_STATE_SUBMITTED"},
+                    "artifacts": [],
+                }
+            },
+        }
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            client = AdCPTestClient(env)
+            with patch("httpx.Client") as mock_client_cls:
+                mock_response = MagicMock()
+                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
+                mock_response.raise_for_status.return_value = None
+                mock_post = mock_client_cls.return_value.__enter__.return_value.post
+                mock_post.return_value = mock_response
+
+                result = client.call("create_media_buy", {"buyer_ref": "x"}, Transport.E2E_A2A)
+
+        assert result.is_success, result.error
+        assert result.payload == {"status": "submitted", "task_id": "task_submitted_1"}
+
+    def test_missing_e2e_config_raises(self):
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv() as env:
+            client = AdCPTestClient(env)
+            result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A)
+
+        assert result.is_error
+        assert "e2e_config" in str(result.error)
+
+
+class TestA2AE2EDispatcher:
+    """``A2AE2EDispatcher`` (salesagent-tisr / SB-3c) — the legacy
+    ``env.call_via(Transport.E2E_A2A, ...)`` entry point, delegating to
+    ``AdCPTestClient``/``_deliver_e2e_a2a`` under the hood."""
+
+    def test_dispatch_requires_a_tool_name(self):
+        from tests.harness.dispatchers import A2AE2EDispatcher
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            with pytest.raises(NotImplementedError, match="tool_name"):
+                A2AE2EDispatcher().dispatch(env, brief="video ads")
+
+    def test_dispatch_with_tool_name_delegates_to_client(self):
+        from unittest.mock import MagicMock, patch
+
+        from tests.harness.dispatchers import A2AE2EDispatcher
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        rpc_response = TestClientE2eA2aDelivery._rpc_success_body(
+            artifact_data={"products": [], "message": "ok", "success": True}
+        )
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            with patch("httpx.Client") as mock_client_cls:
+                mock_response = MagicMock()
+                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
+                mock_response.raise_for_status.return_value = None
+                mock_post = mock_client_cls.return_value.__enter__.return_value.post
+                mock_post.return_value = mock_response
+
+                result = A2AE2EDispatcher().dispatch(env, tool_name="get_products", brief="video ads")
+
+        assert result.is_success, result.error
+        skill_part = mock_post.call_args.kwargs["json"]["params"]["message"]["parts"][0]["data"]
+        assert skill_part["skill"] == "get_products"
+        assert skill_part["parameters"] == {"brief": "video ads"}
 
 
 @pytest.mark.integration
