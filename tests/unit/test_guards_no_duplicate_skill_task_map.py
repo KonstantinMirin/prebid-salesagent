@@ -24,7 +24,12 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, format_failure, scan_for_ast_violations
+from tests.unit._architecture_helpers import (
+    REPO_ROOT,
+    find_dict_literals_with_matching_entries,
+    format_failure,
+    scan_for_ast_violations,
+)
 
 CANONICAL_FILE = "tests/helpers/skill_to_adcp_task.py"
 GUARD_FILE = "tests/unit/test_guards_no_duplicate_skill_task_map.py"
@@ -54,19 +59,12 @@ def _is_task_name_value(skill_name: str, value: ast.expr) -> bool:
 
 def find_duplicate_skill_task_maps(tree: ast.Module) -> list[int]:
     """Line numbers of dict literals matching >=3 known skill-name -> task-name entries."""
-    violations: list[int] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Dict):
-            continue
-        matches = 0
-        for key, value in zip(node.keys, node.values, strict=True):
-            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
-                continue
-            if key.value in KNOWN_SKILL_NAMES and _is_task_name_value(key.value, value):
-                matches += 1
-        if matches >= MIN_MATCHING_ENTRIES:
-            violations.append(node.lineno)
-    return violations
+    return find_dict_literals_with_matching_entries(
+        tree,
+        key_matches=lambda name: name in KNOWN_SKILL_NAMES,
+        value_matches=_is_task_name_value,
+        min_matches=MIN_MATCHING_ENTRIES,
+    )
 
 
 def test_no_duplicate_skill_task_map():

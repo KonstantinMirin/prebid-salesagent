@@ -12,15 +12,14 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantAuthConfig
 from src.core.domain_config import get_sales_agent_domain, get_sales_agent_url
+from src.core.oidc_providers import OIDC_DISCOVERY_URLS
 
 logger = logging.getLogger(__name__)
 
 
-# Well-known OIDC discovery URLs
-OIDC_PROVIDERS = {
-    "google": "https://accounts.google.com/.well-known/openid-configuration",
-    "microsoft": "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
-}
+# Providers with a fixed (non-tenant-parameterized) discovery URL — the
+# subset of OIDC_DISCOVERY_URLS this service can use directly as a fallback.
+OIDC_PROVIDERS = {name: url for name, url in OIDC_DISCOVERY_URLS.items() if url is not None}
 
 # Well-known OIDC logout URLs
 OIDC_LOGOUT_URLS = {

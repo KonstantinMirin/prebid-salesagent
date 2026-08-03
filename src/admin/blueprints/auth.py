@@ -30,6 +30,7 @@ from src.core.domain_config import (
     get_super_admin_domain,
     is_sales_agent_domain,
 )
+from src.core.oidc_providers import OIDC_DISCOVERY_URLS
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +63,7 @@ def _safe_redirect(url: str | None, fallback: str) -> str:
     return decoded
 
 
-# Well-known OIDC discovery URLs for common providers
-OIDC_PROVIDERS = {
-    "google": "https://accounts.google.com/.well-known/openid-configuration",
-    "microsoft": "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration",
-    "okta": None,  # Requires tenant: https://{tenant}.okta.com/.well-known/openid-configuration
-    "auth0": None,  # Requires tenant: https://{tenant}.auth0.com/.well-known/openid-configuration
-    "keycloak": None,  # Requires server/realm: https://{server}/realms/{realm}/.well-known/openid-configuration
-}
+OIDC_PROVIDERS = OIDC_DISCOVERY_URLS
 
 
 def get_oauth_provider_name():

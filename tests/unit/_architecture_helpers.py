@@ -351,6 +351,42 @@ def scan_for_ast_violations(
     return violations
 
 
+def find_dict_literals_with_matching_entries(
+    tree: ast.Module,
+    *,
+    key_matches: Callable[[str], bool],
+    value_matches: Callable[[str, ast.expr], bool],
+    min_matches: int,
+) -> list[int]:
+    """Line numbers of dict literals with >=``min_matches`` key/value pairs
+    both predicates accept.
+
+    Shared body for "no hand-duplicated domain-vocabulary dict" guards
+    (skill->task-name maps, OIDC provider->discovery-URL maps, ...): a
+    reintroduced hand-typed copy is fingerprinted by dict CONTENT (a
+    key-vocabulary match paired with a value-shape match), not by variable
+    name — a rename would evade a name-based check, and matching on keys
+    ALONE over-fires on legitimate dicts that share the same key vocabulary
+    but map to a different kind of value. ``value_matches`` receives the
+    matched key's string too, since some shapes (e.g. "value is the task-name
+    spelling of THIS key") are key-dependent; shapes that aren't can just
+    ignore the first argument.
+    """
+    violations: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        matches = 0
+        for key, value in zip(node.keys, node.values, strict=True):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                continue
+            if key_matches(key.value) and value_matches(key.value, value):
+                matches += 1
+        if matches >= min_matches:
+            violations.append(node.lineno)
+    return violations
+
+
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
     """.yml and .yaml files in .github/workflows/."""
     wf_dir = repo / ".github" / "workflows"
