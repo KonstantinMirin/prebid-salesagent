@@ -7,12 +7,26 @@ would grade us on, do we have a BDD scenario?**
 
 A storyboard is on our path unless a gate the spec defines excludes it:
 
-  * ``universal/``            — always applies, no gate
+  * ``universal/``            — applies to every agent type, but is NOT
+                                exempt from ``required_tools`` (see below).
+                                Confirmed against SB-1b's real-runner baseline
+                                (salesagent-exbf): the SDK's capability-driven
+                                selection put every one of the 35 real,
+                                gradable ``universal/`` storyboards through the
+                                same any-of tool gate as protocol/specialism
+                                storyboards — 25 ran, 10 graded fully skipped
+                                as ``not_applicable`` because our agent
+                                advertises none of their ``required_tools``
+                                (e.g. ``comply_test_controller``,
+                                ``validate_input``, ``get_signals``). Treating
+                                ``universal/`` as ungated was the bug this
+                                comment used to describe.
   * ``protocols/``            — a protocol we must declare
   * ``specialisms/``          — a specialism we must declare
   * ``requires_capability:``  — a capability we must advertise
   * ``required_tools:``       — lenient any-of; only advertising NONE of the
-                                listed tools triggers a coverage-gap skip
+                                listed tools triggers a coverage-gap skip.
+                                Applies to every tier, ``universal/`` included.
 
 ``requires_scenarios`` plays exactly one role, and it is easy to get backwards.
 It is NOT a whitelist of what applies — the schema defines it as composition,
@@ -26,7 +40,17 @@ required only by two specialisms we do not declare.
 UNRESOLVED: whether a scenario in no ``requires_scenarios`` list at all is
 reachable standalone on its own ``required_tools``, or is simply orphaned. This
 classifier assumes the former. ``provenance_enforcement`` is the case that
-decides it, and settling it needs the compliance runner's source.
+decides it, and settling it needs the compliance runner's source. SB-1b's real
+run does NOT settle this: its capability probe (``get_adcp_capabilities``)
+was itself rejected by our agent (``VALIDATION_ERROR: Unexpected keyword
+argument``), so ``resolveStoryboardsForCapabilities`` never got far enough to
+attempt selecting anything under ``protocols/`` or ``specialisms/`` —
+``provenance_enforcement`` never appears anywhere in the run's output, neither
+executed nor missing-tools nor observations. The 35 storyboards the run did
+select are exactly (byte-for-byte) the ``universal/`` tier's real, gradable
+files gated by ``required_tools`` — see the ``universal/`` note above. This
+remains open; do not treat SB-1b as evidence either way for
+``requires_scenarios`` reachability.
 
 Uncovered on-path storyboards are conformance gaps with no test. Covered
 off-path scenarios are tests claiming a grading that does not apply to us.
@@ -129,16 +153,16 @@ def classify(
     * ``requires_capability`` — a capability we must advertise
     * ``specialisms/`` / ``protocols/`` — the declared-gate tiers
     * ``required_tools`` — LENIENT any-of; per storyboard-schema.yaml, only
-      "missing **all** listed tools triggers a coverage-gap skip"
+      "missing **all** listed tools triggers a coverage-gap skip". Applies to
+      EVERY tier, including ``universal/`` — confirmed against SB-1b's real
+      runner baseline, which graded 10 ``universal/`` storyboards fully
+      skipped (``not_applicable``) purely on this gate.
 
     ``requires_scenarios`` is deliberately NOT used as a whitelist. The schema
     defines it as composition ("scenario IDs that must pass alongside this
     storyboard"), not an exhaustive list of what applies — treating it as one
     wrongly excludes scenarios that are graded on their own applicability.
     """
-    if rel.startswith("universal/"):
-        return "ON-PATH", "universal — applies to every agent"
-
     # Reachability first: if every index that pulls this scenario in is behind a
     # gate we fail, the scenario is unreachable regardless of its own directory.
     owners = (required_by or {}).get(Path(rel).stem, [])
@@ -153,6 +177,9 @@ def classify(
         if listed and not (listed & tools):
             return "OFF-PATH", f"advertises none of required_tools {sorted(listed)}"
         return None
+
+    if rel.startswith("universal/"):
+        return tool_gate() or ("ON-PATH", "universal — applies to every agent")
 
     if rel.startswith("specialisms/"):
         name = rel.split("/")[1]
@@ -221,7 +248,18 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         stem = storyboard_key(rel)
         if rel.startswith(("test-kits/", "test-vectors/")) or stem == "storyboard-schema":
             continue
-        status, reason = classify(rel, yaml_file.read_text("utf-8"), decl, ADVERTISED_TOOLS, required_by)
+        text = yaml_file.read_text("utf-8")
+        # universal/ holds two files that are not graded storyboards at all:
+        # fictional-entities.yaml (a shared data catalog) and
+        # runner-output-contract.yaml (a contract for runner OUTPUT shape, not
+        # something dispatched against an agent — it isn't even valid plain
+        # YAML, it embeds prose/code blocks). Every real storyboard declares a
+        # top-level `track:`; these two don't. Confirmed against SB-1b's real
+        # runner run: neither ever appears in storyboards_executed or
+        # storyboards_missing_tools, unlike every other universal/ file.
+        if rel.startswith("universal/") and not re.search(r"^track:\s*\S", text, re.M):
+            continue
+        status, reason = classify(rel, text, decl, ADVERTISED_TOOLS, required_by)
         key = f"{rel}"
         if key in seen:
             continue
