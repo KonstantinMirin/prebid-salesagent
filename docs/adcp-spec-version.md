@@ -96,8 +96,28 @@ A spec version bump is a deliberate change with downstream impact:
 6. Run `make quality` and address Pydantic field/type changes.
 7. Re-verify integration and BDD test coverage.
 
+## Pinned schema sources (currently two)
+
+The repo grades against pinned AdCP JSON schemas in two places, and they are
+**not the same pin**:
+
+1. **The installed SDK's bundled tree** (`adcp/_schemas/<major.minor>/bundled/`)
+   — used by `tests/e2e/adcp_schema_validator.py`. Moves automatically with
+   the `pyproject.toml` SDK pin; the CI guard above keeps it honest.
+2. **The vendored fixture tree** (`tests/fixtures/adcp_schemas_pinned/`, at the
+   upstream commit recorded in its `_refresh.py` `PINNED_SHA`) — used by
+   `tests/unit/test_pydantic_schema_alignment.py`. Moves only when `PINNED_SHA`
+   is bumped and the tree re-vendored, independently of the SDK pin.
+
+The two can (and currently do) diverge — the fixture tree is an older snapshot
+whose schemas are strict subsets of the SDK's. Unifying the unit alignment
+suite onto the SDK tree and retiring the vendored fixture is tracked as a
+follow-up; until then, a spec bump must consider both sources.
+
 ## Related files
 
 - `pyproject.toml` — SDK pin
 - `tests/unit/test_adcp_spec_version.py` — CI guard
+- `tests/e2e/adcp_schema_validator.py` — e2e validation against the SDK's bundled schema tree
+- `tests/fixtures/adcp_schemas_pinned/` — vendored schema snapshot for the unit alignment suite (independent pin)
 - `docs/adcp-spec-version.md` — this document

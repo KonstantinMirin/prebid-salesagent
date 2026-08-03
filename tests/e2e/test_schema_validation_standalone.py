@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
+from .adcp_schema_validator import AdCPSchemaValidator, SchemaError, SchemaValidationError
 
 
 @pytest.mark.asyncio
@@ -89,7 +89,7 @@ async def test_get_products_request_validation():
 
 
 @pytest.mark.asyncio
-async def test_pinned_sdk_schema_source():
+async def test_pinned_sdk_schema_source(monkeypatch):
     """The validator grades the PINNED spec, from the installed SDK, offline.
 
     Replaces the former test_offline_mode, which was xfailed non-strict for
@@ -98,7 +98,11 @@ async def test_pinned_sdk_schema_source():
     the pinned adcp SDK, so live-registry drift cannot change what this suite
     grades, and this minimal spec-valid payload must validate deterministically.
     """
+    import socket
+
     import adcp
+
+    from tests.unit.test_adcp_spec_version import EXPECTED_SPEC_VERSION
 
     # Minimal payload the PINNED 3.1.1 response schema accepts: cache_scope is
     # required on the standard (else) branch since AdCP 3.1, and the top-level
@@ -106,17 +110,73 @@ async def test_pinned_sdk_schema_source():
     # envelope (allOf.1.required in get-products-response.json).
     payload = {"products": [], "cache_scope": "public", "status": "completed"}
 
+    # "Offline" is graded, not claimed: any socket creation from here on fails.
+    def _no_network(*args, **kwargs):
+        raise AssertionError("schema validation attempted network access")
+
+    monkeypatch.setattr(socket, "socket", _no_network)
+
     async with AdCPSchemaValidator() as validator:
-        # The schema source is the installed SDK package — not a network cache.
-        sdk_root = Path(adcp.__file__).parent
-        assert validator.schema_root.is_relative_to(sdk_root), (
-            f"validator loads schemas from {validator.schema_root}, expected inside the adcp SDK at {sdk_root}"
+        # The schema source is the SDK's _schemas/<major.minor> tree — asserted
+        # on the validator's OWN root (not recomputed here), so a wrong tree in
+        # _sdk_schema_root() fails this test.
+        assert validator.schema_root.parent.name == "_schemas"
+        assert validator.schema_root.parent.parent == Path(adcp.__file__).parent, (
+            f"validator loads schemas from {validator.schema_root}, expected the adcp SDK's _schemas tree"
         )
-        # The loaded index is the pinned spec version the repo builds against.
+        # The loaded index is the repo's pinned spec version. EXPECTED_SPEC_VERSION
+        # is the pin-drift guard's constant (tests/unit/test_adcp_spec_version.py);
+        # comparing against it — not just the SDK's self-report — pins the version
+        # this suite grades even if the SDK pin shifts without the guard updating.
         index = await validator.get_schema_index()
-        assert index["adcp_version"] == adcp.get_adcp_spec_version()
+        assert index["adcp_version"] == EXPECTED_SPEC_VERSION == adcp.get_adcp_spec_version()
 
         await validator.validate_response("get-products", payload)
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected"),
+    [
+        # The absolute-URL form upstream #6133 introduced — the outage's trigger.
+        ("https://adcontextprotocol.org/schemas/latest/core/version-envelope.json", "core/version-envelope.json"),
+        ("/schemas/v1/media-buy/get-products-request.json", "media-buy/get-products-request.json"),
+        ("/schemas/3.1.1/core/format-id.json", "core/format-id.json"),
+        # Version-root-relative, the form the SDK index uses — passes through.
+        ("media-buy/get-products-request.json", "media-buy/get-products-request.json"),
+    ],
+)
+def test_normalize_ref_accepted_forms(ref, expected):
+    """Every historical $ref form maps onto the pinned version root."""
+    validator = AdCPSchemaValidator()
+    assert validator._normalize_ref(ref) == expected
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "/schemas/",  # no relative path after the version segment
+        "/other/x.json",  # site-rooted but not under /schemas/
+        "../x.json",  # traversal out of the version root
+        "https://evil.example.com/x.json",  # foreign host, non-/schemas/ path
+    ],
+)
+def test_normalize_ref_rejected_forms(ref):
+    """Malformed or escaping refs raise instead of resolving to a file probe."""
+    validator = AdCPSchemaValidator()
+    with pytest.raises(SchemaError):
+        validator._normalize_ref(ref)
+
+
+def test_schema_path_rejects_embedded_traversal():
+    """A ref that normalizes clean but traverses mid-path is contained.
+
+    '_normalize_ref' only rejects '..' prefixes; the containment check in
+    '_schema_path' must stop 'media-buy/../../../../etc/hosts' before any
+    filesystem probe.
+    """
+    validator = AdCPSchemaValidator()
+    with pytest.raises(SchemaError, match="escapes the pinned SDK schema tree"):
+        validator._schema_path("media-buy/" + "../" * 8 + "etc/hosts")
 
 
 @pytest.mark.asyncio

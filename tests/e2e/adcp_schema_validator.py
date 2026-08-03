@@ -1,8 +1,9 @@
 """AdCP JSON Schema Validator for E2E Tests — pinned to the installed SDK's schemas.
 
 Validates requests and responses against the AdCP schemas BUNDLED with the
-pinned ``adcp`` SDK (adcp==6.6.0 → AdCP spec 3.1.1) — never against the live
-adcontextprotocol.org registry. The live registry serves "latest", which
+pinned ``adcp`` SDK (see docs/adcp-spec-version.md for the current pin and
+bump procedure) — never against the live adcontextprotocol.org registry. The
+live registry serves "latest", which
 drifts ahead of the repo's pin: on 2026-08-01 upstream PR #6133 canonicalized
 the live schemas' $ref URIs and broke remote ref resolution here overnight
 with zero contract change, and before that #1308 tracked payload-vs-latest
@@ -21,7 +22,6 @@ Usage:
         await validator.validate_response("get-products", response_data)
 """
 
-import functools
 import hashlib
 import json
 from pathlib import Path
@@ -112,16 +112,24 @@ class AdCPSchemaValidator:
         return ref
 
     def _schema_path(self, relative_ref: str) -> Path:
-        """Resolve a version-root-relative ref to a file, preferring bundled."""
-        bundled = self.schema_root / "bundled" / relative_ref
-        if bundled.is_file():
-            return bundled
-        plain = self.schema_root / relative_ref
-        if plain.is_file():
-            return plain
+        """Resolve a version-root-relative ref inside the self-contained bundled tree.
+
+        Only ``bundled/`` is served: the plain tree's schemas carry relative
+        ``../core/x.json`` / bare-sibling ``$ref``s that cannot be resolved
+        without threading a base directory through ``_normalize_ref``, so a
+        plain-tree fallback would trade this loud error for the resolver's own.
+        """
+        bundled_root = (self.schema_root / "bundled").resolve()
+        candidate = (bundled_root / relative_ref).resolve()
+        # Containment check: closes traversal forms a prefix check misses
+        # (e.g. 'media-buy/../../../../etc/hosts') before any filesystem probe.
+        if not candidate.is_relative_to(bundled_root):
+            raise SchemaError(f"Schema reference {relative_ref!r} escapes the pinned SDK schema tree")
+        if candidate.is_file():
+            return candidate
         raise SchemaError(
-            f"Schema {relative_ref!r} not found in the pinned SDK tree {self.schema_root} "
-            "(checked bundled/ and the plain tree)"
+            f"Schema {relative_ref!r} not found under {bundled_root} — the validator serves only "
+            "the SDK's self-contained bundled tree"
         )
 
     async def get_schema_index(self) -> dict[str, Any]:
@@ -146,10 +154,9 @@ class AdCPSchemaValidator:
             def _retrieve(uri: str) -> referencing.Resource:
                 """Resolve a $ref against the pinned SDK tree — loudly, never a fallback.
 
-                Bundled schemas are self-contained, so this only fires for a
-                schema loaded from the plain tree. A miss raises (surfacing as
-                a validation error naming the ref) instead of substituting a
-                reject-everything schema.
+                Bundled schemas are self-contained, so this should never fire;
+                if it does, the miss raises (naming the ref) instead of
+                substituting a reject-everything schema.
                 """
                 return DRAFT7.create_resource(self._load_json(self._schema_path(self._normalize_ref(uri))))
 
@@ -305,60 +312,11 @@ class AdCPSchemaValidator:
         except SchemaValidationError:
             # Re-raise schema validation errors without wrapping them
             raise
+        except SchemaError:
+            # Schema-RESOLUTION failures (bad ref, missing file) must not be
+            # wrapped as SchemaValidationError: callers branch on that type to
+            # mean "the payload violates the contract". Subclass arm above,
+            # base-class arm here — order matters.
+            raise
         except Exception as e:
             raise SchemaValidationError(f"Unexpected error validating {context}: {e}", [str(e)])
-
-
-# Decorator functions for easy integration with tests
-
-
-def validate_adcp_request(task_name: str):
-    """
-    Decorator to validate AdCP request data.
-
-    Usage:
-        @validate_adcp_request("get-products")
-        async def test_method(self):
-            # Test implementation
-            pass
-    """
-
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            # Extract request data from kwargs or test method
-            # This would need to be integrated with the specific test patterns
-            result = await func(*args, **kwargs)
-            return result
-
-        return wrapper
-
-    return decorator
-
-
-def validate_adcp_response(task_name: str):
-    """
-    Decorator to validate AdCP response data.
-
-    Usage:
-        @validate_adcp_response("get-products")
-        async def test_method(self):
-            # Test returns response data
-            return response_data
-    """
-
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            result = await func(*args, **kwargs)
-
-            # Validate the result if it looks like response data
-            if isinstance(result, dict):
-                async with AdCPSchemaValidator() as validator:
-                    await validator.validate_response(task_name, result)
-
-            return result
-
-        return wrapper
-
-    return decorator
