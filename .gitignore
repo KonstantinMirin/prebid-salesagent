@@ -110,9 +110,6 @@ server.pid
 conductor_ports.json
 conductor_ports.lock
 
-# AdCP Schema Cache (downloaded on demand by E2E tests)
-/schemas/
-tests/e2e/schemas/
 
 # Test response files
 line_item_*_response.json

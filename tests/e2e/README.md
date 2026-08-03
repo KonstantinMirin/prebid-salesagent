@@ -153,8 +153,8 @@ The test suite includes comprehensive AdCP protocol schema validation:
 
 ### Features
 - **Automatic validation** of all MCP tool calls against official AdCP schemas
-- **Pinned to the installed SDK** — schemas load from the `adcp` package
-  (`adcp==6.6.0` → AdCP spec 3.1.1), never the live registry
+- **Pinned to the installed SDK** — schemas load from the `adcp` package at the
+  repo's pinned spec version (see `docs/adcp-spec-version.md`), never the live registry
 - **Offline by construction** — no network access, deterministic CI
 - **Detailed error reporting** with JSON path locations
 
