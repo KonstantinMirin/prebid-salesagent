@@ -26,6 +26,12 @@ async def sync_creatives(
     dry_run: Annotated[bool, Field(description="Preview changes without applying them")] = False,
     validation_mode: ValidationMode | None = None,
     push_notification_config: PushNotificationConfig | None = None,
+    adcp_version: Annotated[  # noqa: ARG001 -- accepted so FastMCP doesn't reject the AdCP request envelope
+        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
+    ] = None,
+    adcp_major_version: Annotated[  # noqa: ARG001 -- see adcp_version; no negotiation logic uses this yet
+        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
+    ] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
@@ -43,6 +49,8 @@ async def sync_creatives(
         dry_run: Preview changes without applying them
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for async notifications (AdCP spec, optional)
+        adcp_version: Release-precision AdCP version the buyer conforms to (accepted, not yet threaded to _impl -- no request object exists here)
+        adcp_major_version: Deprecated major-version pin (accepted, same as adcp_version)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
 
@@ -83,6 +91,8 @@ def sync_creatives_raw(
     dry_run: bool = False,
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | None = None,
+    adcp_version: str | None = None,  # noqa: ARG001 -- accepted so FastMCP doesn't reject the AdCP request envelope
+    adcp_major_version: int | None = None,  # noqa: ARG001 -- see adcp_version; no negotiation logic uses this yet
     context: ContextObject | None = None,
     account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
@@ -100,6 +110,8 @@ def sync_creatives_raw(
         dry_run: Preview changes without applying them
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for status updates
+        adcp_version: Release-precision AdCP version the buyer conforms to (accepted, not yet threaded to _impl -- no request object exists here)
+        adcp_major_version: Deprecated major-version pin (accepted, same as adcp_version)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
         identity: ResolvedIdentity (transport-agnostic, preferred over ctx)

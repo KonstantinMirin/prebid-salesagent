@@ -122,7 +122,17 @@ class TestRawFunctionParameterValidation:
 
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
         # Note: promoted_offering removed per adcp v1.2.1 migration
-        expected_params = ["brief", "brand", "filters", "property_list", "context"]
+        # salesagent-xg5w.1: adcp_version/adcp_major_version (AdcpVersionEnvelope)
+        # are now genuinely accepted and threaded through -- not silently dropped.
+        expected_params = [
+            "brief",
+            "brand",
+            "filters",
+            "property_list",
+            "context",
+            "adcp_version",
+            "adcp_major_version",
+        ]
 
         assert params == expected_params, (
             f"create_get_products_request signature changed!\n"
@@ -191,7 +201,8 @@ class TestHelperFunctionDocumentation:
         # Verify create_get_products_request (the one that caused the bug)
         assert "create_get_products_request" in signatures
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
-        expected = ["brief", "brand", "filters", "property_list", "context"]
+        # salesagent-xg5w.1: adcp_version/adcp_major_version now genuinely threaded through.
+        expected = ["brief", "brand", "filters", "property_list", "context", "adcp_version", "adcp_major_version"]
         actual = signatures["create_get_products_request"]
         assert actual == expected, (
             f"create_get_products_request signature changed!\n"

@@ -41,11 +41,34 @@ from src.routes.api_v1 import (
 # resolved at the transport boundary; raw_wire_payload is the raw wire request
 # body captured server-side for idempotency hashing (FastAPI raw_json_body dependency).
 _TRANSPORT_PARAMS = {"ctx", "identity", "raw_wire_payload"}
-# Body-only meta field (not a raw-wrapper param).
+# Body-only meta field (not a raw-wrapper param). ``adcp_version`` here is a
+# REST-only response-shape compat pin (see apply_version_compat) that predates
+# and is NOT the same field as the raw wrappers' AdCP request-envelope
+# ``adcp_version`` (AdcpVersionEnvelope) — confirmed by their incompatible
+# formats: this one defaults to full semver "1.0.0", while the spec field is
+# pattern-constrained to VERSION.RELEASE (e.g. "3.1") and rejects "1.0.0"
+# outright. Forwarding body.adcp_version into the raw wrapper's adcp_version
+# param was tried and reverted (salesagent-xg5w.1) — it broke every REST
+# create/update/sync/list call with a VALIDATION_ERROR. Real fix needs a
+# non-colliding REST field for the buyer's AdCP version pin; tracked below via
+# the per-class allowlist entries until that lands.
 _BODY_META = {"adcp_version"}
 
 # Allowlisted omissions: {BodyClassName: {param_name: justification}}.
 # Allowlists can only SHRINK — every entry needs a real reason, never a blanket escape.
+# All 5 "adcp_version" entries below share one root cause: the REST Body's
+# pre-existing adcp_version field (a response-shape compat pin) collides in
+# name and format with the raw wrappers' new AdCP request-envelope adcp_version
+# param (salesagent-xg5w.1) -- forwarding one into the other breaks every call.
+# Tracked for a real fix (non-colliding field) at salesagent-xg5w.10; remove
+# these 5 entries when that lands.
+_ADCP_VERSION_COLLISION = (
+    "REST Body's adcp_version is a pre-existing response-compat pin (format '1.0.0'), "
+    "not the raw wrapper's AdCP request-envelope adcp_version (format 'VERSION.RELEASE', "
+    "e.g. '3.1') -- forwarding one into the other rejects with VALIDATION_ERROR. "
+    "salesagent-xg5w.10 tracks a non-colliding REST field for the real fix."
+)
+
 _ALLOWLIST: dict[str, dict[str, str]] = {
     "UpdateMediaBuyBody": {
         # media_buy_id is the URL path parameter (/media-buys/{media_buy_id}),
@@ -57,7 +80,12 @@ _ALLOWLIST: dict[str, dict[str, str]] = {
         # once the raw wrapper actually plumbs them through.
         "targeting_overlay": "raw wrapper accepts but drops before _build_update_request",
         "creatives": "raw wrapper accepts but drops before _build_update_request",
+        "adcp_version": _ADCP_VERSION_COLLISION,
     },
+    "CreateMediaBuyBody": {"adcp_version": _ADCP_VERSION_COLLISION},
+    "GetMediaBuyDeliveryBody": {"adcp_version": _ADCP_VERSION_COLLISION},
+    "SyncCreativesBody": {"adcp_version": _ADCP_VERSION_COLLISION},
+    "ListCreativesBody": {"adcp_version": _ADCP_VERSION_COLLISION},
 }
 
 # Each field-by-field REST Body paired with the raw wrapper its route forwards into.

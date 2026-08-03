@@ -24,6 +24,7 @@ from src.core.exceptions import (
     to_wire_error_code,
 )
 from src.core.helpers import enum_value
+from src.core.helpers.version_envelope import version_envelope_kwargs
 from src.core.tool_context import ToolContext
 
 
@@ -732,6 +733,8 @@ def _build_get_media_buy_delivery_request(
     attribution_window: AttributionWindow | None,
     include_package_daily_breakdown: bool | None,
     context: ContextObject | None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
 ) -> GetMediaBuyDeliveryRequest:
     """Build a GetMediaBuyDeliveryRequest from individual wire params.
 
@@ -750,6 +753,7 @@ def _build_get_media_buy_delivery_request(
             attribution_window=attribution_window,
             include_package_daily_breakdown=include_package_daily_breakdown,
             context=cast(ContextObject | None, context),
+            **version_envelope_kwargs(adcp_version, adcp_major_version),
         )
 
 
@@ -764,6 +768,12 @@ async def get_media_buy_delivery(
         bool | None, Field(description="When true, include daily breakdown metrics per package")
     ] = None,
     account: LibraryAccountReference | None = None,
+    adcp_version: Annotated[
+        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
+    ] = None,
+    adcp_major_version: Annotated[
+        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
+    ] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -780,6 +790,8 @@ async def get_media_buy_delivery(
         attribution_window: Attribution window configuration (optional)
         include_package_daily_breakdown: Include daily breakdown per package (optional)
         account: Account reference for multi-account scenarios (optional)
+        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
+        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
         context: Application level context object (ContextObject)
         ctx: FastMCP context (automatically provided)
 
@@ -803,6 +815,8 @@ async def get_media_buy_delivery(
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
         context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
     )
     response = _get_media_buy_delivery_impl(req, identity)
     return ToolResult(content=str(response), structured_content=response)
@@ -817,6 +831,8 @@ def get_media_buy_delivery_raw(
     attribution_window: AttributionWindow | None = None,
     include_package_daily_breakdown: bool | None = None,
     account: LibraryAccountReference | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -859,6 +875,8 @@ def get_media_buy_delivery_raw(
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
         context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
     )
     return _get_media_buy_delivery_impl(req, identity)
 

@@ -22,6 +22,7 @@ from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value, log_tool_activity
+from src.core.helpers.version_envelope import version_envelope_kwargs
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
@@ -80,6 +81,8 @@ def _build_list_creatives_request(
     sort_by: str = "created_date",
     sort_order: str = "desc",
     context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
 ) -> "ListCreativesRequest":
     """Build a ListCreativesRequest from individual wire params.
 
@@ -183,6 +186,7 @@ def _build_list_creatives_request(
             fields=fields,
             include_assignments=include_assignments,
             context=context,
+            **version_envelope_kwargs(adcp_version, adcp_major_version),
         )
 
 
@@ -487,6 +491,12 @@ async def list_creatives(
         str, PydanticField(description="Field to sort by (e.g. 'created_date', 'name')")
     ] = "created_date",
     sort_order: Annotated[str, PydanticField(description="Sort direction: 'asc' or 'desc'")] = "desc",
+    adcp_version: Annotated[
+        str | None, PydanticField(description="Release-precision AdCP version the buyer conforms to")
+    ] = None,
+    adcp_major_version: Annotated[
+        int | None, PydanticField(description="Deprecated major-version pin, kept for pre-3.x buyers")
+    ] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
@@ -535,6 +545,8 @@ async def list_creatives(
         sort_by=sort_by,
         sort_order=sort_order,
         context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
     )
     response = _list_creatives_impl(
         req=req,
@@ -565,6 +577,8 @@ def list_creatives_raw(
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -618,6 +632,8 @@ def list_creatives_raw(
         sort_by=sort_by,
         sort_order=sort_order,
         context=to_context_object(context),
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
     )
     return _list_creatives_impl(
         req=req,

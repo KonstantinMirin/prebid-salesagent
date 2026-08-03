@@ -42,6 +42,7 @@ from pydantic import Field
 
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
+from src.core.helpers.version_envelope import version_envelope_kwargs
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,8 @@ def build_list_creative_formats_request(
     disclosure_positions: list[DisclosurePosition] | None = None,
     disclosure_persistence: list[DisclosurePersistence] | None = None,
     context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
     asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
@@ -177,6 +180,7 @@ def build_list_creative_formats_request(
         disclosure_positions=disclosure_positions,
         disclosure_persistence=disclosure_persistence,
         context=context,
+        **version_envelope_kwargs(adcp_version, adcp_major_version),
     )
 
 
@@ -543,6 +547,12 @@ async def list_creative_formats(
     disclosure_persistence: Annotated[
         list[DisclosurePersistence] | None, Field(description="Filter by supported disclosure persistence modes")
     ] = None,
+    adcp_version: Annotated[
+        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
+    ] = None,
+    adcp_major_version: Annotated[
+        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
+    ] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
@@ -565,6 +575,8 @@ async def list_creative_formats(
         max_height: Maximum format height in pixels
         disclosure_positions: Filter by supported disclosure positions
         disclosure_persistence: Filter by supported disclosure persistence modes
+        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
+        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
         context: Application-level context per AdCP spec
         ctx: FastMCP context (automatically provided)
 
@@ -587,6 +599,8 @@ async def list_creative_formats(
             disclosure_positions=disclosure_positions,
             disclosure_persistence=disclosure_persistence,
             context=context,
+            adcp_version=adcp_version,
+            adcp_major_version=adcp_major_version,
         )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None

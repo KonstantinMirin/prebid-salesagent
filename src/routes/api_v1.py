@@ -91,6 +91,7 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     # below, and not honored by _impl even if it were — see #1619.
     paused: bool | None = None
     adcp_version: str = "1.0.0"
+    adcp_major_version: int | None = None
 
 
 class UpdateMediaBuyBody(SalesAgentBaseModel):
@@ -115,6 +116,7 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
     adcp_version: str = "1.0.0"
+    adcp_major_version: int | None = None
 
 
 class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
@@ -128,6 +130,7 @@ class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
     account: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
+    adcp_major_version: int | None = None
 
 
 class SyncCreativesBody(SalesAgentBaseModel):
@@ -141,6 +144,7 @@ class SyncCreativesBody(SalesAgentBaseModel):
     context: dict[str, Any] | None = None
     account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
     adcp_version: str = "1.0.0"
+    adcp_major_version: int | None = None
 
 
 class ListCreativesBody(SalesAgentBaseModel):
@@ -166,6 +170,7 @@ class ListCreativesBody(SalesAgentBaseModel):
     sort_order: str = "desc"
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
+    adcp_major_version: int | None = None
 
 
 class UpdatePerformanceIndexBody(SalesAgentBaseModel):
@@ -335,6 +340,7 @@ async def create_media_buy(
         context=context,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        adcp_major_version=body.adcp_major_version,
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )
@@ -369,6 +375,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook=reporting_webhook,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        adcp_major_version=body.adcp_major_version,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -395,6 +402,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
         attribution_window=body.attribution_window,
         include_package_daily_breakdown=body.include_package_daily_breakdown,
         context=to_context_object(body.context),
+        adcp_major_version=body.adcp_major_version,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -423,6 +431,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
         push_notification_config=push_notification_config,
         context=context,
         account=account_ref,
+        adcp_major_version=body.adcp_major_version,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -454,6 +463,7 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
         sort_by=body.sort_by,
         sort_order=body.sort_order,
         context=to_context_object(body.context),
+        adcp_major_version=body.adcp_major_version,
         identity=identity,
     )
     return response.model_dump(mode="json")

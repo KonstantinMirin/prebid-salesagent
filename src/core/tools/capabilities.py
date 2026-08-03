@@ -8,8 +8,9 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 
 import logging
 from datetime import UTC, datetime
+from typing import Annotated
 
-from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
@@ -31,6 +32,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
+from pydantic import Field
 
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
@@ -38,6 +40,7 @@ from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.version_envelope import version_envelope_kwargs
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.services.targeting_capabilities import supports_property_list_filtering
@@ -279,6 +282,13 @@ def _get_adcp_capabilities_impl(
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
+    adcp_version: Annotated[
+        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
+    ] = None,
+    adcp_major_version: Annotated[
+        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
+    ] = None,
+    context: ContextObject | None = None,
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -287,6 +297,9 @@ async def get_adcp_capabilities(
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
+        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
+        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
+        context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -294,8 +307,7 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object (currently minimal)
-    req = GetAdcpCapabilitiesRequest()
+    req = GetAdcpCapabilitiesRequest(context=context, **version_envelope_kwargs(adcp_version, adcp_major_version))
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -323,6 +335,9 @@ async def get_adcp_capabilities(
 
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetAdcpCapabilitiesResponse:
@@ -332,6 +347,9 @@ async def get_adcp_capabilities_raw(
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
+        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
+        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
+        context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -342,5 +360,5 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest()
+    req = GetAdcpCapabilitiesRequest(context=context, **version_envelope_kwargs(adcp_version, adcp_major_version))
     return _get_adcp_capabilities_impl(req, identity)
