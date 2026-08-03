@@ -167,6 +167,20 @@ def test_normalize_ref_rejected_forms(ref):
         validator._normalize_ref(ref)
 
 
+@pytest.mark.asyncio
+async def test_resolution_failure_is_not_a_validation_error():
+    """A schema-RESOLUTION failure propagates as SchemaError, unwrapped.
+
+    Callers branch on SchemaValidationError to mean "the payload violates the
+    contract" — a missing/unresolvable schema must not be conflated with that
+    (the ``except SchemaError: raise`` arm in ``_validate_against_schema``).
+    """
+    validator = AdCPSchemaValidator()
+    with pytest.raises(SchemaError) as exc_info:
+        await validator._validate_against_schema("media-buy/does-not-exist.json", {}, "resolution failure")
+    assert not isinstance(exc_info.value, SchemaValidationError)
+
+
 def test_schema_path_rejects_embedded_traversal():
     """A ref that normalizes clean but traverses mid-path is contained.
 
