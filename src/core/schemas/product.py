@@ -22,6 +22,7 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
     _upgrade_legacy_format_ids,
+    strip_none_deep,
 )
 
 
@@ -158,17 +159,28 @@ class Product(LibraryProduct):
             data["format_ids"] = data.pop("formats")
 
         # Remove null fields per AdCP spec
-        # Only truly required fields should always be present
+        # Only truly required fields should always be present (per the pinned
+        # get-products-response.json schema: product_id, name, description,
+        # publisher_properties, delivery_type, pricing_options,
+        # reporting_capabilities, plus format_ids under the legacy named-format
+        # anyOf arm). is_custom and delivery_measurement are NOT spec-required
+        # and must not be force-included as null.
         core_fields = {
             "product_id",
             "name",
             "description",
             "format_ids",
             "delivery_type",
-            "delivery_measurement",
             "reporting_capabilities",
-            "is_custom",
         }
+
+        # Nested optional fields (format_ids[].width, pricing_options[].floor_price,
+        # placements[].*, delivery_measurement.vendors, publisher_properties[].
+        # publisher_domains, ...) are typed by the pinned schema and reject null.
+        # Strip those before the top-level inclusion decision below, which must
+        # keep operating on this level's own None/non-None (a core field forced
+        # in as null here must stay null, not be stripped by the same pass).
+        data = {key: strip_none_deep(value) for key, value in data.items()}
 
         adcp_data = {}
         for key, value in data.items():
