@@ -3073,7 +3073,17 @@ def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal:
 
 
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
-    """Detect which use case a BDD scenario belongs to via its tags."""
+    """Detect which use case a BDD scenario belongs to via its tags.
+
+    The recognized-UC set below must cover every ``T-UC-<n>`` tag prefix that
+    a bound feature file can carry. A tag that isn't recognized here falls
+    through to ``None``, and ``_harness_env``'s catch-all then reports it as
+    "No harness wired for None" instead of naming the actual UC -- masking
+    the real gap. Widen this set whenever a new BR-UC-*.feature gets a
+    binding test_*.py file, even if no harness env exists for it yet: an
+    informative per-UC xfail is strictly better than the opaque "None"
+    message.
+    """
     marker_names = {m.name for m in request.node.iter_markers()}
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
@@ -3085,12 +3095,22 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-005"
     if any(t.startswith("T-UC-004") for t in marker_names):
         return "UC-004"
+    if any(t.startswith("T-UC-008") for t in marker_names):
+        return "UC-008"
     if any(t.startswith("T-UC-011") for t in marker_names):
         return "UC-011"
+    if any(t.startswith("T-UC-014") for t in marker_names):
+        return "UC-014"
     if any(t.startswith("T-UC-018") for t in marker_names):
         return "UC-018"
     if any(t.startswith("T-UC-019") for t in marker_names):
         return "UC-019"
+    if any(t.startswith("T-UC-020") for t in marker_names):
+        return "UC-020"
+    if any(t.startswith("T-UC-021") for t in marker_names):
+        return "UC-021"
+    if any(t.startswith("T-UC-030") for t in marker_names):
+        return "UC-030"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names or (
@@ -3199,7 +3219,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)
-    - Unknown UC → no harness (yields immediately)
+    - A UC recognized by ``_detect_uc`` but not (yet) given a branch below
+      xfails with a UC-specific reason via the catch-all at the bottom.
+    - A tag ``_detect_uc`` does not recognize at all falls through to the
+      same catch-all as ``uc=None`` -- an opaque "No harness wired for None".
+      That is a bug, not intended behavior: widen ``_detect_uc`` instead of
+      relying on this fixture to paper over it.
     """
     uc = _detect_uc(request)
     e2e_config = ctx.get("e2e_config")
@@ -3372,7 +3397,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf"}:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf", "storyboard-v3.1"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
@@ -3381,6 +3406,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # creative lookup) — dormant until the cross-principal existence-gate
             # fix (PR #1430 review) made the surface safe to grade.
             # @webhook-ssrf scenarios grade registration SSRF on push_notification_config.url.
+            # @storyboard-v3.1 covers the 8 UC-006 storyboard-conformance proposals
+            # (provenance required/disclosure/digital-source-type/corrected/contradicted,
+            # multi-format sync, format-id roundtrip, creative-reception) — without this
+            # tag they xfailed here before any step ran, which is what let some of them
+            # falsely appear "dormant by design" (no matching steps) when they were
+            # actually masked by this gate.
             from tests.harness.creative_sync import CreativeSyncEnv
 
             with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
