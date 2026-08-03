@@ -23,7 +23,6 @@ import pytest
 
 from tests.e2e._compliance_report import ComplianceReportBase
 from tests.e2e.adcp_request_builder import build_a2a_message_send
-from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
@@ -305,28 +304,22 @@ class TestA2AAdCPCompliance:
 
     @pytest.mark.asyncio
     async def test_all_adcp_skills_compliance(self, compliance_client, compliance_report):
-        """Test all AdCP skills for compliance in a single comprehensive test."""
+        """Test all AdCP skills for compliance in a single comprehensive test.
 
-        # Define skill tests
+        Every entry here must be a request that genuinely SUCCEEDS against the
+        real CI-seeded stack — the point is to exercise real schema-compliant
+        responses, not error paths (those are covered by the dedicated
+        test_explicit_skill_create_media_buy). create_media_buy and
+        add_creative_assets were previously listed here with a legacy request
+        shape (product_ids/total_budget/flight_start_date, and a skill name
+        that no longer exists in the A2A dispatch table) that could never
+        pass schema validation — masked entirely by the assertion below only
+        checking that SOME results were collected (salesagent-1q8d.15).
+        """
         # Note: signals skills removed - should come from dedicated signals agents
         skill_tests = [
             ("get_products", {"brief": "Display ads", "brand": {"domain": "testbrand.com"}}),
-            (
-                "create_media_buy",
-                {
-                    "product_ids": ["display_standard"],
-                    "total_budget": 5000.0,
-                    "flight_start_date": "2025-03-01",
-                    "flight_end_date": "2025-03-31",
-                },
-            ),
-            (
-                "add_creative_assets",
-                {
-                    "media_buy_id": "mb_test_123",
-                    "assets": build_assets(image_spec("main", url="https://example.com/creative.jpg")),
-                },
-            ),
+            ("list_creatives", {"context": {"e2e": "compliance_all_skills"}}),
         ]
 
         for skill_name, params in skill_tests:
@@ -350,8 +343,10 @@ class TestA2AAdCPCompliance:
                 compliance_report.add_result(error_result)
                 print(f"Failed to test {skill_name}: {e}")
 
-        # Always pass - results are in the report
-        assert compliance_report.results, "Should have collected some test results"
+        assert compliance_report.failed == 0, (
+            f"{compliance_report.failed} of {len(skill_tests)} skill(s) failed AdCP schema compliance: "
+            f"{[r for r in compliance_report.results if not r['valid']]}"
+        )
 
 
 def pytest_addoption(parser):
