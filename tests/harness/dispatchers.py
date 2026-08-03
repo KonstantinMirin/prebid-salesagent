@@ -231,48 +231,48 @@ class McpDispatcher:
 class RestE2EDispatcher:
     """Dispatch via real HTTP through nginx to the Docker stack.
 
-    Uses httpx to send POST requests to the live server, exercising the full
-    stack: nginx -> UnifiedAuthMiddleware -> resolve_identity() ->
-    get_principal_from_token() DB lookup -> route handler -> _impl().
+    Exercises the full stack: nginx -> UnifiedAuthMiddleware ->
+    resolve_identity() -> get_principal_from_token() DB lookup -> route
+    handler -> _impl().
 
-    Reuses the env's REST contract (build_rest_body / REST_ENDPOINT /
-    parse_rest_response / parse_rest_error); the only e2e-specific dependency is
-    ``env.e2e_config`` (base_url of the live stack), set by the bdd conftest for
-    E2E scenarios. Ported from feature/media-buy-refactoring (PR #1360 lineage).
+    WRAP (``env.build_rest_body`` / ``env.REST_ENDPOINT`` / ``env.REST_METHOD``)
+    stays the per-env contract every dispatch path already uses — migrating
+    that to the generic ``tests.harness.client._wrap_rest`` would require
+    rewriting each env's bespoke request-shaping (e.g. ``MediaBuyDualEnv``'s
+    create/update routing), an explicit non-goal of the transport-generic
+    client design (``.claude/notes/storyboard-conformance/
+    sb2a-transport-generic-client-design.md`` §6).
+
+    DELIVER (the actual httpx call) is NOT hand-rolled here — it delegates to
+    ``tests.harness.client._deliver_e2e_rest``, the single delivery
+    implementation also used by ``AdCPTestClient.call(..., Transport.E2E_REST)``
+    (salesagent-uz00, SB-3a; design doc §5).
+
+    UNWRAP (the status-code/envelope handling below) stays local to this
+    class: it preserves the exact ``"e2e_rest"`` envelope tag and the
+    graceful non-JSON-body fallback (#1420) that e2e_rest — the only e2e
+    transport running today — has always had as its regression baseline.
+    ``tests.harness.client._unwrap_rest`` does not (yet) replicate the
+    e2e-specific envelope tag for the E2E_REST family member, so reusing it
+    here would silently change behavior; not done.
+
+    Ported from feature/media-buy-refactoring (PR #1360 lineage).
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
-        import httpx
+        from tests.harness.address_table import ToolAddress
+        from tests.harness.client import _deliver_e2e_rest
 
         if not env.e2e_config:
             return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
         identity = kwargs.pop("identity", None)
-        base_url = env.e2e_config.base_url
-
-        # identity=None means "send without auth headers" (no-auth test) — let the
-        # server's auth middleware return 401/structured error. When identity exists
-        # but auth_token is None (principal_id=None boundary tests), omit the header
-        # so the server rejects gracefully instead of httpx raising on a None header.
-        headers: dict[str, str] = {"Content-Type": "application/json"}
-        if identity is not None:
-            if identity.auth_token is not None:
-                headers["x-adcp-auth"] = identity.auth_token
-            tenant = getattr(identity, "tenant", None)
-            if tenant is not None:
-                subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
-                if subdomain is not None:
-                    headers["x-adcp-tenant"] = subdomain
-            tc = getattr(identity, "testing_context", None)
-            if tc is not None and getattr(tc, "dry_run", False):
-                headers["x-dry-run"] = "true"
-
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
+        method = getattr(env, "REST_METHOD", "post")
+        address = ToolAddress(Transport.E2E_REST, name=endpoint, method=method)
 
-        with httpx.Client(base_url=base_url, timeout=30) as client:
-            method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+        response = _deliver_e2e_rest(env, address, {"url": endpoint, "body": body}, identity)
 
         envelope = {
             "transport": "e2e_rest",

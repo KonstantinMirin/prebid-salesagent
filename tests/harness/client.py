@@ -28,11 +28,13 @@ Pydantic model those methods normally parse into (this is why ``call()``
 does not need a ``response_cls`` parameter — see the "typed payload"
 docstring note on ``TransportResult.payload`` below for the tradeoff).
 
-E2E delivery (``Transport.E2E_REST``/``E2E_MCP``/``E2E_A2A``) is NOT
-implemented here — this is a documented, deliberate deferral (design doc
-§7 "Two placeholder E2E dispatchers"), matching the beads tasks this one
-blocks: ``salesagent-uz00`` (SB-3a, e2e_rest), ``salesagent-wu78``
-(SB-3b, e2e_mcp), ``salesagent-tisr`` (SB-3c, e2e_a2a). WRAP is already
+E2E_REST delivery is implemented (``_deliver_e2e_rest`` below,
+salesagent-uz00/SB-3a) — real HTTP through nginx to the live Docker stack,
+reused verbatim by ``RestE2EDispatcher`` (``tests/harness/dispatchers.py``)
+so there is one delivery implementation, not two. E2E_MCP/E2E_A2A delivery
+is still NOT implemented here — a documented, deliberate deferral (design
+doc §7 "Two placeholder E2E dispatchers") tracked by ``salesagent-wu78``
+(SB-3b, e2e_mcp) and ``salesagent-tisr`` (SB-3c, e2e_a2a). WRAP is already
 written per transport *family*, so those follow-ups only need to add a
 DELIVER function — ADDRESS and WRAP need no changes.
 
@@ -192,11 +194,73 @@ def _deliver_e2e_not_implemented(transport: Transport, follow_up: str) -> Callab
     return _deliver
 
 
+def _e2e_rest_headers(identity: Any) -> dict[str, str]:
+    """Build e2e HTTP headers from *identity*.
+
+    Ported verbatim from ``RestE2EDispatcher.dispatch``
+    (``tests/harness/dispatchers.py``) — this is now the single
+    implementation; that class delegates to :func:`_deliver_e2e_rest`
+    instead of hand-rolling the same header logic (salesagent-uz00, SB-3a).
+
+    ``identity=None`` means "send without auth headers" (no-auth test) — let
+    the server's auth middleware return 401/structured error. When identity
+    exists but ``auth_token`` is ``None`` (principal_id=None boundary
+    tests), the header is omitted so the server rejects gracefully instead
+    of httpx raising on a ``None`` header value.
+    """
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if identity is not None:
+        if identity.auth_token is not None:
+            headers["x-adcp-auth"] = identity.auth_token
+        tenant = getattr(identity, "tenant", None)
+        if tenant is not None:
+            subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
+            if subdomain is not None:
+                headers["x-adcp-tenant"] = subdomain
+        tc = getattr(identity, "testing_context", None)
+        if tc is not None and getattr(tc, "dry_run", False):
+            headers["x-dry-run"] = "true"
+    return headers
+
+
+def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
+    """E2E_REST DELIVER: real HTTP through nginx to the live Docker stack.
+
+    The single implementation of e2e_rest delivery (salesagent-uz00, SB-3a)
+    — ``RestE2EDispatcher`` (``tests/harness/dispatchers.py``) delegates
+    here instead of hand-rolling its own header-building/httpx-client
+    construction, matching the design doc §5 DELIVER-function split: WRAP
+    (``_wrap_rest`` above) and UNWRAP already serve both ``Transport.REST``
+    and ``Transport.E2E_REST`` unchanged; only DELIVER differed, and now it
+    is one function reused by both the generic client and the dispatcher.
+
+    *wrapped* is ``{"url": ..., "body": ...}`` — the shape ``_wrap_rest``
+    produces. Returns the raw ``httpx.Response``; UNWRAP (status-code /
+    envelope handling) is the caller's responsibility — ``_unwrap_rest``
+    below for the generic ``AdCPTestClient.call()`` path,
+    ``RestE2EDispatcher``'s own status-code handling for the dispatcher
+    path (see that class's docstring for why the two UNWRAP paths are not
+    unified: the e2e_rest envelope/non-JSON-error shape is the standing
+    regression baseline and must not shift silently).
+    """
+    import httpx
+
+    if not env.e2e_config:
+        raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
+
+    resolved_identity = env.identity_for(Transport.E2E_REST) if identity is _NO_IDENTITY_OVERRIDE else identity
+    headers = _e2e_rest_headers(resolved_identity)
+    method = address.method or "post"
+
+    with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
+        return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
+
+
 DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = {
     Transport.MCP: _deliver_mcp,
     Transport.A2A: _deliver_a2a,
     Transport.REST: _deliver_rest,
-    Transport.E2E_REST: _deliver_e2e_not_implemented(Transport.E2E_REST, "salesagent-uz00 (SB-3a)"),
+    Transport.E2E_REST: _deliver_e2e_rest,
     Transport.E2E_MCP: _deliver_e2e_not_implemented(Transport.E2E_MCP, "salesagent-wu78 (SB-3b)"),
     Transport.E2E_A2A: _deliver_e2e_not_implemented(Transport.E2E_A2A, "salesagent-tisr (SB-3c)"),
 }

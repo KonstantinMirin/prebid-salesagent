@@ -117,13 +117,15 @@ class TestClientRestWrapPathParamPeeling:
 
 
 class TestClientE2eDeliveryDeferred:
-    """E2E delivery is a documented, deliberate gap (design doc §7) — must raise
-    NotImplementedError loudly, never get silently swallowed into a
-    TransportResult a caller could mistake for a real AdCP rejection."""
+    """E2E_MCP/E2E_A2A delivery is a documented, deliberate gap (design doc §7)
+    — must raise NotImplementedError loudly, never get silently swallowed into
+    a TransportResult a caller could mistake for a real AdCP rejection.
+    E2E_REST delivery is implemented (salesagent-uz00/SB-3a) — see
+    TestClientE2eRestDelivery below."""
 
     @pytest.mark.parametrize(
         "transport",
-        [Transport.E2E_REST, Transport.E2E_MCP, Transport.E2E_A2A],
+        [Transport.E2E_MCP, Transport.E2E_A2A],
     )
     def test_e2e_delivery_raises_not_implemented(self, transport):
         class _UnitEnv(BaseTestEnv):
@@ -133,6 +135,122 @@ class TestClientE2eDeliveryDeferred:
             client = AdCPTestClient(env)
             with pytest.raises(NotImplementedError):
                 client.call("get_products", {"brief": "x"}, transport)
+
+
+class TestClientE2eRestDelivery:
+    """E2E_REST DELIVER (``_deliver_e2e_rest``, salesagent-uz00/SB-3a) — real
+    HTTP through nginx to a live Docker stack. Mocks ``httpx.Client`` so
+    coverage does not require a live server; genuine e2e-with-real-server
+    verification happens in ``tests/e2e/``."""
+
+    def _make_env_with_e2e_config(self):
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import E2EConfig
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        return _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack.test", postgres_url="postgresql://x/y"))
+
+    def test_e2e_rest_delivery_sends_real_http_request(self, monkeypatch):
+        import httpx
+
+        from tests.factories.principal import PrincipalFactory
+
+        captured = {}
+
+        class _FakeResponse:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+
+            def json(self):
+                return {"products": []}
+
+        class _FakeClient:
+            def __init__(self, *, base_url, timeout):
+                captured["base_url"] = base_url
+                captured["timeout"] = timeout
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                return False
+
+            def post(self, url, *, json, headers):
+                captured["url"] = url
+                captured["json"] = json
+                captured["headers"] = headers
+                return _FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", _FakeClient)
+
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1", tenant_id="t1", protocol="rest", auth_token="tok_abc"
+        )
+
+        with self._make_env_with_e2e_config() as env:
+            client = AdCPTestClient(env)
+            result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_REST, identity=identity)
+
+        assert result.is_success, result.error
+        assert captured["base_url"] == "http://e2e-stack.test"
+        assert captured["url"] == "/api/v1/products"
+        assert captured["json"] == {"brief": "video ads"}
+        assert captured["headers"]["x-adcp-auth"] == "tok_abc"
+        assert captured["headers"]["x-adcp-tenant"] == identity.tenant["subdomain"]
+
+    def test_e2e_rest_delivery_unauthenticated_omits_auth_header(self, monkeypatch):
+        import httpx
+
+        from src.core.exceptions import AdCPAuthRequiredError, build_two_layer_error_envelope
+
+        wire_body = build_two_layer_error_envelope(AdCPAuthRequiredError("no credentials"))
+        captured = {}
+
+        class _FakeResponse:
+            status_code = 401
+            headers = {"content-type": "application/json"}
+            text = '{"errors": [{"code": "AUTH_REQUIRED"}]}'
+
+            def json(self):
+                return wire_body
+
+        class _FakeClient:
+            def __init__(self, *, base_url, timeout):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                return False
+
+            def post(self, url, *, json, headers):
+                captured["headers"] = headers
+                return _FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", _FakeClient)
+
+        with self._make_env_with_e2e_config() as env:
+            client = AdCPTestClient(env)
+            result = client.call("get_products", {"brief": "x"}, Transport.E2E_REST, identity=None)
+
+        assert "x-adcp-auth" not in captured["headers"]
+        assert result.is_error
+        result.assert_wire_error("AUTH_REQUIRED")
+
+    def test_e2e_rest_delivery_requires_e2e_config(self):
+        from tests.harness.address_table import ToolAddress
+        from tests.harness.client import _deliver_e2e_rest
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv() as env:
+            address = ToolAddress(Transport.E2E_REST, name="/api/v1/products", method="post")
+            with pytest.raises(RuntimeError, match="e2e_config"):
+                _deliver_e2e_rest(env, address, {"url": "/api/v1/products", "body": {}}, None)
 
 
 @pytest.mark.integration
