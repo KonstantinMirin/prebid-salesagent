@@ -24,12 +24,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import (
-    REPO_ROOT,
-    format_failure,
-    iter_src_and_test_python_files,
-    safe_parse,
-)
+from tests.unit._architecture_helpers import REPO_ROOT, format_failure, scan_for_ast_violations
 
 CANONICAL_FILE = "tests/helpers/skill_to_adcp_task.py"
 GUARD_FILE = "tests/unit/test_guards_no_duplicate_skill_task_map.py"
@@ -75,14 +70,8 @@ def find_duplicate_skill_task_maps(tree: ast.Module) -> list[int]:
 
 
 def test_no_duplicate_skill_task_map():
-    violations: list[str] = []
     exclude = frozenset({CANONICAL_FILE, GUARD_FILE})
-    for path, rel in iter_src_and_test_python_files(REPO_ROOT, exclude=exclude):
-        tree = safe_parse(path)
-        if tree is None:
-            continue
-        for lineno in find_duplicate_skill_task_maps(tree):
-            violations.append(f"{rel}:{lineno}")
+    violations = scan_for_ast_violations(REPO_ROOT, exclude=exclude, finder=find_duplicate_skill_task_maps)
     assert not violations, format_failure(
         summary="A hand-written dict literal re-implements the skill->AdCP-task map",
         violations=violations,

@@ -30,12 +30,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import (
-    REPO_ROOT,
-    format_failure,
-    iter_src_and_test_python_files,
-    safe_parse,
-)
+from tests.unit._architecture_helpers import REPO_ROOT, format_failure, scan_for_ast_violations
 
 GUARD_FILE = "tests/unit/test_guards_no_silent_schema_index_gap.py"
 
@@ -99,13 +94,9 @@ def find_warn_and_skip_violations(tree: ast.Module) -> list[int]:
 
 
 def test_no_hardcoded_schema_section_lookup():
-    violations: list[str] = []
-    for path, rel in iter_src_and_test_python_files(REPO_ROOT, exclude=frozenset({GUARD_FILE})):
-        tree = safe_parse(path)
-        if tree is None:
-            continue
-        for lineno in find_hardcoded_schema_section_lookups(tree):
-            violations.append(f"{rel}:{lineno}")
+    violations = scan_for_ast_violations(
+        REPO_ROOT, exclude=frozenset({GUARD_FILE}), finder=find_hardcoded_schema_section_lookups
+    )
     assert not violations, format_failure(
         summary="Hardcoded single-section lookup against an AdCP schema index (schemas[<literal>])",
         violations=violations,
@@ -116,13 +107,9 @@ def test_no_hardcoded_schema_section_lookup():
 
 
 def test_no_warn_and_skip_on_schema_miss():
-    violations: list[str] = []
-    for path, rel in iter_src_and_test_python_files(REPO_ROOT, exclude=frozenset({GUARD_FILE})):
-        tree = safe_parse(path)
-        if tree is None:
-            continue
-        for lineno in find_warn_and_skip_violations(tree):
-            violations.append(f"{rel}:{lineno}")
+    violations = scan_for_ast_violations(
+        REPO_ROOT, exclude=frozenset({GUARD_FILE}), finder=find_warn_and_skip_violations
+    )
     assert not violations, format_failure(
         summary="print()+return on a schema-resolution miss instead of raising (quiet failure)",
         violations=violations,

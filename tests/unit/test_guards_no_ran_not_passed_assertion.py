@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import REPO_ROOT, format_failure, iter_src_and_test_python_files, safe_parse
+from tests.unit._architecture_helpers import REPO_ROOT, format_failure, scan_for_ast_violations
 
 GUARD_FILE = "tests/unit/test_guards_no_ran_not_passed_assertion.py"
 
@@ -74,15 +74,8 @@ def find_ran_not_passed_violations(tree: ast.Module) -> list[int]:
 
 
 def test_no_ran_not_passed_assertion():
-    violations: list[str] = []
-    for path, rel in iter_src_and_test_python_files(REPO_ROOT, exclude=frozenset({GUARD_FILE})):
-        tree = safe_parse(path)
-        if tree is None:
-            continue
-        for lineno in find_ran_not_passed_violations(tree):
-            site = f"{rel}:{lineno}"
-            if site not in ALLOWLIST:
-                violations.append(site)
+    found = scan_for_ast_violations(REPO_ROOT, exclude=frozenset({GUARD_FILE}), finder=find_ran_not_passed_violations)
+    violations = [site for site in found if site not in ALLOWLIST]
     assert not violations, format_failure(
         summary="Assertion grades that a check RAN, not that it PASSED",
         violations=violations,

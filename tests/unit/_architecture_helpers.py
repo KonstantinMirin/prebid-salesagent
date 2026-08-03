@@ -328,6 +328,29 @@ def iter_src_and_test_python_files(repo: Path, *, exclude: frozenset[str] = froz
             yield path, rel
 
 
+def scan_for_ast_violations(
+    repo: Path,
+    *,
+    exclude: frozenset[str],
+    finder: Callable[[ast.Module], list[int]],
+) -> list[str]:
+    """Run an AST-based detector over every src/+tests/ .py file, collecting ``"path:line"`` hits.
+
+    Standard body for a guard's enforcement test: ``finder(tree)`` returns
+    violation line numbers for one file; this walks every file (via
+    ``iter_src_and_test_python_files``), parses it, and flattens the results
+    into ``file:line`` strings ready for ``format_failure``.
+    """
+    violations: list[str] = []
+    for path, rel in iter_src_and_test_python_files(repo, exclude=exclude):
+        tree = safe_parse(path)
+        if tree is None:
+            continue
+        for lineno in finder(tree):
+            violations.append(f"{rel}:{lineno}")
+    return violations
+
+
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
     """.yml and .yaml files in .github/workflows/."""
     wf_dir = repo / ".github" / "workflows"

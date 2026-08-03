@@ -6,6 +6,7 @@ from fastmcp.server.context import Context
 from rich.console import Console
 from sqlalchemy import select
 
+from src.adapters import ADAPTER_REGISTRY
 from src.adapters.mock_creative_engine import MockCreativeEngine
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.transport_helpers import resolve_identity_from_context
@@ -202,7 +203,10 @@ context_mgr = ContextManager()
 # --- Adapter Configuration ---
 # Get adapter from config, fallback to mock
 SELECTED_ADAPTER = ((config.get("ad_server", {}).get("adapter") or "mock") if config else "mock").lower()
-AVAILABLE_ADAPTERS = ["mock", "gam", "kevel", "triton", "triton_digital"]
+# creative_engine is a creative-processing base class, not a selectable ad-server
+# adapter (see CLAUDE.md "Adapter Support"); every other ADAPTER_REGISTRY key is.
+_NON_AD_SERVER_REGISTRY_KEYS = {"creative_engine"}
+AVAILABLE_ADAPTERS = [k for k in ADAPTER_REGISTRY if k not in _NON_AD_SERVER_REGISTRY_KEYS]
 
 # --- In-Memory State (already initialized above, just adding context_map) ---
 context_map: dict[str, str] = {}  # Maps context_id to media_buy_id
