@@ -58,6 +58,7 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     Targeting,
     _upgrade_legacy_format_ids,
+    strip_none_deep,
 )
 
 
@@ -201,6 +202,17 @@ class Creative(LibraryCreative):
     def format_agent_url(self) -> str | None:
         """Get agent URL string from FormatId object."""
         return str(self.format_id.agent_url) if self.format_id else None
+
+    def model_dump(self, **kwargs):
+        """AdCP-compliant dump. ``assets`` is an untyped dict[str, Any] (the DB
+        stores arbitrary asset shapes), so Pydantic's exclude_none=True default
+        never sees inside it — a None field on a stored asset survives as a
+        literal null instead of being omitted, failing AdCP schema validation.
+        """
+        data = super().model_dump(**kwargs)
+        if data.get("assets") is not None:
+            data["assets"] = strip_none_deep(data["assets"])
+        return data
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal fields for database storage.

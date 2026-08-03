@@ -143,7 +143,13 @@ class A2AAdCPComplianceClient:
                 await self.schema_validator.validate_response(schema_task, adcp_payload)
                 result["warnings"].append("AdCP schema validation passed")
             except SchemaValidationError as e:
-                result["errors"].append(f"AdCP schema validation failed: {e}")
+                # str(e) is just the top-level message ("Schema validation
+                # failed for X response") — the actual field-level errors
+                # live on e.validation_errors and were silently dropped here,
+                # which made a real production bug take much longer to
+                # diagnose than it should have.
+                detail = "; ".join(e.validation_errors)
+                result["errors"].append(f"AdCP schema validation failed: {detail}")
                 result["valid"] = False
             except Exception as e:
                 result["errors"].append(f"Validation error: {e}")
