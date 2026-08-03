@@ -1339,7 +1339,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # sellers can return arbitrary formats and still pass smoke tests; the
     # schema check is the protocol-level contract.
     # delivery_reporting: schema compliance after controller-driven delivery
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/measurement_accountability.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/delivery_reporting.yaml phase=simulate_and_verify step=get_delivery
 
   @T-UC-004-storyboard-required-metrics-end-to-end-accountability @storyboard-v3.1 @v3-1 @missing-metrics @accountability
   Scenario: Measurement accountability -- required_metrics declared at discovery surfaces missing_metrics in delivery

@@ -944,7 +944,7 @@ Feature: BR-UC-021 Preview Creative
       | agent returns error response                         | error "SERVICE_UNAVAILABLE" with suggestion "Retry"           |
       | agent returns empty previews (no renders)            | server-side error: renders must have at least 1 item                 |
 
-  @T-UC-021-storyboard-preview-display-from-synced-manifest @storyboard-v3.1 @v3-1 @preview-from-library
+  @T-UC-021-storyboard-preview-display-from-synced-manifest @schema-v3.1 @v3-1 @preview-from-library
   Scenario: Preview a synced display creative -- returns preview_url and render_dimensions matching the format
     Given a display creative has been synced to the library with creative_id "display_trail_pro_300x250" and format_id {agent_url, "display_300x250"}
     When the Buyer Agent sends preview_creative with request_type "single" and the synced creative_manifest

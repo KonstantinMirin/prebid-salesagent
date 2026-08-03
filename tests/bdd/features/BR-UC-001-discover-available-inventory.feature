@@ -1743,7 +1743,7 @@ Feature: BR-UC-001 Discover Available Inventory
       | iso6166   | invalid  |
       | ein       | invalid  |
 
-  @T-UC-001-storyboard-proposal-finalize-action @storyboard-v3.1 @v3.1 @proposal @refine @finalize-action
+  @T-UC-001-storyboard-proposal-finalize-action @schema-v3.1 @v3.1 @proposal @refine @finalize-action
   Scenario: Proposal finalize action transitions proposal_status from draft to committed
     Given a previous get_products response returned a proposal with proposal_status "draft"
     And the buyer holds the proposal_id captured from that response
@@ -1762,7 +1762,7 @@ Feature: BR-UC-001 Discover Available Inventory
     # proposal_finalize: action=finalize is the commitment trigger; pricing transitions from indicative to firm
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/proposal_finalize.yaml
 
-  @T-UC-001-storyboard-finalize-uses-refine-vocabulary @storyboard-v3.1 @v3.1 @proposal @refine @finalize-action
+  @T-UC-001-storyboard-finalize-uses-refine-vocabulary @schema-v3.1 @v3.1 @proposal @refine @finalize-action
   Scenario: Finalize action is encoded as a refine entry with action "finalize" (vocabulary lock)
     Given a refine entry with scope "proposal", a proposal_id, and action "finalize"
     When the system validates the refine entry

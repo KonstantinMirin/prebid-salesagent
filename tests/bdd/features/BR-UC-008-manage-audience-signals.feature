@@ -1108,7 +1108,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the error "details" object should include "current_size" with value 800
     # v3.1: AUDIENCE_TOO_SMALL details enable buyer-side broadening without re-query
 
-  @T-UC-008-storyboard-baseline-end-to-end @storyboard-v3.1 @v3-1 @baseline-conformance
+  @T-UC-008-storyboard-baseline-end-to-end @schema-v3.1 @v3-1 @baseline-conformance
   Scenario: Signals baseline conformance -- discovery propagates signal_agent_segment_id into activation
     Given the Buyer Agent calls get_signals with signal_spec "Adults interested in electric vehicles"
     And the response carries at least one signal entry
@@ -1125,7 +1125,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # signals_baseline: signal IDs roundtrip from discovery to activation without modification
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/signals/index.yaml
 
-  @T-UC-008-storyboard-activate-agent-destination @storyboard-v3.1 @v3-1 @activation @agent-destination
+  @T-UC-008-storyboard-activate-agent-destination @schema-v3.1 @v3-1 @activation @agent-destination
   Scenario: Signals baseline activation -- agent destination type returns schema-valid deployment
     Given the Buyer Agent holds a signal_agent_segment_id and pricing_option_id from get_signals
     When the Buyer Agent sends activate_signal with destinations of type "agent" and agent_url "https://wonderstruck.salesagents.example"
@@ -1140,7 +1140,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # signals_baseline: agent-destination activation contract
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/signals/index.yaml
 
-  @T-UC-008-storyboard-activate-platform-destination @storyboard-v3.1 @v3-1 @activation @platform-destination
+  @T-UC-008-storyboard-activate-platform-destination @schema-v3.1 @v3-1 @activation @platform-destination
   Scenario: Signals baseline activation -- platform destination returns activation_key of type segment_id
     Given the Buyer Agent holds a signal_agent_segment_id and pricing_option_id from get_signals
     When the Buyer Agent sends activate_signal with destinations of type "platform", platform "the-trade-desk", and account "agency-123-ttd"

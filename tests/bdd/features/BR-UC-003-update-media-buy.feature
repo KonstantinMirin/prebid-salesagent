@@ -2057,7 +2057,7 @@ Feature: BR-UC-003 Update Media Buy
     # media_buy_id. The seller MUST return MEDIA_BUY_NOT_FOUND with recovery=correctable
     # and context echoed unchanged. Sellers returning 500s or silent successes fail.
     # invalid_transitions: unknown media_buy_id surfaces as structured MEDIA_BUY_NOT_FOUND
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=unknown_media_buy step=update_unknown_media_buy
 
   @T-UC-003-storyboard-package-not-found @storyboard-v3.1 @v3-1 @structured-errors @package-not-found
   Scenario: update_media_buy with known media_buy_id but unknown package_id returns PACKAGE_NOT_FOUND
@@ -2072,7 +2072,7 @@ Feature: BR-UC-003 Update Media Buy
     # PACKAGE_NOT_FOUND, distinguishing from MEDIA_BUY_NOT_FOUND so the buyer knows
     # whether to retry against the buy or fix the package reference.
     # invalid_transitions: distinct PACKAGE_NOT_FOUND error code separates buy-level from package-level lookup failure
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml
+    # @source repo=adcp ref=v3.1.1 commit=v3.1.1 path=dist/compliance/3.1.1/protocols/media-buy/scenarios/invalid_transitions.yaml phase=unknown_package step=update_unknown_package
 
   @T-UC-003-storyboard-not-cancellable-on-recancel @storyboard-v3.1 @v3-1 @structured-errors @not-cancellable @terminal-state
   Scenario: Re-cancel of a canceled media buy returns NOT_CANCELLABLE, not silent success

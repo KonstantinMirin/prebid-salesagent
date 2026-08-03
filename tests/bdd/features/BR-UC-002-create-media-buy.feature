@@ -2614,7 +2614,7 @@ Feature: BR-UC-002 Create Media Buy
       | collection_list_exclude with valid agent_url and list_id  | targeting validation passes  |
       | both collection_list and collection_list_exclude set      | targeting validation passes  |
 
-  @T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip @storyboard-v3.1 @v3-1 @submitted-envelope @async @task-id-roundtrip
+  @T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip @schema-v3.1 @v3-1 @submitted-envelope @async @task-id-roundtrip
   Scenario: Async submitted envelope -- task_id matches deterministic value registered via comply_test_controller
     Given a comply_test_controller directive registered force_create_media_buy_arm with arm "submitted" and task_id "task_async_signed_io_q2"
     And the directive is keyed to the caller's authenticated sandbox account
@@ -2633,7 +2633,7 @@ Feature: BR-UC-002 Create Media Buy
     # create_media_buy_async: deterministic task_id roundtrips through registered controller directive
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/governance_approved.yaml
 
-  @T-UC-002-storyboard-governance-approved @storyboard-v3.1 @v3-1 @governance @governance-decision
+  @T-UC-002-storyboard-governance-approved @schema-v3.1 @v3-1 @governance @governance-decision
   Scenario: Governance approved -- seller creates the buy and propagates the governance decision payload
     Given the buyer's governance agent has returned decision "APPROVED" for the proposed buy
     And the buyer attaches the governance_decision payload to the create_media_buy request
@@ -2647,7 +2647,7 @@ Feature: BR-UC-002 Create Media Buy
     # governance_approved: APPROVED decision flows through to the persisted buy
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/governance_conditions.yaml
 
-  @T-UC-002-storyboard-governance-with-conditions @storyboard-v3.1 @v3-1 @governance @governance-decision @conditions
+  @T-UC-002-storyboard-governance-with-conditions @schema-v3.1 @v3-1 @governance @governance-decision @conditions
   Scenario: Governance approved with conditions -- seller attaches conditions to the buy
     Given the buyer's governance agent has returned decision "APPROVED_WITH_CONDITIONS" with a non-empty conditions array
     And the buyer attaches the governance_decision payload to the create_media_buy request
@@ -2662,7 +2662,7 @@ Feature: BR-UC-002 Create Media Buy
     # governance_conditions: conditions persist on the buy for downstream enforcement
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied.yaml
 
-  @T-UC-002-storyboard-governance-denied @storyboard-v3.1 @v3-1 @governance @governance-decision @rejection
+  @T-UC-002-storyboard-governance-denied @schema-v3.1 @v3-1 @governance @governance-decision @rejection
   Scenario: Governance denied -- seller rejects the buy with GOVERNANCE_DENIED and propagates denial rationale
     Given the buyer's governance agent has returned decision "DENIED" with a denial reason
     And the buyer attaches the governance_decision payload to the create_media_buy request
@@ -2677,7 +2677,7 @@ Feature: BR-UC-002 Create Media Buy
     # governance_denied: seller surfaces governance denial as a structured error
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied_recovery.yaml
 
-  @T-UC-002-storyboard-governance-denied-recovery @storyboard-v3.1 @v3-1 @governance @recovery
+  @T-UC-002-storyboard-governance-denied-recovery @schema-v3.1 @v3-1 @governance @recovery
   Scenario: Governance denied recovery -- buyer shrinks the buy to within plan limits and retries successfully
     Given a previous create_media_buy attempt failed with error code "GOVERNANCE_DENIED"
     And the buyer reduces the proposed buy to within the governance agent's spending authority
@@ -2725,7 +2725,7 @@ Feature: BR-UC-002 Create Media Buy
     # storyboard also asserts parity with update_media_buy (covered in UC-003)
     # so the buyer can manage list-bound buys post-creation.
     # inventory_list_targeting: list-based targeting honored on create
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/measurement_terms_rejected.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_targeting.yaml phases=create_with_both_lists,verify_create_persisted
 
   @T-UC-002-storyboard-measurement-terms-rejected @storyboard-v3.1 @v3-1 @measurement-terms @rejection
   Scenario: Measurement terms unworkable for the seller -- TERMS_REJECTED with terms identified in error details
@@ -2743,7 +2743,7 @@ Feature: BR-UC-002 Create Media Buy
     # measurement_terms_rejected: seller refuses unworkable measurement_terms with structured error
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/pending_creatives_to_start.yaml
 
-  @T-UC-002-storyboard-pending-creatives-state-transition @storyboard-v3.1 @v3-1 @lifecycle @pending-creatives @pending-start
+  @T-UC-002-storyboard-pending-creatives-state-transition @schema-v3.1 @v3-1 @lifecycle @pending-creatives @pending-start
   Scenario: Media buy created without creatives sits in pending_creatives until sync_creatives completes, then transitions to pending_start
     Given the buyer sends create_media_buy without inline creatives
     When the Buyer Agent sends the create_media_buy request

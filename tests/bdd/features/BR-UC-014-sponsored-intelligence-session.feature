@@ -1280,7 +1280,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the error should include "suggestion" field
     # Expired offering cannot anchor a new session
 
-  @T-UC-014-storyboard-baseline-session-id-roundtrip @storyboard-v3.1 @v3-1 @baseline-conformance @session-id-roundtrip
+  @T-UC-014-storyboard-baseline-session-id-roundtrip @schema-v3.1 @v3-1 @baseline-conformance @session-id-roundtrip
   Scenario: SI baseline conformance -- session_id roundtrips from initiate through send_message to terminate
     Given the Buyer Agent calls si_get_offering for offering_id "novamotors_conversational_v1"
     And the si_get_offering response is schema-valid against si-get-offering-response.json

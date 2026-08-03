@@ -1012,7 +1012,7 @@ Feature: BR-UC-020 Build Creative
     # POST-F2: rejection rationale is structured, not free text
     # POST-F3: buyer knows what to revise via the suggestion + policy_url
 
-  @T-UC-020-storyboard-build-vast-tag-from-synced-creative @storyboard-v3.1 @v3-1 @build-from-library @vast
+  @T-UC-020-storyboard-build-vast-tag-from-synced-creative @schema-v3.1 @v3-1 @build-from-library @vast
   Scenario: Build a VAST-compatible serving tag from a synced video creative referenced by creative_id
     Given a video creative has been synced to the library with creative_id "video_30s_trail_pro"
     When the Buyer Agent sends build_creative referencing the creative_id and a target_format_id with id "vast_30s"

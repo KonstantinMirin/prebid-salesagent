@@ -770,7 +770,7 @@ Feature: BR-UC-018 List Creatives
     # creative_lifecycle: list_creatives reflects recent sync_creatives state
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
 
-  @T-UC-018-storyboard-filter-by-format-id-object @storyboard-v3.1 @v3-1 @list-filter @format-id-object
+  @T-UC-018-storyboard-filter-by-format-id-object @schema-v3.1 @v3-1 @list-filter @format-id-object
   Scenario: List creatives filtered by a format_id object returns only creatives matching that {agent_url, id}
     Given the buyer has synced creatives in formats including {agent_url, "display_300x250"} and {agent_url, "video_30s"}
     When the Buyer Agent sends list_creatives with filters.format_ids carrying one format_id object {agent_url, "display_300x250"}
@@ -784,7 +784,7 @@ Feature: BR-UC-018 List Creatives
     # creative_lifecycle: format_id object filter exact-matches both (agent_url, id)
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
 
-  @T-UC-018-storyboard-filter-by-concept-id @storyboard-v3.1 @v3-1 @list-filter @concept-id
+  @T-UC-018-storyboard-filter-by-concept-id @schema-v3.1 @v3-1 @list-filter @concept-id
   Scenario: List creatives filtered by concept_ids returns only creatives in that concept carrying concept_id and concept_name
     Given the authenticated principal has creatives grouped under concept "concept_summer_2026" and other creatives under different concepts
     When the Buyer Agent sends list_creatives with filters.concept_ids ["concept_summer_2026"]

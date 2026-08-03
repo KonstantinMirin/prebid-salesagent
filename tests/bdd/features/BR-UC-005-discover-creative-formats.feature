@@ -1080,7 +1080,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # formats[] means the catalog references a stale or typo'd format that would
     # have failed silently at sync_creatives after the buy was already committed.
     # list_formats_integrity: format_ids advertised on products MUST resolve through list_creative_formats
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.1.1 phase=list_formats_integrity path=dist/compliance/3.1.1/protocols/media-buy/index.yaml#L352
 
   @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope @storyboard-v3.1 @v3-1 @format-id-roundtrip @third-party-agent
   Scenario: Format ID with agent_url pointing at a third-party creative agent is reported as observation, not failure
@@ -1111,4 +1111,4 @@ Feature: BR-UC-005 Discover Creative Formats
     # discover_formats: format_id object shape is the federation contract
     # The strict "every entry / never a bare string" form is mandated by the schema
     # (core/format-id.json: required [agent_url, id]); the storyboard grades field_present on formats[0].
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/core/format-id.json
+    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/core/format-id.json

@@ -565,7 +565,7 @@ Feature: BR-UC-030 Manage Governance Binding
       | replay: same key + identical payload            | valid   |
       | replay: same key + divergent payload            | invalid |
 
-  @T-UC-030-storyboard-binding-used-during-create-media-buy @storyboard-v3.1 @v3-1 @binding @create-media-buy-integration
+  @T-UC-030-storyboard-binding-used-during-create-media-buy @schema-v3.1 @v3-1 @binding @create-media-buy-integration
   Scenario: Governance agent bound via sync_governance is invoked by the seller during create_media_buy
     Given the buyer has registered governance agent "https://governance.pinnacle-agency.example" on the account via sync_governance
     When the Buyer Agent subsequently sends create_media_buy under the same account
