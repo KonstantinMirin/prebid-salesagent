@@ -11,7 +11,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatus
+from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
 from adcp.types import AccountReference as LibraryAccountReference
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
@@ -566,71 +566,17 @@ class TestA2ASkillInvocation:
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
     # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 
-    @pytest.mark.asyncio
-    async def test_adcp_schema_validation_integration(self, validator):
-        """Test A2A-to-AdCP schema validation integration."""
-        # Test the validation helper directly with mock data
-
-        # Create mock A2A task with AdCP-compliant product data
-
-        mock_adcp_products_response = {
-            "products": [
-                {
-                    "id": "prod_test_1",
-                    "name": "Test Video Product",
-                    "description": "Test video advertising product",
-                    "formats": [{"id": "video_720p", "name": "720p Video", "width": 1280, "height": 720}],
-                    "pricing": {"base_cpm": 12.5, "currency": "USD"},
-                    "targeting_template": {"demographics": ["18-34"], "interests": ["technology"]},
-                    "countries": ["US", "CA"],
-                    "delivery_type": "guaranteed",
-                }
-            ],
-            "message": "Products retrieved successfully",
-        }
-
-        # Create A2A artifacts structure (protobuf)
-        from tests.utils.a2a_helpers import _dict_to_value
-
-        artifact = Artifact(
-            artifact_id="test_artifact_1",
-            name="get_products_result",
-        )
-        artifact.parts.append(Part(data=_dict_to_value(mock_adcp_products_response)))
-
-        mock_task = Task(
-            id="test_task_1",
-            context_id="test_context_1",
-            status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
-            artifacts=[artifact],
-        )
-
-        # Test validation for each skill that has AdCP schemas
-        adcp_skills_to_test = {
-            "get_products": mock_task,
-            # Add other skills when we have mock data for them
-        }
-
-        for skill_name, task_result in adcp_skills_to_test.items():
-            validation_result = await validator.validate_a2a_skill_response(skill_name, task_result)
-
-            print(f"\n=== Schema Validation Results for {skill_name} ===")
-            print(f"Valid: {validation_result['valid']}")
-            print(f"Schema tested: {validation_result['schema_tested']}")
-
-            if validation_result["errors"]:
-                print(f"Errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Warnings: {validation_result['warnings']}")
-
-            # For now, don't fail on validation errors - just ensure the validator runs
-            assert "schema_tested" in validation_result
-
-            # If schema validation is available and schema exists, it should have attempted validation
-            if SCHEMA_VALIDATION_AVAILABLE and validation_result["schema_tested"]:
-                assert validation_result["schema_tested"] == "get-products"
-                # Either valid or has meaningful errors/warnings
-                assert validation_result["valid"] or validation_result["errors"] or validation_result["warnings"]
+    # test_adcp_schema_validation_integration removed (salesagent-1q8d.3): it built a
+    # hand-rolled mock A2A Task/Artifact instead of exercising the real production path
+    # — pure mocking in a file whose whole point is DB-backed integration coverage — and
+    # its "assert valid or errors or warnings" could never fail regardless of outcome.
+    # test_natural_language_get_products and test_explicit_skill_get_products below
+    # already cover skill->schema resolution + validator invocation through the real
+    # handler and a real database-backed product, which is strictly better coverage of
+    # the same concept. (Making THEIR assertions non-vacuous is tracked separately —
+    # salesagent-1q8d.16 — since production's get_products response is not currently
+    # AdCP schema-valid; strengthening those asserts here would just newly break this
+    # ticket's own quality gate on an unrelated, larger defect.)
 
     def test_skill_handler_mapping(self, handler):
         """Test that all advertised skills have handlers."""
