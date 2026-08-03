@@ -319,17 +319,20 @@ def _configure_persistence_timing(ctx: dict, approval: str, adapter_result: str)
         given_adapter_manual_approval(ctx)
 
 
-_PARTITION_MAP = {
-    "auto_approve_adapter_success": ("auto", "success"),
-    "manual_approval_pending": ("manual", "n/a"),
-    "auto_approve_adapter_failure": ("auto", "failure"),
-}
+# Canonical rows for the 3 persistence-timing scenarios (BR-RULE-020). Both
+# Given steps below phrase the same scenario differently in Gherkin
+# ("auto_approve_adapter_success" vs "auto-approve success") — _PARTITION_MAP
+# and _BOUNDARY_MAP are derived from this single source so the two phrasings
+# can never diverge on the (approval, adapter_result) tuple they resolve to
+# (salesagent-1q8d.13).
+_PERSISTENCE_TIMING_SCENARIOS = [
+    {"partition": "auto_approve_adapter_success", "boundary": "auto-approve success", "resolved": ("auto", "success")},
+    {"partition": "auto_approve_adapter_failure", "boundary": "auto-approve failure", "resolved": ("auto", "failure")},
+    {"partition": "manual_approval_pending", "boundary": "manual approval", "resolved": ("manual", "n/a")},
+]
 
-_BOUNDARY_MAP = {
-    "auto-approve success": ("auto", "success"),
-    "auto-approve failure": ("auto", "failure"),
-    "manual approval": ("manual", "n/a"),
-}
+_PARTITION_MAP = {row["partition"]: row["resolved"] for row in _PERSISTENCE_TIMING_SCENARIOS}
+_BOUNDARY_MAP = {row["boundary"]: row["resolved"] for row in _PERSISTENCE_TIMING_SCENARIOS}
 
 
 @given(parsers.parse("the persistence timing scenario is {partition}"))
