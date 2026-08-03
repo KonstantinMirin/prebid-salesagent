@@ -172,21 +172,20 @@ class AdCPSchemaValidator:
         return self._compiled_validators[schema_hash]
 
     async def _find_schema_ref_for_task(self, task_name: str, request_or_response: str) -> str | None:
-        """Find the schema reference for a specific task and type."""
+        """Find the schema reference for a specific task and type.
+
+        Searches every section of the pinned index, in the index's own key
+        order (NOT sorted — at least one task name, 'list-creative-formats',
+        is defined differently in two sections: media-buy's sales-agent-facing
+        format_ids+creative_agents list vs. creative's authoritative full
+        format definitions. Index order puts media-buy first, so that's the
+        match returned; re-sorting the sections would silently flip it.
+        """
         index = await self.get_schema_index()
 
-        # Look in media-buy tasks first
-        media_buy_tasks = index.get("schemas", {}).get("media-buy", {}).get("tasks", {})
-        if task_name in media_buy_tasks:
-            task_info = media_buy_tasks[task_name]
-            if request_or_response in task_info:
-                return task_info[request_or_response]["$ref"]
-
-        # Look in signals tasks
-        signals_tasks = index.get("schemas", {}).get("signals", {}).get("tasks", {})
-        if task_name in signals_tasks:
-            task_info = signals_tasks[task_name]
-            if request_or_response in task_info:
+        for section in index.get("schemas", {}).values():
+            task_info = section.get("tasks", {}).get(task_name)
+            if task_info and request_or_response in task_info:
                 return task_info[request_or_response]["$ref"]
 
         return None
@@ -204,9 +203,7 @@ class AdCPSchemaValidator:
         """
         schema_ref = await self._find_schema_ref_for_task(task_name, "request")
         if not schema_ref:
-            # Don't fail if schema not found - log warning instead
-            print(f"Warning: No request schema found for task '{task_name}'")
-            return
+            raise SchemaError(f"No request schema found for task {task_name!r} in the pinned index")
 
         await self._validate_against_schema(schema_ref, request_data, f"{task_name} request")
 
@@ -226,9 +223,7 @@ class AdCPSchemaValidator:
         """
         schema_ref = await self._find_schema_ref_for_task(task_name, "response")
         if not schema_ref:
-            # Don't fail if schema not found - log warning instead
-            print(f"Warning: No response schema found for task '{task_name}'")
-            return
+            raise SchemaError(f"No response schema found for task {task_name!r} in the pinned index")
 
         # Extract AdCP payload from protocol wrapper if present
         adcp_payload = self._extract_adcp_payload(response_data)
