@@ -199,6 +199,25 @@ def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:
     return (canonical_agent_url(format_id.agent_url), format_id.id)
 
 
+def strip_none_deep(value: Any) -> Any:
+    """Recursively drop ``None`` values from nested dicts/lists.
+
+    ``model_dump(exclude_none=True)`` only strips at the level it's called on
+    — once a parent has already been dumped to a plain dict (e.g. by a custom
+    ``model_dump()`` override that needs ``exclude_none=False`` at its own
+    level to keep required-but-currently-None fields), Pydantic never
+    revisits the nested dicts/lists inside it. AdCP schemas type optional
+    fields (not accepting ``null``) far more often than they accept it, so a
+    parent's null-preserving override otherwise leaks nulls into every
+    optional field of every nested object.
+    """
+    if isinstance(value, dict):
+        return {k: strip_none_deep(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [strip_none_deep(v) for v in value]
+    return value
+
+
 class NestedModelSerializerMixin:
     """Mixin that ensures nested Pydantic models use their custom model_dump().
 

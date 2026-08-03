@@ -2162,11 +2162,12 @@ class AdCPRequestHandler(RequestHandler):
         # Convert to A2A response format with v2.x backward compatibility
         from src.core.version_compat import apply_version_compat
 
-        products = [product.model_dump(mode="json") for product in (response.products or [])]
-        response_data = {
-            "products": products,
-            "message": str(response),  # Use __str__ method for human-readable message
-        }
+        # Dump the full response (not just products) so schema-required
+        # envelope fields (cache_scope, status, ...) survive — matching
+        # _handle_get_products_skill's explicit-skill serialization.
+        response_data = response.model_dump(mode="json")
+        response_data["message"] = str(response)  # Use __str__ method for human-readable message
+        response_data.setdefault("success", True)
         return apply_version_compat("get_products", response_data, None)
 
     def _extract_brand_name_from_query(self, query: str) -> str:
