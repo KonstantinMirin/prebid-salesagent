@@ -2530,17 +2530,6 @@ PROPERTY_TYPES = ["website", "mobile_app", "ctv_app", "dooh", "podcast", "radio"
 # Valid verification statuses
 VERIFICATION_STATUSES = ["pending", "verified", "failed"]
 
-# Valid identifier types by property type (AdCP compliant mappings)
-IDENTIFIER_TYPES_BY_PROPERTY_TYPE = {
-    "website": ["domain", "subdomain"],
-    "mobile_app": ["bundle_id", "store_id"],
-    "ctv_app": ["roku_store_id", "amazon_store_id", "samsung_store_id", "lg_store_id"],
-    "dooh": ["venue_id", "network_id"],
-    "podcast": ["podcast_guid", "rss_feed_url"],
-    "radio": ["station_call_sign", "stream_url"],
-    "streaming_audio": ["platform_id", "stream_id"],
-}
-
 # Property form field requirements
 PROPERTY_REQUIRED_FIELDS = ["property_type", "name", "identifiers", "publisher_domain"]
 
