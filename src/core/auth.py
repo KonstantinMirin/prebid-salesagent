@@ -43,6 +43,28 @@ logger = logging.getLogger(__name__)
 # Enable verbose auth logging only in development
 _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
 
+# Single source of truth for "which skill/tool names are callable without an
+# auth token" — imported by MCP (mcp_auth_middleware.AUTH_OPTIONAL_TOOLS) and
+# A2A (adcp_a2a_server.DISCOVERY_SKILLS). REST expresses the same policy via
+# per-route resolve_auth (optional)/require_auth (required) dependencies —
+# tests/unit/test_guards_auth_policy_cross_transport.py cross-checks REST's
+# routing against this set so the three transports can't re-diverge.
+#
+# list_accounts is NOT here: although PR #1838 review flagged it as
+# "auth-optional per BR-RULE-055", the graded BR-UC-011 BDD scenario
+# (@T-UC-011-list-unauth, wired and passing on all 3 transports) and
+# _list_accounts_impl's own require_principal_id both currently enforce auth —
+# see salesagent-1q8d.17 for the doc-vs-graded-behavior reconciliation this
+# needs before any transport is allowed to treat it as optional.
+AUTH_OPTIONAL_SKILLS = frozenset(
+    {
+        "get_adcp_capabilities",  # Agent capabilities (always public per AdCP spec)
+        "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
+        "list_creative_formats",  # Creative specifications (always public)
+        "list_authorized_properties",  # Property catalog (always public)
+    }
+)
+
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:
     """

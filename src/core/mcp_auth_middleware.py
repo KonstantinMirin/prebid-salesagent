@@ -11,21 +11,15 @@ from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 
+from src.core.auth import AUTH_OPTIONAL_SKILLS
 from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
 
-# Discovery tools that work without authentication.
-# All other tools require a valid auth token.
-AUTH_OPTIONAL_TOOLS = frozenset(
-    {
-        "get_adcp_capabilities",
-        "get_products",
-        "list_accounts",
-        "list_creative_formats",
-        "list_authorized_properties",
-    }
-)
+# Discovery tools that work without authentication. Single source of truth
+# shared with A2A (adcp_a2a_server.DISCOVERY_SKILLS) — see src.core.auth for
+# the definition and the rationale for what's (and isn't) in it.
+AUTH_OPTIONAL_TOOLS = AUTH_OPTIONAL_SKILLS
 
 
 class MCPAuthMiddleware(Middleware):

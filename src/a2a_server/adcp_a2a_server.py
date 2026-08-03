@@ -54,7 +54,7 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import AUTH_REQUIRED_SUGGESTION
+from src.core.auth import AUTH_OPTIONAL_SKILLS, AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
@@ -172,21 +172,10 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 
 # ADCP Discovery Skills: Skills that don't require authentication
 # Per AdCP spec section 3.2, these endpoints allow optional authentication for public discovery.
-# IMPORTANT: This is the single source of truth for auth-optional skills in A2A.
-# Add new skills here ONLY if they meet AdCP discovery endpoint requirements:
-#   1. Return only public/non-sensitive data
-#   2. Support tenant-level access control (e.g., brand_manifest_policy)
-#   3. Never expose user-specific or transactional data
-#   4. Must be safe to call without authentication
-DISCOVERY_SKILLS = frozenset(
-    {
-        "get_adcp_capabilities",  # Agent capabilities (always public per AdCP spec)
-        "list_accounts",  # Account discovery (public, returns empty for unauthed per BR-RULE-055)
-        "list_creative_formats",  # Creative specifications (always public)
-        "list_authorized_properties",  # Property catalog (always public)
-        "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
-    }
-)
+# Single source of truth (src.core.auth.AUTH_OPTIONAL_SKILLS), shared with MCP
+# (mcp_auth_middleware.AUTH_OPTIONAL_TOOLS). list_accounts is NOT auth-optional —
+# see AUTH_OPTIONAL_SKILLS's docstring / salesagent-1q8d.17 for why.
+DISCOVERY_SKILLS = AUTH_OPTIONAL_SKILLS
 
 
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
