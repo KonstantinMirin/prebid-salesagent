@@ -253,16 +253,115 @@ verified passing behavior.
 - Root-cause the `get_adcp_capabilities` "Unexpected keyword argument"
   rejection (`adcp_major_version`/`adcp_version`/`context`) — it single-handedly
   blocks capability discovery for every storyboard that starts with it,
-  which is most of them.
+  which is most of them. **DONE — see SB-1d addendum below (salesagent-xg5w.1).**
 - Root-cause the `sync_accounts`-specific "Authentication token is invalid
   for tenant 'default'" — same token works everywhere else in the same run.
+  **Partially done — see SB-1d addendum (salesagent-xg5w.2, salesagent-xg5w.11).**
 - Triage `security_baseline/probe_unauth` (unauthenticated protected call
-  not rejecting with 401/403) as a possible real security gap.
+  not rejecting with 401/403) as a possible real security gap. **Confirmed
+  real (salesagent-xg5w.3); fix designed, blocked on human sign-off (new
+  ASGI auth-enforcement middleware, out of scope for autonomous
+  implementation given the blast radius).**
 - Re-run with `--webhook-receiver loopback` to unlock the 9 currently
   coverage-blocked storyboards (`webhook_emission`, `idempotency`, the
   pagination-integrity family, `schema_validation`) — none of those are
-  actually verified yet.
+  actually verified yet. **DONE — see SB-1d addendum below (salesagent-xg5w.4).**
 - SB-1c: reconcile this measured 25-executed/10-missing-tools/1-track-empty
   selection against the derived "70 storyboards apply to us" estimate in
   `README.md`, and reconcile the 4 `error_compliance` gaps against
-  `salesagent-44c8`.
+  `salesagent-44c8`. **Done (salesagent-0w5t, closed 2026-08-03).**
+
+## SB-1d addendum — re-run with `--webhook-receiver loopback` (salesagent-xg5w.4)
+
+Run date: 2026-08-03. Same branch, same method as SB-1b (`docker-compose.e2e.yml`
++ `.ports.yml`, project name `sb1d`, ports `18093`/`15436`, local Docker instead
+of the remote CI box — the local machine had Docker available this session),
+run **after** `salesagent-xg5w.1` and `salesagent-xg5w.2`'s fixes were committed
+to this branch. One change from the SB-1b command: `--webhook-receiver loopback`
+added to the full run. Raw data: `sb1b-runner/results/sb1d-full.json`,
+`sb1d-summary.json`, `smoke-webhook.json`.
+
+### Primary result: webhook receiver unlocks 3 of 9 previously coverage-blocked storyboards cleanly
+
+| Storyboard | Before (SB-1b) | After (SB-1d) |
+|---|---|---|
+| `idempotency` | 0 graded steps (skipped, no receiver) | **All steps passed** (7 scenarios) |
+| `schema_validation` | 0 graded steps (skipped, no receiver) | **All steps passed** (5 scenarios) |
+| `webhook_receiver_envelope` | 0 graded steps | **All steps passed** (2 scenarios) |
+| `webhook_emission` | 0 graded steps | Mostly passing — 5 of 9 checks fail: `idempotency_key_presence`, `operation_id_echo`, `idempotency_replay_side_effects`, `idempotency_key_stability` (all `sync_accounts`-token-invalid, see below), and `signing_keys_published`/`signature_validity` (RFC 9421 signing, expected — tracked separately, #1291) |
+| `get_media_buys_pagination_integrity` | 0 graded steps | Still `requirement_unmet: controller` — needs `comply_test_controller`, unaffected by `--webhook-receiver` |
+| `get_products_pagination_integrity` | 0 graded steps | Same — still controller-gated |
+| `pagination_integrity` | 0 graded steps | Same — still controller-gated |
+| `pagination_integrity_creative_formats` | 0 graded steps | Same — still controller-gated |
+| `pagination_integrity_list_accounts` | 0 graded steps | Same — still controller-gated |
+
+The pagination-integrity family's blocker is `comply_test_controller` (an
+admin-seeding tool this agent doesn't expose), not the webhook receiver — a
+distinct, still-open gap.
+
+### `get_adcp_capabilities` fix confirmed, uncovered a second bug
+
+The smoke test (`capability_discovery` alone) confirms the "Unexpected keyword
+argument" rejection is gone. But the response now fails schema validation
+instead: `extensions_supported`/`experimental_features`/`errors` are `null`
+where the schema wants an array, `wholesale_feed_versioning`/`ext`/
+`wholesale_feed_webhooks` are `null` where it wants an object, and the
+`context`/`context_id` echo checks fail (not in the response). This blocks the
+same wide set of storyboards `get_adcp_capabilities` gates, for a different
+reason. Filed as `salesagent-xg5w.12`.
+
+### `sync_accounts`-class token-invalid errors: confirmed NOT a masked infra error
+
+`salesagent-xg5w.2` changed `get_principal_from_token()` to *raise*
+`AdCPServiceUnavailableError` (a different message) instead of silently
+returning `(None, None)` on a DB/infra exception. This re-run — with that fix
+already committed — still shows the **original** "Authentication token is
+invalid for tenant 'default'" message, unchanged, for 12 checks across
+`billing_gate_dispatch`, `notification_config_event_scope/lifecycle/rejections`,
+`read_tool_idempotency` (`list_creatives_with_idempotency_key`),
+`webhook_emission` (4 checks), and two `media_buy_seller` checks
+(`sync_creatives`, `sync_accounts`). Since the masking fix did NOT change the
+observed message, this proves the failure is a genuine, deterministic
+`(None, None)` result — no exception is being raised at all; the token+tenant
+combination truly doesn't resolve for these specific calls, while the
+identical `ci-test-token` resolves fine for `get_products`/`create_media_buy`
+in the same run. Checked whether `webhook_emission`/`read_tool_idempotency`
+declare a test-kit auth override the way `billing_gate_dispatch` does (which
+would explain that one storyboard) — they don't, so that explanation doesn't
+generalize. Needs live wire-level tracing (curl/tcpdump) to find the actual
+divergence; filed as `salesagent-xg5w.11`.
+
+### New failure surface: `AUTH_REQUIRED` on `get_products` in several storyboards
+
+Because `get_adcp_capabilities` now returns (schema-invalid but) real data
+instead of rejecting outright, the capability-driven selection now resolves
+**44 storyboards** (vs 25 in SB-1b) — including the entire `media_buy_seller`
+family, previously never reached. Several of these hit a new failure class:
+`get_products` (a discovery/`AUTH_OPTIONAL_TOOLS` tool) rejects with
+"`AUTH_REQUIRED`: Authentication required by tenant policy" for specific
+storyboard steps (`error_compliance/missing_fields`,
+`stale_response_advisory/no_stale_on_healthy_upstream`, most of
+`media_buy_seller`'s `get_products_brief`/`get_products_canonical_format`
+steps). Not root-caused here — noted for SB-1c/next-baseline triage, since the
+much larger selection surface this run reveals means the "25 executed / 10
+missing-tools" numbers in this report's main body are now stale and need a
+fresh SB-1c-style reconciliation pass.
+
+### Summary counts (schema_version 2, `sb1d-summary.json`)
+
+`overall_status: partial` — 204 total steps: 7 passed, 47 failed, 150 skipped
+(33 `prerequisite_failed`, 53 `missing_test_controller`, 48 `not_applicable`, 4
+`missing_tool`, 1 `peer_branch_taken`, 11 `unsatisfied_contract`). Not directly
+comparable to SB-1b's 72-failing-checks/25-storyboards figure — the storyboard
+selection surface itself changed (44 vs 25 executed) because fixing capability
+discovery unlocked a much larger set of storyboards to attempt, most of which
+immediately hit the new findings above rather than passing cleanly. A clean
+apples-to-apples before/after comparison needs the `get_adcp_capabilities`
+schema bug (`salesagent-xg5w.12`) fixed first.
+
+### Artifacts (this addendum)
+
+- `sb1b-runner/results/sb1d-full.json` — full `ComplianceResult`, same shape as `sb1b-full.json`.
+- `sb1b-runner/results/sb1d-summary.json` — narrow summary artifact.
+- `sb1b-runner/results/smoke-webhook.json` — single-storyboard smoke test (post-fix).
+- `sb1b-runner/results/sb1d-stderr.log` — the run's `STORYBOARD-FAIL` stderr summary.
