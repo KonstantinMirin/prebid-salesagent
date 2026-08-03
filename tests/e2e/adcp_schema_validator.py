@@ -294,7 +294,7 @@ class AdCPSchemaValidator:
 
                     # Include more detailed error information
                     error_msg = f"At {path}: {error.message}"
-                    if hasattr(error, "schema_path") and error.schema_path:
+                    if error.schema_path:
                         schema_path = ".".join(str(p) for p in error.schema_path)
                         error_msg += f" (schema path: {schema_path})"
 
