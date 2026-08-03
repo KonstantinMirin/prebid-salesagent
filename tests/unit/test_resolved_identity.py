@@ -155,6 +155,43 @@ class TestResolveIdentity:
         assert identity.tenant_id == "default"
 
 
+class TestGetPrincipalFromTokenDoesNotMaskInfraErrors:
+    """get_principal_from_token() must not report a DB/infra failure as an invalid token.
+
+    Bug xg5w.2 (SB-1b baseline): sync_accounts rejected ci-test-token as
+    'invalid for tenant default' while the identical token authenticated every
+    other tool call in the same run. The identity-resolution code path is
+    byte-identical across tools (no sync_accounts-specific branch exists), but
+    get_principal_from_token() swallows ANY exception from execute_with_retry
+    -- not just 'no matching principal' -- and returns (None, None), which
+    resolve_identity() then reports as AdCPAuthenticationError. A transient
+    DB error hit by one busier tool call under load is therefore
+    indistinguishable from a genuinely bad token.
+    """
+
+    @patch("src.core.auth_utils.execute_with_retry")
+    def test_db_error_does_not_report_as_invalid_token(self, mock_execute_with_retry):
+        """A real DB/connection error during principal lookup must not collapse to (None, None).
+
+        It must raise a typed, transient-recovery error the transport boundary can
+        translate into a real 503 -- not the raw driver exception (Flask/FastAPI
+        boundaries wouldn't know how to translate an unrecognized SQLAlchemyError)
+        and not silently return (None, None) (which resolve_identity() reports as
+        AdCPAuthenticationError -- exactly the bug being fixed).
+        """
+        from sqlalchemy.exc import OperationalError
+
+        from src.core.auth_utils import get_principal_from_token
+        from src.core.exceptions import AdCPServiceUnavailableError
+
+        mock_execute_with_retry.side_effect = OperationalError("connection reset", None, None)
+
+        with pytest.raises(AdCPServiceUnavailableError) as exc_info:
+            get_principal_from_token("ci-test-token", "default")
+
+        assert isinstance(exc_info.value.__cause__, OperationalError)
+
+
 class TestAuthConsolidation:
     """Test that auth.py delegates to auth_utils.py (with retry)."""
 

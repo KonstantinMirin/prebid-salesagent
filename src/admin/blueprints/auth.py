@@ -650,7 +650,13 @@ def google_callback():
             try:
                 ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
             except Exception as e:
+                # Converge on the correct sibling behavior at select_tenant() below:
+                # deny + flash, never grant a session for a User record that may
+                # not exist (was: swallowed and granted the session anyway --
+                # a fail-open bug, salesagent-xg5w.2).
                 logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
+                flash("Error setting up user access. Please contact support.", "error")
+                return redirect(url_for("auth.login"))
 
             session["tenant_id"] = tenant_id
             session["is_tenant_admin"] = tenant.get("is_admin", True)

@@ -4,9 +4,11 @@ import hmac
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal, Tenant
+from src.core.exceptions import AdCPServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,8 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
 
     try:
         return execute_with_retry(_lookup_principal)
-    except Exception as e:
+    except SQLAlchemyError as e:
         logger.error(f"[AUTH] Database error during principal lookup: {e}", exc_info=True)
-        return None, None
+        raise AdCPServiceUnavailableError(
+            "Unable to verify credentials — the database is temporarily unavailable."
+        ) from e

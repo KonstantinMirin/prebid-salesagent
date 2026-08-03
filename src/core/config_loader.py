@@ -14,6 +14,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
@@ -121,11 +122,11 @@ def get_default_tenant() -> dict[str, Any] | None:
 
                 return serialize_tenant_to_dict(tenant)
             return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+    except ProgrammingError:
+        # Tenant table not yet migrated (fresh/pre-migration deployment) --
+        # a real, expected condition, not a masked infra error. Anything else
+        # (OperationalError, connection resets, etc.) propagates loud.
+        return None
 
 
 def load_config() -> dict[str, Any]:
@@ -216,11 +217,11 @@ def get_tenant_by_subdomain(subdomain: str) -> dict[str, Any] | None:
 
                 return serialize_tenant_to_dict(tenant)
             return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+    except ProgrammingError:
+        # Tenant table not yet migrated (fresh/pre-migration deployment) --
+        # a real, expected condition, not a masked infra error. Anything else
+        # (OperationalError, connection resets, etc.) propagates loud.
+        return None
 
 
 def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
@@ -242,11 +243,11 @@ def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
 
                 return serialize_tenant_to_dict(tenant)
             return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+    except ProgrammingError:
+        # Tenant table not yet migrated (fresh/pre-migration deployment) --
+        # a real, expected condition, not a masked infra error. Anything else
+        # (OperationalError, connection resets, etc.) propagates loud.
+        return None
 
 
 def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
@@ -261,11 +262,11 @@ def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
 
                 return serialize_tenant_to_dict(tenant)
             return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+    except ProgrammingError:
+        # Tenant table not yet migrated (fresh/pre-migration deployment) --
+        # a real, expected condition, not a masked infra error. Anything else
+        # (OperationalError, connection resets, etc.) propagates loud.
+        return None
 
 
 def get_secret(key: str, default: str | None = None) -> str | None:

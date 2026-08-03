@@ -36,7 +36,10 @@ def extract_user_info(token: dict) -> dict | None:
         if id_token:
             try:
                 user = jwt.decode(id_token, options={"verify_signature": False})
-            except Exception as e:
+            except jwt.PyJWTError as e:
+                # A malformed/expired token IS "no user" -- the correct outcome.
+                # Anything else (e.g. a bug in our own code) propagates loud
+                # instead of being silently reported as a failed login.
                 logger.warning(f"Failed to decode ID token: {e}")
                 return None
 
