@@ -226,6 +226,47 @@ async def test_task_name_mapping():
         assert "get-products" in schema_ref1
 
 
+@pytest.mark.asyncio
+async def test_find_schema_ref_searches_every_index_section():
+    """The resolver must search every task-bearing section of the pinned index, not just media-buy/signals.
+
+    salesagent-667l: _find_schema_ref_for_task only checked the media-buy and
+    signals sections. The pinned 3.1.1 index carries tasks in 10 sections;
+    sync-creatives and list-creatives live under "creative", get-task-status
+    lives under "protocol" — none of them resolvable before this fix, so any
+    validate_request/validate_response call for them silently no-op'd.
+    """
+    async with AdCPSchemaValidator() as validator:
+        index = await validator.get_schema_index()
+        unresolved = []
+        for section_name, section in index.get("schemas", {}).items():
+            for task_name, task_info in section.get("tasks", {}).items():
+                for request_or_response in ("request", "response"):
+                    if request_or_response not in task_info:
+                        continue
+                    resolved = await validator._find_schema_ref_for_task(task_name, request_or_response)
+                    if resolved is None:
+                        unresolved.append(f"{section_name}/{task_name}/{request_or_response}")
+
+        assert not unresolved, f"tasks unreachable by the resolver: {unresolved}"
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_task_name_raises_instead_of_silently_skipping():
+    """An unresolvable task name must raise, not warn-and-return.
+
+    salesagent-667l: validate_request/validate_response printed a warning and
+    returned on a resolver miss, so the caller observed success having graded
+    nothing — a quiet failure (CLAUDE.md "No Quiet Failures").
+    """
+    async with AdCPSchemaValidator() as validator:
+        with pytest.raises(SchemaError):
+            await validator.validate_request("this-task-does-not-exist", {})
+
+        with pytest.raises(SchemaError):
+            await validator.validate_response("this-task-does-not-exist", {})
+
+
 if __name__ == "__main__":
     import asyncio
 
