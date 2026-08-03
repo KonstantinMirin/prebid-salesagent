@@ -21,24 +21,23 @@ the JSON schema artifact, not the SDK Pydantic model (which is not authoritative
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
-import adcp
 import pytest
 from jsonschema.validators import Draft7Validator
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import ProductEnv
 from tests.harness.transport import Transport
+from tests.helpers.sdk_schema_root import sdk_schema_root
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 def _placement_validator() -> Draft7Validator:
-    """Draft-07 validator for the adcp 3.1.1 placement schema bundled in adcp==6.6.0."""
-    schema_path = os.path.join(os.path.dirname(adcp.__file__), "_schemas", "3.1", "core", "placement.json")
-    schema = json.loads(open(schema_path).read())
+    """Draft-07 validator for the pinned spec version's placement schema bundled in the SDK."""
+    schema_path = sdk_schema_root() / "core" / "placement.json"
+    schema = json.loads(schema_path.read_text())
     return Draft7Validator(schema)
 
 

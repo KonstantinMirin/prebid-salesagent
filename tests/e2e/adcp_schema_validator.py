@@ -31,6 +31,8 @@ import referencing
 from jsonschema.validators import Draft7Validator
 from referencing.jsonschema import DRAFT7
 
+from tests.helpers.sdk_schema_root import sdk_schema_root as _sdk_schema_root
+
 
 class SchemaError(Exception):
     """Base exception for schema validation errors."""
@@ -43,26 +45,6 @@ class SchemaValidationError(SchemaError):
         super().__init__(message)
         self.validation_errors = validation_errors
         self.json_path = json_path
-
-
-def _sdk_schema_root() -> Path:
-    """Locate the pinned spec version's schema tree inside the installed SDK.
-
-    The SDK stores schemas under ``adcp/_schemas/<major.minor>/`` (e.g. the
-    3.1.1 spec lives in ``_schemas/3.1/``; its ``index.json`` carries the full
-    ``adcp_version``).
-    """
-    import adcp
-
-    spec_version = adcp.get_adcp_spec_version()
-    major_minor = ".".join(spec_version.split(".")[:2])
-    root = Path(adcp.__file__).parent / "_schemas" / major_minor
-    if not root.is_dir():
-        raise SchemaError(
-            f"Installed adcp SDK (spec {spec_version}) has no bundled schema tree at {root} — "
-            "the SDK layout changed; update _sdk_schema_root()."
-        )
-    return root
 
 
 class AdCPSchemaValidator:
