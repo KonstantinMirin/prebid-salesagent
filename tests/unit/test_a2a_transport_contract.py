@@ -19,6 +19,8 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
+from src.a2a_server.adcp_a2a_server import DISCOVERY_SKILLS as _PRODUCTION_DISCOVERY_SKILLS
+from src.a2a_server.adcp_a2a_server import SKILL_HANDLER_NAMES
 from src.app import app
 from tests.factories.principal import PrincipalFactory
 
@@ -30,31 +32,14 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
 )
 
 # ---------------------------------------------------------------------------
-# All 13 A2A skills from the dispatch map (adcp_a2a_server.py:1416-1438)
+# The A2A skill roster, derived from production (src.a2a_server.adcp_a2a_server)
+# instead of hand-copied — a hand-copied literal silently went stale and
+# missed 5 real skills (list_accounts, sync_accounts, get_media_buys,
+# create_creative, assign_creative), so this regression gate never exercised
+# their boundary/auth contract (salesagent-1q8d.9).
 # ---------------------------------------------------------------------------
-ALL_SKILLS = [
-    "get_adcp_capabilities",
-    "get_products",
-    "create_media_buy",
-    "list_creative_formats",
-    "list_authorized_properties",
-    "update_media_buy",
-    "get_media_buy_delivery",
-    "update_performance_index",
-    "sync_creatives",
-    "list_creatives",
-    "approve_creative",
-    "get_media_buy_status",
-    "optimize_media_buy",
-]
-
-DISCOVERY_SKILLS = [
-    "get_adcp_capabilities",
-    "list_creative_formats",
-    "list_authorized_properties",
-    "get_products",
-]
-
+ALL_SKILLS = list(SKILL_HANDLER_NAMES.keys())
+DISCOVERY_SKILLS = list(_PRODUCTION_DISCOVERY_SKILLS)
 AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if s not in DISCOVERY_SKILLS]
 
 # ---------------------------------------------------------------------------
