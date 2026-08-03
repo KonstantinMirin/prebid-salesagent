@@ -209,10 +209,13 @@ async def compliance_client(a2a_url, auth_token):
     """A2A compliance client fixture."""
     import httpx
 
-    # Check if A2A server is available by testing the agent card endpoint
+    # Check if A2A server is available by testing the agent card endpoint.
+    # src/app.py registers /.well-known/agent-card.json (hyphenated) — NOT
+    # agent.json — so probing the wrong path always 404s and silently skips
+    # every test in this module (salesagent-1q8d.4).
     try:
         async with httpx.AsyncClient(timeout=2.0) as test_client:
-            response = await test_client.get(f"{a2a_url.replace('/a2a', '')}/.well-known/agent.json")
+            response = await test_client.get(f"{a2a_url.replace('/a2a', '')}/.well-known/agent-card.json")
             if response.status_code != 200:
                 pytest.skip(f"A2A server not available at {a2a_url} (status: {response.status_code})")
     except (httpx.ConnectError, httpx.TimeoutException, Exception) as e:
@@ -267,6 +270,11 @@ class TestA2AAdCPCompliance:
         # Verify context echoed
         payload = compliance_client.extract_adcp_payload_from_a2a_response(response)
         assert payload and payload.get("context") == {"e2e": "get_products"}
+        # Must be a real product listing, not an error envelope masquerading
+        # as a payload (an AUTH_REQUIRED error also echoes context and would
+        # otherwise pass this assertion silently — salesagent-1q8d.4).
+        assert "adcp_error" not in payload, f"Expected products, got an error envelope: {payload}"
+        assert "products" in payload
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy(self, compliance_client, compliance_report):
