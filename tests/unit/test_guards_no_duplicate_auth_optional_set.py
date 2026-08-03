@@ -25,8 +25,17 @@ GUARD_FILE = "tests/unit/test_guards_no_duplicate_auth_optional_set.py"
 
 
 def _name_matches_policy_vocabulary(name: str) -> bool:
+    """True for names shaped like an auth-optional skill/tool policy set.
+
+    Deliberately narrower than a bare '*_SKILLS'/'*_TOOLS' suffix match — that
+    over-fired on unrelated constants like _KNOWN_MISSING_SCHEMA_SKILLS. Only
+    counts a name that pairs AUTH with OPTIONAL/SKILL/TOOL, or DISCOVERY with
+    SKILL/TOOL.
+    """
     upper = name.upper()
-    return upper.endswith("_SKILLS") or upper.endswith("_TOOLS") or "DISCOVERY" in upper or "AUTH_OPTIONAL" in upper
+    auth_shaped = "AUTH" in upper and any(kw in upper for kw in ("OPTIONAL", "SKILL", "TOOL"))
+    discovery_shaped = "DISCOVERY" in upper and any(kw in upper for kw in ("SKILL", "TOOL"))
+    return auth_shaped or discovery_shaped
 
 
 def _is_frozenset_literal(node: ast.expr) -> bool:
@@ -79,6 +88,12 @@ def test_detector_catches_auth_optional_tools_literal():
 def test_detector_ignores_alias_of_shared_constant():
     fixed = "from src.core.auth import AUTH_OPTIONAL_SKILLS\nDISCOVERY_SKILLS = AUTH_OPTIONAL_SKILLS\n"
     assert find_duplicate_auth_optional_sets(ast.parse(fixed)) == []
+
+
+def test_detector_ignores_unrelated_skills_constant():
+    """Regression: a bare '*_SKILLS' suffix over-fired on unrelated constants."""
+    unrelated = '_KNOWN_MISSING_SCHEMA_SKILLS = frozenset({"list_authorized_properties"})\n'
+    assert find_duplicate_auth_optional_sets(ast.parse(unrelated)) == []
 
 
 def test_detector_ignores_unrelated_frozenset():
