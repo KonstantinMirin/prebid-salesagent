@@ -120,30 +120,6 @@ class GAMCompanyType(Enum):
 # API Configuration
 GAM_SCOPES = ["https://www.googleapis.com/auth/dfp"]
 
-# Creative size limits (in bytes)
-GAM_CREATIVE_SIZE_LIMITS = {
-    "display": 150_000,  # 150KB
-    "video": 2_200_000,  # 2.2MB
-    "rich_media": 2_200_000,  # 2.2MB
-    "native": 150_000,  # 150KB
-    "html5": None,  # Let GAM API handle validation
-}
-
-# Maximum creative dimensions (pixels)
-GAM_MAX_DIMENSIONS = {
-    "width": 1800,
-    "height": 1500,
-}
-
-# Allowed file extensions by creative type
-GAM_ALLOWED_EXTENSIONS = {
-    "display": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
-    "video": [".mp4", ".webm", ".mov", ".avi"],
-    "rich_media": [".swf", ".html", ".zip"],
-    "html5": [".html", ".htm", ".html5", ".zip"],
-    "native": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
-}
-
 # Standard creative sizes (width x height)
 GAM_STANDARD_SIZES = {
     # Display banners
