@@ -36,7 +36,7 @@ class TestA2AProtocolCompliance:
 
         Regression test for: A2A server expecting 'updates' instead of 'packages'
         """
-        async with AdCPSchemaValidator(offline_mode=False) as validator:
+        async with AdCPSchemaValidator() as validator:
             # Load official AdCP schema
             schema = await validator.get_schema("/schemas/v1/media-buy/update-media-buy-request.json")
 
@@ -77,7 +77,7 @@ class TestA2AProtocolCompliance:
             "list_authorized_properties",
         }
 
-        async with AdCPSchemaValidator(offline_mode=False) as validator:
+        async with AdCPSchemaValidator() as validator:
             missing_schemas = []
 
             for skill in adcp_skills:
@@ -107,7 +107,7 @@ class TestA2AProtocolCompliance:
 
         Validates the request accepts AdCP-compliant field names.
         """
-        async with AdCPSchemaValidator(offline_mode=False) as validator:
+        async with AdCPSchemaValidator() as validator:
             schema = await validator.get_schema("/schemas/v1/media-buy/get-media-buy-delivery-request.json")
 
             # Verify expected fields from AdCP spec

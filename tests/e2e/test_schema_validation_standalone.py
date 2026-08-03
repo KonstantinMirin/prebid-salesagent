@@ -5,6 +5,8 @@ This test validates that our schema validation system works correctly
 without needing a running server, by testing the validation logic directly.
 """
 
+from pathlib import Path
+
 import pytest
 
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
@@ -12,7 +14,7 @@ from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
 @pytest.mark.asyncio
 async def test_schema_validator_initialization():
-    """Test that the schema validator can be initialized and download schemas."""
+    """Test that the schema validator initializes and loads the pinned schema index."""
     async with AdCPSchemaValidator() as validator:
         # Test that we can get the schema index
         index = await validator.get_schema_index()
@@ -87,29 +89,34 @@ async def test_get_products_request_validation():
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "get-products schema drift: /schemas/latest/ evolves faster than the "
-        "adcp library. Validation of a minimal payload fails when the spec adds "
-        "new required fields not yet modelled in the library. Tracked in #1308. "
-        "strict=False: both pass (spec caught up) and fail (still drifting) are acceptable."
-    ),
-)
-async def test_offline_mode():
-    """Test that offline mode works with cached schemas."""
-    # cache_scope is required on the standard (else) branch of get-products-response
-    # since AdCP 3.1; default to "public" when no account is involved.
-    payload = {"products": [], "cache_scope": "public"}
+async def test_pinned_sdk_schema_source():
+    """The validator grades the PINNED spec, from the installed SDK, offline.
 
-    # First, ensure schemas are cached by using online mode
+    Replaces the former test_offline_mode, which was xfailed non-strict for
+    #1308 ("/schemas/latest/ evolves faster than the adcp library"). Pinning
+    resolves #1308's root cause: the validator now loads schemas bundled with
+    the pinned adcp SDK, so live-registry drift cannot change what this suite
+    grades, and this minimal spec-valid payload must validate deterministically.
+    """
+    import adcp
+
+    # Minimal payload the PINNED 3.1.1 response schema accepts: cache_scope is
+    # required on the standard (else) branch since AdCP 3.1, and the top-level
+    # protocol status ("completed" TaskStatus) is required via the response
+    # envelope (allOf.1.required in get-products-response.json).
+    payload = {"products": [], "cache_scope": "public", "status": "completed"}
+
     async with AdCPSchemaValidator() as validator:
-        await validator.validate_response("get-products", payload)
+        # The schema source is the installed SDK package — not a network cache.
+        sdk_root = Path(adcp.__file__).parent
+        assert validator.schema_root.is_relative_to(sdk_root), (
+            f"validator loads schemas from {validator.schema_root}, expected inside the adcp SDK at {sdk_root}"
+        )
+        # The loaded index is the pinned spec version the repo builds against.
+        index = await validator.get_schema_index()
+        assert index["adcp_version"] == adcp.get_adcp_spec_version()
 
-    # Now test offline mode
-    async with AdCPSchemaValidator(offline_mode=True) as offline_validator:
-        # Should work with cached schemas
-        await offline_validator.validate_response("get-products", payload)
+        await validator.validate_response("get-products", payload)
 
 
 @pytest.mark.asyncio
