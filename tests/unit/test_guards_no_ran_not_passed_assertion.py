@@ -31,11 +31,11 @@ OUTCOME_KEYS = {"valid", "success", "passed", "ok"}
 ACTIVITY_KEYS = {"errors", "warnings", "results", "messages", "warning", "error"}
 
 # Pre-existing violation, tracked for a follow-up fix — shrink-only, never add to this.
-# FIXME(#1838): tests/e2e/test_a2a_adcp_compliance.py:346 asserts only that
+# FIXME(#1838): tests/e2e/test_a2a_adcp_compliance.py:354 asserts only that
 # compliance_report.results is non-empty, not that any tested skill's validation
 # actually passed (Form B — same disease this guard bans).
 ALLOWLIST = {
-    "tests/e2e/test_a2a_adcp_compliance.py:346",
+    "tests/e2e/test_a2a_adcp_compliance.py:354",
 }
 
 
