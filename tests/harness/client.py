@@ -28,17 +28,17 @@ Pydantic model those methods normally parse into (this is why ``call()``
 does not need a ``response_cls`` parameter — see the "typed payload"
 docstring note on ``TransportResult.payload`` below for the tradeoff).
 
-E2E_REST and E2E_A2A delivery are implemented (``_deliver_e2e_rest`` and
-``_deliver_e2e_a2a`` below, salesagent-uz00/SB-3a and salesagent-tisr/SB-3c
-respectively) — real HTTP through nginx to the live Docker stack.
-``_deliver_e2e_rest`` is reused verbatim by ``RestE2EDispatcher``
-(``tests/harness/dispatchers.py``) so there is one e2e_rest delivery
-implementation, not two; ``A2AE2EDispatcher`` likewise delegates to
-``AdCPTestClient`` for e2e_a2a. E2E_MCP delivery is still NOT implemented
-here — a documented, deliberate deferral (design doc §7 "Two placeholder E2E
-dispatchers") tracked by ``salesagent-wu78`` (SB-3b, e2e_mcp). WRAP is
-already written per transport *family*, so that follow-up only needs to add
-a DELIVER function — ADDRESS and WRAP need no changes.
+All three E2E transports are now implemented — ``_deliver_e2e_rest``
+(salesagent-uz00/SB-3a), ``_deliver_e2e_mcp`` (salesagent-wu78/SB-3b), and
+``_deliver_e2e_a2a`` (salesagent-tisr/SB-3c) below, each real HTTP through
+nginx to the live Docker stack. ``RestE2EDispatcher`` and
+``A2AE2EDispatcher`` (``tests/harness/dispatchers.py``) delegate to the
+matching DELIVER function instead of duplicating it, so there is one
+implementation per transport, not two. Auth-header construction is shared
+across all three via ``e2e_identity_headers`` below (this project's DRY
+invariant, CLAUDE.md) — WRAP/UNWRAP were already written per transport
+*family* (design doc §5), so each of these follow-ups only needed to add a
+DELIVER function; ADDRESS and WRAP needed no changes.
 
 Usage::
 
@@ -185,43 +185,39 @@ def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any
     return getattr(client, method)(wrapped["url"], json=wrapped["body"])
 
 
-def _deliver_e2e_not_implemented(transport: Transport, follow_up: str) -> Callable[..., Any]:
-    def _deliver(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
-        raise NotImplementedError(
-            f"{transport} delivery is not yet implemented on AdCPTestClient — "
-            f"see {follow_up} (design doc §7 'Two placeholder E2E dispatchers'). "
-            "WRAP/ADDRESS need no changes; only a DELIVER function is missing."
-        )
+def e2e_identity_headers(identity: Any) -> dict[str, str]:
+    """Auth/tenant/dry-run HTTP headers for e2e dispatch, derived from a
+    resolved identity.
 
-    return _deliver
+    Shared by e2e REST, e2e MCP, and e2e A2A DELIVER (below) — production's
+    identity resolution (``resolve_identity()``,
+    ``src/core/resolved_identity.py``) reads the same
+    ``x-adcp-auth``/``x-adcp-tenant``/``x-dry-run`` headers regardless of
+    transport protocol (MCP's ``mcp_auth_middleware`` and A2A's
+    ``UnifiedAuthMiddleware`` resolve through the identical
+    ``resolve_identity_from_context`` -> header extraction chain REST does),
+    so this is one function, not an independently reinvented convention per
+    transport (this project's DRY invariant, CLAUDE.md).
 
-
-def _e2e_rest_headers(identity: Any) -> dict[str, str]:
-    """Build e2e HTTP headers from *identity*.
-
-    Ported verbatim from ``RestE2EDispatcher.dispatch``
-    (``tests/harness/dispatchers.py``) — this is now the single
-    implementation; that class delegates to :func:`_deliver_e2e_rest`
-    instead of hand-rolling the same header logic (salesagent-uz00, SB-3a).
-
-    ``identity=None`` means "send without auth headers" (no-auth test) — let
-    the server's auth middleware return 401/structured error. When identity
-    exists but ``auth_token`` is ``None`` (principal_id=None boundary
-    tests), the header is omitted so the server rejects gracefully instead
-    of httpx raising on a ``None`` header value.
+    ``identity=None`` means "dispatch without auth headers" (explicit
+    unauthenticated) — the live server's own auth middleware then returns the
+    real 401/``AUTH_REQUIRED`` rejection. When identity carries no
+    ``auth_token`` (e.g. ``principal_id=None`` boundary tests), the header is
+    simply omitted rather than sent empty.
     """
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    if identity is not None:
-        if identity.auth_token is not None:
-            headers["x-adcp-auth"] = identity.auth_token
-        tenant = getattr(identity, "tenant", None)
-        if tenant is not None:
-            subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
-            if subdomain is not None:
-                headers["x-adcp-tenant"] = subdomain
-        tc = getattr(identity, "testing_context", None)
-        if tc is not None and getattr(tc, "dry_run", False):
-            headers["x-dry-run"] = "true"
+    headers: dict[str, str] = {}
+    if identity is None:
+        return headers
+    if identity.auth_token is not None:
+        headers["x-adcp-auth"] = identity.auth_token
+    tenant = getattr(identity, "tenant", None)
+    if tenant is not None:
+        subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
+        if subdomain is not None:
+            headers["x-adcp-tenant"] = subdomain
+    tc = getattr(identity, "testing_context", None)
+    if tc is not None and getattr(tc, "dry_run", False):
+        headers["x-dry-run"] = "true"
     return headers
 
 
@@ -251,11 +247,62 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
 
     resolved_identity = env.identity_for(Transport.E2E_REST) if identity is _NO_IDENTITY_OVERRIDE else identity
-    headers = _e2e_rest_headers(resolved_identity)
+    headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
     method = address.method or "post"
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
         return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
+
+
+def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+    """E2E MCP DELIVER: real HTTP via ``fastmcp.Client`` against the live Docker
+    stack — the transport ``runStoryboard`` (the real AdCP conformance runner)
+    actually speaks (``request_signing.transport = 'mcp'``, agent URLs ending
+    ``/mcp``), see beads salesagent-wu78 (SB-3b).
+
+    Same call shape as ``_run_mcp_client`` (``tests/harness/_base.py:754``) —
+    ``call_tool`` -> ``structured_content`` -> stash on
+    ``env._last_wire_response`` -> unwrap ``ToolError`` via the SAME
+    ``_unwrap_mcp_tool_error`` helper ``_run_mcp_client`` and
+    ``McpDispatcher.dispatch`` use — only the transport under the FastMCP
+    ``Client`` changes: a real ``StreamableHttpTransport`` against
+    ``env.e2e_config.base_url`` instead of the in-memory ``mcp`` app object.
+    Auth flows as real HTTP headers (``e2e_identity_headers``) instead of the
+    ``get_http_headers``/``resolve_identity_from_context`` patches
+    ``_run_mcp_client`` installs for in-process dispatch — there is a real
+    nginx -> ``UnifiedAuthMiddleware`` -> ``resolve_identity()`` chain running
+    on the live server, so nothing needs mocking here.
+    """
+    import asyncio
+
+    from fastmcp import Client
+    from fastmcp.client.transports import StreamableHttpTransport
+
+    from tests.harness._base import _unwrap_mcp_tool_error
+
+    if not env.e2e_config:
+        raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
+
+    # Mirrors _run_mcp_client's unconditional commit (_base.py:788) — the live
+    # server hits its own Postgres via env.e2e_config.postgres_url, so
+    # uncommitted factory rows in this test session would be invisible to it.
+    env._commit_factory_data()
+
+    resolved_identity = env.identity_for(Transport.E2E_MCP) if identity is _NO_IDENTITY_OVERRIDE else identity
+    headers = e2e_identity_headers(resolved_identity)
+    url = f"{env.e2e_config.base_url}/mcp/"
+
+    async def _call() -> dict[str, Any]:
+        mcp_transport = StreamableHttpTransport(url=url, headers=headers)
+        async with Client(transport=mcp_transport) as mcp_client:
+            result = await mcp_client.call_tool(address.name, wrapped)
+            env._last_wire_response = result.structured_content
+            return result.structured_content
+
+    try:
+        return asyncio.run(_call())
+    except Exception as exc:
+        raise _unwrap_mcp_tool_error(exc) from exc
 
 
 # -- E2E_A2A DELIVER: real JSON-RPC message/send over HTTP ------------------
@@ -272,34 +319,6 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
 # (``_handle_explicit_skill``, ``adcp_a2a_server.py:1491``) is out of scope —
 # see ``_wrap_a2a``'s docstring; this DELIVER function sends whatever
 # ``_wrap_a2a`` produced unchanged, same limitation.
-
-
-def _e2e_a2a_headers(identity: Any) -> dict[str, str]:
-    """Auth/tenant/dry-run headers for a real HTTP A2A request.
-
-    ``identity`` here is already the RESOLVED identity (sentinel already
-    substituted by the caller) — ``None`` means "send unauthenticated"
-    (explicit no-auth dispatch), matching the same meaning ``identity=None``
-    carries throughout ``tests/harness`` (see ``_NO_IDENTITY_OVERRIDE``
-    module docstring above). ``UnifiedAuthMiddleware`` reads x-adcp-auth /
-    x-adcp-tenant / x-dry-run off ANY route it wraps — REST and A2A share
-    the exact same middleware, so the header contract here must match
-    REST's e2e header construction (``RestE2EDispatcher.dispatch``,
-    ``tests/harness/dispatchers.py:257-268``) field-for-field.
-    """
-    headers = {"Content-Type": "application/json"}
-    if identity is None:
-        return headers
-    if identity.auth_token:
-        headers["x-adcp-auth"] = identity.auth_token
-    tenant = getattr(identity, "tenant", None)
-    subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
-    if subdomain:
-        headers["x-adcp-tenant"] = subdomain
-    testing_context = getattr(identity, "testing_context", None)
-    if getattr(testing_context, "dry_run", False):
-        headers["x-dry-run"] = "true"
-    return headers
 
 
 def _build_a2a_jsonrpc_body(skill_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -366,7 +385,7 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     if resolved_identity is _NO_OVERRIDE:
         resolved_identity = env.identity_for(Transport.E2E_A2A)
 
-    headers = _e2e_a2a_headers(resolved_identity)
+    headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
     rpc_body = _build_a2a_jsonrpc_body(address.name, kwargs)
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as http_client:
@@ -420,7 +439,7 @@ DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = 
     Transport.A2A: _deliver_a2a,
     Transport.REST: _deliver_rest,
     Transport.E2E_REST: _deliver_e2e_rest,
-    Transport.E2E_MCP: _deliver_e2e_not_implemented(Transport.E2E_MCP, "salesagent-wu78 (SB-3b)"),
+    Transport.E2E_MCP: _deliver_e2e_mcp,
     Transport.E2E_A2A: _deliver_e2e_a2a,
 }
 

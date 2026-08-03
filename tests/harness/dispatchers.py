@@ -333,12 +333,50 @@ class RestE2EDispatcher:
 
 
 class McpE2EDispatcher:
-    """Placeholder for real MCP E2E dispatch (not yet implemented)."""
+    """Dispatch via real HTTP through nginx to the Docker stack's MCP endpoint.
+
+    Delegates to ``AdCPTestClient`` (``tests/harness/client.py``,
+    ``salesagent-wu78``/SB-3b) instead of duplicating the
+    ADDRESS/WRAP/DELIVER/UNWRAP logic here a second time — ``client.call()``
+    already builds the real ``fastmcp.Client`` against
+    ``env.e2e_config.base_url`` and unwraps the response identically to the
+    in-process ``McpDispatcher`` above (design doc §5).
+
+    Unlike the other dispatchers on this legacy ``env.call_via(transport,
+    **kwargs)`` path, per-env subclasses hardcode their MCP tool name as a
+    string literal inside ``call_mcp()`` (e.g. ``ProductEnv.call_mcp`` calls
+    ``self._run_mcp_client("get_products", ...)``) — there is no attribute to
+    introspect it from generically, and unlike ``RestE2EDispatcher`` (which
+    reads ``env.REST_ENDPOINT``/``env.REST_METHOD``) no env exposes an MCP
+    equivalent. This dispatcher was a ``NotImplementedError`` placeholder with
+    zero callers (no env ever dispatched ``Transport.E2E_MCP`` through
+    ``call_via``), so this is not a breaking-change surface: callers must pass
+    ``tool_name=`` explicitly in kwargs, the same tool identity
+    ``AdCPTestClient.call()``'s first positional argument already requires.
+    """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
-        raise NotImplementedError(
-            "E2E_MCP dispatcher is not yet implemented. Use Transport.MCP for in-process MCP dispatch."
+        from tests.harness.client import AdCPTestClient
+        from tests.harness.transport import Transport
+
+        tool_name = kwargs.pop("tool_name", None)
+        if tool_name is None:
+            raise TypeError(
+                "McpE2EDispatcher.dispatch requires tool_name= in kwargs (e.g. "
+                'env.call_via(Transport.E2E_MCP, tool_name="get_products", req=...)) — '
+                "there is no per-env attribute to derive it from generically. "
+                "Prefer AdCPTestClient(env).call(tool_name, payload, Transport.E2E_MCP) directly."
+            )
+
+        identity = kwargs.pop("identity", None)
+        req = kwargs.pop("req", None)
+        payload = (
+            req.model_dump(mode="json", exclude_none=True)
+            if req is not None and hasattr(req, "model_dump")
+            else dict(kwargs)
         )
+
+        return AdCPTestClient(env).call(tool_name, payload, Transport.E2E_MCP, identity=identity)
 
 
 class A2AE2EDispatcher:

@@ -118,30 +118,6 @@ class TestClientRestWrapPathParamPeeling:
         assert wrapped["body"] == {"extra": "kept"}
 
 
-class TestClientE2eDeliveryDeferred:
-    """E2E_MCP delivery is a documented, deliberate gap (design doc §7) — must
-    raise NotImplementedError loudly, never get silently swallowed into a
-    TransportResult a caller could mistake for a real AdCP rejection.
-
-    E2E_REST graduated out of this list (salesagent-uz00 / SB-3a) — see
-    TestClientE2eRestDelivery below. E2E_A2A graduated out of this list
-    (salesagent-tisr / SB-3c) — see TestClientE2eA2aDelivery below.
-    """
-
-    @pytest.mark.parametrize(
-        "transport",
-        [Transport.E2E_MCP],
-    )
-    def test_e2e_delivery_raises_not_implemented(self, transport):
-        class _UnitEnv(BaseTestEnv):
-            pass
-
-        with _UnitEnv() as env:
-            client = AdCPTestClient(env)
-            with pytest.raises(NotImplementedError):
-                client.call("get_products", {"brief": "x"}, transport)
-
-
 class TestClientE2eRestDelivery:
     """E2E_REST DELIVER (``_deliver_e2e_rest``, salesagent-uz00/SB-3a) — real
     HTTP through nginx to a live Docker stack. Mocks ``httpx.Client`` so
@@ -256,6 +232,129 @@ class TestClientE2eRestDelivery:
             address = ToolAddress(Transport.E2E_REST, name="/api/v1/products", method="post")
             with pytest.raises(RuntimeError, match="e2e_config"):
                 _deliver_e2e_rest(env, address, {"url": "/api/v1/products", "body": {}}, None)
+
+
+class TestClientE2eMcpDelivery:
+    """Real e2e MCP DELIVER (salesagent-wu78/SB-3b) — mocks the fastmcp
+    ``Client``/HTTP transport layer for unit-level coverage. Genuine
+    e2e-with-a-real-server verification happens in ``tests/e2e/`` via
+    ``./run_all_tests.sh`` (no Docker stack available in this worktree)."""
+
+    class _FakeToolResult:
+        def __init__(self, structured_content: dict) -> None:
+            self.structured_content = structured_content
+
+    class _FakeMcpClient:
+        """Records the transport it was built with and the tool_name/arguments
+        of the last call_tool — enough to assert DELIVER built the real HTTP
+        transport with the right URL/headers and dispatched the right tool."""
+
+        instances: list = []
+
+        def __init__(self, transport=None):
+            self.transport = transport
+            self.calls: list[tuple[str, dict]] = []
+            type(self).instances.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, arguments))
+            return TestClientE2eMcpDelivery._FakeToolResult({"products": [{"product_id": "prod_e2e"}]})
+
+    def test_e2e_mcp_dispatch_builds_real_http_transport_and_succeeds(self, monkeypatch):
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import E2EConfig
+
+        self._FakeMcpClient.instances = []
+        monkeypatch.setattr("fastmcp.Client", self._FakeMcpClient)
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
+        client = AdCPTestClient(env)
+
+        result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_MCP, identity=None)
+
+        assert result.is_success, result.error
+        assert result.envelope["transport"] == "mcp"
+        assert result.wire_response == {"products": [{"product_id": "prod_e2e"}]}
+
+        fake_client = self._FakeMcpClient.instances[0]
+        assert fake_client.transport.url == "http://e2e-host:9000/mcp/"
+        assert fake_client.transport.headers == {}  # identity=None -> no auth headers
+        assert fake_client.calls == [("get_products", {"brief": "video ads"})]
+
+    def test_e2e_mcp_dispatch_sends_auth_headers_from_identity(self, monkeypatch):
+        from tests.factories.principal import PrincipalFactory
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import E2EConfig
+
+        self._FakeMcpClient.instances = []
+        monkeypatch.setattr("fastmcp.Client", self._FakeMcpClient)
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
+        client = AdCPTestClient(env)
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1", tenant_id="t1", protocol="mcp", auth_token="tok_123"
+        )
+
+        client.call("get_products", {"brief": "video ads"}, Transport.E2E_MCP, identity=identity)
+
+        fake_client = self._FakeMcpClient.instances[0]
+        assert fake_client.transport.headers["x-adcp-auth"] == "tok_123"
+
+    def test_e2e_mcp_dispatch_requires_e2e_config(self):
+        """Missing env.e2e_config is a genuine precondition failure (mirrors
+        RestE2EDispatcher.dispatch's own check) — caught by
+        AdCPTestClient.call()'s generic except and surfaced as an error
+        TransportResult, same as any other DELIVER-raised Exception (NOT the
+        NotImplementedError special-case that re-raises loudly)."""
+        from tests.harness._base import BaseTestEnv
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv() as env:
+            client = AdCPTestClient(env)
+            result = client.call("get_products", {"brief": "x"}, Transport.E2E_MCP, identity=None)
+
+        assert result.is_error
+        assert "e2e_config" in str(result.error)
+
+    def test_e2e_mcp_dispatch_tool_error_unwraps_to_adcp_error(self, monkeypatch):
+        from fastmcp.exceptions import ToolError
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import E2EConfig
+
+        class _FailingMcpClient(self._FakeMcpClient):
+            async def call_tool(self, name, arguments):
+                raise ToolError(
+                    '{"errors": [{"code": "AUTH_REQUIRED", "message": "no auth", "recovery": "correctable"}], '
+                    '"adcp_error": {"code": "AUTH_REQUIRED", "message": "no auth", "recovery": "correctable"}}'
+                )
+
+        monkeypatch.setattr("fastmcp.Client", _FailingMcpClient)
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
+        client = AdCPTestClient(env)
+
+        result = client.call("get_products", {"brief": "x"}, Transport.E2E_MCP, identity=None)
+
+        assert result.is_error
+        result.assert_wire_error("AUTH_REQUIRED")
 
 
 class TestClientE2eA2aDelivery:
@@ -495,6 +594,47 @@ class TestA2AE2EDispatcher:
         skill_part = mock_post.call_args.kwargs["json"]["params"]["message"]["parts"][0]["data"]
         assert skill_part["skill"] == "get_products"
         assert skill_part["parameters"] == {"brief": "video ads"}
+
+
+class TestMcpE2EDispatcherDelegation:
+    """``McpE2EDispatcher`` (``tests/harness/dispatchers.py``) is the legacy
+    ``env.call_via(Transport.E2E_MCP, **kwargs)`` entry point — it must
+    delegate to ``AdCPTestClient`` rather than reimplement ADDRESS/WRAP/
+    DELIVER/UNWRAP a second time."""
+
+    def test_requires_tool_name(self):
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.dispatchers import McpE2EDispatcher
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv() as env:
+            with pytest.raises(TypeError, match="tool_name"):
+                McpE2EDispatcher().dispatch(env, identity=None)
+
+    def test_delegates_to_client_with_flattened_req(self, monkeypatch):
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.dispatchers import McpE2EDispatcher
+        from tests.harness.transport import E2EConfig
+
+        TestClientE2eMcpDelivery._FakeMcpClient.instances = []
+        monkeypatch.setattr("fastmcp.Client", TestClientE2eMcpDelivery._FakeMcpClient)
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        class _FakeReq:
+            def model_dump(self, **kwargs):
+                return {"brief": "video ads"}
+
+        env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
+
+        result = McpE2EDispatcher().dispatch(env, tool_name="get_products", req=_FakeReq(), identity=None)
+
+        assert result.is_success, result.error
+        fake_client = TestClientE2eMcpDelivery._FakeMcpClient.instances[0]
+        assert fake_client.calls == [("get_products", {"brief": "video ads"})]
 
 
 @pytest.mark.integration
