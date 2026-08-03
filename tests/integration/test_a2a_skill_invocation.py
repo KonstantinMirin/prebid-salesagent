@@ -60,7 +60,7 @@ class A2AAdCPValidator:
     def __init__(self):
         self.validator = None
         if SCHEMA_VALIDATION_AVAILABLE:
-            self.validator = AdCPSchemaValidator(offline_mode=True, adcp_version="v1")
+            self.validator = AdCPSchemaValidator()
 
     async def __aenter__(self):
         if self.validator:

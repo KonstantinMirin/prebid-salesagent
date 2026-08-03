@@ -40,13 +40,11 @@ class A2AAdCPComplianceClient:
         auth_token: str,
         tenant: str | None = None,
         validate_schemas: bool = True,
-        offline_mode: bool = True,
     ):
         self.a2a_url = a2a_url
         self.auth_token = auth_token
         self.tenant = tenant
         self.validate_schemas = validate_schemas
-        self.offline_mode = offline_mode
         self.http_client = httpx.AsyncClient(timeout=30.0)
         self.schema_validator = None
 
@@ -54,7 +52,7 @@ class A2AAdCPComplianceClient:
         """Enter async context."""
         # Initialize schema validator if enabled
         if self.validate_schemas:
-            self.schema_validator = AdCPSchemaValidator(offline_mode=self.offline_mode, adcp_version="v1")
+            self.schema_validator = AdCPSchemaValidator()
             await self.schema_validator.__aenter__()
 
         return self
@@ -232,7 +230,7 @@ async def compliance_client(a2a_url, auth_token):
         pytest.skip(f"A2A server not available at {a2a_url}: {e}")
 
     async with A2AAdCPComplianceClient(
-        a2a_url=a2a_url, auth_token=auth_token, tenant="ci-test", validate_schemas=True, offline_mode=True
+        a2a_url=a2a_url, auth_token=auth_token, tenant="ci-test", validate_schemas=True
     ) as client:
         yield client
 

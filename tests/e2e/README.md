@@ -20,9 +20,7 @@ tests/e2e/
 ├── test_adcp_schema_compliance.py     # Schema validation compliance tests
 ├── test_schema_validation_standalone.py  # Standalone schema validation tests
 ├── test_testing_hooks.py              # Testing hooks implementation (PR #34)
-├── adcp_schema_validator.py            # AdCP schema validation system
-├── schemas/                           # Versioned schema cache for offline validation
-│   └── v1/                           # AdCP v1 schemas (37 files, ~160KB)
+├── adcp_schema_validator.py            # AdCP schema validation (pinned to the adcp SDK's schemas)
 └── README.md                          # This file
 ```
 
@@ -155,8 +153,9 @@ The test suite includes comprehensive AdCP protocol schema validation:
 
 ### Features
 - **Automatic validation** of all MCP tool calls against official AdCP schemas
-- **Multi-version support** (currently v1, ready for v2+)
-- **Offline validation** for reliable CI execution
+- **Pinned to the installed SDK** — schemas load from the `adcp` package
+  (`adcp==6.6.0` → AdCP spec 3.1.1), never the live registry
+- **Offline by construction** — no network access, deterministic CI
 - **Detailed error reporting** with JSON path locations
 
 ### Usage
@@ -183,19 +182,15 @@ pytest tests/e2e/test_adcp_schema_compliance.py -v
 pytest tests/e2e/test_schema_validation_standalone.py -v
 ```
 
-### Cached Schemas
-- **Location**: `tests/e2e/schemas/v1/` (37 schemas, ~160KB)
-- **Purpose**: Offline validation, CI reliability, version pinning
-- **Update**: Manual updates when AdCP specification changes
+### Schema Source (pinned)
+- **Location**: the installed `adcp` SDK package (`adcp/_schemas/<major.minor>/bundled/`)
+- **Purpose**: validate exactly the spec version production is built against;
+  the live adcontextprotocol.org registry serves "latest" and drifts ahead of the pin
+- **Update**: bump the `adcp` pin in `pyproject.toml` (guarded by
+  `tests/unit/test_adcp_spec_version.py`) — the validator follows automatically
 
-### Multi-Version Support
 ```python
-# Use specific schema version
-async with AdCPSchemaValidator(adcp_version="v1") as validator:
-    await validator.validate_response("get-products", data)
-
-# Future: Support multiple versions for different partners
-async with AdCPSchemaValidator(adcp_version="v2") as validator:
+async with AdCPSchemaValidator() as validator:
     await validator.validate_response("get-products", data)
 ```
 
