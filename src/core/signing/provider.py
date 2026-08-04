@@ -191,8 +191,22 @@ def assert_pem_publishes_jwk(
     The passphrase is threaded into both ``load_private_key_pem`` and
     ``pem_to_adcp_jwk``: omitting it from the second is a false alarm the moment a
     passphrase is configured, and it reads exactly like a real mismatch.
+
+    ``load_private_key_pem`` raises a raw ``ValueError`` ("Incorrect password, could
+    not decrypt key") on a wrong passphrase — not a project exception type. Every
+    caller of this module (the capabilities read path's key-presence check, the
+    admin setup checklist, C1's outbound webhook boundary) expects
+    ``AdCPConfigurationError`` as the one signing-configuration error type, so the
+    wrong-passphrase case is normalized here rather than leaking a bare
+    ``ValueError`` past this module's boundary (salesagent-dn4i).
     """
-    private_key = load_private_key_pem(pem, password=passphrase)
+    try:
+        private_key = load_private_key_pem(pem, password=passphrase)
+    except ValueError as exc:
+        raise AdCPConfigurationError(
+            f"Signing key {kid!r} for tenant {tenant_id!r} could not be decrypted — the configured "
+            f"passphrase does not match the one this key's private half was encrypted under: {exc}"
+        ) from exc
     derived_jwk = pem_to_adcp_jwk(
         pem,
         kid=kid,

@@ -616,19 +616,25 @@ class KeyBacking(NamedTuple):
     publishes: bool
 
 
-def _private_half_is_resolvable(row: SigningKey) -> bool:
-    """Whether this deployment can decrypt *row*'s private key.
+def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, now: datetime) -> bool:
+    """Whether this deployment can ACTUALLY DECRYPT *row*'s private key.
 
     A ``db:`` row stores the private PEM ENCRYPTED under the deployment-wide key
     encryption key named by ``SigningConfig.key_passphrase_env``. Minting refuses
     without it (``src/core/signing/keys.py``) and ``resolve_signing_material`` needs it
-    again at every use — so a row minted under a KEK that was later unset is a key we
-    cannot open, and reporting it as backing means the wire says ``supported: true``
-    while every delivery raises.
+    again at every use — so a row minted under a KEK that was later unset, or under a
+    DIFFERENT KEK than this process holds (salesagent-dn4i: a rotated KEK, a
+    per-environment mismatch, a stale secret), is a key we cannot open, and reporting
+    it as backing means the wire says ``supported: true`` while every delivery raises.
 
-    The two WARNINGs are deliberately distinct so an operator can tell "no key" from
-    "a key I cannot open": the first is a provisioning gap, the second a deployment
-    misconfiguration with the key material intact.
+    This ATTEMPTS the real resolution (via :func:`~src.core.signing.provider.resolve_signing_material`)
+    rather than only checking that SOME passphrase is configured — presence is not
+    correctness. The three WARNINGs are deliberately distinct so an operator can tell
+    "no key" from "a passphrase is configured but it's the wrong one": the first two are
+    provisioning gaps, the third is a deployment misconfiguration with the key material
+    intact. Reuses the SAME per-(tenant, kid) resolution cache signing itself uses
+    (``_provider_cache``) — cache success, never errors, so a later-fixed KEK is retried
+    on the next call rather than pinned as permanently unresolvable.
 
     ``env:`` / ``file:`` refs are resolved by the process's own environment or mount at
     use time and carry no KEK of ours, so their resolvability is not knowable here —
@@ -641,19 +647,35 @@ def _private_half_is_resolvable(row: SigningKey) -> bool:
     belongs to resolution, which reports it loudly at the point of use.
     """
     from src.core.config import get_config
-    from src.core.signing.provider import DB_SCHEME
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.signing.provider import DB_SCHEME, resolve_signing_material
 
-    if not (row.private_key_ref or "").startswith(f"{DB_SCHEME}:") or get_config().signing.key_passphrase is not None:
+    if not (row.private_key_ref or "").startswith(f"{DB_SCHEME}:"):
         return True
-    logger.warning(
-        "Tenant %s holds ACTIVE signing key %s whose private half is encrypted under the "
-        "deployment key encryption key, but SigningConfig.key_passphrase_env resolves to "
-        "nothing — the key cannot be opened, so this agent declares and performs NO signing "
-        "with it (#1291)",
-        row.tenant_id,
-        row.kid,
-    )
-    return False
+    if get_config().signing.key_passphrase is None:
+        logger.warning(
+            "Tenant %s holds ACTIVE signing key %s whose private half is encrypted under the "
+            "deployment key encryption key, but SigningConfig.key_passphrase_env resolves to "
+            "nothing — the key cannot be opened, so this agent declares and performs NO signing "
+            "with it (#1291)",
+            row.tenant_id,
+            row.kid,
+        )
+        return False
+    try:
+        resolve_signing_material(repo, tenant_id=row.tenant_id, purpose=row.purpose, now=now, kid=row.kid)
+    except AdCPConfigurationError as exc:
+        logger.warning(
+            "Tenant %s holds ACTIVE signing key %s and a passphrase IS configured, but this "
+            "deployment could not decrypt the key's private half (%s) — the configured KEK is "
+            "wrong for this row, so this agent declares and performs NO signing with it (#1291, "
+            "salesagent-dn4i)",
+            row.tenant_id,
+            row.kid,
+            exc,
+        )
+        return False
+    return True
 
 
 def signing_key_backed(repo: SigningKeyRepository, *, now: datetime) -> KeyBacking:
@@ -677,6 +699,6 @@ def signing_key_backed(repo: SigningKeyRepository, *, now: datetime) -> KeyBacki
 
     active = repo.active_at(now=now)
     return KeyBacking(
-        signs=active is not None and _private_half_is_resolvable(active),
+        signs=active is not None and _private_half_is_resolvable(repo, active, now=now),
         publishes=bool(repo.publishable_at(now=now, grace_seconds=get_config().signing.grace_seconds)),
     )
