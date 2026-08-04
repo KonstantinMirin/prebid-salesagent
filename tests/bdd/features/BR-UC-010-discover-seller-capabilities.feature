@@ -1578,8 +1578,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | algorithms=['rsa-pss-sha512']                           | invalid  |
 
   # ── New scenarios (2026-07-13, #1592 P0.2 gap closure): account block per-field ──────────
-  # The account block is not emitted per-field by production today — the scenarios below
-  # state the spec-true contract and land red/xfail against #1592.
+  # The account block core (supported_billing, require_operator_auth, sandbox) is emitted
+  # since #1721 C2; the per-field CONFIG surface (operator-auth true, authorization_endpoint,
+  # required_for_products, tenant-set sandbox) is tracked by #1856 — those rows xfail there.
 
   @T-UC-010-account-require-operator-auth @v31 @account @post-s3 @post-s30 @partition
   Scenario Outline: account-require-operator-auth — who must authenticate is declared up front
@@ -1587,7 +1588,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant is configured with require_operator_auth <configured>
     When the Buyer Agent calls get_adcp_capabilities
     Then account.require_operator_auth should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (account block fields beyond the legacy shape
+    # XFAIL-EXPECTED: production gap — #1856 (account block fields beyond the legacy shape
     # are not emitted)
     # 3.1.1 semantics (major rewrite vs beta.3): the flag declares WHO must authenticate —
     # not whether OAuth/list_accounts/sync modes exist. When true, account-scoped calls use
@@ -1611,7 +1612,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant is configured with require_operator_auth true and OAuth support <oauth_state>
     When the Buyer Agent calls get_adcp_capabilities
     Then account.authorization_endpoint should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (account.authorization_endpoint not emitted)
+    # XFAIL-EXPECTED: production gap — #1856 (account.authorization_endpoint not emitted)
     # Present (format uri) when the seller supports OAuth for operator authentication; if
     # absent while require_operator_auth is true, operators obtain credentials out-of-band
     # (seller portal, API key).
@@ -1628,7 +1629,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant is configured with required_for_products <configured>
     When the Buyer Agent calls get_adcp_capabilities
     Then account.required_for_products should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (account.required_for_products not emitted)
+    # XFAIL-EXPECTED: production gap — #1856 (account.required_for_products not emitted)
     # default false: buyer can browse products without an account (price comparison and
     # discovery before committing); true requires establishing an account before get_products.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/required_for_products
@@ -1753,7 +1754,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant creative approval mode is configured as <configured>
     When the Buyer Agent calls get_adcp_capabilities
     Then media_buy.creative_approval_mode should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (media_buy.creative_approval_mode not emitted)
+    # Partially graded: production emits the constant require_human (shipped #1721 C5) — that row
+    # passes; the <configured>=auto_approve row is strict-excluded (#1724: never claim
+    # auto_approve without auto-approval behavior) and the tenant-config surface is #1856.
     # NEW at 3.1.1: closed enum [auto_approve, require_human] — not a workflow, an
     # applicability signal; require_human is a worst-case ceiling across the portfolio; when
     # ABSENT approval behavior is legacy-unspecified and runners SHOULD NOT treat omission as

@@ -355,7 +355,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
     # No ASGI middleware checks content-length for oversized bodies.
     "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
-    # ── UC-010 batch-1 wiring (FIXME(#1592), salesagent-4sn7) ──────────────
+    # ── UC-010 batch-1 wiring — remaining per-family gaps re-cited to their GH homes ──
     # Verified against a real run 2026-07-14: every entry below fails on all
     # three wire transports (strict holds); per-row / per-transport gaps use
     # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
@@ -465,7 +465,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated (salesagent-rldj): version negotiation now emits a non-empty,
     # release-precision supported_versions in VERSION_UNSUPPORTED details on
     # every row. T-UC-010-v31-version-unsupported-details-bounds removed.
-    # ── UC-011 list wiring (FIXME(#1592), salesagent-9if1) ─────────────────
+    # ── UC-011 list wiring — graduated; provenance below ───────────────────
     # Graduated (salesagent-tm97): _apply_list_account_filters honors req.account
     # (AccountReference oneOf, both account_id and natural-key arms), forwarded by
     # all 3 transports. T-UC-011-list-account-filter removed.
@@ -607,7 +607,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"delayed"},
         "BR-RULE-029: production webhook service has no is_delayed flag — only scheduled/final/adjusted emitted",
     ),
-    # ── UC-010 batch-1 per-row gaps (FIXME(#1592), salesagent-4sn7) ────────
+    # ── UC-010 batch-1 per-row gaps — re-cited to their GH homes ───────────
     # The 'omitted' / absence rows of these outlines pass vacuously (the field
     # is absent because the whole block is missing), so only the value rows xfail.
     # Graduated (salesagent-7moz): invalid_token_a2a row — A2A now always
@@ -3874,7 +3874,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
-            pytest.xfail("UC-010 harness wiring not extended to this tag (dormant, never graded) — #1592")
+            pytest.xfail(
+                "UC-010 harness wiring not extended to this tag (dormant, never graded) — steps tracked by #1855; presence-object production gap is #1855"
+            )
 
         from tests.harness.capabilities import CapabilitiesEnv
 
