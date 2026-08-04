@@ -213,6 +213,39 @@ def terminal_client_error_status(exc: OutboundError) -> int | None:
     return status
 
 
+def find_wrapped_http_status_error(exc: BaseException) -> httpx.HTTPStatusError | None:
+    """Walk *exc*'s cause/context chain (and any ``ExceptionGroup`` members) for a wrapped ``httpx.HTTPStatusError``.
+
+    For a transport that does NOT go through ``send``/``asend`` — the guarded
+    MCP seam (``src.core.utils.mcp_client.create_mcp_client``) hands a
+    ``guarded_client_factory``-built client to fastmcp/mcp, whose own
+    session/retry logic wraps failures in its own exception types, but chains
+    through the real ``httpx.HTTPStatusError`` via ``raise ... from ...``. This
+    lets a caller of that seam recover the same status-code-aware
+    classification (429/4xx/5xx) this module's own retry loop uses, without
+    importing ``httpx`` itself — this module is the one sanctioned importer
+    (GH #1589).
+    """
+    seen: set[int] = set()
+    return _find_wrapped_http_status_error(exc, seen)
+
+
+def _find_wrapped_http_status_error(exc: BaseException, seen: set[int]) -> httpx.HTTPStatusError | None:
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError):
+            return current
+        sub_exceptions = getattr(current, "exceptions", None)
+        if sub_exceptions is not None:
+            for sub in sub_exceptions:
+                found = _find_wrapped_http_status_error(sub, seen)
+                if found is not None:
+                    return found
+        current = current.__cause__ or current.__context__
+    return None
+
+
 @dataclass(frozen=True)
 class OutboundResult:
     """A delivered response, plus what it cost to get it."""
@@ -386,7 +419,7 @@ async def sleep_backoff(attempt: int) -> None:
     await asyncio.sleep(_backoff_seconds(attempt))
 
 
-def _retry_after_seconds(response: httpx.Response) -> float | None:
+def retry_after_seconds(response: httpx.Response) -> float | None:
     """The origin's Retry-After in seconds, or ``None`` if it did not usably say.
 
     Delta-seconds only. RFC 9110 also permits an HTTP-date, but honouring one
@@ -398,6 +431,12 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
     buyer is clamped to the spec's [1, 3600] at the point of emission. Fusing the
     two would floor every wait at one second, so an origin could not answer
     ``Retry-After: 0`` — and a test suite could not avoid sleeping for real.
+
+    Public (not module-private): reused by
+    ``src.core.helpers.mcp_seam_error_mapping`` to parse the same header off
+    the ``httpx.HTTPStatusError`` a guarded MCP-seam dial surfaces, so the
+    429/Retry-After parsing rule has one home regardless of which transport
+    the seam used underneath.
     """
     raw = response.headers.get("Retry-After")
     if raw is None:
@@ -646,7 +685,7 @@ def send(
                 last_retry_after = None
             else:
                 last_status = response.status_code
-                last_retry_after = _retry_after_seconds(response)
+                last_retry_after = retry_after_seconds(response)
                 if not _should_retry_status(last_status):
                     if response.is_success:
                         return _result(response, bytes(body), attempt, started)
@@ -710,7 +749,7 @@ async def asend(
                 last_retry_after = None
             else:
                 last_status = response.status_code
-                last_retry_after = _retry_after_seconds(response)
+                last_retry_after = retry_after_seconds(response)
                 if not _should_retry_status(last_status):
                     if response.is_success:
                         return _result(response, bytes(body), attempt, started)

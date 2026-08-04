@@ -10,6 +10,10 @@ which rate-limits under CI load and flaked the required E2E check.
 The public default URL is a connection ALIAS for the configured agent: the
 wire-level federation identity (format_id.agent_url) is unchanged; only the
 transport connection reroutes.
+
+salesagent-4n88 moved the OPERATOR agent path off ``adcp.ADCPMultiAgentClient``
+onto the guarded MCP seam (``create_mcp_client``) — the routing/aliasing tests
+below mock that seam instead of the deleted SDK client.
 """
 
 from __future__ import annotations
@@ -50,24 +54,33 @@ class TestConnectionAgentUrl:
         assert _connection_agent_url(PUBLIC_DEFAULT_AGENT_URL) == PUBLIC_DEFAULT_AGENT_URL
 
 
+def _mock_mcp_client_cm(formats_payload: dict) -> tuple[MagicMock, AsyncMock]:
+    """A ``create_mcp_client(...)`` async-context-manager mock yielding a client
+    whose ``call_tool`` returns *formats_payload* as ``structured_content``."""
+    call_tool = AsyncMock(return_value=MagicMock(structured_content=formats_payload, content=[]))
+    mock_client = MagicMock()
+    mock_client.call_tool = call_tool
+    client_cm = MagicMock()
+    client_cm.__aenter__ = AsyncMock(return_value=mock_client)
+    client_cm.__aexit__ = AsyncMock(return_value=False)
+    return client_cm, call_tool
+
+
 class TestRegistryConnectionRouting:
-    def test_fetch_path_connects_to_configured_agent(self, monkeypatch):
-        """_build_adcp_client must receive the ALIASED url for the public agent
+    @pytest.mark.asyncio
+    async def test_fetch_path_connects_to_configured_agent(self, monkeypatch):
+        """_fetch_formats_operator must dial the ALIASED url for the public agent
         while the cache/federation identity stays on the canonical url."""
         from src.core.creative_agent_registry import CreativeAgent
 
         monkeypatch.setenv("CREATIVE_AGENT_URL", _PINNED)
         registry = CreativeAgentRegistry()
-        captured: list[str] = []
 
-        with (
-            patch("src.core.helpers.adapter_helpers.build_agent_config") as bac,
-            patch("src.core.creative_agent_registry.ADCPMultiAgentClient"),
-        ):
-            bac.side_effect = lambda agent: captured.append(agent.agent_url) or MagicMock()
-            registry._build_adcp_client([CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="x", enabled=True)])
+        client_cm, _call_tool = _mock_mcp_client_cm({"formats": []})
+        with patch("src.core.creative_agent_registry.create_mcp_client", return_value=client_cm) as cmc:
+            await registry._fetch_formats_operator(CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="x"))
 
-        assert captured == [_PINNED]
+        assert cmc.call_args.kwargs["agent_url"] == _PINNED
 
     @pytest.mark.asyncio
     async def test_preview_creative_connects_to_configured_agent(self, monkeypatch):
@@ -90,10 +103,10 @@ class TestRegistryConnectionRouting:
         # The payload's format_id is the federation-identity OBJECT carrying the
         # CANONICAL agent_url (not the connection alias) — the pinned reference
         # agent rejects a bare string, which the live public host tolerated
-        # (the mismatch the in-network pinning unmasked). The identity is the
-        # FormatId serialization (model_dump(mode="json")): Pydantic AnyUrl
-        # yields the trailing-slash form for the path-less public URL
-        # (salesagent-ehdq — verified tolerated by the pinned reference agent).
+        # (the mismatch the in-network pinning unmasked). The identity keeps the
+        # CANONICAL agent_url. AnyUrl serialization yields the
+        # trailing-slash form for path-less URLs — verified tolerated
+        # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
         call_tool = client_cm.__aenter__.return_value.call_tool
         payload = call_tool.call_args.args[1]
         assert payload["format_id"] == {
@@ -102,23 +115,21 @@ class TestRegistryConnectionRouting:
         }
 
 
-async def _fetch_formats_with_mocked_sdk(registry, agent):
-    """Drive registry.get_formats_for_agent twice with only the SDK dial mocked.
+async def _fetch_formats_with_mocked_seam(registry, agent):
+    """Drive registry.get_formats_for_agent twice with only create_mcp_client mocked.
 
-    The swap itself (_connection_agent_url / _build_adcp_client) and the real
-    build_agent_config run unmocked; only ADCPMultiAgentClient — the true
-    external that would dial the network — is replaced. Returns the patched
-    constructor (transport-config evidence), the list_creative_formats
-    AsyncMock (fetch count), and both call results.
+    The swap itself (_connection_agent_url / _fetch_formats_operator) and the
+    real request-building/parsing run unmocked; only create_mcp_client — the
+    true external that would dial the network — is replaced. Returns the
+    patched constructor (transport-config evidence), the call_tool AsyncMock
+    (fetch count), and both call results.
     """
-    sdk_client = MagicMock()
-    sdk_client.agent.return_value.list_creative_formats = AsyncMock(
-        return_value=MagicMock(status="completed", data=MagicMock(formats=[FormatFactory.build()]))
-    )
-    with patch("src.core.creative_agent_registry.ADCPMultiAgentClient", return_value=sdk_client) as constructor:
+    formats_payload = {"formats": [FormatFactory.build().model_dump(mode="json")]}
+    client_cm, call_tool = _mock_mcp_client_cm(formats_payload)
+    with patch("src.core.creative_agent_registry.create_mcp_client", return_value=client_cm) as constructor:
         first = await registry.get_formats_for_agent(agent)
         second = await registry.get_formats_for_agent(agent)
-    return constructor, sdk_client.agent.return_value.list_creative_formats, first, second
+    return constructor, call_tool, first, second
 
 
 class TestAliasPreservesIdentity:
@@ -144,10 +155,10 @@ class TestAliasPreservesIdentity:
         registry = CreativeAgentRegistry()
         agent = CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="AdCP Standard Creative Agent")
 
-        constructor, fetch, first, second = await _fetch_formats_with_mocked_sdk(registry, agent)
+        constructor, fetch, first, second = await _fetch_formats_with_mocked_seam(registry, agent)
 
-        # Transport: the constructed SDK config dials the pinned alias.
-        assert [cfg.agent_uri for cfg in constructor.call_args.kwargs["agents"]] == [_PINNED]
+        # Transport: create_mcp_client dials the pinned alias.
+        assert constructor.call_args.kwargs["agent_url"] == _PINNED
 
         # Identity: the cache key is byte-identical to the CANONICAL public
         # URL — the alias appears nowhere in the cache.
@@ -171,9 +182,9 @@ class TestAliasPreservesIdentity:
         partner_url = "https://partner-agent.example.com"
         agent = CreativeAgent(agent_url=partner_url, name="Partner Agent")
 
-        constructor, fetch, first, second = await _fetch_formats_with_mocked_sdk(registry, agent)
+        constructor, fetch, first, second = await _fetch_formats_with_mocked_seam(registry, agent)
 
-        assert [cfg.agent_uri for cfg in constructor.call_args.kwargs["agents"]] == [partner_url]
+        assert constructor.call_args.kwargs["agent_url"] == partner_url
         assert set(registry._format_cache) == {canonical_agent_url(partner_url)}
         assert fetch.await_count == 1
         assert second == first
@@ -188,6 +199,6 @@ class TestAliasPreservesIdentity:
         registry = CreativeAgentRegistry()
         agent = CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="AdCP Standard Creative Agent")
 
-        constructor, _fetch, _first, _second = await _fetch_formats_with_mocked_sdk(registry, agent)
+        constructor, _fetch, _first, _second = await _fetch_formats_with_mocked_seam(registry, agent)
 
-        assert [cfg.agent_uri for cfg in constructor.call_args.kwargs["agents"]] == [PUBLIC_DEFAULT_AGENT_URL]
+        assert constructor.call_args.kwargs["agent_url"] == PUBLIC_DEFAULT_AGENT_URL

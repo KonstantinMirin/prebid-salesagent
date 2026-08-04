@@ -53,17 +53,22 @@ _NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*TID251[^\n]*")
 # the one construction/import site the seam architecture sanctions:
 #   - outbound_http.py       — the seam itself imports httpx
 #   - mcp_client.py          — StreamableHttpTransport, factory-pinned
-#   - creative_agent_registry.py / signals_agent_registry.py
-#                            — SDK clients on the un-pinned path (GH #1589)
 # Adding a file here requires a matching live violation (case c) — the set
 # and the noqa lines move together or this module fails.
+#
+# creative_agent_registry.py / signals_agent_registry.py were exempted here
+# for constructing adcp.ADCPMultiAgentClient on the un-pinned OPERATOR-agent
+# path (adcp 6.6.0 exposed no transport injection point — GH #1589). Both were
+# migrated onto the guarded MCP seam (src.core.utils.mcp_client.create_mcp_client)
+# by salesagent-4n88, so neither file constructs an adcp SDK client anymore —
+# the exemption set SHRINKS from 4 to 2, per this module's own non-vacuity
+# contract (case c/d): removing a noqa without a live violation is required,
+# not merely permitted.
 # ---------------------------------------------------------------------------
 EXPECTED_EXEMPT_FILES: frozenset[str] = frozenset(
     {
         "src/core/security/outbound_http.py",
         "src/core/utils/mcp_client.py",
-        "src/core/creative_agent_registry.py",
-        "src/core/signals_agent_registry.py",
     }
 )
 

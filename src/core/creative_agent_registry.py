@@ -27,11 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # FIXME(#1388): ListCreativeFormatsRequest has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import (
-    ADCPMultiAgentClient,  # noqa: TID251 - SDK dials un-pinned; injection blocked by adcp 6.6.0 (GH #1589)
-    ListCreativeFormatsRequest,
-)
-from adcp.exceptions import ADCPError
+from adcp import ListCreativeFormatsRequest
 from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
 from pydantic import ValidationError
@@ -40,9 +36,12 @@ from src.core.exceptions import (
     AdCPAdapterError,
 )
 from src.core.format_cache import load_reference_formats
+from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
+from src.core.helpers.mcp_tool_payload import extract_tool_payload
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import Format, FormatId, canonical_agent_url
 from src.core.security.outbound_http import OutboundError, asend
+from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError
 
 
 def _known_asset_types() -> frozenset[str]:
@@ -65,34 +64,6 @@ def _known_asset_types() -> frozenset[str]:
 
 
 _KNOWN_ASSET_TYPES = _known_asset_types()
-_SCHEMA_VALIDATION_FAILURE_MARKERS = (
-    "doesn't match expected schema",
-    "does not match expected schema",
-    "validation error",
-    "validationerror",
-    "failed to validate",
-    # adcp >= 6.6 phrasing: "Schema validation failed for <tool>: ... oneOf
-    # composition failed" (seen live when the pinned reference agent serves
-    # post-pin additive asset_types, e.g. pixel_tracker).
-    "schema validation failed",
-)
-
-
-def _as_format_dict(fmt: Any) -> dict[str, Any]:
-    """Normalize a format item (pydantic model or plain dict) to a dict.
-
-    The adcp client may return parsed library models or raw dicts depending on
-    the response shape; the tolerant validator needs one uniform input.
-    """
-    if isinstance(fmt, dict):
-        return fmt
-    model_dump = getattr(fmt, "model_dump", None)
-    if callable(model_dump):
-        return model_dump(mode="json")
-    raise AdCPAdapterError(
-        f"Unexpected format item type from creative agent: {type(fmt)!r}",
-        recovery="terminal",
-    )
 
 
 def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
@@ -243,6 +214,24 @@ def _connection_agent_url(agent_url: str) -> str:
     return configured
 
 
+# The format-discovery filter parameter names shared by every layer that
+# forwards them (this module's own internal calls, format_resolver.py,
+# admin/blueprints/products.py). Named once so a call site building the
+# forwarding kwargs can do it from this tuple + locals() instead of writing
+# out "max_width=max_width, max_height=max_height, ..." again — the literal
+# repetition is exactly what pylint's R0801 (and CLAUDE.md's DRY invariant)
+# flag as duplicated code once it appears at more than one call site.
+_FORMAT_FILTER_FIELDS = (
+    "max_width",
+    "max_height",
+    "min_width",
+    "min_height",
+    "is_responsive",
+    "asset_types",
+    "name_search",
+)
+
+
 @dataclass
 class CreativeAgent:
     """Represents a creative agent that provides format definitions and creative services."""
@@ -314,29 +303,6 @@ class CreativeAgentRegistry:
         """
         return canonical_agent_url(agent_url)
 
-    def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from creative agent configs.
-
-        Connections to the public default agent are rerouted through
-        ``_connection_agent_url`` (pinned-container alias in test/CI stacks);
-        the agents' identity urls (cache keys, format_id federation) are
-        untouched — only the transport config sees the alias.
-        """
-        from dataclasses import replace as _dc_replace
-
-        from src.core.helpers.adapter_helpers import build_agent_config
-
-        return ADCPMultiAgentClient(
-            agents=[
-                build_agent_config(
-                    _dc_replace(agent, agent_url=_connection_agent_url(agent.agent_url))
-                    if _connection_agent_url(agent.agent_url) != agent.agent_url
-                    else agent
-                )
-                for agent in agents
-            ]
-        )
-
     def _get_tenant_agents(self, tenant_id: str | None) -> list[CreativeAgent]:
         """Get list of creative agents for a tenant.
 
@@ -386,9 +352,8 @@ class CreativeAgentRegistry:
         agents.sort(key=lambda a: a.priority)
         return [a for a in agents if a.enabled]
 
-    async def _fetch_formats_from_agent(
+    async def _fetch_formats_operator(
         self,
-        client: ADCPMultiAgentClient,
         agent: CreativeAgent,
         max_width: int | None = None,
         max_height: int | None = None,
@@ -397,13 +362,21 @@ class CreativeAgentRegistry:
         is_responsive: bool | None = None,
         asset_types: list[str] | None = None,
         name_search: str | None = None,
-        type_filter: str | None = None,
     ) -> list[Format]:
-        """Fetch format list from a creative agent via MCP.
+        """Fetch format list from an OPERATOR-configured creative agent, through the guarded MCP seam.
+
+        Routes through ``create_mcp_client`` — a real MCP handshake, IP-pinned,
+        redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
+        httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
+        transport injection point; upstream adcp-client-python#1004). Closes the
+        gap tracked by salesagent-4n88. ``_connection_agent_url`` applies HERE
+        (the pinned-container alias for the public default agent); a
+        counterparty-supplied ``agent_url`` never reaches this method — see
+        ``_fetch_formats_raw_mcp`` for that path, unchanged by this migration.
 
         Args:
-            client: ADCPMultiAgentClient to use for requests
-            agent: CreativeAgent to query
+            agent: CreativeAgent to query (operator-configured — a tenant DB row
+                or the built-in default agent, never a buyer-supplied URL)
             max_width: Maximum width in pixels (inclusive)
             max_height: Maximum height in pixels (inclusive)
             min_width: Minimum width in pixels (inclusive)
@@ -411,7 +384,6 @@ class CreativeAgentRegistry:
             is_responsive: Filter for responsive formats
             asset_types: Filter by asset types
             name_search: Search by name
-            type_filter: Filter by format type (display, video, audio)
 
         Returns:
             List of Format objects from the agent
@@ -420,109 +392,37 @@ class CreativeAgentRegistry:
 
         logger = logging.getLogger(__name__)
 
+        typed_asset_types: list[AssetType] | None = None
+        if asset_types:
+            typed_asset_types = [AssetType(at) for at in asset_types]
+
+        request = ListCreativeFormatsRequest(
+            max_width=max_width,
+            max_height=max_height,
+            min_width=min_width,
+            min_height=min_height,
+            is_responsive=is_responsive,
+            asset_types=typed_asset_types,
+            name_search=name_search,
+        )
+        args = request.model_dump(mode="json", exclude_none=True)
+
+        connection_url = _connection_agent_url(agent.agent_url)
         try:
-            # Convert string asset_types to AssetType enums
-            typed_asset_types: list[AssetType] | None = None
-            if asset_types:
-                typed_asset_types = [AssetType(at) for at in asset_types]
+            async with create_mcp_client(
+                agent_url=connection_url,
+                auth=agent.auth,
+                auth_header=agent.auth_header,
+                timeout=agent.timeout,
+            ) as client:
+                result = await client.call_tool("list_creative_formats", args)
+        except OutboundError as exc:
+            raise_mapped_outbound_error(exc, agent_label=f"creative agent {agent.name}", logger=logger)
+        except (MCPConnectionError, MCPCompatibilityError) as exc:
+            raise_mapped_mcp_error(exc, agent_label=f"creative agent {agent.name}", logger=logger)
 
-            # Build request parameters
-            # Note: type_filter (FormatCategory) removed in adcp 3.12 — formats are
-            # categorized structurally via assets[].asset_type, not a top-level enum.
-            request = ListCreativeFormatsRequest(
-                max_width=max_width,
-                max_height=max_height,
-                min_width=min_width,
-                min_height=min_height,
-                is_responsive=is_responsive,
-                asset_types=typed_asset_types,
-                name_search=name_search,
-            )
-
-            # Call agent using adcp library
-            logger.info(f"_fetch_formats_from_agent: Calling {agent.name} at {agent.agent_url}")
-            result = await client.agent(agent.name).list_creative_formats(request)
-            logger.info(f"_fetch_formats_from_agent: Got result status={result.status}, type={type(result)}")
-
-            # Handle response based on status
-            if result.status == "completed":
-                formats_data = result.data
-                if formats_data is None:
-                    raise AdCPAdapterError(
-                        "Completed status but no data in response",
-                        recovery="terminal",
-                    )
-
-                logger.info(
-                    f"_fetch_formats_from_agent: Got response with {len(formats_data.formats) if hasattr(formats_data, 'formats') else 'N/A'} formats"
-                )
-
-                # Convert to Format objects via the tolerant per-format validator.
-                # adcp has already parsed the response wholesale to reach
-                # status="completed", so additive asset_type growth normally
-                # surfaces via the raw-MCP fallback path instead — but routing
-                # both ingestion points through the same helper keeps a single
-                # validation contract (DRY) and is defensive for the completed
-                # path too. The adcp client may hand back either parsed library
-                # models or plain dicts; normalize to one dict shape so the
-                # shared helper has a uniform input.
-                format_dicts = [_as_format_dict(fmt) for fmt in formats_data.formats]
-                return _validate_formats_tolerant(format_dicts, logger)
-
-            elif result.status == "submitted":
-                raise AdCPAdapterError(
-                    f"Unexpected submitted status for list_creative_formats from {agent.name}",
-                    recovery="terminal",
-                )
-
-            elif result.status == "failed":
-                # Log detailed error information for debugging
-                # Use getattr for safe access in case response structure varies
-                error_msg = (
-                    getattr(result, "error", None) or getattr(result, "message", None) or "No error details provided"
-                )
-
-                # adcp SDK 3.6.0 requires structuredContent but some creative agents
-                # return TextContent with JSON. Also falls back when the SDK fails
-                # with generic errors (e.g., "no running event loop" → "No error
-                # details provided") that indicate an SDK-level transport issue.
-                error_text = str(error_msg)
-                sdk_transport_error = (
-                    "structuredContent" in error_text
-                    or "No error details provided" in error_text
-                    or "no running event loop" in error_text
-                    or "Failed to connect" in error_text
-                )
-                # Wholesale schema-validation FAILED (e.g. one AdCP-additive
-                # asset_type fails the closed Literal union → "doesn't match
-                # expected schema ListCreativeFormatsResponse" with thousands of
-                # errors). Route to the raw-MCP path where per-format tolerant
-                # ingestion can salvage the compatible formats instead of
-                # discarding the entire catalog. (salesagent-w8yn)
-                schema_validation_failure = any(
-                    marker in error_text.lower() for marker in _SCHEMA_VALIDATION_FAILURE_MARKERS
-                )
-                if sdk_transport_error or schema_validation_failure:
-                    reason = "schema-validation failure" if schema_validation_failure else "SDK transport issue"
-                    logger.warning(f"adcp {reason}, falling back to raw HTTP: {error_msg}")
-                    return await self._fetch_formats_raw_mcp(agent)
-
-                logger.error(f"Creative agent {agent.name} returned FAILED status. Error: {error_msg}")
-                debug_info = getattr(result, "debug_info", None)
-                if debug_info:
-                    logger.debug(f"Debug info: {debug_info}")
-                raise AdCPAdapterError(f"Creative agent format fetch failed: {error_msg}")
-
-            else:
-                raise AdCPAdapterError(
-                    f"Unexpected result status from {agent.name}: {result.status}",
-                    recovery="terminal",
-                )
-
-        except ADCPError as e:
-            from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
-
-            raise_mapped_adcp_error(e, agent_label=f"creative agent {agent.name}", logger=logger)
+        payload = extract_tool_payload(result)
+        return _validate_formats_tolerant(payload.get("formats", []), logger)
 
     async def _fetch_formats_raw_mcp(self, agent: CreativeAgent, *, field: str | None = None) -> list[Format]:
         """Fetch formats through the EGRESS SEAM, as a raw MCP tools/call.
@@ -703,22 +603,9 @@ class CreativeAgentRegistry:
         if cached and not cached.is_expired() and not force_refresh and not has_filters:
             return cached.formats
 
-        # Build client for this agent
-        client = self._build_adcp_client([agent])
-
         # Fetch from agent
-        formats = await self._fetch_formats_from_agent(
-            client,
-            agent,
-            max_width=max_width,
-            max_height=max_height,
-            min_width=min_width,
-            min_height=min_height,
-            is_responsive=is_responsive,
-            asset_types=asset_types,
-            name_search=name_search,
-            type_filter=type_filter,
-        )
+        filter_kwargs = {field: locals()[field] for field in _FORMAT_FILTER_FIELDS}
+        formats = await self._fetch_formats_operator(agent, **filter_kwargs)
 
         return self._cache_formats(agent, formats, has_filters)
 
@@ -807,50 +694,15 @@ class CreativeAgentRegistry:
 
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
 
-        # Build client for all agents
-        client = self._build_adcp_client(agents)
-
         for agent in agents:
             logger.info(f"list_all_formats: Fetching from {agent.agent_url}")
             try:
-                # Check cache first if no filters and not forcing refresh
-                has_filters = any(
-                    [
-                        max_width is not None,
-                        max_height is not None,
-                        min_width is not None,
-                        min_height is not None,
-                        is_responsive is not None,
-                        asset_types is not None,
-                        name_search is not None,
-                        type_filter is not None,
-                    ]
+                # Delegates to get_formats_for_agent for the cache-check + fetch +
+                # cache-store logic (DRY — this loop used to reimplement it inline).
+                filter_kwargs = {field: locals()[field] for field in _FORMAT_FILTER_FIELDS}
+                formats = await self.get_formats_for_agent(
+                    agent, force_refresh=force_refresh, type_filter=type_filter, **filter_kwargs
                 )
-
-                cache_key = self._cache_key(agent.agent_url)
-                cached = self._format_cache.get(cache_key)
-                if cached and not cached.is_expired() and not force_refresh and not has_filters:
-                    formats = cached.formats
-                else:
-                    # Fetch from agent
-                    formats = await self._fetch_formats_from_agent(
-                        client,
-                        agent,
-                        max_width=max_width,
-                        max_height=max_height,
-                        min_width=min_width,
-                        min_height=min_height,
-                        is_responsive=is_responsive,
-                        asset_types=asset_types,
-                        name_search=name_search,
-                        type_filter=type_filter,
-                    )
-
-                    # Update cache only if no filtering parameters
-                    if not has_filters:
-                        self._format_cache[cache_key] = CachedFormats(
-                            formats=formats, fetched_at=datetime.now(UTC), ttl_seconds=3600
-                        )
 
                 logger.info(f"list_all_formats: Got {len(formats)} formats from {agent.agent_url}")
                 all_formats.extend(formats)
@@ -980,21 +832,7 @@ class CreativeAgentRegistry:
                     "creative_manifest": creative_manifest,
                 },
             )
-
-            # Use structured_content field for JSON response (MCP protocol update)
-            if hasattr(result, "structured_content") and result.structured_content:
-                return result.structured_content
-
-            # Fallback: Parse result from content field (legacy)
-            import json
-
-            if isinstance(result.content, list) and result.content:
-                preview_data = result.content[0].text if hasattr(result.content[0], "text") else result.content[0]
-                if isinstance(preview_data, str):
-                    preview_data = json.loads(preview_data)
-                return preview_data
-
-            return {}
+            return extract_tool_payload(result)
 
     async def build_creative(
         self,
@@ -1043,21 +881,7 @@ class CreativeAgentRegistry:
                 params["context_id"] = context_id
 
             result = await client.call_tool("build_creative", params)
-
-            # Use structured_content field for JSON response (MCP protocol update)
-            if hasattr(result, "structured_content") and result.structured_content:
-                return result.structured_content
-
-            # Fallback: Parse result from content field (legacy)
-            import json
-
-            if isinstance(result.content, list) and result.content:
-                creative_data = result.content[0].text if hasattr(result.content[0], "text") else result.content[0]
-                if isinstance(creative_data, str):
-                    creative_data = json.loads(creative_data)
-                return creative_data
-
-            return {}
+            return extract_tool_payload(result)
 
 
 # Global registry instance

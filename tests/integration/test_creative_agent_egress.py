@@ -1,9 +1,11 @@
 """The creative-agent raw-MCP fetch, against a real origin and the real egress seam.
 
-``CreativeAgentRegistry._fetch_formats_raw_mcp`` is the fallback the registry
-takes when the adcp SDK rejects a TextContent response, and it is the last
-creative-agent code path that issues its own outbound HTTP. Once it fetches
-through ``src/core/security/outbound_http.py``, scheme policy, address
+``CreativeAgentRegistry._fetch_formats_raw_mcp`` is the COUNTERPARTY-agent_url
+fetch path (a buyer-supplied ``format_id.agent_url``) — the operator-agent path
+moved onto the guarded fastmcp seam (``create_mcp_client``, via
+``_fetch_formats_operator``) in salesagent-4n88, so this raw-JSON-RPC-over-asend
+method now has exactly the one caller. It issues its own outbound HTTP: once it
+fetches through ``src/core/security/outbound_http.py``, scheme policy, address
 validation, IP pinning, redirect refusal, the response-size cap, the retry
 count and the backoff schedule all belong to the seam and are graded once, in
 ``tests/integration/test_outbound_http.py``. Re-asserting them here would be the
@@ -24,11 +26,12 @@ What does NOT move to the seam, and is therefore graded here:
   change on the ``create_media_buy`` path and it is graded by counting hits on a
   server that actually ran.
 
-Both callers of the fetch reach it through ``_fetch_formats_from_agent``, and
-``ADCP_TESTING=true`` is autouse for the whole suite (``tests/conftest.py``), so
-both public entry points short-circuit to the checked-in reference formats. The
-fetch is therefore driven directly — as the unit tests it replaces did — because
-a test that went through ``list_all_formats_with_errors`` would assert on
+``ADCP_TESTING=true`` is autouse for the whole suite (``tests/conftest.py``), and
+the public entry point (``get_formats_for_agent``) skips this path entirely for
+an operator agent — only a COUNTERPARTY ``agent_url`` reaches it, ahead of the
+testing short-circuit (see ``_is_operator_agent`` in creative_agent_registry.py).
+The fetch is therefore driven directly — as the unit tests it replaces did —
+because a test that went through the public entry points would assert on
 formats that were never fetched.
 
 Spec grounding — pinned AdCP 3.1.1, read with ``git -C <adcp> show v3.1.1:<path>``:

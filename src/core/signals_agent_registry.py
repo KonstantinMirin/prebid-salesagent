@@ -31,11 +31,16 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from adcp import ADCPMultiAgentClient  # noqa: TID251 - SDK dials un-pinned; injection blocked by adcp 6.6.0 (GH #1589)
-from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError
+from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
+from pydantic import ValidationError
 
 from src.core.exceptions import AdCPAdapterError
+from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
+from src.core.helpers.mcp_tool_payload import extract_tool_payload
+from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import GetSignalsRequest
+from src.core.security.outbound_http import OutboundError
+from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError, create_mcp_client
 
 logger = logging.getLogger(__name__)
 
@@ -118,108 +123,71 @@ class SignalsAgentRegistry:
         agents.sort(key=lambda a: a.name)
         return [a for a in agents if a.enabled]
 
-    def _build_adcp_client(self, agents: list[SignalsAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from signals agent configs."""
-        from src.core.helpers.adapter_helpers import build_agent_config
+    async def _fetch_signals_operator(self, agent: SignalsAgent, brief: str) -> list[dict[str, Any]]:
+        """Fetch signals from an OPERATOR-configured signals agent, through the guarded MCP seam.
 
-        return ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
+        Routes through ``create_mcp_client`` — a real MCP handshake, IP-pinned,
+        redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
+        httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
+        transport injection point; upstream adcp-client-python#1004). Closes the
+        gap tracked by salesagent-4n88. Signals agents are ALWAYS
+        operator-configured (tenant DB rows) — there is no counterparty-supplied
+        signals URL, so every call here takes this path.
 
-    async def _get_signals_from_agent(
-        self,
-        client: ADCPMultiAgentClient,
-        agent: SignalsAgent,
-        brief: str,
-        tenant_id: str,
-        principal_id: str | None = None,
-        context: dict[str, Any] | None = None,
-        principal_data: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Fetch signals from a signals discovery agent via adcp library.
+        The MCP protocol path only ever returns COMPLETED or FAILED (never
+        SUBMITTED — that status exists in the adcp SDK's abstraction for other
+        protocols, not for a synchronous MCP tool call), so there is no webhook/
+        async branch to preserve here.
 
         Args:
-            client: AdCP client instance
             agent: SignalsAgent to query
-            brief: Search brief/query
-            tenant_id: Tenant identifier
-            principal_id: Optional principal identifier
-            context: Optional context data
-            principal_data: Optional principal information
+            brief: Search brief/query (mapped onto AdCP's ``signal_spec``)
 
         Returns:
-            List of signal objects from the agent
+            List of signal dicts from the agent
         """
         import time
 
         start_time = time.time()
 
+        request = GetSignalsRequest(signal_spec=brief)
+        args = request.model_dump(mode="json", exclude_none=True)
+
+        logger.info(f"[TIMING] Calling agent {agent.name}, brief: {brief[:50]}...")
         try:
-            # Build request parameters using new AdCP v2.2.0 schema
-            # Map our old 'brief' parameter to 'signal_spec'
-            signal_spec = brief
+            async with create_mcp_client(
+                agent_url=agent.agent_url,
+                auth=agent.auth,
+                auth_header=agent.auth_header,
+                timeout=agent.timeout,
+            ) as client:
+                result = await client.call_tool("get_signals", args)
+        except OutboundError as exc:
+            raise_mapped_outbound_error(exc, agent_label=f"signals agent {agent.name}", logger=logger)
+        except (MCPConnectionError, MCPCompatibilityError) as exc:
+            raise_mapped_mcp_error(exc, agent_label=f"signals agent {agent.name}", logger=logger)
 
-            # Create typed request (adcp 3.12: countries/destinations are flat on request, not via DeliverTo)
-            request = GetSignalsRequest(
-                signal_spec=signal_spec,
+        payload = extract_tool_payload(result)
+        if not payload:
+            # An empty payload means neither structured_content nor a TextContent
+            # block carried anything parseable. GetSignalsResponse.model_validate({})
+            # would otherwise validate CLEANLY with signals=None — every field is
+            # optional — silently producing signals=[] and masking a genuine
+            # agent failure as "agent up, 0 signals" (salesagent-9eu class bug).
+            raise AdCPAdapterError(
+                f"No parseable content in get_signals response from {agent.name}", recovery="terminal"
             )
+        try:
+            parsed = LibraryGetSignalsResponse.model_validate(payload)
+        except ValidationError as e:
+            raise AdCPAdapterError(
+                f"Signals agent {agent.name} returned an invalid response", recovery="terminal"
+            ) from e
 
-            logger.info(f"[TIMING] Calling agent {agent.name} for tenant {tenant_id}, brief: {brief[:50]}...")
-            call_start = time.time()
-
-            # Call agent
-            result = await client.agent(agent.name).get_signals(request)
-
-            call_duration = time.time() - call_start
-            logger.info(f"[TIMING] Agent call completed in {call_duration:.2f}s, status: {result.status}")
-
-            # Handle response based on status
-            if result.status == "completed":
-                # Synchronous completion
-                if result.data is None:
-                    raise AdCPAdapterError(
-                        "Completed status but no data in signals response",
-                        recovery="terminal",
-                    )
-                signals = result.data.signals
-                total_duration = time.time() - start_time
-                logger.info(f"[TIMING] Got {len(signals or [])} signals synchronously in {total_duration:.2f}s total")
-                # Convert Signal objects to dicts for internal use
-                # AdCP library returns Signal objects, but our internal code expects dicts
-                # Handle both Signal objects (from adcp library) and dicts (from some test/error scenarios)
-                result_signals = []
-                for signal in signals or []:
-                    if isinstance(signal, dict):
-                        # Already a dict, use as-is
-                        result_signals.append(signal)
-                    else:
-                        # Pydantic Signal object, convert to dict
-                        result_signals.append(signal.model_dump(mode="json"))
-                return result_signals
-
-            elif result.status == "submitted":
-                # Asynchronous completion - webhook registered
-                total_duration = time.time() - start_time
-                if result.submitted is None:
-                    raise AdCPAdapterError(
-                        "Submitted status but no submitted info in signals response",
-                        recovery="terminal",
-                    )
-                logger.info(
-                    f"[TIMING] Async operation submitted in {total_duration:.2f}s, "
-                    f"webhook: {result.submitted.webhook_url}"
-                )
-                # For now, return empty list (webhook will deliver results later)
-                return []
-
-            else:
-                raise AdCPAdapterError(
-                    f"Unexpected result status from {agent.name}: {result.status}",
-                    recovery="terminal",
-                )
-
-        except ADCPError as e:
-            from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
-
-            raise_mapped_adcp_error(e, agent_label=agent.name, logger=logger)
+        signals = parsed.signals or []
+        total_duration = time.time() - start_time
+        logger.info(f"[TIMING] Got {len(signals)} signals in {total_duration:.2f}s")
+        return [signal if isinstance(signal, dict) else signal.model_dump(mode="json") for signal in signals]
 
     async def get_signals(
         self,
@@ -249,30 +217,16 @@ class SignalsAgentRegistry:
         if not agents:
             return all_signals
 
-        # Build AdCP client for all agents and use as async context manager
-        client = self._build_adcp_client(agents)
-
-        # Use async context manager to ensure proper cleanup
-        async with client:
-            # Query each agent
-            for agent in agents:
-                logger.info(f"get_signals: Fetching from {agent.agent_url}")
-                try:
-                    signals = await self._get_signals_from_agent(
-                        client,
-                        agent,
-                        brief=brief,
-                        tenant_id=tenant_id,
-                        principal_id=principal_id,
-                        context=context,
-                        principal_data=principal_data,
-                    )
-                    logger.info(f"get_signals: Got {len(signals)} signals from {agent.agent_url}")
-                    all_signals.extend(signals)
-                except Exception as e:
-                    # Log error but continue with other agents (graceful degradation)
-                    logger.error(f"Failed to fetch signals from {agent.agent_url}: {e}", exc_info=True)
-                    continue
+        for agent in agents:
+            logger.info(f"get_signals: Fetching from {agent.agent_url}")
+            try:
+                signals = await self._fetch_signals_operator(agent, brief=brief)
+                logger.info(f"get_signals: Got {len(signals)} signals from {agent.agent_url}")
+                all_signals.extend(signals)
+            except Exception as e:
+                # Log error but continue with other agents (graceful degradation)
+                logger.error(f"Failed to fetch signals from {agent.agent_url}: {e}", exc_info=True)
+                continue
 
         logger.info(f"get_signals: Returning {len(all_signals)} total signals")
         return all_signals
@@ -301,36 +255,23 @@ class SignalsAgentRegistry:
                 timeout=30,
             )
 
-            # Build AdCP client and use as async context manager
-            client = self._build_adcp_client([test_agent])
+            signals = await self._fetch_signals_operator(test_agent, brief="test")
 
-            async with client:
-                # Try to fetch signals with minimal query
-                signals = await self._get_signals_from_agent(
-                    client,
-                    test_agent,
-                    brief="test",
-                    tenant_id="test_tenant",
-                )
-
-                return {
-                    "success": True,
-                    "message": "Successfully connected to signals agent",
-                    "signal_count": len(signals),
-                }
-
-        except ADCPAuthenticationError as e:
-            logger.error(f"Connection test failed (auth): {e.message}")
             return {
-                "success": False,
-                "error": f"Authentication failed: {e.message}. Check credentials and auth header.",
+                "success": True,
+                "message": "Successfully connected to signals agent",
+                "signal_count": len(signals),
             }
 
-        except ADCPConnectionError as e:
-            logger.error(f"Connection test failed (connection): {e.message}")
+        except AdCPAdapterError as e:
+            # A terminal rejection from the guarded MCP seam (e.g. HTTP 401/403/404
+            # during the handshake) — the seam's failure surface no longer
+            # distinguishes "bad auth" from "bad request" the way the deleted SDK
+            # client's ADCPAuthenticationError/ADCPConnectionError did.
+            logger.error(f"Connection test failed (rejected): {e.message}")
             return {
                 "success": False,
-                "error": f"Connection failed: {e.message}. Check agent URL and network.",
+                "error": f"Connection failed: {e.message}. Check credentials, auth header, and agent URL.",
             }
 
         except Exception as e:

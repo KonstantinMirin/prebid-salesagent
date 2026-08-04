@@ -284,8 +284,13 @@ def test_signals_agent(tenant_id, agent_id):
                     "credentials": agent.auth_credentials,
                 }
 
-            # Validate the stored URL before making an outbound request: a row written
-            # before this check existed still has to be graded on the way out.
+            # Re-validate the stored URL at send time: a row written while the
+            # egress-policy escape hatches were open must not become an outbound
+            # request once they are closed. This is NOT the validate-then-dial
+            # TOCTOU the epic removes — the underlying dial is guarded regardless
+            # (create_mcp_client's own validate_url) — it exists because policy
+            # can change between ingest and test, and this route's obligation is
+            # "ask again, using CURRENT policy" (tests/integration/test_admin_ingest_url_policy.py).
             if blocked := json_error_if_url_blocked(agent.agent_url, "Agent URL", success=False):
                 return blocked
 

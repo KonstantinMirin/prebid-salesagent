@@ -1,16 +1,23 @@
-"""Unit tests for creative agent TextContent fallback.
+"""Unit tests for the creative agent's MCP tool-result parser.
 
-Tests the fallback path when the adcp SDK 3.6.0 rejects TextContent
-responses from creative agents that don't return structuredContent.
+The fallback classes that used to live here (``TestStructuredContentFallbackTrigger``,
+``TestSchemaValidationFailureTriggersFallback``) tested a mechanism that no
+longer exists: the adcp SDK's own strict Pydantic parsing of
+``list_creative_formats`` responses, which sometimes rejected a TextContent-only
+reply and triggered a fallback to the raw-MCP path. salesagent-4n88 removed the
+SDK client (``ADCPMultiAgentClient``) from the OPERATOR agent path entirely —
+routing it through the guarded MCP seam instead — so there is no SDK-side
+strict parser left to reject anything, and therefore nothing left to trigger a
+fallback FROM. ``_parse_mcp_tool_result``'s own tolerant, per-format validation
+(covered below) is now the ONLY ingestion path, for both the operator method
+and the counterparty raw-MCP method.
 
 Fixes: salesagent-c6i
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
-from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.creative_agent_registry import CreativeAgentRegistry
 from src.core.exceptions import AdCPAdapterError
 
 
@@ -19,57 +26,7 @@ def registry():
     return CreativeAgentRegistry()
 
 
-@pytest.fixture
-def agent():
-    return CreativeAgent(
-        agent_url="https://creative.example.com",
-        name="test-agent",
-        auth={"type": "token", "credentials": "test-token"},
-        auth_header="x-test-auth",
-    )
-
-
 SAMPLE_FORMATS_JSON = '{"formats": [{"format_id": {"agent_url": "https://creative.example.com", "id": "display_image"}, "name": "Display Image", "type": "display"}]}'
-
-
-class TestStructuredContentFallbackTrigger:
-    """Test that the structuredContent error triggers the fallback."""
-
-    @pytest.mark.asyncio
-    async def test_failed_status_with_structured_content_error_triggers_fallback(self, registry, agent):
-        """SDK returns TaskResult(status='failed', error='...structuredContent...') → triggers fallback."""
-        mock_result = MagicMock()
-        mock_result.status = "failed"
-        mock_result.error = "MCP tool list_creative_formats did not return structuredContent. This SDK requires..."
-
-        mock_agent_proxy = MagicMock()
-        mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
-        mock_client = MagicMock()
-        mock_client.agent.return_value = mock_agent_proxy
-
-        with (
-            patch.object(registry, "_build_adcp_client", return_value=mock_client),
-            patch.object(registry, "_fetch_formats_raw_mcp", new_callable=AsyncMock, return_value=[]) as mock_fallback,
-        ):
-            await registry._fetch_formats_from_agent(mock_client, agent)
-            mock_fallback.assert_called_once_with(agent)
-
-    @pytest.mark.asyncio
-    async def test_failed_status_with_other_error_raises_value_error(self, registry, agent):
-        """SDK returns TaskResult(status='failed', error='some other error') → raises AdCPAdapterError."""
-        mock_result = MagicMock()
-        mock_result.status = "failed"
-        mock_result.error = "Connection refused"
-        mock_result.message = None
-
-        mock_agent_proxy = MagicMock()
-        mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
-        mock_client = MagicMock()
-        mock_client.agent.return_value = mock_agent_proxy
-
-        with patch.object(registry, "_build_adcp_client", return_value=mock_client):
-            with pytest.raises(AdCPAdapterError, match="Creative agent format fetch failed"):
-                await registry._fetch_formats_from_agent(mock_client, agent)
 
 
 class TestParseMcpToolResult:
@@ -211,48 +168,3 @@ class TestTolerantPerFormatIngestion:
             formats = registry._parse_mcp_tool_result(result, logging.getLogger())
         assert len(formats) == 1
         assert formats[0].format_id.id == "tracking_pixel"
-
-
-class TestSchemaValidationFailureTriggersFallback:
-    """salesagent-w8yn: a wholesale schema-parse FAILED from the adcp client must
-    fall back to the raw-MCP path (where per-format tolerance applies), not only
-    transport-class errors."""
-
-    async def _assert_routes_to_fallback(self, registry, agent, error_text):
-        """Drive a status='failed' result with the given error and assert the raw-MCP fallback is taken."""
-        mock_result = MagicMock()
-        mock_result.status = "failed"
-        mock_result.error = error_text
-        mock_result.message = None
-
-        mock_agent_proxy = MagicMock()
-        mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
-        mock_client = MagicMock()
-        mock_client.agent.return_value = mock_agent_proxy
-
-        with (
-            patch.object(registry, "_build_adcp_client", return_value=mock_client),
-            patch.object(registry, "_fetch_formats_raw_mcp", new_callable=AsyncMock, return_value=[]) as mock_fallback,
-        ):
-            await registry._fetch_formats_from_agent(mock_client, agent)
-            mock_fallback.assert_called_once_with(agent)
-
-    @pytest.mark.asyncio
-    async def test_schema_mismatch_failed_status_triggers_raw_fallback(self, registry, agent):
-        """SDK returns status='failed' with a schema-validation error → raw-MCP fallback."""
-        # The exact wholesale-validation signature observed live (2700 errors).
-        await self._assert_routes_to_fallback(
-            registry, agent, "Response doesn't match expected schema ListCreativeFormatsResponse"
-        )
-
-    @pytest.mark.asyncio
-    async def test_sdk66_schema_validation_phrasing_triggers_raw_fallback(self, registry, agent):
-        """adcp 6.6 rephrased wholesale-validation errors to 'Schema validation failed
-        for <tool>: ...' — observed live against the v3.1.1-pinned reference agent,
-        whose catalog carries post-3.1.1 additive asset_types (pixel_tracker).
-        Must route to the raw-MCP fallback (per-format tolerance), not raise."""
-        await self._assert_routes_to_fallback(
-            registry,
-            agent,
-            "Schema validation failed for list_creative_formats: /formats/0/assets/1 oneOf composition failed (+47 more)",
-        )
