@@ -14,35 +14,26 @@ Read-only. Emits JSON on stdout; ``--markdown`` renders the checked-in baseline.
 
 The pinned version comes from docs/adcp-spec-version.md, never hardcoded here --
 a sweep that hardcodes the version rots the same way the pins it audits did.
+
+Parsing primitives (pinned version, declared capabilities, phase/check grading,
+@source footer parsing, path normalization, tier classification) come from
+scripts/audit/storyboard_spec.py -- the shared L0 module also used by
+storyboard_coverage_map.py and the tests/fixtures/adcp_storyboards_pinned index,
+so this sweep's findings agree with the coverage map and the make quality guard
+by construction (salesagent-pw71).
 """
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-SCENARIO_TAG = "@storyboard-v3.1"
-FEATURES_DIR = Path("tests/bdd/features")
-CAPABILITIES = Path("src/core/tools/capabilities.py")
-SPEC_VERSION_DOC = Path("docs/adcp-spec-version.md")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-# @source repo=adcp ref=<ref> [phase=<phase>] path=<path>[#L..]
-SOURCE_RE = re.compile(
-    r"@source\s+repo=(?P<repo>\S+)\s+ref=(?P<ref>\S+)"
-    r"(?:\s+commit=(?P<commit>\S+))?"
-    r"(?:\s+phase=(?P<phase>\S+))?"
-    r"\s+path=(?P<path>[^\s#]+)"
-)
-TAGLINE_RE = re.compile(r"^\s*@[\w.\-]+(?:\s+@[\w.\-]+)*\s*$")
-SCENARIO_RE = re.compile(r"^\s*Scenario(?: Outline)?:\s*(?P<title>.+?)\s*$")
-IDENT_TAG_RE = re.compile(r"@(T-[A-Za-z0-9_\-]+)")
-# A storyboard phase/step id as it appears in the YAML and in scenario prose.
-PHASE_ID_RE = re.compile(r"^\s*-\s*id:\s*(?P<id>[a-z][a-z0-9_]{3,})\s*$", re.M)
+from scripts.audit import storyboard_spec  # noqa: E402
 
 
 @dataclass
@@ -57,7 +48,6 @@ class Binding:
     sources: list[dict[str, str]] = field(default_factory=list)
     findings: list[str] = field(default_factory=list)
     bucket: str = "A"  # A ok · B wrong path · C wrong tag · D under-asserts · E prod-blocked
-    comment_block: str = ""  # scenario prose; phase ids are named here, not only in `phase=`
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,115 +62,30 @@ class Binding:
         }
 
 
-def pinned_version(repo: Path) -> str:
-    """Read the pinned AdCP spec version from the doc that owns it."""
-    text = (repo / SPEC_VERSION_DOC).read_text(encoding="utf-8")
-    match = re.search(r"targets \*\*AdCP spec version ([0-9][^*]*)\*\*", text)
-    if not match:
-        raise SystemExit(f"cannot determine pinned version from {SPEC_VERSION_DOC}")
-    return match.group(1).strip()
-
-
-def declared_capabilities(repo: Path) -> dict[str, set[str]]:
-    """Extract declared specialisms and protocols from the capabilities emitter."""
-    text = (repo / CAPABILITIES).read_text(encoding="utf-8")
-    specialisms = set(re.findall(r"AdcpSpecialism\.(\w+)", text))
-    protocols = set(re.findall(r"SupportedProtocol\.(\w+)", text))
-    return {"specialisms": specialisms, "protocols": protocols}
-
-
-def parse_features(repo: Path) -> list[Binding]:
-    """Collect every @storyboard-v3.1 scenario with its tags, title and @source lines."""
-    bindings: list[Binding] = []
-    for feature in sorted((repo / FEATURES_DIR).glob("*.feature")):
-        lines = feature.read_text(encoding="utf-8").splitlines()
-        for idx, line in enumerate(lines):
-            if SCENARIO_TAG not in line or not TAGLINE_RE.match(line):
-                continue
-            tags = line.split()
-            title, title_line = "", idx + 1
-            for probe in range(idx + 1, min(idx + 4, len(lines))):
-                if match := SCENARIO_RE.match(lines[probe]):
-                    title, title_line = match.group("title"), probe + 1
-                    break
-            ident = next((m for t in tags if (m := IDENT_TAG_RE.match(t))), None)
-            binding = Binding(
-                feature=feature.name,
-                line=title_line,
-                identifier=ident.group(1) if ident else "(none)",
-                tags=tags,
-                title=title,
-            )
-            # @source lines and the explanatory prose live in the block after the
-            # scenario body, up to the next scenario's tag line.
-            block: list[str] = []
-            for probe in range(idx, min(idx + 80, len(lines))):
-                if probe > idx and TAGLINE_RE.match(lines[probe]):
-                    break  # next scenario's tag line
-                block.append(lines[probe])
-                if match := SOURCE_RE.search(lines[probe]):
-                    binding.sources.append({k: v or "" for k, v in match.groupdict().items()})
-            binding.comment_block = "\n".join(block)
-            bindings.append(binding)
-    return bindings
-
-
-def storyboard_tier(rel_path: str) -> str:
-    """Classify a storyboard path into the tier that decides how it is gated."""
-    for tier in ("universal", "specialisms", "protocols", "domains", "test-kits", "test-vectors"):
-        if f"/{tier}/" in f"/{rel_path}":
-            return tier
-    return "unknown"
-
-
-def phase_is_graded(text: str, phase: str) -> str | None:
-    """Is `phase` present, and does it sit under validations: or only expected: prose?
-
-    Returns "graded", "prose", "absent", or None when no phase was cited.
-    """
-    if not phase:
-        return None
-    anchor = re.search(rf"^(?P<indent>\s*)-\s*id:\s*{re.escape(phase)}\s*$", text, re.M)
-    if anchor is None:
-        return "absent"
-
-    # Window runs to the next sibling id at the SAME indent, not to the next
-    # deeper one. Phases sit two spaces in and their steps six; truncating at
-    # the first six-space `- id:` stopped at the phase's first step and never
-    # reached `validations:`, reporting graded phases as prose.
-    indent = len(anchor.group("indent"))
-    sibling = re.compile(rf"^\s{{0,{indent}}}-\s*id:\s*\S+\s*$", re.M)
-    rest = text[anchor.end() :]
-    following = sibling.search(rest)
-    window = rest[: following.start()] if following else rest
-    return "graded" if re.search(r"^\s*-\s*check:", window, re.M) else "prose"
-
-
-def phase_index(dist: Path) -> dict[str, list[str]]:
-    """Map every storyboard phase/step id at the pinned version to the files declaring it.
-
-    Scenario footers frequently omit ``phase=`` and name the phase in prose instead,
-    so the audit has to recognise phase ids on sight rather than trusting the key.
-    """
-    index: dict[str, list[str]] = {}
-    for yaml_file in sorted(dist.rglob("*.yaml")):
-        rel = str(yaml_file.relative_to(dist))
-        for match in PHASE_ID_RE.finditer(yaml_file.read_text(encoding="utf-8")):
-            index.setdefault(match.group("id"), []).append(rel)
-    return index
-
-
 def audit(repo: Path, adcp: Path) -> dict[str, Any]:
-    version = pinned_version(repo)
-    dist = adcp / "dist" / "compliance" / version
+    version = storyboard_spec.pinned_version(repo)
+    dist = storyboard_spec.dist_root(adcp, version)
     if not dist.is_dir():
         raise SystemExit(f"pinned compliance tree missing: {dist}")
 
-    declared = declared_capabilities(repo)
-    bindings = parse_features(repo)
-    phases = phase_index(dist)
+    declared = storyboard_spec.declared_capabilities(repo)
+    scenarios = storyboard_spec.tagged_scenarios(repo / "tests" / "bdd" / "features")
+    phases = storyboard_spec.phase_index(dist)
 
-    for binding in bindings:
+    bindings: list[Binding] = []
+    for scenario in scenarios:
+        binding = Binding(
+            feature=scenario.feature,
+            line=scenario.line,
+            identifier=scenario.identifier,
+            tags=scenario.tags,
+            title=scenario.title,
+        )
+        for match in re.finditer(r"@source\s+\S.*", scenario.block):
+            footer = storyboard_spec.parse_source_footer(match.group(0))
+            if footer and "path" in footer:
+                binding.sources.append({k: footer.get(k, "") for k in ("repo", "ref", "commit", "phase", "path")})
+
         # Phases the scenario names in prose, whether or not it set `phase=`.
         #
         # Match only an explicit phase REFERENCE ("<id> phase:", "phase=<id>",
@@ -193,22 +98,24 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
             if re.search(
                 rf"(?:\b{re.escape(p)}\s+(?:phase|step)\b|\bphase[=:]\s*{re.escape(p)}\b"
                 rf"|\bstep\s+{re.escape(p)}\b)",
-                binding.comment_block,
+                scenario.block,
             )
         )
         cited_files = {
-            re.sub(r"^(dist/compliance/[^/]+/|static/compliance/source/)", "", s["path"])
-            for s in binding.sources
-            if "schemas" not in s["path"]
+            storyboard_spec.normalize_cited_path(s["path"]) for s in binding.sources if "schemas" not in s["path"]
         }
         # Scenarios name their own storyboard in a summary line ("# <name>: <claim>")
         # immediately above the @source footer. When that self-declared name does not
         # match the cited file, the footer points somewhere the scenario never claimed.
-        declared_names = set(re.findall(r"^\s*#\s*([a-z][a-z0-9_]{3,}):\s", binding.comment_block, re.M))
-        cited_stems = {Path(p).stem for p in cited_files}
+        declared_names = scenario.self_declared_names
+        cited_stems = {storyboard_spec.storyboard_key(p) for p in cited_files}
         if declared_names and cited_stems and not (declared_names & cited_stems):
             # Only a finding when the declared name is a real storyboard/phase id.
-            real = {n for n in declared_names if n in phases or any(Path(f).stem == n for f in phases.get(n, []))}
+            real = {
+                n
+                for n in declared_names
+                if n in phases or any(storyboard_spec.storyboard_key(f) == n for f in phases.get(n, []))
+            }
             real |= {
                 n
                 for n in declared_names
@@ -232,6 +139,7 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
         if not binding.sources:
             binding.findings.append("NO @source footer — binding is unverifiable")
             binding.bucket = "C"
+            bindings.append(binding)
             continue
 
         for source in binding.sources:
@@ -241,9 +149,7 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
                 binding.findings.append(f"stale ref {ref!r} — pinned version is {version}")
                 binding.bucket = max(binding.bucket, "B")
 
-            # Normalize: footers cite either dist/compliance/<v>/... or static/... source paths.
-            rel = re.sub(r"^dist/compliance/[^/]+/", "", raw_path)
-            rel = re.sub(r"^static/compliance/source/", "", rel)
+            rel = storyboard_spec.normalize_cited_path(raw_path)
             is_schema = "schemas" in raw_path
             if is_schema:
                 source["verdict"] = "schema-path (not a storyboard)"
@@ -257,9 +163,9 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
                 continue
 
             text = target.read_text(encoding="utf-8")
-            tier = storyboard_tier(rel)
+            tier = storyboard_spec.storyboard_tier(rel)
             source["tier"] = tier
-            grading = phase_is_graded(text, phase)
+            grading = storyboard_spec.phase_is_graded(text, phase)
             if grading:
                 source["grading"] = grading
                 if grading == "absent":
@@ -270,10 +176,12 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
                     binding.bucket = "C"
 
             if tier == "specialisms":
-                name = rel.split("/")[1].replace("-", "_")
+                name = rel.split("/")[1]
                 if name not in declared["specialisms"]:
                     binding.findings.append(f"gated by specialism {name!r} which we do NOT declare — tag is wrong")
                     binding.bucket = "C"
+
+        bindings.append(binding)
 
     buckets: dict[str, int] = {}
     for binding in bindings:
@@ -293,7 +201,7 @@ def render_markdown(result: dict[str, Any]) -> str:
     out = [
         f"# Storyboard binding baseline — AdCP {version}",
         "",
-        f"`{result['scenario_count']}` scenarios tagged `{SCENARIO_TAG}`. "
+        f"`{result['scenario_count']}` scenarios tagged `{storyboard_spec.TAG}`. "
         f"Declared specialisms: `{', '.join(result['declared']['specialisms']) or 'none'}`; "
         f"protocols: `{', '.join(result['declared']['protocols']) or 'none'}`.",
         "",
@@ -311,15 +219,7 @@ def render_markdown(result: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--adcp", type=Path, default=Path.home() / "projects" / "adcp")
-    parser.add_argument("--markdown", action="store_true")
-    args = parser.parse_args()
-
-    result = audit(args.repo.resolve(), args.adcp.resolve())
-    print(render_markdown(result) if args.markdown else json.dumps(result, indent=2))
-    return 0
+    return storyboard_spec.run_cli(__doc__ or "", audit, render_markdown)
 
 
 if __name__ == "__main__":

@@ -55,40 +55,29 @@ remains open; do not treat SB-1b as evidence either way for
 Uncovered on-path storyboards are conformance gaps with no test. Covered
 off-path scenarios are tests claiming a grading that does not apply to us.
 
+Parsing primitives (universe filter, gate-field extraction, tagged-scenario
+block extraction, storyboard identity) come from scripts/audit/storyboard_spec.py
+— the shared L0 module also used by storyboard_binding_sweep.py and the
+tests/fixtures/adcp_storyboards_pinned index, so this map's classification and
+the binding sweep's audit agree by construction (salesagent-pw71).
+
 Read-only. Emits JSON, or ``--markdown`` for the checked-in artifact.
 """
 
 from __future__ import annotations
 
-import argparse
-import json
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
-FEATURES_DIR = Path("tests/bdd/features")
-CAPABILITIES = Path("src/core/tools/capabilities.py")
-SPEC_VERSION_DOC = Path("docs/adcp-spec-version.md")
-SCENARIO_TAG = "@storyboard-v3.1"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.audit import storyboard_spec  # noqa: E402
 
-def pinned_version(repo: Path) -> str:
-    text = (repo / SPEC_VERSION_DOC).read_text(encoding="utf-8")
-    match = re.search(r"targets \*\*AdCP spec version ([0-9][^*]*)\*\*", text)
-    if not match:
-        raise SystemExit(f"cannot determine pinned version from {SPEC_VERSION_DOC}")
-    return match.group(1).strip()
-
-
-def declared(repo: Path) -> dict[str, set[str]]:
-    text = (repo / CAPABILITIES).read_text(encoding="utf-8")
-    return {
-        "specialisms": {s.replace("_", "-") for s in re.findall(r"AdcpSpecialism\.(\w+)", text)},
-        "protocols": {p.replace("_", "-") for p in re.findall(r"SupportedProtocol\.(\w+)", text)},
-    }
-
-
+# ADVERTISED_TOOLS is intentionally still hand-maintained here — deriving it
+# from src/core/tools/ is tracked separately as part of the repo's broader
+# "5 hand-maintained discovery surfaces" initiative (#1210/qz2g), not folded
+# into this ticket's parsing-primitive extraction.
 ADVERTISED_TOOLS = {
     "activate_signal",
     "create_media_buy",
@@ -105,38 +94,6 @@ ADVERTISED_TOOLS = {
     "sync_creatives",
     "update_media_buy",
 }
-
-
-def requiring_indexes(dist: Path) -> dict[str, list[str]]:
-    """Map each scenario id to the index.yaml files that pull it in.
-
-    A scenario's directory does NOT determine its gate. `governance_conditions`
-    sits under `protocols/media-buy/scenarios/` but is required only by
-    `specialisms/governance-aware-seller` and `-spend-authority`, so classifying
-    it by path prefix reports it ungated when it is specialism-gated.
-    """
-    required_by: dict[str, list[str]] = {}
-    for index in sorted(dist.rglob("index.yaml")):
-        rel_index = str(index.relative_to(dist))
-        if rel_index.startswith("domains/"):
-            continue
-        block = re.search(r"^requires_scenarios:\n((?:\s+-\s+\S+\n)+)", index.read_text("utf-8"), re.M)
-        if not block:
-            continue
-        for line in block.group(1).splitlines():
-            scenario_id = line.strip().lstrip("- ").split("/")[-1]
-            required_by.setdefault(scenario_id, []).append(rel_index)
-    return required_by
-
-
-def index_is_satisfiable(rel_index: str, decl: dict[str, set[str]]) -> bool:
-    """Can we reach this index at all, given what we declare?"""
-    tier, name = rel_index.split("/")[0], rel_index.split("/")[1]
-    if tier == "specialisms":
-        return name in decl["specialisms"]
-    if tier == "protocols":
-        return name in decl["protocols"]
-    return True
 
 
 def classify(
@@ -166,14 +123,11 @@ def classify(
     # Reachability first: if every index that pulls this scenario in is behind a
     # gate we fail, the scenario is unreachable regardless of its own directory.
     owners = (required_by or {}).get(Path(rel).stem, [])
-    if owners and not any(index_is_satisfiable(o, decl) for o in owners):
+    if owners and not any(storyboard_spec.index_reachable(o, decl) for o in owners):
         return "OFF-PATH", f"only required by {sorted(owners)} — all behind gates we do not declare"
 
     def tool_gate() -> tuple[str, str] | None:
-        block = re.search(r"^required_tools:\n((?:\s+-\s+\S+\n)+)", text, re.M)
-        if not block:
-            return None
-        listed = {line.strip().lstrip("- ") for line in block.group(1).splitlines()}
+        listed = storyboard_spec.required_tools(text)
         if listed and not (listed & tools):
             return "OFF-PATH", f"advertises none of required_tools {sorted(listed)}"
         return None
@@ -191,86 +145,47 @@ def classify(
         protocol = rel.split("/")[1]
         if protocol not in decl["protocols"]:
             return "OFF-PATH", f"protocol {protocol!r} not declared"
-        if capability := re.search(r"requires_capability:\s*\n\s*path:\s*(\S+)\s*\n\s*equals:\s*(\S+)", text):
-            return "GATED", f"requires_capability {capability.group(1)} == {capability.group(2)}"
+        if capability := storyboard_spec.requires_capability(text):
+            return "GATED", f"requires_capability {capability[0]} == {capability[1]}"
         return tool_gate() or ("ON-PATH", f"protocol {protocol!r}, required_tools advertised")
 
     return "UNKNOWN", "unclassified tier"
 
 
-def storyboard_key(rel: str) -> str:
-    """Stable identity for a storyboard file.
-
-    ``Path.stem`` collapses every ``*/index.yaml`` onto the literal "index",
-    which makes one citation of ``protocols/creative/index.yaml`` look like a
-    claim on every specialism's index. Key index files by their parent instead.
-    """
-    path = Path(rel)
-    return path.parent.name if path.stem == "index" else path.stem
-
-
 def covered_storyboards(repo: Path) -> dict[str, list[str]]:
     """Storyboard stems our @storyboard-v3.1 scenarios claim, by scenario identifier."""
     claims: dict[str, list[str]] = {}
-    for feature in sorted((repo / FEATURES_DIR).glob("*.feature")):
-        lines = feature.read_text("utf-8").splitlines()
-        for idx, line in enumerate(lines):
-            if SCENARIO_TAG not in line:
-                continue
-            ident = next((t for t in line.split() if t.startswith("@T-")), "@?").lstrip("@")
-            block = "\n".join(lines[idx : idx + 60])
-            # Prefer the scenario's self-declared storyboard name over its (often wrong) @source.
-            for name in re.findall(r"^\s*#\s*([a-z][a-z0-9_]{3,}):\s", block, re.M):
-                claims.setdefault(name, []).append(ident)
-            for path in re.findall(r"path=(\S+)", block):
-                if "schemas" not in path:
-                    claims.setdefault(storyboard_key(path), []).append(ident)
+    for scenario in storyboard_spec.tagged_scenarios(repo / "tests" / "bdd" / "features"):
+        # Prefer the scenario's self-declared storyboard name over its (often wrong) @source.
+        for name in scenario.self_declared_names:
+            claims.setdefault(name, []).append(scenario.identifier)
+        footer = storyboard_spec.parse_source_footer(scenario.block)
+        if footer and "path" in footer and "schemas" not in footer["path"]:
+            rel = storyboard_spec.normalize_cited_path(footer["path"])
+            claims.setdefault(storyboard_spec.storyboard_key(rel), []).append(scenario.identifier)
     return claims
 
 
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
-    version = pinned_version(repo)
-    dist = adcp / "dist" / "compliance" / version
+    version = storyboard_spec.pinned_version(repo)
+    dist = storyboard_spec.dist_root(adcp, version)
     if not dist.is_dir():
         raise SystemExit(f"missing pinned compliance tree: {dist}")
 
-    decl = declared(repo)
+    decl = storyboard_spec.declared_capabilities(repo)
     claims = covered_storyboards(repo)
-    required_by = requiring_indexes(dist)
+    required_by = storyboard_spec.requiring_indexes(dist)
 
     rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for yaml_file in sorted(dist.rglob("*.yaml")):
-        rel = str(yaml_file.relative_to(dist))
-        # protocols/ and domains/ mirror each other byte-for-byte; count each storyboard once.
-        if rel.startswith("domains/"):
-            continue
-        stem = storyboard_key(rel)
-        if rel.startswith(("test-kits/", "test-vectors/")) or stem == "storyboard-schema":
-            continue
-        text = yaml_file.read_text("utf-8")
-        # universal/ holds two files that are not graded storyboards at all:
-        # fictional-entities.yaml (a shared data catalog) and
-        # runner-output-contract.yaml (a contract for runner OUTPUT shape, not
-        # something dispatched against an agent — it isn't even valid plain
-        # YAML, it embeds prose/code blocks). Every real storyboard declares a
-        # top-level `track:`; these two don't. Confirmed against SB-1b's real
-        # runner run: neither ever appears in storyboards_executed or
-        # storyboards_missing_tools, unlike every other universal/ file.
-        if rel.startswith("universal/") and not re.search(r"^track:\s*\S", text, re.M):
-            continue
-        status, reason = classify(rel, text, decl, ADVERTISED_TOOLS, required_by)
-        key = f"{rel}"
-        if key in seen:
-            continue
-        seen.add(key)
+    for sb in storyboard_spec.storyboards(dist):
+        status, reason = classify(sb.rel, sb.text, decl, ADVERTISED_TOOLS, required_by)
         rows.append(
             {
-                "storyboard": rel,
-                "stem": stem,
+                "storyboard": sb.rel,
+                "stem": sb.stem,
                 "status": status,
                 "reason": reason,
-                "covered_by": sorted(set(claims.get(stem, []))),
+                "covered_by": sorted(set(claims.get(sb.stem, []))),
             }
         )
 
@@ -326,14 +241,7 @@ def render(result: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--adcp", type=Path, default=Path.home() / "projects" / "adcp")
-    parser.add_argument("--markdown", action="store_true")
-    args = parser.parse_args()
-    result = build(args.repo.resolve(), args.adcp.resolve())
-    print(render(result) if args.markdown else json.dumps(result, indent=2))
-    return 0
+    return storyboard_spec.run_cli(__doc__ or "", build, render)
 
 
 if __name__ == "__main__":

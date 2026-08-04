@@ -19,7 +19,8 @@ Branch: `test/storyboard-binding-baseline`.
 
 Generated (not hand-written) companions live in `docs/test-obligations/`:
 `storyboard-binding-baseline.md`, `storyboard-coverage-map.md`,
-`storyboard-reconciliation.md`. Regenerate with the scripts in `scripts/audit/`.
+`storyboard-reconciliation.md`, `storyboard-roadmap.md`. Regenerate with the
+scripts in `scripts/audit/`.
 
 ## Read these with the right amount of trust
 
@@ -43,6 +44,12 @@ Each was caught by cross-checking against the spec or by a reviewer contradictin
 tool. Assume the same failure mode is still possible.
 
 ## The one number that matters
+
+> Numbers below superseded by salesagent-pw71 (SB-5b): the parsing bugs this
+> paragraph's own methodology inherited (see "The lesson" above) are now fixed
+> in `scripts/audit/storyboard_spec.py`, and `docs/test-obligations/
+> storyboard-coverage-map.md` is the current, regenerated source of truth
+> (62 on-path storyboards, 51 with no scenario, as of that change).
 
 70 storyboards apply to us at 3.1.1, containing **1,337 graded checks**. Our
 scenarios touch 12 of the 70; **1,167 checks sit in storyboards with no scenario at

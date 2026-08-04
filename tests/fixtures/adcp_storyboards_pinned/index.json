@@ -1,7 +1,7 @@
 {
   "adcp_spec_version": "3.1.1",
   "source": "adcontextprotocol/adcp dist/compliance/3.1.1",
-  "storyboard_count": 124,
+  "storyboard_count": 121,
   "storyboards": {
     "protocols/brand/index.yaml": {
       "phases": [
@@ -2165,35 +2165,6 @@
       ],
       "universal": true
     },
-    "universal/fictional-entities.yaml": {
-      "phases": [
-        "acme_outdoor",
-        "bistro_oranje",
-        "camping_gear",
-        "commhub",
-        "cooking_bistros_series",
-        "ev_insider_series",
-        "hiking_trails",
-        "loti_entertainment",
-        "meridian_geo",
-        "mountaineering",
-        "nova_motors",
-        "osei_natural",
-        "outdoor_magazine",
-        "outdoornet",
-        "pinnacle_agency",
-        "podtrail",
-        "prism",
-        "shopgrid",
-        "streamhaus",
-        "summit_foods",
-        "summit_stories_series",
-        "test_publisher",
-        "trail_life_series",
-        "trident_auto"
-      ],
-      "universal": true
-    },
     "universal/get-media-buys-pagination-integrity.yaml": {
       "phases": [
         "capability_discovery",
@@ -2370,10 +2341,6 @@
       ],
       "universal": true
     },
-    "universal/runner-output-contract.yaml": {
-      "phases": [],
-      "universal": true
-    },
     "universal/schema-validation-signals.yaml": {
       "phases": [
         "capability_discovery",
@@ -2451,10 +2418,6 @@
       "required_tools": [
         "get_products"
       ],
-      "universal": true
-    },
-    "universal/storyboard-schema.yaml": {
-      "phases": [],
       "universal": true
     },
     "universal/v3-envelope-integrity.yaml": {

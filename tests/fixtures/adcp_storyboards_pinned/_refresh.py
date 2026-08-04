@@ -19,72 +19,53 @@ disagree — and when they do, that disagreement is the finding.
 To refresh (a deliberate, reviewed change — normally only when the pin advances):
     uv run python tests/fixtures/adcp_storyboards_pinned/_refresh.py
 
-Reads from a local clone at ~/projects/adcp.
+Reads from a local clone at ~/projects/adcp. Parsing primitives (the storyboard
+universe filter, required_tools/requires_capability/requires_scenarios extraction,
+phase-id parsing) come from scripts/audit/storyboard_spec.py — the shared L0 module
+also used by storyboard_coverage_map.py and storyboard_binding_sweep.py, so this
+index's universe and gate fields agree with theirs by construction (salesagent-pw71).
 """
 
 from __future__ import annotations
 
 import json
-import re
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.audit import storyboard_spec  # noqa: E402
+
 ADCP = Path.home() / "projects" / "adcp"
 OUT = Path(__file__).parent / "index.json"
 
-PHASE_RE = re.compile(r"^\s*-\s*id:\s*(?P<id>[a-z][a-z0-9_]{3,})\s*$", re.M)
-CAPABILITY_RE = re.compile(r"requires_capability:\s*\n\s*path:\s*(\S+)\s*\n\s*equals:\s*(\S+)")
-TOOLS_RE = re.compile(r"^required_tools:\n((?:\s+-\s+\S+\n)+)", re.M)
-
-
-def pinned_version() -> str:
-    doc = (REPO_ROOT / "docs" / "adcp-spec-version.md").read_text(encoding="utf-8")
-    match = re.search(r"targets \*\*AdCP spec version ([0-9][^*]*)\*\*", doc)
-    if not match:
-        raise SystemExit("cannot determine pinned version from docs/adcp-spec-version.md")
-    return match.group(1).strip()
-
 
 def build() -> dict[str, object]:
-    version = pinned_version()
-    dist = ADCP / "dist" / "compliance" / version
+    version = storyboard_spec.pinned_version(REPO_ROOT)
+    dist = storyboard_spec.dist_root(ADCP, version)
     if not dist.is_dir():
         raise SystemExit(f"pinned compliance tree not found: {dist}\nIs ~/projects/adcp cloned and current?")
 
-    # Which index.yaml pulls each scenario in. A scenario's directory does NOT
-    # determine its gate: governance_conditions sits under protocols/media-buy/
-    # but is required only by specialisms we may not declare.
-    required_by: dict[str, list[str]] = {}
-    for index in sorted(dist.rglob("index.yaml")):
-        rel_index = str(index.relative_to(dist))
-        if rel_index.startswith("domains/"):
-            continue
-        block = re.search(r"^requires_scenarios:\n((?:\s+-\s+\S+\n)+)", index.read_text("utf-8"), re.M)
-        if block:
-            for line in block.group(1).splitlines():
-                required_by.setdefault(line.strip().lstrip("- ").split("/")[-1], []).append(rel_index)
+    required_by = storyboard_spec.requiring_indexes(dist)
 
     storyboards: dict[str, dict[str, object]] = {}
-    for yaml_file in sorted(dist.rglob("*.yaml")):
-        rel = str(yaml_file.relative_to(dist))
-        # protocols/ and domains/ mirror byte-for-byte; index the protocols/ view only.
-        if rel.startswith(("domains/", "test-kits/", "test-vectors/")):
-            continue
-        text = yaml_file.read_text(encoding="utf-8")
-        entry: dict[str, object] = {"phases": sorted({m.group("id") for m in PHASE_RE.finditer(text)})}
-        if capability := CAPABILITY_RE.search(text):
-            entry["requires_capability"] = {"path": capability.group(1), "equals": capability.group(2)}
-        if tools := TOOLS_RE.search(text):
-            entry["required_tools"] = sorted(line.strip().lstrip("- ") for line in tools.group(1).splitlines())
-        if owners := required_by.get(yaml_file.stem):
+    for sb in storyboard_spec.storyboards(dist):
+        entry: dict[str, object] = {"phases": sorted(storyboard_spec.phases(sb.text))}
+        if capability := storyboard_spec.requires_capability(sb.text):
+            entry["requires_capability"] = {"path": capability[0], "equals": capability[1]}
+        if tools := storyboard_spec.required_tools(sb.text):
+            entry["required_tools"] = sorted(tools)
+        if owners := required_by.get(sb.stem):
             entry["required_by"] = sorted(owners)
-        if rel.startswith("specialisms/"):
-            entry["specialism"] = rel.split("/")[1]
-        elif rel.startswith("protocols/"):
-            entry["protocol"] = rel.split("/")[1]
-        elif rel.startswith("universal/"):
+        tier = storyboard_spec.storyboard_tier(sb.rel)
+        if tier == "specialisms":
+            entry["specialism"] = sb.rel.split("/")[1]
+        elif tier == "protocols":
+            entry["protocol"] = sb.rel.split("/")[1]
+        elif tier == "universal":
             entry["universal"] = True
-        storyboards[rel] = entry
+        storyboards[sb.rel] = entry
 
     return {
         "adcp_spec_version": version,

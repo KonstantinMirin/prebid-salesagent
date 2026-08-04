@@ -31,7 +31,9 @@ Two things are true at once and both matter:
   We commit to `/compliance/3.1.1/protocols/media-buy/`. `list_all` lives in
   `/compliance/3.1.1/protocols/creative/`. It is not on our conformance path.
 
-The repo already knows this: `docs/test-obligations/storyboard-coverage-map.md:69` lists
+The repo already knows this: `docs/test-obligations/storyboard-coverage-map.md`
+(line 69 pre-salesagent-pw71 regeneration; the row moved when SB-5b's parsing
+fixes changed row ordering — search for `protocols/creative/index.yaml`) lists
 `protocols/creative/index.yaml` → *"protocol 'creative' not declared"* → and names
 `T-UC-018-storyboard-list-all-creatives-after-sync` among its orphans. The feature file's tag
 just never caught up.

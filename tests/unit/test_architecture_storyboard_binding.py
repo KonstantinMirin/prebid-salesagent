@@ -13,11 +13,21 @@ months. This guard makes each failure mode fail loudly:
 1. a tagged scenario has an `@source` footer
 2. the footer's `ref` names the pinned spec version, not some older commit
 3. the cited storyboard path exists at the pin
-4. a phase named in `<id> phase:` form lives in the cited file
+4. a phase named in prose lives in the cited file
 5. the cited storyboard is not gated by a protocol/specialism/capability we lack
 
 Offline: reads `tests/fixtures/adcp_storyboards_pinned/index.json`, refreshed by the
-`_refresh.py` next to it when the pin advances.
+`_refresh.py` next to it when the pin advances. This guard runs in CI, where no
+`~/projects/adcp` clone exists — it must never resolve a live pinned tree.
+
+Feature-file parsing (tagged-scenario extraction, `@source` footer parsing, path
+normalization) comes from scripts/audit/storyboard_spec.py, the shared L0 module
+also used by storyboard_coverage_map.py and storyboard_binding_sweep.py, so this
+guard's notion of a tagged scenario's block/footer agrees with the audit scripts by
+construction (salesagent-pw71) — importing it is safe here because none of its
+functions this file calls (`tagged_scenarios`, `parse_source_footer`,
+`normalize_cited_path`) touch the pinned compliance tree; only the vendored
+`index.json` and this repo's own `.feature` files are read.
 
 Allowlist policy is the repo standard — it may only shrink. Entries are seeded from
 the audit baseline; each is removed as its scenario is re-pinned or retagged.
@@ -27,6 +37,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,13 +45,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FEATURES = REPO_ROOT / "tests" / "bdd" / "features"
 INDEX = REPO_ROOT / "tests" / "fixtures" / "adcp_storyboards_pinned" / "index.json"
-CAPABILITIES = REPO_ROOT / "src" / "core" / "tools" / "capabilities.py"
 
-TAG = "@storyboard-v3.1"
-TAGLINE_RE = re.compile(r"^\s*@[\w.\-]+(?:\s+@[\w.\-]+)*\s*$")
-IDENT_RE = re.compile(r"@(T-[A-Za-z0-9_\-]+)")
-SOURCE_RE = re.compile(r"@source\s+repo=\S+\s+ref=(?P<ref>\S+)(?:\s+\S+=\S+)*?\s+path=(?P<path>[^\s#]+)")
-PHASE_REF_RE = re.compile(r"\b([a-z][a-z0-9_]{3,})\s+phase\b")
+sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.audit import storyboard_spec  # noqa: E402
 
 # Scenarios whose binding is known-broken at the audit baseline. MAY ONLY SHRINK.
 # Every entry is a scenario the 3.1.1 audit found mis-bound; removing one means its
@@ -66,66 +74,33 @@ def _index() -> dict:
     return json.loads(INDEX.read_text(encoding="utf-8"))
 
 
-def _declared() -> tuple[set[str], set[str]]:
-    text = CAPABILITIES.read_text(encoding="utf-8")
-    specialisms = {s.replace("_", "-") for s in re.findall(r"AdcpSpecialism\.(\w+)", text)}
-    protocols = {p.replace("_", "-") for p in re.findall(r"SupportedProtocol\.(\w+)", text)}
-    return specialisms, protocols
-
-
-def _index_reachable(rel_index: str, specialisms: set[str], protocols: set[str]) -> bool:
-    """Can we reach the index that pulls a scenario in, given what we declare?"""
-    parts = rel_index.split("/")
-    if parts[0] == "specialisms":
-        return parts[1] in specialisms
-    if parts[0] == "protocols":
-        return parts[1] in protocols
-    return True
-
-
-def _tagged_scenarios() -> list[tuple[str, str, str]]:
-    """(identifier, feature name, comment block) for every @storyboard-v3.1 scenario."""
-    found: list[tuple[str, str, str]] = []
-    for feature in sorted(FEATURES.glob("*.feature")):
-        lines = feature.read_text(encoding="utf-8").splitlines()
-        for idx, line in enumerate(lines):
-            if TAG not in line or not TAGLINE_RE.match(line):
-                continue
-            ident = next((m.group(1) for t in line.split() if (m := IDENT_RE.match(t))), "(unnamed)")
-            block: list[str] = []
-            for probe in range(idx, min(idx + 80, len(lines))):
-                if probe > idx and TAGLINE_RE.match(lines[probe]):
-                    break
-                block.append(lines[probe])
-            found.append((ident, feature.name, "\n".join(block)))
-    return found
-
-
 def _violations() -> dict[str, str]:
     """Map identifier -> first binding defect found. Empty when every binding resolves."""
     index = _index()
     version = index["adcp_spec_version"]
     storyboards: dict[str, dict] = index["storyboards"]
-    specialisms, protocols = _declared()
+    declared = storyboard_spec.declared_capabilities(REPO_ROOT)
     bad: dict[str, str] = {}
 
-    for ident, feature, block in _tagged_scenarios():
-        match = SOURCE_RE.search(block)
-        if not match:
-            bad[ident] = f"{feature}: no @source footer"
+    for scenario in storyboard_spec.tagged_scenarios(FEATURES):
+        footer = storyboard_spec.parse_source_footer(scenario.block)
+        if footer is None or "ref" not in footer or "path" not in footer:
+            bad[scenario.identifier] = f"{scenario.feature}: no @source footer"
             continue
 
-        ref, raw_path = match.group("ref"), match.group("path")
+        ref, raw_path = footer["ref"], footer["path"]
         if version not in ref:
-            bad[ident] = f"{feature}: @source ref {ref!r} does not name the pinned version {version}"
+            bad[scenario.identifier] = (
+                f"{scenario.feature}: @source ref {ref!r} does not name the pinned version {version}"
+            )
             continue
 
-        rel = re.sub(r"^(dist/compliance/[^/]+/|static/compliance/source/)", "", raw_path)
+        rel = storyboard_spec.normalize_cited_path(raw_path)
         if "schemas" in rel:
             continue  # schema-only citation; nothing storyboard-shaped to resolve
         entry = storyboards.get(rel)
         if entry is None:
-            bad[ident] = f"{feature}: cited storyboard {rel!r} does not exist at {version}"
+            bad[scenario.identifier] = f"{scenario.feature}: cited storyboard {rel!r} does not exist at {version}"
             continue
 
         # Reachability before tier: a scenario's directory does not determine its
@@ -133,24 +108,26 @@ def _violations() -> dict[str, str]:
         # but is pulled in only by specialisms we do not declare, so a path-prefix
         # check reports it ungated.
         owners: list[str] = entry.get("required_by", [])
-        if owners and not any(_index_reachable(o, specialisms, protocols) for o in owners):
-            bad[ident] = f"{feature}: only required by {owners} — all behind gates we do not declare"
+        if owners and not any(storyboard_spec.index_reachable(o, declared) for o in owners):
+            bad[scenario.identifier] = (
+                f"{scenario.feature}: only required by {owners} — all behind gates we do not declare"
+            )
             continue
 
-        if (specialism := entry.get("specialism")) and specialism not in specialisms:
-            bad[ident] = f"{feature}: gated by undeclared specialism {specialism!r}"
+        if (specialism := entry.get("specialism")) and specialism not in declared["specialisms"]:
+            bad[scenario.identifier] = f"{scenario.feature}: gated by undeclared specialism {specialism!r}"
             continue
-        if (protocol := entry.get("protocol")) and protocol not in protocols:
-            bad[ident] = f"{feature}: gated by undeclared protocol {protocol!r}"
+        if (protocol := entry.get("protocol")) and protocol not in declared["protocols"]:
+            bad[scenario.identifier] = f"{scenario.feature}: gated by undeclared protocol {protocol!r}"
             continue
         if capability := entry.get("requires_capability"):
-            bad[ident] = f"{feature}: gated by requires_capability {capability['path']}"
+            bad[scenario.identifier] = f"{scenario.feature}: gated by requires_capability {capability['path']}"
             continue
 
         known = set(entry.get("phases", []))
-        for named in {m.group(1) for m in PHASE_REF_RE.finditer(block)}:
+        for named in {m.group(1) for m in re.finditer(r"\b([a-z][a-z0-9_]{3,})\s+phase\b", scenario.block)}:
             if any(named in sb.get("phases", []) for sb in storyboards.values()) and named not in known:
-                bad[ident] = f"{feature}: names phase {named!r}, absent from cited {rel!r}"
+                bad[scenario.identifier] = f"{scenario.feature}: names phase {named!r}, absent from cited {rel!r}"
                 break
 
     return bad
@@ -169,7 +146,7 @@ def test_storyboard_bindings_resolve_at_the_pin() -> None:
 def test_allowlist_has_no_stale_entries() -> None:
     """Allowlisted scenarios that now resolve must be removed — the ratchet only shrinks."""
     broken = set(_violations())
-    identifiers = {ident for ident, _, _ in _tagged_scenarios()}
+    identifiers = {s.identifier for s in storyboard_spec.tagged_scenarios(FEATURES)}
     stale = {e for e in KNOWN_BROKEN_BINDINGS if e in identifiers and e not in broken}
     assert stale == set(), "These bindings now resolve; remove them from KNOWN_BROKEN_BINDINGS:\n" + "\n".join(
         f"  {e}" for e in sorted(stale)

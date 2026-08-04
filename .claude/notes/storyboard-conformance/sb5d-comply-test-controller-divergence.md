@@ -58,7 +58,10 @@ conformance-graded surface.
 (`tests/fixtures/adcp_storyboards_pinned/index.json`) list
 `comply_test_controller` in `required_tools`. Of those, 20 sit on our
 declared conformance path with no scenario today (the "on-path, NOT COVERED"
-58 in `docs/test-obligations/storyboard-coverage-map.md`). Every storyboard
+58 in `docs/test-obligations/storyboard-coverage-map.md` — that total is now 51
+after salesagent-pw71 (SB-5b) fixed the coverage map's parsing bugs; the
+comply_test_controller total of 29 above is unaffected, since it comes from
+`required_tools` extraction, not the fixed window/key logic). Every storyboard
 step that dispatches `task: comply_test_controller` is permanently
 unreachable for us — not "pending implementation," not a coverage gap to
 close, a **closed** branch. These 20 stay dormant/ungraded by design. See
