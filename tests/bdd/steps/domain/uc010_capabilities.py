@@ -161,7 +161,7 @@ def given_full_capabilities(ctx: dict) -> None:
 @given("the tenant supports audience targeting")
 def given_supports_audience_targeting(ctx: dict) -> None:
     """Declare audience-targeting support. Production does not emit the
-    media_buy.audience_targeting block yet (#1592) — records intent; the
+    media_buy.audience_targeting block yet (#1855) — records intent; the
     value asserts xfail until the block lands."""
     _config(ctx)["audience_targeting"] = True
 
@@ -169,7 +169,7 @@ def given_supports_audience_targeting(ctx: dict) -> None:
 @given("the tenant supports conversion tracking")
 def given_supports_conversion_tracking(ctx: dict) -> None:
     """Declare conversion-tracking support. Production does not emit the
-    media_buy.conversion_tracking block yet (#1592) — records intent; the
+    media_buy.conversion_tracking block yet (#1855) — records intent; the
     presence/value asserts xfail until the block lands."""
     _config(ctx)["conversion_tracking"] = True
 
@@ -177,14 +177,14 @@ def given_supports_conversion_tracking(ctx: dict) -> None:
 @given('"creative" is in supported_protocols')
 def given_creative_in_supported_protocols(ctx: dict) -> None:
     """Declare the creative protocol. Production advertises only the media_buy
-    protocol, so the creative section is not emitted (#1592) — records intent."""
+    protocol, so the creative section is not emitted (#1724) — records intent."""
     _config(ctx).setdefault("supported_protocols", []).append("creative")
 
 
 @given("the tenant declares creative supports_compliance true")
 def given_creative_supports_compliance(ctx: dict) -> None:
     """Declare the optional creative.supports_compliance value. Records intent;
-    production does not emit the creative section yet (#1592)."""
+    production does not emit the creative section yet (#1724)."""
     _config(ctx)["creative_supports_compliance"] = True
 
 

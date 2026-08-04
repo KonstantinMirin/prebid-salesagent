@@ -359,7 +359,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # Verified against a real run 2026-07-14: every entry below fails on all
     # three wire transports (strict holds); per-row / per-transport gaps use
     # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
-    "T-UC-010-main": "account block, supported_pricing_models, reporting_delivery_methods not emitted — #1592 spec-production gap",
+    # The scenario's first failing assert is `account.sandbox should equal false` --
+    # Tenant.account_sandbox defaults True (models.py:82) with no Given-side override,
+    # so the response always reports sandbox=true. Transport-independent: all 3
+    # transports reach this same assert.
+    "T-UC-010-main": "account.sandbox should equal false but Tenant.account_sandbox defaults True with no "
+    "Given-side override (models.py:82) — #1856 account-config surface",
     # Graduated (salesagent-rldj): _build_adcp_block() now always emits
     # adcp.supported_versions (derived from SUPPORTED_ADCP_VERSIONS) on both
     # the no-tenant and tenant-resolved paths. T-UC-010-ext-a removed.
@@ -382,7 +387,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # constructs a real typed GetAdcpCapabilitiesRequest (Pydantic enforces the
     # protocols enum + minItems:1), and _get_adcp_capabilities_impl echoes
     # req.context verbatim onto the response on every transport.
-    "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1592",
+    "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1724",
     # Graduated (salesagent-rldj): T-UC-010-v31-supported-versions removed —
     # see T-UC-010-ext-a graduation note above (same _build_adcp_block fix).
     # Graduated (salesagent-rldj): version negotiation now implemented
@@ -392,7 +397,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # -major-fallback / -build-version-advisory removed from this dict.
     # Wired non-dormant + strengthened (salesagent-e4ad): steps execute and grade the
     # spec-pinned shape, then fail on the unemitted/hard-coded block (strict xfail on all transports).
-    "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1592 spec-production gap",
+    "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1724",
     # Re-cited #1592 -> #1724 (salesagent-3xmz batch B3). The OLD reason ("hard-coded,
     # not derived from tenant config") is now FALSE: specialisms ARE declaration-driven
     # and registry-validated. The scenario stays xfailed for a different, permanent
@@ -406,18 +411,23 @@ _XFAIL_TAGS: dict[str, str] = {
     # and the account block is now emitted on the tenant-resolved path.
     # Graduated (salesagent-y9ld R1): media_buy.supported_pricing_models now derives from
     # adapter.get_supported_pricing_models() (mirrors products.py:721). T-UC-010-pricing removed.
-    "T-UC-010-audience-caps": "media_buy.audience_targeting not emitted by the capabilities builder — #1592 spec-production gap",
+    "T-UC-010-audience-caps": "media_buy.audience_targeting not emitted by the capabilities builder — #1855",
     # Wired non-dormant + strengthened (salesagent-ytq6): steps execute and grade the
     # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
-    "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1592 spec-production gap",
-    "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1592 spec-production gap",
+    "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1855",
+    "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1724",
     # Graduated (salesagent-y9ld R2): CHANNEL_MAPPING now includes sponsored_intelligence,
     # the 20th canonical channel. T-UC-010-channel-all-canonical removed.
     # Wired non-dormant + strengthened (salesagent-tmpd): each scenario executes and grades the
     # spec-pinned shapes, then fails on a block the capabilities builder never emits (strict
     # xfail on all transports).
-    "T-UC-010-features": "media_buy.content_standards / conversion_tracking / audience_targeting presence-objects and the account block (account.sandbox) not emitted by the capabilities builder — #1592 spec-production gap",
-    "T-UC-010-targeting": "targeting emits only geo_countries/geo_regions/geo_metros/geo_postal_areas — age_restriction, language, keyword_targets, negative_keywords, geo_proximity not built and geo_postal_areas uses the deprecated boolean-alias shape not the native country-keyed map — #1592 spec-production gap",
+    "T-UC-010-features": "media_buy.content_standards / conversion_tracking / audience_targeting presence-objects not emitted (#1855) and the account block (account.sandbox) not emitted (#1856) by the capabilities builder",
+    # _build_geo_postal_areas builds the native country-keyed map correctly --
+    # geo_postal_areas is not part of the gap. The remaining gap is the non-geo
+    # targeting dimensions never being built.
+    "T-UC-010-targeting": "targeting emits only geo_countries/geo_regions/geo_metros/geo_postal_areas — "
+    "age_restriction, language, keyword_targets, negative_keywords, geo_proximity not built "
+    "— #1857 non-geo targeting capability dimensions",
     # Wired non-dormant + strengthened (salesagent-scgh): each scenario executes and grades the
     # spec-pinned v3.1.1 shape, then fails on a block the capabilities builder never emits
     # (brand is not in supported_protocols; measurement block never built). Strict xfail, all
@@ -609,39 +619,46 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-010-account-require-operator-auth",
         {"operator_auth_required"},
         "account.require_operator_auth is a hardcoded False constant — no config surface to "
-        "make it True exists — #1592",
+        "make it True exists — #1856",
     ),
     (
         "T-UC-010-account-required-for-products",
         {"products_gated", "products_open"},
-        "account.required_for_products not emitted — #1592",
+        "account.required_for_products not emitted — #1856",
     ),
     (
         "T-UC-010-account-authorization-endpoint",
         {"oauth_supported"},
-        "account.authorization_endpoint not emitted — #1592",
+        "account.authorization_endpoint not emitted — #1856",
     ),
     (
         "T-UC-010-features-partitions",
         {"sandbox_disabled"},
         "account.sandbox Given-side gap: no step writes account_sandbox=false for this row "
-        "(the DB column defaults true, owner decision) — #1592",
+        "(the DB column defaults true, owner decision) — #1856",
     ),
     (
         "T-UC-010-degradation-account",
         {"account_degraded"},
-        "account_degraded row gap not yet root-caused (same underlying assertion as the sibling "
-        "T-UC-010-degradation-partitions account_degraded row) — #1592",
+        # _build_account_block (src/core/tools/capabilities.py) always emits
+        # require_operator_auth (a constant) and sandbox (tenant.account_sandbox,
+        # default True) as real, non-null values -- only authorization_endpoint/
+        # required_for_products/account_financials are honestly omitted. The
+        # scenario expects a supported_billing-only shape, which this design
+        # cannot produce.
+        "account_degraded expects a supported_billing-only account block, but "
+        "_build_account_block always emits require_operator_auth and sandbox as real "
+        "constant/config values, not honestly omitted — #1856 account-config surface",
     ),
     # Wired non-dormant + strengthened (salesagent-chbi): the 'absent' rows (adapter
     # fails / capability disabled) pass — the block is genuinely off the wire; only the
     # 'present' rows (full_response: adapter succeeds AND capability enabled) fail,
     # because production never emits the media_buy.audience_targeting /
-    # conversion_tracking blocks yet (#1592). Strict on the present rows only.
+    # conversion_tracking blocks yet. Strict on the present rows only.
     (
         "T-UC-010-degradation-sections",
         {"full_response"},
-        "media_buy.audience_targeting / conversion_tracking sections not emitted by the capabilities builder — #1592",
+        "media_buy.audience_targeting / conversion_tracking sections not emitted by the capabilities builder — #1855",
     ),
     # Wired non-dormant + strengthened (salesagent-tmpd): targeting-partitions rows that
     # production satisfies (adapter_unavailable_defaults, nested_absent) pass; the rest execute
@@ -661,7 +678,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "geo_proximity_supported",
         },
         "targeting builder never emits the non-geo dimensions (age_restriction/language/"
-        "keyword_targets/negative_keywords/geo_proximity) — R8 follow-up, out of core scope — #1592",
+        "keyword_targets/negative_keywords/geo_proximity) — #1857",
     ),
     # Wired non-dormant + strengthened (salesagent-tmpd): degradation-partitions rows that
     # production satisfies (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass; the
@@ -673,9 +690,18 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-degradation-partitions",
         {"no_tenant", "no_principal", "account_degraded"},
-        "adcp.supported_versions not emitted; INV-4 keeps adapter channels "
-        "principal-free so no_principal does not degrade to [display]; account_degraded gap "
-        "not yet root-caused — #1592",
+        # _build_adcp_block(None) always emits supported_versions, so that is not
+        # the no_tenant gap. The real no_tenant gap is extra top-level keys:
+        # _deg_no_tenant asserts wire keys are a SUBSET of {adcp,
+        # supported_protocols}, but the no-tenant response also includes
+        # specialisms/webhook_signing/request_signing, which are non-null and
+        # therefore present on the wire.
+        "no_tenant top-level response carries extra keys (specialisms, webhook_signing, "
+        "request_signing) beyond the minimal {adcp, supported_protocols} contract; "
+        "INV-4 keeps adapter channels principal-free so no_principal does not degrade to "
+        "[display]; account_degraded expects a supported_billing-only account block but "
+        "_build_account_block always emits require_operator_auth/sandbox as real values "
+        "— #1856 account-config surface",
     ),
     # Wired (salesagent-y9ld R7): approval_unspecified (creative_approval_mode omitted
     # by default -- TenantFactory.human_review_required=False and no
@@ -689,8 +715,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-010-v31-creative-approval-mode",
         {"approval_auto"},
-        "media_buy.creative_approval_mode=auto_approve has no backing config surface "
-        "(Q2 deferred) — #1592 spec-production gap",
+        "media_buy.creative_approval_mode=auto_approve has no backing config surface (Q2 deferred) — #1724",
     ),
     # Moved from _XFAIL_TAGS (salesagent-3s5a): request_signing/webhook_signing={supported:false}
     # now emitted, so "valid" rows (asserting schema-valid relations/bounds against an
@@ -1561,18 +1586,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
-        # UC-004 date range strict=False entry from main covers T-UC-004-daterange
-        # (custom dates partially applied). T-UC-004-daterange-end-only is
-        # promoted to strict=True in _UC004_GENUINE_XFAIL_ROWS below (debt C7).
-        _UC004_DATE_SELECTIVE: list[tuple[str, set[str], str]] = [
-            ("T-UC-004-daterange", set(), "custom date range partially applied"),
-        ]
-        if any(t.startswith("T-UC-004-daterange") for t in marker_names):
-            for tag, substrings, reason in _UC004_DATE_SELECTIVE:
-                if tag in marker_names:
-                    if not substrings or any(s in nodeid for s in substrings):
-                        item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-                    break
+        # Graduated: T-UC-004-daterange. When both start_date and end_date are
+        # supplied, src/core/tools/media_buy_delivery.py uses them verbatim on
+        # all transports (only the single-sided start-only/end-only defaulting
+        # paths have a real gap, tracked separately as T-UC-004-daterange-end-only
+        # / debt C7 below).
 
         # Per-row strict=True xfails for partition/boundary scenarios where
         # blanket markers were removed and production gaps are real and named
@@ -1936,23 +1954,33 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 is_a2a and "differs from owner" in nodeid
             )
             if not _ownership_passes:
+                # mcp's xpass here is VACUOUS, not a production graduation.
+                # when_boundary_ownership (uc004_delivery.py) sends the Gherkin
+                # label text as a literal `ownership=` kwarg, which is not a real
+                # request field -- FastMCP's TypeAdapter rejects it as an
+                # unrecognized argument before _get_media_buy_delivery_impl ever
+                # runs, coincidentally matching `invalid`. It does not test whether
+                # production enforces cross-principal ownership. See
+                # docs/test-debt-bdd-strict-markers.md item B3 (RECONCILED for the
+                # partition variant only, via _dispatch_ownership_partition; the
+                # boundary variant used here still has the bug). Do NOT graduate
+                # until when_boundary_ownership is fixed to route through a real
+                # identity swap.
                 item.add_marker(
                     pytest.mark.xfail(reason="ownership boundary: validation gaps on some transports", strict=False)
                 )
 
-        # Graduated: T-UC-004-boundary-reporting-dims — all pass except:
-        # "metro but no system" fails on all transports;
-        # "geo without geo_level", "limit=0", "limit negative" fail on a2a only.
+        # Graduated: T-UC-004-boundary-reporting-dims — "metro but no system" is the
+        # only row still genuinely gapped (prose-only spec constraint, no formal
+        # validator; separately tracked as C10 in _UC004_GENUINE_XFAIL_ROWS above).
+        # "geo without geo_level", "limit=0", "limit negative" also now genuinely
+        # reject on mcp/rest (a2a already passed, #1417) — required geo_level /
+        # limit>=1 per the pinned v3.1.1 get-media-buy-delivery-request.json, and
+        # RequestCompatMiddleware normalizes the ToolError to a two-layer envelope
+        # on mcp/rest.
         if "T-UC-004-boundary-reporting-dims" in marker_names:
             _rdim_all_transport_fail = "geo_level=metro but no system" in nodeid
-            # Post-merge: MCP and REST also return ToolError instead of AdCPError
-            # for invalid reporting_dimensions (transport wrapping changed in adcp 3.12)
-            # a2a now normalizes these to AdCPError (wire-drop confirmed XPASS,
-            # #1417); mcp/rest still return ToolError-not-AdCPError.
-            _rdim_non_impl_fail = (is_mcp or is_rest) and any(
-                s in nodeid for s in ("geo without geo_level", "limit=0 (below minimum)", "limit negative")
-            )
-            if _rdim_all_transport_fail or _rdim_non_impl_fail:
+            if _rdim_all_transport_fail:
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="reporting_dimensions boundary: validation gaps on some transports", strict=False
@@ -1977,6 +2005,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 not is_impl and not is_a2a and not is_e2e_rest and "Unknown string not in enum" in nodeid
             )
             if _samp_not_rest_fail or _samp_not_impl_fail:
+                # mcp's xpass here is VACUOUS. `sampling_method` is not a real
+                # get_media_buy_delivery request field (does not exist in the
+                # pinned v3.1.1 schema at all -- it belongs to content-standards
+                # native-creative sampling, a different domain).
+                # when_boundary_sampling sends it as a raw kwarg, which FastMCP's
+                # TypeAdapter rejects as unrecognized before
+                # _get_media_buy_delivery_impl runs -- coincidentally matching
+                # `invalid` for ANY value, valid or not, so this scenario cannot
+                # distinguish "enum rejected" from "field doesn't exist". See
+                # docs/test-debt-bdd-strict-markers.md item B4 -- the documented fix
+                # is to relocate/delete this scenario family, not graduate rows.
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="sampling_method boundary: not implemented on this transport", strict=False
@@ -1992,27 +2031,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # Graduated: T-UC-004-boundary-date-range — valid examples (before, omitted)
-        # pass on rest; invalid examples (equals, after) pass on impl.
-        if "T-UC-004-boundary-date-range" in marker_names:
-            _dr_valid_fail = (
-                not is_rest
-                and not is_e2e_rest
-                and any(s in nodeid for s in ("start_date before end_date", "dates omitted"))
-            )
-            # GRADUATED (2026-07-25): a2a/mcp/rest all now validate
-            # start_date>=end_date (impl passes too) — the invalid-rows branch is
-            # removed; only the valid-rows gap remains.
-            if _dr_valid_fail:
-                item.add_marker(
-                    pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
-                )
-            # GRADUATED (#1270 / #1417): production now validates date range over
-            # e2e_rest, so the invalid cases (equals, after) are rejected — the
-            # former strict "Docker does not validate date range" tripwire here
-            # XPASSed deterministically (in-network runs on both branches) and was
-            # removed; the e2e_rest ledger entries for these nodeids are removed
-            # too (both sides retired them — none remain in the merged ledger).
+        # Graduated: T-UC-004-boundary-date-range. a2a/mcp/rest all accept a valid
+        # start_date<end_date pair and omitted dates without error — the shared
+        # _get_media_buy_delivery_impl (src/core/tools/media_buy_delivery.py) has
+        # no transport-specific date-range branch. Production also validates date
+        # range over e2e_rest, rejecting the invalid cases (equals, after).
 
         # T-UC-004-daterange-end-only over e2e_rest: same Gap G40 (debt C7) as
         # in-process — when only end_date is given, production defaults start to
@@ -2074,11 +2097,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (wire-drop confirmed XPASS, #1417). Valid rows (account exists / single
             # match / sandbox account exists) now pass on mcp/rest once their accounts
             # are seeded (salesagent-jr5b) — the former "production gaps" mask hid the
-            # missing seed. mcp still gaps on the oneOf/empty invalid rows; impl still
-            # gaps on not-found (impl is not in the default BDD parametrization).
-            _acc_invalid_fail = is_mcp and any(s in nodeid for s in ("both account_id", "empty object"))
+            # missing seed. impl still gaps on not-found (impl is not in the default
+            # BDD parametrization).
+            # mcp's "both account_id"/"empty object" invalid rows also now reject
+            # correctly — FastMCP's TypeAdapter validates the account param against
+            # the adcp library's AccountReference oneOf (RootModel,
+            # additionalProperties:false per branch) BEFORE the tool body runs,
+            # normalized to VALIDATION_ERROR via the shared normalize_to_adcp_error().
             _acc_notfound_fail = is_impl and "not found" in nodeid
-            if _acc_invalid_fail or _acc_notfound_fail:
+            if _acc_notfound_fail:
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="delivery account boundary: production gaps on this transport", strict=False
@@ -2099,15 +2126,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"non-boolean", "non_boolean", "string 'true'"},
                 "include_package_daily_breakdown boundary: non-boolean validation not implemented",
             ),
-            # media_buy_resolution: partial still fails on all transports
             # Graduated: "buyer_refs only" and "zero resolution" (all 4 transports pass)
             # Graduated: "empty array" passes on impl/mcp/rest (only a2a fails)
+            # Graduated: "partial resolution" -- the transport-agnostic _impl
+            # (src/core/tools/media_buy_delivery.py) diffs requested media_buy_ids
+            # vs. resolved buys and appends an advisory MEDIA_BUY_NOT_FOUND to
+            # response.errors[] instead of hard-failing, which is exactly the shape
+            # get-media-buy-delivery-response.json#/properties/errors documents
+            # (v3.1.1), on all 3 transports.
             # Clean-pass: media_buy_ids only, both provided, neither provided
-            (
-                "T-UC-004-boundary-resolution",
-                {"partial resolution"},
-                "media_buy_resolution boundary: production gaps on some transports",
-            ),
             # Graduated: status_filter "not in AdCP enum" passes on impl+rest,
             # "empty array, violates" passes on impl+mcp+rest (transport-aware below)
         ]
@@ -2120,16 +2147,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # T-UC-004-boundary-resolution "empty array": a2a now raises AdCPError
         # (wire-drop confirmed XPASS, #1417) — no transport still fails here.
         # T-UC-004-boundary-status-filter: graduated per-transport
-        # "not in AdCP enum" (failed): a2a now passes, only mcp still fails
+        # "not in AdCP enum" (failed): all transports now pass.
         # "empty array, violates" ([]): a2a now passes — no transport still fails
         if "T-UC-004-boundary-status-filter" in marker_names:
-            if "not in AdCP enum" in nodeid and is_mcp:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="status_filter boundary: invalid enum validation not implemented on mcp",
-                        strict=False,
-                    )
-                )
+            # mcp's "not in AdCP enum" (status_filter="failed") row also now
+            # rejects correctly — FastMCP's TypeAdapter validates status_filter
+            # against the adcp library's MediaBuyStatus enum before the tool body
+            # runs, same mechanism/normalize_to_adcp_error() path as the account
+            # boundary graduation above.
             # Graduated: e2e_rest invalid status_filter (unknown enum value) now
             # returns 400 INVALID_REQUEST (the RequestValidationError handler in
             # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
@@ -2144,19 +2169,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # adcp 5.7 SDK dropped buyer_refs (excised from the pin since 3.0.0) — the
-        # "both provided" resolution scenario sends both media_buy_ids and buyer_refs,
-        # but buyer_refs no longer exists, so the scenario is obsolete. strict=False
-        # tolerates it (in-process xfails, e2e_rest xpasses) until PR #1417 retires the
-        # obligation + feature rows upstream. (salesagent-uw8f)
-        if "T-UC-004-boundary-resolution" in marker_names and "both provided" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="adcp 5.7 SDK dropped buyer_refs — 'both provided' resolution test is obsolete "
-                    "(retirement owned by PR #1417)",
-                    strict=False,
-                )
-            )
+        # Graduated: "both provided (priority rule)". #1417 already retired
+        # buyer_refs and rewrote _dispatch_resolution
+        # (tests/bdd/steps/domain/uc004_delivery.py) to send media_buy_ids +
+        # status_filter instead, so the row tests a real, spec-permitted
+        # combination, not obsolete content.
 
         # Graduated: e2e_rest media_buy_resolution "empty array" now returns a
         # structured AdCP error envelope (not a raw 500/empty body), so the
@@ -2214,23 +2231,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
                 "reporting_dimensions validation not implemented — production accepts invalid configs",
             ),
-            # attribution_window: validation IS implemented (SDK model enum/range +
-            # _validate_attribution_window for campaign INV-5, emitting VALIDATION_ERROR),
-            # but the partition-shape error rows never reach it: the generic
-            # "with {request_params}" step shadows the specific "with attribution_window
-            # {value}" step and _parse_request_params drops the space-form window
-            # (#1417) — a TEST step-binding bug, not the #1462 in-process gap.
-            # campaign_interval_not_one removed (salesagent-x18x, #1545): the only
-            # transport parametrized for it (a2a) now emits VALIDATION_ERROR+suggestion
-            # for the named Example and passes unmasked. interval_zero/negative/unit/model
-            # remain: those rows XPASS on a2a/rest but genuinely XFAIL on mcp under the
-            # salesagent-50hl generic-step-shadowing debt (out of scope for x18x).
-            (
-                "T-UC-004-partition-attribution",
-                {"interval_zero", "interval_negative", "invalid_unit", "invalid_model"},
-                "attribution_window partition rows never reach validation — generic with-{request_params} "
-                "step shadows the specific partition step and drops the window (salesagent-50hl)",
-            ),
+            # Graduated: T-UC-004-partition-attribution
+            # interval_zero/interval_negative/invalid_unit/invalid_model. The
+            # generic "with {request_params}" step no longer shadows the specific
+            # "with attribution_window {value}" step (the generic step now
+            # requires \w+=... key=value form, mutually exclusive with the
+            # space-form "attribution_window {json}" step). attribution_window is
+            # a real-wire-asserted field (_WIRE_ASSERTED_FIELDS), and all 4 rows
+            # pass with the correct VALIDATION_ERROR+suggestion on all 3
+            # transports.
             # daily breakdown: production doesn't validate non-boolean values
             (
                 "T-UC-004-partition-daily-breakdown",
@@ -3865,7 +3874,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
-            pytest.xfail("UC-010 wiring batch 2/3 pending (#1592, salesagent-4sn7)")
+            pytest.xfail("UC-010 harness wiring not extended to this tag (dormant, never graded) — #1592")
 
         from tests.harness.capabilities import CapabilitiesEnv
 
