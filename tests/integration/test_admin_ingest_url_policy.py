@@ -38,7 +38,8 @@ import logging
 import pytest
 from sqlalchemy import select
 
-from src.core.database.models import SignalsAgent, Tenant
+from src.core.database.models import CreativeAgent, PushNotificationConfig, SignalsAgent, Tenant
+from tests.factories import PrincipalFactory
 from tests.integration.test_outbound_http import set_flags
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -73,6 +74,18 @@ def seeded_tenant(integration_db):
     with IntegrationEnv() as env:
         TenantFactory(tenant_id=TENANT_ID, name="Ingest URL Policy", subdomain="ingesturlpolicy")
         yield env
+
+
+PRINCIPAL_ID = "ingest_url_policy_principal"
+
+
+@pytest.fixture
+def seeded_principal(seeded_tenant):
+    """A committed principal under ``seeded_tenant``, for webhook registration."""
+    session = seeded_tenant.get_session()
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).one()
+    PrincipalFactory(tenant=tenant, principal_id=PRINCIPAL_ID)
+    return seeded_tenant
 
 
 @pytest.fixture
@@ -374,3 +387,185 @@ def test_update_tenant_accepts_a_url_egress_policy_admits(management_api_client,
     session.rollback()
     tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).one()
     assert tenant.slack_webhook_url == "http://127.0.0.1:9999/hook"
+
+
+# ---------------------------------------------------------------------------
+# Three more form-shape ingest sites, previously ungraded: a refactor could
+# silently drop the ``redirect_if_url_blocked`` call from any of these and
+# every other test in this suite would stay green.
+# ---------------------------------------------------------------------------
+
+
+def post_register_webhook(client, url: str):
+    """POST the principal-webhook registration form with *url* as the target."""
+    return client.post(
+        f"/tenant/{TENANT_ID}/principals/{PRINCIPAL_ID}/webhooks/register",
+        data={"url": url, "auth_type": "none"},
+        follow_redirects=False,
+    )
+
+
+def push_notification_configs_for(env) -> list[PushNotificationConfig]:
+    """Every registered webhook for the test principal, read fresh."""
+    session = env.get_session()
+    session.rollback()
+    return list(
+        session.scalars(select(PushNotificationConfig).filter_by(tenant_id=TENANT_ID, principal_id=PRINCIPAL_ID)).all()
+    )
+
+
+@pytest.mark.parametrize("url", [METADATA_URL, INSECURE_PUBLIC_URL])
+def test_register_webhook_refuses_and_stores_nothing(url, authenticated_admin_client, seeded_principal, monkeypatch):
+    """principals.py:625 — a principal's push-notification webhook is stored now,
+    posted to later, and is graded the same as every other ingest site.
+    """
+    set_flags(monkeypatch)
+
+    response = post_register_webhook(authenticated_admin_client, url)
+
+    assert response.status_code == 302
+    assert flashes(authenticated_admin_client) == [("error", "Webhook URL is not allowed by outbound egress policy.")]
+    assert push_notification_configs_for(seeded_principal) == []
+
+
+# No "accepts an admitted URL" positive control for this site: the handler's
+# PushNotificationConfig(...) call uses field names that do not exist on the
+# model (config_id/auth_type/auth_config instead of id/authentication_type/
+# webhook_secret), so it raises on every real insert regardless of the URL —
+# an unrelated pre-existing bug (salesagent-e4rf), not an SSRF-policy gap.
+# The refusal-path test above still catches a dropped url_policy call, which
+# is the obligation this file grades.
+
+
+def post_creative_agent_add(client, url: str):
+    """POST the creative-agent add form with *url* as the agent URL."""
+    return client.post(
+        f"/tenant/{TENANT_ID}/creative-agents/add",
+        data={"agent_url": url, "name": "Ingest Policy Creative Agent", "priority": "10", "enabled": "on"},
+        follow_redirects=False,
+    )
+
+
+def creative_agents_for(env) -> list[CreativeAgent]:
+    """Every creative agent row for the test tenant, read fresh."""
+    session = env.get_session()
+    session.rollback()
+    return list(session.scalars(select(CreativeAgent).filter_by(tenant_id=TENANT_ID)).all())
+
+
+def create_creative_agent_through_the_add_form(client, env, monkeypatch) -> CreativeAgent:
+    """Seed one creative agent by driving the real add endpoint.
+
+    There is no ``CreativeAgentFactory``, and hand-writing the row would test a
+    row this application never wrote — same rationale as the signals-agent seed
+    helper above.
+    """
+    set_flags(monkeypatch, private=True, insecure=True)
+    response = post_creative_agent_add(client, ADMITTED_URL)
+    assert response.status_code == 302, "seeding the creative agent through the add form failed"
+    agents = creative_agents_for(env)
+    assert len(agents) == 1, f"expected exactly one seeded creative agent, got {agents}"
+    return agents[0]
+
+
+@pytest.mark.parametrize("url", [METADATA_URL, INSECURE_PUBLIC_URL])
+def test_creative_agent_add_refuses_and_stores_nothing(url, authenticated_admin_client, seeded_tenant, monkeypatch):
+    """creative_agents.py:105 — the add form."""
+    set_flags(monkeypatch)
+
+    response = post_creative_agent_add(authenticated_admin_client, url)
+
+    assert response.status_code == 302
+    assert "/creative-agents/add" in response.headers["Location"]
+    assert flashes(authenticated_admin_client) == [("error", "Agent URL is not allowed by outbound egress policy.")]
+    assert creative_agents_for(seeded_tenant) == []
+
+
+def test_creative_agent_add_accepts_a_url_egress_policy_admits(authenticated_admin_client, seeded_tenant, monkeypatch):
+    """A URL the policy admits is stored — the add form's positive control."""
+    set_flags(monkeypatch, private=True, insecure=True)
+
+    response = post_creative_agent_add(authenticated_admin_client, ADMITTED_URL)
+
+    assert response.status_code == 302
+    assert "/creative-agents/add" not in response.headers["Location"]
+    stored = creative_agents_for(seeded_tenant)
+    assert [agent.agent_url for agent in stored] == [ADMITTED_URL]
+
+
+@pytest.mark.parametrize("url", [METADATA_URL, INSECURE_PUBLIC_URL])
+def test_creative_agent_edit_refuses_and_leaves_the_stored_url_alone(
+    url, authenticated_admin_client, seeded_tenant, monkeypatch
+):
+    """creative_agents.py:189 — the edit form.
+
+    Unlike the signals-agent edit handler, this one checks before assigning
+    ``agent.agent_url``, so the ORM object never holds the refused value — but
+    that is exactly what could regress silently without a test reading the
+    column back.
+    """
+    agent = create_creative_agent_through_the_add_form(authenticated_admin_client, seeded_tenant, monkeypatch)
+    set_flags(monkeypatch)
+
+    response = authenticated_admin_client.post(
+        f"/tenant/{TENANT_ID}/creative-agents/{agent.id}/edit",
+        data={"agent_url": url, "name": "Ingest Policy Creative Agent", "priority": "10", "enabled": "on"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert "/edit" in response.headers["Location"]
+    assert [stored.agent_url for stored in creative_agents_for(seeded_tenant)] == [ADMITTED_URL]
+
+
+@pytest.mark.parametrize(
+    "field, label",
+    [
+        ("slack_webhook_url", "Slack webhook URL"),
+        ("slack_audit_webhook_url", "Slack audit webhook URL"),
+    ],
+)
+def test_update_slack_refuses_blocked_webhook_url_and_stores_nothing(
+    field, label, authenticated_admin_client, seeded_tenant, monkeypatch
+):
+    """settings.py:521,525 — the tenant-settings Slack integration form.
+
+    Same fields as ``test_create_tenant_refuses_blocked_webhook_url`` above,
+    but this is a second, independent handler (form POST, not the
+    tenant-management JSON API) — grading only the JSON path would leave this
+    one silently ungraded.
+    """
+    set_flags(monkeypatch)
+
+    response = authenticated_admin_client.post(
+        f"/tenant/{TENANT_ID}/settings/slack",
+        data={field: METADATA_URL},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert flashes(authenticated_admin_client) == [("error", f"{label} is not allowed by outbound egress policy.")]
+
+    session = seeded_tenant.get_session()
+    session.rollback()
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).one()
+    assert tenant.slack_webhook_url is None
+    assert tenant.slack_audit_webhook_url is None
+
+
+def test_update_slack_accepts_a_url_egress_policy_admits(authenticated_admin_client, seeded_tenant, monkeypatch):
+    """A URL the policy admits is stored — the Slack form's positive control."""
+    set_flags(monkeypatch, private=True, insecure=True)
+
+    response = authenticated_admin_client.post(
+        f"/tenant/{TENANT_ID}/settings/slack",
+        data={"slack_webhook_url": ADMITTED_URL},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+
+    session = seeded_tenant.get_session()
+    session.rollback()
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).one()
+    assert tenant.slack_webhook_url == ADMITTED_URL
