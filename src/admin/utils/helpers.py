@@ -56,83 +56,85 @@ def get_tenant_config_from_db(tenant_id):
         logger.warning("get_tenant_config_from_db called with empty tenant_id")
         return {}
 
-    # A genuine DB/connection error propagates uncaught here (Flask's default
-    # 500 handling) rather than being reported as "tenant not found" -- the
-    # not-found case below is a real query result, not an exception.
-    with get_db_session() as db_session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id)
-        tenant = db_session.scalars(stmt).first()
-        if not tenant:
-            logger.warning(f"Tenant not found: {tenant_id}")
-            return {}
+    try:
+        with get_db_session() as db_session:
+            stmt = select(Tenant).filter_by(tenant_id=tenant_id)
+            tenant = db_session.scalars(stmt).first()
+            if not tenant:
+                logger.warning(f"Tenant not found: {tenant_id}")
+                return {}
 
-        # Build config from individual columns
-        config = {
-            "adapters": {},
-            "features": {},
-            "creative_engine": {},
-            "admin_token": tenant.admin_token or "",
-            "slack_webhook_url": tenant.slack_webhook_url or "",
-            "policy_settings": {},
-        }
+            # Build config from individual columns
+            config = {
+                "adapters": {},
+                "features": {},
+                "creative_engine": {},
+                "admin_token": tenant.admin_token or "",
+                "slack_webhook_url": tenant.slack_webhook_url or "",
+                "policy_settings": {},
+            }
 
-        # Build adapter config from relationship
-        if tenant.adapter_config:
-            adapter_obj = tenant.adapter_config
-            adapter_type = adapter_obj.adapter_type
+            # Build adapter config from relationship
+            if tenant.adapter_config:
+                adapter_obj = tenant.adapter_config
+                adapter_type = adapter_obj.adapter_type
 
-            # Build the legacy JSON structure for backward compatibility
-            adapter_config = {adapter_type: {"enabled": True}}
+                # Build the legacy JSON structure for backward compatibility
+                adapter_config = {adapter_type: {"enabled": True}}
 
-            # Add adapter-specific fields
-            if adapter_type == "google_ad_manager":
-                if adapter_obj.gam_network_code:
-                    adapter_config[adapter_type]["network_code"] = adapter_obj.gam_network_code
-                if adapter_obj.gam_refresh_token:
-                    adapter_config[adapter_type]["refresh_token"] = adapter_obj.gam_refresh_token
-                # NOTE: gam_company_id removed - advertiser_id is per-principal
-                if adapter_obj.gam_trafficker_id:
-                    adapter_config[adapter_type]["trafficker_id"] = adapter_obj.gam_trafficker_id
-                adapter_config[adapter_type]["manual_approval_required"] = (
-                    adapter_obj.gam_manual_approval_required or False
-                )
-            elif adapter_type == "mock":
-                adapter_config[adapter_type]["dry_run"] = adapter_obj.mock_dry_run or False
-            elif adapter_type == "kevel":
-                if adapter_obj.kevel_network_id:
-                    adapter_config[adapter_type]["network_id"] = adapter_obj.kevel_network_id
-                if adapter_obj.kevel_api_key:
-                    adapter_config[adapter_type]["api_key"] = adapter_obj.kevel_api_key
-                adapter_config[adapter_type]["manual_approval_required"] = (
-                    adapter_obj.kevel_manual_approval_required or False
-                )
-            elif adapter_type == "triton":
-                if adapter_obj.triton_station_id:
-                    adapter_config[adapter_type]["station_id"] = adapter_obj.triton_station_id
-                if adapter_obj.triton_api_key:
-                    adapter_config[adapter_type]["api_key"] = adapter_obj.triton_api_key
+                # Add adapter-specific fields
+                if adapter_type == "google_ad_manager":
+                    if adapter_obj.gam_network_code:
+                        adapter_config[adapter_type]["network_code"] = adapter_obj.gam_network_code
+                    if adapter_obj.gam_refresh_token:
+                        adapter_config[adapter_type]["refresh_token"] = adapter_obj.gam_refresh_token
+                    # NOTE: gam_company_id removed - advertiser_id is per-principal
+                    if adapter_obj.gam_trafficker_id:
+                        adapter_config[adapter_type]["trafficker_id"] = adapter_obj.gam_trafficker_id
+                    adapter_config[adapter_type]["manual_approval_required"] = (
+                        adapter_obj.gam_manual_approval_required or False
+                    )
+                elif adapter_type == "mock":
+                    adapter_config[adapter_type]["dry_run"] = adapter_obj.mock_dry_run or False
+                elif adapter_type == "kevel":
+                    if adapter_obj.kevel_network_id:
+                        adapter_config[adapter_type]["network_id"] = adapter_obj.kevel_network_id
+                    if adapter_obj.kevel_api_key:
+                        adapter_config[adapter_type]["api_key"] = adapter_obj.kevel_api_key
+                    adapter_config[adapter_type]["manual_approval_required"] = (
+                        adapter_obj.kevel_manual_approval_required or False
+                    )
+                elif adapter_type == "triton":
+                    if adapter_obj.triton_station_id:
+                        adapter_config[adapter_type]["station_id"] = adapter_obj.triton_station_id
+                    if adapter_obj.triton_api_key:
+                        adapter_config[adapter_type]["api_key"] = adapter_obj.triton_api_key
 
-            config["adapters"] = adapter_config
+                config["adapters"] = adapter_config
 
-        # Build features config from individual columns
-        # Note: max_daily_budget moved to currency_limits table (per-currency limits)
-        config["features"] = {
-            "enable_axe_signals": tenant.enable_axe_signals,
-        }
+            # Build features config from individual columns
+            # Note: max_daily_budget moved to currency_limits table (per-currency limits)
+            config["features"] = {
+                "enable_axe_signals": tenant.enable_axe_signals,
+            }
 
-        # Build creative engine config from individual columns
-        config["creative_engine"] = {
-            "auto_approve_formats": tenant.auto_approve_format_ids or [],
-            "human_review_required": tenant.human_review_required,
-        }
+            # Build creative engine config from individual columns
+            config["creative_engine"] = {
+                "auto_approve_formats": tenant.auto_approve_format_ids or [],
+                "human_review_required": tenant.human_review_required,
+            }
 
-        # Add policy settings
-        if tenant.policy_settings:
-            policy_settings = parse_json_config(tenant.policy_settings)
-            if policy_settings:
-                config["policy_settings"] = policy_settings
+            # Add policy settings
+            if tenant.policy_settings:
+                policy_settings = parse_json_config(tenant.policy_settings)
+                if policy_settings:
+                    config["policy_settings"] = policy_settings
 
-        return config
+            return config
+
+    except Exception as e:
+        logger.error(f"Error getting tenant config: {e}")
+        return {}
 
 
 def is_super_admin(email):
@@ -173,30 +175,33 @@ def is_super_admin(email):
             _cache_admin_status(email_lower, True)
             return True
 
-    # 2. FALLBACK: Check database configuration. A genuine DB/connection error
-    # propagates uncaught (Flask's default 500) rather than being cached and
-    # reported as "not a super admin" -- a DB outage is not a decision.
-    with get_db_session() as db_session:
-        # Check exact emails
-        stmt = select(TenantManagementConfig).filter_by(config_key="super_admin_emails")
-        emails_config = db_session.scalars(stmt).first()
-        if emails_config and emails_config.config_value:
-            emails_list = [e.strip().lower() for e in emails_config.config_value.split(",")]
-            if email_lower in emails_list:
-                logger.debug(f"Super admin access granted via database: {email}")
-                _cache_admin_status(email_lower, True)
-                return True
+    # 2. FALLBACK: Check database configuration
+    try:
+        with get_db_session() as db_session:
+            # Check exact emails
+            stmt = select(TenantManagementConfig).filter_by(config_key="super_admin_emails")
+            emails_config = db_session.scalars(stmt).first()
+            if emails_config and emails_config.config_value:
+                emails_list = [e.strip().lower() for e in emails_config.config_value.split(",")]
+                if email_lower in emails_list:
+                    logger.debug(f"Super admin access granted via database: {email}")
+                    _cache_admin_status(email_lower, True)
+                    return True
 
-        # Check domains
-        stmt = select(TenantManagementConfig).filter_by(config_key="super_admin_domains")
-        domains_config = db_session.scalars(stmt).first()
-        if domains_config and domains_config.config_value:
-            domains_list = [d.strip().lower() for d in domains_config.config_value.split(",")]
-            email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
-            if email_domain in domains_list:
-                logger.debug(f"Super admin access granted via database domain: {email}")
-                _cache_admin_status(email_lower, True)
-                return True
+            # Check domains
+            stmt = select(TenantManagementConfig).filter_by(config_key="super_admin_domains")
+            domains_config = db_session.scalars(stmt).first()
+            if domains_config and domains_config.config_value:
+                domains_list = [d.strip().lower() for d in domains_config.config_value.split(",")]
+                email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
+                if email_domain in domains_list:
+                    logger.debug(f"Super admin access granted via database domain: {email}")
+                    _cache_admin_status(email_lower, True)
+                    return True
+
+    except Exception as e:
+        logger.error(f"Error checking super admin status in database: {e}")
+        # Don't fail completely - environment check already happened above
 
     # Cache negative result too (to avoid repeated expensive checks)
     _cache_admin_status(email_lower, False)
@@ -232,18 +237,23 @@ def is_tenant_admin(email, tenant_id=None):
     if is_super_admin(email):
         return True
 
-    # Check if user is a tenant admin in the database. A genuine DB/connection
-    # error propagates uncaught (Flask's default 500) rather than being
-    # reported as "not a tenant admin" -- a DB outage is not a decision.
-    with get_db_session() as db_session:
-        stmt = select(User).filter_by(email=email.lower(), is_active=True, is_admin=True)
+    # Check if user is a tenant admin in the database
+    try:
+        with get_db_session() as db_session:
+            stmt = select(User).filter_by(email=email.lower(), is_active=True, is_admin=True)
 
-        if tenant_id:
-            # Check for specific tenant
-            stmt = stmt.filter_by(tenant_id=tenant_id)
+            if tenant_id:
+                # Check for specific tenant
+                stmt = stmt.filter_by(tenant_id=tenant_id)
 
-        user = db_session.scalars(stmt).first()
-        return user is not None
+            user = db_session.scalars(stmt).first()
+            return user is not None
+
+    except Exception as e:
+        logger.error(f"Error checking tenant admin status: {e}")
+        return False
+
+    return False
 
 
 def require_auth(admin_only=False):
@@ -304,16 +314,16 @@ def require_tenant_access(api_mode=False):
             # Check for test mode (global env var OR per-tenant auth_setup_mode)
             test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
 
-            # Also check per-tenant auth_setup_mode if test_user is in session.
-            # A genuine DB/connection error propagates uncaught here rather than
-            # silently leaving test_mode False -- a DB outage is not the same
-            # fact as "this tenant doesn't have auth_setup_mode enabled".
+            # Also check per-tenant auth_setup_mode if test_user is in session
             if not test_mode and "test_user" in session:
-                with get_db_session() as db_session:
-                    tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                    if tenant and getattr(tenant, "auth_setup_mode", False):
-                        test_mode = True
-                        logger.debug(f"Auth setup mode enabled for tenant {tenant_id}")
+                try:
+                    with get_db_session() as db_session:
+                        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+                        if tenant and getattr(tenant, "auth_setup_mode", False):
+                            test_mode = True
+                            logger.debug(f"Auth setup mode enabled for tenant {tenant_id}")
+                except Exception as e:
+                    logger.warning(f"Error checking tenant auth_setup_mode: {e}")
 
             if test_mode and "test_user" in session:
                 g.user = session["test_user"]

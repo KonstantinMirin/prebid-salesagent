@@ -1439,8 +1439,6 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    adcp_version: str | None = None,
-    adcp_major_version: int | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1496,10 +1494,6 @@ def _build_update_request(
         request_params["ext"] = ext
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
-    if adcp_version is not None:
-        request_params["adcp_version"] = adcp_version
-    if adcp_major_version is not None:
-        request_params["adcp_major_version"] = adcp_major_version
 
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
@@ -1543,12 +1537,6 @@ async def update_media_buy(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    adcp_version: Annotated[
-        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
-    ] = None,
-    adcp_major_version: Annotated[
-        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
-    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1599,8 +1587,6 @@ async def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
-        adcp_version=adcp_version,
-        adcp_major_version=adcp_major_version,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1630,8 +1616,6 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
-    adcp_version: str | None = None,
-    adcp_major_version: int | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1681,8 +1665,6 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
-        adcp_version=adcp_version,
-        adcp_major_version=adcp_major_version,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

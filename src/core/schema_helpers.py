@@ -29,7 +29,6 @@ from adcp.types import (
 from pydantic import BaseModel, ValidationError
 
 from src.core.exceptions import AdCPValidationError
-from src.core.helpers.version_envelope import version_envelope_kwargs
 from src.core.schemas.product import GetProductsRequest
 from src.core.validation_helpers import adcp_validation_boundary
 
@@ -224,8 +223,6 @@ def create_get_products_request(
     filters: dict[str, Any] | ProductFilters | None = None,
     property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
-    adcp_version: str | None = None,
-    adcp_major_version: int | None = None,
 ) -> GetProductsRequest:
     """Create GetProductsRequest aligned with adcp v3.6.0 spec.
 
@@ -236,8 +233,6 @@ def create_get_products_request(
         filters: Structured filters for product discovery (dict or ProductFilters)
         property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
-        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
-        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
 
     Returns:
         GetProductsRequest
@@ -256,13 +251,12 @@ def create_get_products_request(
         elif isinstance(filters, dict):
             filters_obj = ProductFilters(**filters)
 
-    return GetProductsRequest(
+    return GetProductsRequest(  # type: ignore[call-arg]
         brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,
         property_list=to_property_list_reference(property_list),
         context=to_context_object(context),
-        **version_envelope_kwargs(adcp_version, adcp_major_version),
     )
 
 

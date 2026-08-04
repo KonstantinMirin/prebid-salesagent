@@ -36,7 +36,6 @@ from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
-from src.core.helpers.version_envelope import version_envelope_kwargs
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -176,12 +175,6 @@ async def list_accounts(
     status: AccountStatus | None = None,
     pagination: PaginationRequest | None = None,
     sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
-    adcp_version: Annotated[
-        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
-    ] = None,
-    adcp_major_version: Annotated[
-        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
-    ] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -194,8 +187,6 @@ async def list_accounts(
         status: Filter accounts by status (active, closed, etc.).
         pagination: Pagination parameters (max_results, cursor).
         sandbox: Filter by sandbox flag.
-        adcp_version: Release-precision AdCP version the buyer conforms to (optional).
-        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional).
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
 
@@ -207,7 +198,6 @@ async def list_accounts(
         pagination=pagination,
         sandbox=sandbox,
         context=context,
-        **version_envelope_kwargs(adcp_version, adcp_major_version),
     )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -704,12 +694,6 @@ async def sync_accounts(
         bool | None, Field(description="Deactivate accounts not present in the sync list")
     ] = None,
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
-    adcp_version: Annotated[
-        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
-    ] = None,
-    adcp_major_version: Annotated[
-        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
-    ] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -722,8 +706,6 @@ async def sync_accounts(
         accounts: List of accounts to upsert.
         delete_missing: Deactivate accounts not in the list.
         dry_run: Preview changes without persisting.
-        adcp_version: Release-precision AdCP version the buyer conforms to (optional).
-        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional).
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
 
@@ -736,7 +718,6 @@ async def sync_accounts(
         dry_run=dry_run,
         context=context,
         idempotency_key=str(uuid.uuid4()),
-        **version_envelope_kwargs(adcp_version, adcp_major_version),
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)

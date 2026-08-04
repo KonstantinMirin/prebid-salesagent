@@ -125,7 +125,6 @@ from src.core.helpers.creative_helpers import (
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
 )
-from src.core.helpers.version_envelope import version_envelope_kwargs
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
@@ -4337,8 +4336,6 @@ def _build_create_media_buy_request(
     account: AccountReference | None,
     idempotency_key: str | None,
     paused: bool | None,
-    adcp_version: str | None = None,
-    adcp_major_version: int | None = None,
 ) -> CreateMediaBuyRequest:
     """Shared boundary request construction for the MCP and A2A/REST wrappers.
 
@@ -4371,7 +4368,6 @@ def _build_create_media_buy_request(
             # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
             # None type error.
             **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
-            **version_envelope_kwargs(adcp_version, adcp_major_version),
         )
 
 
@@ -4423,12 +4419,6 @@ async def create_media_buy(
             )
         ),
     ] = None,
-    adcp_version: Annotated[
-        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
-    ] = None,
-    adcp_major_version: Annotated[
-        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
-    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Create a media buy with the specified parameters.
@@ -4456,8 +4446,6 @@ async def create_media_buy(
         idempotency_key: Client-supplied idempotency key (REQUIRED per AdCP 3.0.1) —
             the same key replays the original success; a missing key rejects as
             VALIDATION_ERROR
-        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
-        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -4476,8 +4464,6 @@ async def create_media_buy(
         account=account,
         idempotency_key=idempotency_key,
         paused=paused,
-        adcp_version=adcp_version,
-        adcp_major_version=adcp_major_version,
     )
 
     # Read identity, context_id, and the raw wire arguments pre-stashed by
@@ -4522,8 +4508,6 @@ async def create_media_buy_raw(
     account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None,
     paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (tracked in #1619)
-    adcp_version: str | None = None,
-    adcp_major_version: int | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -4567,8 +4551,6 @@ async def create_media_buy_raw(
         account=account,
         idempotency_key=idempotency_key,
         paused=paused,
-        adcp_version=adcp_version,
-        adcp_major_version=adcp_major_version,
     )
 
     if identity is None:

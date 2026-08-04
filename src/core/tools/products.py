@@ -786,12 +786,6 @@ async def get_products(
     brief: Annotated[str, Field(description="Natural language description of campaign goals and requirements")] = "",
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
-    adcp_version: Annotated[
-        str | None, Field(description="Release-precision AdCP version the buyer conforms to")
-    ] = None,
-    adcp_major_version: Annotated[
-        int | None, Field(description="Deprecated major-version pin, kept for pre-3.x buyers")
-    ] = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
 ):
@@ -804,8 +798,6 @@ async def get_products(
         brief: Brief description of the advertising campaign or requirements (optional)
         filters: Structured filters for product discovery (optional)
         property_list: Property list reference for filtering by buyer's property list (optional)
-        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
-        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
 
@@ -821,8 +813,6 @@ async def get_products(
                 filters=filters,
                 property_list=property_list,
                 context=context,
-                adcp_version=adcp_version,
-                adcp_major_version=adcp_major_version,
             )
     except ValueError as e:
         # Helper raises ValueError for semantic (non-Pydantic) input problems.
@@ -847,8 +837,6 @@ async def get_products_raw(
     brand: BrandReference | str | None = None,
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
-    adcp_version: str | None = None,
-    adcp_major_version: int | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
@@ -864,8 +852,6 @@ async def get_products_raw(
         brand: Brand reference per adcp 3.6.0 (BrandReference or string domain shorthand)
         filters: Structured filters for product discovery (optional)
         property_list: Property list reference for filtering by buyer's property list (optional)
-        adcp_version: Release-precision AdCP version the buyer conforms to (optional)
-        adcp_major_version: Deprecated major-version pin, kept for pre-3.x buyers (optional)
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
         identity: Resolved identity from transport boundary (preferred over ctx)
@@ -884,8 +870,6 @@ async def get_products_raw(
         filters=filters,
         property_list=property_list,
         context=context,
-        adcp_version=adcp_version,
-        adcp_major_version=adcp_major_version,
     )
 
     # Call shared implementation
