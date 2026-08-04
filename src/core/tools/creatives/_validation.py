@@ -8,6 +8,7 @@ from typing import Any
 from adcp.types import CreativeAsset
 
 from src.core.exceptions import AdCPValidationError
+from src.core.format_resolver import is_dialled_agent_url
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 
 logger = logging.getLogger(__name__)
@@ -21,22 +22,6 @@ def _get_field(obj: Any, field: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(field, default)
     return getattr(obj, field, default)
-
-
-def is_dialled_agent_url(agent_url: str) -> bool:
-    """Whether *agent_url* names an endpoint we will actually dial over HTTP.
-
-    False for an adapter-provided pseudo-URL like ``broadstreet://<tenant_id>``
-    (really advertised by ``creative_formats.py`` and the Broadstreet adapter):
-    those formats are served by the adapter in-process, so there is no request
-    to make, no address to judge, and an egress gate applied to one would refuse
-    a format the SELLER published to the buyer.
-
-    Guards the format-existence fetch below: an adapter pseudo-URL must not be
-    handed to the seam, which would refuse it on scheme and reject a format the
-    seller itself published.
-    """
-    return agent_url.startswith(("http://", "https://"))
 
 
 def _validate_creative_input(

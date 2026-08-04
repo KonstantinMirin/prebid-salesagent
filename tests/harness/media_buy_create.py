@@ -320,7 +320,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             ),
         }
 
-        def _format_spec_side_effect(agent_url: str, format_id: str) -> Any:
+        def _format_spec_side_effect(agent_url: str, format_id: str, field: str | None = None) -> Any:
             spec = self._format_specs.get(format_id)
             if spec is not None:
                 return spec

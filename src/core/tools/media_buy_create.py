@@ -308,7 +308,7 @@ def _determine_media_buy_status(
     return MediaBuyStatus.active.value
 
 
-def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
+def _get_format_spec_sync(agent_url: str, format_id: str, *, field: str | None = None) -> Any | None:
     """Get format specification synchronously from the async registry.
 
     Thin delegate kept for its patch surface (tests/harness envs patch this
@@ -316,10 +316,17 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     keep their recovery semantics, #1430: transient-error taxonomy fix), untyped errors log and
     become None (unknown-format) — lives in the SINGLE shared fetch path,
     format_resolver.fetch_format_spec (#1430 review).
+
+    ``field`` carries BUYER provenance for a stored creative's ``agent_url`` (it
+    came out of the buyer's own prior sync_creatives call, not this deployment's
+    configuration) — passing it routes a refusal through the seam's counterparty-
+    aware path (INVALID_REQUEST/correctable) instead of the operator path
+    (CONFIGURATION_ERROR/terminal), UNLESS the url happens to also be a real
+    tenant-registered operator agent, which stays terminal regardless (salesagent-ypgd).
     """
     from src.core.format_resolver import fetch_format_spec
 
-    return fetch_format_spec(agent_url, format_id)
+    return fetch_format_spec(agent_url, format_id, field=field)
 
 
 def _validate_creatives_before_adapter_call(
@@ -351,6 +358,8 @@ def _validate_creatives_before_adapter_call(
     """
     if session is None:
         raise ValueError("session is required for _validate_creatives_before_adapter_call")
+
+    from src.core.format_resolver import is_dialled_agent_url
 
     # Collect all creative IDs from all packages
     all_creative_ids = set()
@@ -399,22 +408,33 @@ def _validate_creatives_before_adapter_call(
             )
             continue
 
-        # Get format specification from creative agent (uses in-memory cache with 30min TTL)
+        # Get format specification from creative agent (uses in-memory cache with 30min TTL).
+        # Skip the fetch entirely for an adapter-provided pseudo-URL (e.g.
+        # broadstreet://<tenant_id>): those formats are served by the adapter
+        # in-process, so no dialled agent could ever resolve them, and the
+        # unconditional fetch below would reject a format the seller itself
+        # advertised (salesagent-ypgd). `field` carries BUYER provenance for a
+        # genuinely-dialled url — see _get_format_spec_sync's docstring.
         format_spec = None
-        if creative.format:
-            format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
-
-        # Fail validation if format spec not found (no skipping!)
-        if not format_spec:
-            validation_errors.append(
-                f"Creative {creative.creative_id} has unknown format '{creative.format}' "
-                f"from agent {creative.agent_url}. Format must be registered with the creative agent."
+        if creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
+            format_spec = _get_format_spec_sync(
+                creative.agent_url,
+                str(creative.format),
+                field=f"creative:{creative.creative_id}.agent_url",
             )
-            continue
+
+            # Fail validation if format spec not found (no skipping!) — only
+            # meaningful once we know the agent SHOULD have it (a dialled url).
+            if not format_spec:
+                validation_errors.append(
+                    f"Creative {creative.creative_id} has unknown format '{creative.format}' "
+                    f"from agent {creative.agent_url}. Format must be registered with the creative agent."
+                )
+                continue
 
         # Skip validation for generative formats - they need conversion first
         # Generative formats have output_format_ids (they generate reference formats)
-        if format_spec.output_format_ids:
+        if format_spec and format_spec.output_format_ids:
             logger.info(
                 log_safe(
                     f"Skipping validation for generative creative {creative.creative_id} "
@@ -673,9 +693,20 @@ def _build_adapter_asset_from_creative(
     # fallback must not mask it by re-fetching from the same throttled agent
     # (#1430 review). AdCPFormatNotFoundError from the resolver = genuinely
     # unknown -> proceed without a spec (extraction falls back to raw data).
-    if creative.format:
-        format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
-    if format_spec is None and creative.format:
+    #
+    # Skip BOTH the fetch and the fallback for an adapter-provided pseudo-URL
+    # (e.g. broadstreet://<tenant_id>) — served in-process, so no dialled agent
+    # could ever resolve it (salesagent-ypgd). Extraction below already falls
+    # back to the creative's raw data fields when format_spec stays None.
+    from src.core.format_resolver import is_dialled_agent_url
+
+    if creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
+        format_spec = _get_format_spec_sync(
+            creative.agent_url,
+            str(creative.format),
+            field=f"creative:{creative.creative_id}.agent_url",
+        )
+    if format_spec is None and creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
         from src.core.exceptions import AdCPFormatNotFoundError
         from src.core.format_resolver import get_format
 

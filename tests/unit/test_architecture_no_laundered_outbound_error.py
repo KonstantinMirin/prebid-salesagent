@@ -25,6 +25,7 @@ import pytest
 
 from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
+    iter_call_expressions,
     parse_module,
     repo_root,
     src_python_files,
@@ -39,10 +40,8 @@ DIALLING_METHODS = frozenset({"preview_creative", "build_creative"})
 def _try_body_calls_dialling_method(try_node: ast.Try) -> bool:
     """True when *try_node*'s body (not its handlers) calls a dialling method."""
     for stmt in try_node.body:
-        for node in ast.walk(stmt):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
+        for call in iter_call_expressions(stmt):
+            func = call.func
             if isinstance(func, ast.Attribute) and func.attr in DIALLING_METHODS:
                 return True
     return False

@@ -19,6 +19,23 @@ from src.core.validation_helpers import run_async_in_sync_context
 logger = logging.getLogger(__name__)
 
 
+def is_dialled_agent_url(agent_url: str) -> bool:
+    """Whether *agent_url* names an endpoint we will actually dial over HTTP.
+
+    False for an adapter-provided pseudo-URL like ``broadstreet://<tenant_id>``
+    (advertised by ``creative_formats.py`` and the Broadstreet adapter): those
+    formats are served by the adapter in-process, so there is no request to
+    make, no address to judge, and an egress gate applied to one would refuse
+    a format the SELLER published to the buyer.
+
+    Shared by every format-fetch call site (``creatives/_validation.py``'s
+    ingest gate, ``media_buy_create.py``'s pre-adapter validation and asset
+    build) so the adapter-format exemption is decided once, here, rather than
+    re-derived per call site.
+    """
+    return agent_url.startswith(("http://", "https://"))
+
+
 def fetch_format_spec(agent_url: str, format_id: str, *, field: str | None = None) -> Format | None:
     """Fetch one format spec from the creative-agent registry (sync bridge).
 
