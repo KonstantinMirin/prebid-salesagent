@@ -12,9 +12,13 @@ This script is BOTH:
   * the Phase-1 reconciliation worklist generator (lists what to fix), and
   * the Phase-4 Guard A engine (``--strict``-style: exit 1 on any finding).
 
-Canonical source: the VENDORED enum at
-``tests/fixtures/adcp_schemas_pinned/enums/error-code.json`` (pinned to adcp
-commit 04f59d2d5). Read offline — CI has no ~/projects/adcp clone.
+Canonical source: the installed adcp SDK's own error-code.json enum (read via
+tests.helpers.pinned_schema, offline — no ~/projects/adcp clone needed). This
+script only reads the ``enum`` code LIST (not ``enumMetadata`` recovery/
+suggestion content, which stays on the separately-pinned vendored fixture —
+see docs/adcp-spec-version.md "Pinned schema sources"), so it grades against
+the SDK's full, current vocabulary rather than an independently-pinned
+snapshot that may lag behind it.
 
 Usage:
     # Worklist for specific use cases
@@ -37,7 +41,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FEATURES_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
-ENUM_PATH = PROJECT_ROOT / "tests" / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
+
+sys.path.insert(0, str(PROJECT_ROOT))
+from tests.helpers import pinned_schema  # noqa: E402
 
 # A code-shaped token: ALL_CAPS_SNAKE (e.g. INVALID_REQUEST) or a lowercase
 # *_error token (e.g. authentication_error). This excludes placeholders like
@@ -66,14 +72,11 @@ BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):
 
 
 def load_enum() -> set[str]:
-    if not ENUM_PATH.exists():
-        print(
-            f"ERROR: pinned enum not found at {ENUM_PATH}\n"
-            "Run: uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py",
-            file=sys.stderr,
-        )
+    try:
+        return set(pinned_schema.load("error-code.json")["enum"])
+    except AssertionError as e:
+        print(f"ERROR: pinned enum not found: {e}", file=sys.stderr)
         sys.exit(2)
-    return set(json.loads(ENUM_PATH.read_text())["enum"])
 
 
 def _iter_blocks(lines: list[str]):

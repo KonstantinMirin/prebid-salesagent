@@ -7,19 +7,25 @@ Source of truth: adcontextprotocol/adcp @ commit
 This commit is an INTENTIONAL, frozen reference point, DELIBERATELY independent
 of the installed adcp SDK's own pin (see docs/adcp-spec-version.md "Pinned
 schema sources"). It exists ONLY for enums/error-code.json's ``enumMetadata``
-block (per-code ``recovery``/``suggestion`` classification), read by
-tests/harness/transport.py, tests/unit/test_architecture_error_recovery_enum_conformance.py,
-tests/unit/test_architecture_error_suggestion_enum_conformance.py, and
-scripts/verify_feature_error_codes.py. The installed SDK's error-code enum has
-grown independently (92+ codes vs. this fixture's 66) and its recovery/suggestion
-values diverge from this fixture's on several codes — moving those 4 readers
-onto the SDK tree requires first reconciling that divergence (tracked as its
-own epic; see docs/adcp-spec-version.md), not a mechanical resolver swap.
+``suggestion`` text, read by
+tests/unit/test_architecture_error_suggestion_enum_conformance.py. The
+installed SDK's error-code enum has grown independently (92+ codes vs. this
+fixture's 66) and its ``suggestion`` wording diverges from this fixture's on
+4 codes (CREDENTIAL_IN_ARGS, MEDIA_BUY_NOT_FOUND, PACKAGE_NOT_FOUND,
+REQUOTE_REQUIRED, verified at migration time) — moving that reader onto the
+SDK tree requires first reconciling that divergence (tracked as its own
+epic; see docs/adcp-spec-version.md), not a mechanical resolver swap.
 
-Every OTHER pinned-schema consumer (structural request/response shape,
-$ref resolution) reads through tests/helpers/pinned_schema.py, which resolves
-from the installed SDK's own tree — this fixture directory no longer vendors
-any of those schemas.
+Every OTHER pinned-schema consumer — structural request/response shape,
+``$ref`` resolution, AND the ``recovery`` half of this same enumMetadata
+block (verified byte-identical across all 66 shared codes, so
+tests/harness/transport.py and
+tests/unit/test_architecture_error_recovery_enum_conformance.py both migrated)
+— reads through tests/helpers/pinned_schema.py, which resolves from the
+installed SDK's own tree. scripts/verify_feature_error_codes.py also
+migrated (it only reads the ``enum`` code list, not enumMetadata content).
+This fixture directory no longer vendors any schema-shape files, only this
+one enum, kept only for its suggestion-text divergence.
 
 To refresh (e.g. to advance the pinned commit — a deliberate, reviewed change
 that must also re-check the recovery/suggestion divergence against the SDK):
