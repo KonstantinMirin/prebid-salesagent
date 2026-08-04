@@ -50,11 +50,13 @@ DEFAULT_ADAPTER_CHANNELS = ["display", "social", "ctv"]
 #: which no conformant ``identity.brand_json_url`` can be built from.
 SIGNING_AGENT_HOST = "seller-capabilities.example.com"
 
-#: The deployment key encryption key used while minting a test signing key. A ``db:``
-#: mint refuses outright without one, so this is what makes the KEYED rows reach the
-#: behaviour they grade instead of failing in provisioning.
-_KEK_ENV_NAME = "ADCP_BDD_SIGNING_KEK"
-_KEK_VALUE = "correct-horse-battery-staple"
+#: docker-compose.e2e.yml's adcp-server service, whose environment names the ONE
+#: KEK the LIVE SERVER CONTAINER holds. e2e_rest scenarios resolve a provisioned
+#: key through THAT container, not through this test process, so the runner's KEK
+#: must match it exactly -- a hardcoded literal that drifts from compose is
+#: precisely the KEK mismatch salesagent-dn4i's fix now correctly detects and
+#: refuses to sign with (previously masked by the bug that fix closed).
+_COMPOSE_SERVICE = "adcp-server"
 
 #: Default pricing models seeded on the adapter mock -- mirrors the REAL
 #: MockAdServerAdapter.get_supported_pricing_models() set (mock_ad_server.py),
@@ -192,24 +194,38 @@ class CapabilitiesEnv(IntegrationEnv):
         self.declare_capabilities(**blocks)
 
     def _provision_signing_key(self, alg: str) -> None:
-        """Mint one ACTIVE signing key of *alg* through production, under a test KEK.
+        """Mint one ACTIVE signing key of *alg* through production, under the
+        SAME KEK docker-compose.e2e.yml gives the live server container.
 
         ``provision_signing_key`` stamps ``not_before`` from the wall clock, so the key is
         active by the time the When step calls ``get_adcp_capabilities``. Key PRESENCE is
         then derived by production's ``signing_key_backed`` — this method never asserts a
         posture, it only creates the platform state one is derived from.
+
+        The KEK is read straight out of compose (salesagent-dn4i) rather than a
+        hardcoded literal: in-process transports (mcp/a2a/rest) resolve the key in
+        THIS process, but e2e_rest resolves it in the LIVE SERVER CONTAINER, which
+        only ever holds compose's value. A runner-only literal that drifted from it
+        would mint a key the container can never open -- exactly the mismatch
+        salesagent-dn4i's production fix now correctly detects and refuses to sign
+        with, instead of the previous bug silently masking it.
         """
         import os
+        from pathlib import Path
         from unittest.mock import patch
+
+        import yaml
 
         from src.core.database.repositories.signing_key import SigningKeyRepository
         from src.core.signing.keys import provision_signing_key
 
+        compose_path = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
+        service_env = yaml.safe_load(compose_path.read_text())["services"][_COMPOSE_SERVICE]["environment"]
+        kek_pointer = service_env["ADCP_SIGNING_KEY_PASSPHRASE_ENV"]
+        kek_value = service_env[kek_pointer]
+
         for patcher in (
-            patch.dict(
-                os.environ,
-                {"ADCP_SIGNING_KEY_PASSPHRASE_ENV": _KEK_ENV_NAME, _KEK_ENV_NAME: _KEK_VALUE},
-            ),
+            patch.dict(os.environ, {"ADCP_SIGNING_KEY_PASSPHRASE_ENV": kek_pointer, kek_pointer: kek_value}),
             # The AppConfig carrying `key_passphrase_env` is a process global and is
             # already cached by the time a Given runs; the passphrase itself is re-read
             # from the environment on every use.
