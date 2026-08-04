@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Refresh the pinned AdCP JSON-schema fixtures used by test_pydantic_schema_alignment.
+"""Refresh the pinned AdCP error-code enum vendored here.
 
 Source of truth: adcontextprotocol/adcp @ commit
     04f59d2d56d3d77033162c310e99a1188e4eb419  (tag v3.1-04f59d2d5, 2026-05-13)
 
-This commit is an INTENTIONAL, frozen reference point for AdCP 3.1 semantics. The
-upstream adcp repo ships constantly and `/schemas/latest` drifts; we deliberately do
-NOT track it. The commit is immutable on GitHub, so the schemas are vendored here
-(committed) — the alignment test reads them offline and never fetches `/schemas/latest`.
+This commit is an INTENTIONAL, frozen reference point, DELIBERATELY independent
+of the installed adcp SDK's own pin (see docs/adcp-spec-version.md "Pinned
+schema sources"). It exists ONLY for enums/error-code.json's ``enumMetadata``
+block (per-code ``recovery``/``suggestion`` classification), read by
+tests/harness/transport.py, tests/unit/test_architecture_error_recovery_enum_conformance.py,
+tests/unit/test_architecture_error_suggestion_enum_conformance.py, and
+scripts/verify_feature_error_codes.py. The installed SDK's error-code enum has
+grown independently (92+ codes vs. this fixture's 66) and its recovery/suggestion
+values diverge from this fixture's on several codes — moving those 4 readers
+onto the SDK tree requires first reconciling that divergence (tracked as its
+own epic; see docs/adcp-spec-version.md), not a mechanical resolver swap.
 
-Layout: schema `$id`/`$ref` namespace is `/schemas/<rest>`; each is written to
-`<this dir>/<rest>` (so `/schemas/core/account-ref.json` -> `core/account-ref.json`).
+Every OTHER pinned-schema consumer (structural request/response shape,
+$ref resolution) reads through tests/helpers/pinned_schema.py, which resolves
+from the installed SDK's own tree — this fixture directory no longer vendors
+any of those schemas.
 
-Only the transitive `$ref` closure of the request schemas the test maps is vendored.
-
-To refresh (e.g. to advance the pinned commit — a deliberate, reviewed change):
+To refresh (e.g. to advance the pinned commit — a deliberate, reviewed change
+that must also re-check the recovery/suggestion divergence against the SDK):
     uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
 
 It reads from a local clone at ~/projects/adcp if present (faster), else GitHub raw.
@@ -34,30 +42,9 @@ SRC_PREFIX = "static/schemas/source"  # repo path that backs the `/schemas/...` 
 LOCAL_CLONE = Path.home() / "projects" / "adcp"
 FIXTURE_DIR = Path(__file__).parent
 
-# Request schemas the alignment test maps to Pydantic models, plus response schemas
-# whose contract individual tests assert against (the BFS roots).
+# The sole surviving root: error-code enumMetadata (see module docstring for why
+# this is a deliberately independent pin, not part of the general schema-shape closure).
 ROOTS = [
-    "/schemas/media-buy/get-products-request.json",
-    "/schemas/media-buy/update-media-buy-request.json",
-    "/schemas/media-buy/get-media-buy-delivery-request.json",
-    "/schemas/creative/sync-creatives-request.json",
-    "/schemas/creative/list-creatives-request.json",
-    # Response schemas grounding specific contract tests:
-    "/schemas/media-buy/create-media-buy-response.json",  # test_adcp_contract F4 (valid_actions/context)
-    "/schemas/account/sync-accounts-response.json",  # test_sync_response_account_contract F5 (required fields)
-    "/schemas/creative/sync-creatives-response.json",  # PR1399 R3-F2 (creatives required)
-    # PR1399 Plan-B: machine-complete RESPONSE_ALIGNMENTS over every implemented response model.
-    "/schemas/media-buy/get-products-response.json",
-    "/schemas/media-buy/update-media-buy-response.json",
-    "/schemas/media-buy/get-media-buy-delivery-response.json",
-    "/schemas/creative/get-creative-delivery-response.json",
-    "/schemas/creative/list-creatives-response.json",
-    "/schemas/creative/list-creative-formats-response.json",
-    "/schemas/account/list-accounts-response.json",
-    "/schemas/signals/get-signals-response.json",
-    "/schemas/signals/activate-signal-response.json",
-    # Standalone enum vendored for the BDD error-code guard (verify_feature_error_codes.py).
-    # Not in any request/response $ref closure, so it must be listed explicitly to stay pinned.
     "/schemas/enums/error-code.json",
 ]
 

@@ -1,6 +1,6 @@
 """AdCP JSON Schema Validator for E2E Tests — pinned to the installed SDK's schemas.
 
-Validates requests and responses against the AdCP schemas BUNDLED with the
+Validates requests and responses against the AdCP schemas shipped with the
 pinned ``adcp`` SDK (see docs/adcp-spec-version.md for the current pin and
 bump procedure) — never against the live adcontextprotocol.org registry. The
 live registry serves "latest", which
@@ -11,26 +11,30 @@ drift. Validating against the pin makes CI deterministic and grades the same
 contract production is built against. The SDK↔spec mapping is enforced by
 tests/unit/test_adcp_spec_version.py.
 
-The SDK ships each spec version's schemas twice: a plain tree with $refs and
-a ``bundled/`` tree with every $ref inlined (fully self-contained). Schemas
-are loaded from ``bundled/`` first, so the old failure mode — an unresolvable
-$ref silently degrading to a reject-everything fallback schema — cannot
-occur; an unresolvable reference now raises loudly instead.
+Schema loading and $ref resolution delegate to ``tests.helpers.pinned_schema``
+— the single source of truth every pinned-schema consumer in this repo reads
+through (also used by tests/unit/test_pydantic_schema_alignment.py and the
+integration suite). That module resolves from the SDK's "plain" tree
+(``adcp/_schemas/<major.minor>/``), not the ``bundled/`` subset: bundled only
+physically ships 8 of the SDK's 16 top-level categories (no ``account/``,
+``enums/``, ``governance/``, etc.) — validating a task whose schema lives in
+one of the missing categories against bundled would raise "not found" even
+though the schema exists and is fully valid. The plain tree is a strict
+superset with equivalent (fully-resolvable) $ref behavior, so nothing is
+lost by not using bundled.
 
 Usage:
     async with AdCPSchemaValidator() as validator:
         await validator.validate_response("get-products", response_data)
 """
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-import referencing
 from jsonschema.validators import Draft7Validator
-from referencing.jsonschema import DRAFT7
 
+from tests.helpers import pinned_schema
 from tests.helpers.sdk_schema_root import sdk_schema_root as _sdk_schema_root
 
 
@@ -56,7 +60,7 @@ class AdCPSchemaValidator:
     def __init__(self) -> None:
         self.schema_root = _sdk_schema_root()
 
-        # Schema registry and compiled validators cache
+        # Compiled-validator cache, keyed by normalized ref.
         self._schema_registry: dict[str, dict[str, Any]] = {}
         self._compiled_validators: dict[str, Draft7Validator] = {}
         self._index_cache: dict[str, Any] | None = None
@@ -80,7 +84,9 @@ class AdCPSchemaValidator:
         site-rooted paths (``/schemas/v1/…``, ``/schemas/3.1.1/…``), and paths
         already relative to the version root (``media-buy/get-products-request.json``,
         the form the SDK index uses). The version segment is discarded — the
-        installed SDK's tree IS the pinned version.
+        installed SDK's tree IS the pinned version. The normalized form is also
+        exactly what ``tests.helpers.pinned_schema`` expects (a category-qualified,
+        version-root-relative ref).
         """
         ref = schema_ref
         if ref.startswith(("http://", "https://")):
@@ -93,27 +99,6 @@ class AdCPSchemaValidator:
             raise SchemaError(f"Cannot resolve schema reference {schema_ref!r} against the pinned SDK schema tree")
         return ref
 
-    def _schema_path(self, relative_ref: str) -> Path:
-        """Resolve a version-root-relative ref inside the self-contained bundled tree.
-
-        Only ``bundled/`` is served: the plain tree's schemas carry relative
-        ``../core/x.json`` / bare-sibling ``$ref``s that cannot be resolved
-        without threading a base directory through ``_normalize_ref``, so a
-        plain-tree fallback would trade this loud error for the resolver's own.
-        """
-        bundled_root = (self.schema_root / "bundled").resolve()
-        candidate = (bundled_root / relative_ref).resolve()
-        # Containment check: closes traversal forms a prefix check misses
-        # (e.g. 'media-buy/../../../../etc/hosts') before any filesystem probe.
-        if not candidate.is_relative_to(bundled_root):
-            raise SchemaError(f"Schema reference {relative_ref!r} escapes the pinned SDK schema tree")
-        if candidate.is_file():
-            return candidate
-        raise SchemaError(
-            f"Schema {relative_ref!r} not found under {bundled_root} — the validator serves only "
-            "the SDK's self-contained bundled tree"
-        )
-
     async def get_schema_index(self) -> dict[str, Any]:
         """Get the pinned schema index."""
         if self._index_cache is None:
@@ -122,36 +107,34 @@ class AdCPSchemaValidator:
 
     async def get_schema(self, schema_ref: str) -> dict[str, Any]:
         """Get a schema by reference, using cache when possible."""
-        if schema_ref not in self._schema_registry:
-            self._schema_registry[schema_ref] = self._load_json(self._schema_path(self._normalize_ref(schema_ref)))
-        return self._schema_registry[schema_ref]
+        normalized = self._normalize_ref(schema_ref)
+        if normalized not in self._schema_registry:
+            self._schema_registry[normalized] = self._resolve_pinned(normalized, pinned_schema.load)
+        return self._schema_registry[normalized]
 
-    def _get_compiled_validator(self, schema: dict[str, Any]) -> Draft7Validator:
-        """Get a compiled validator for a schema, with caching."""
-        # Create a hash of the schema for caching
-        schema_hash = hashlib.md5(json.dumps(schema, sort_keys=True).encode()).hexdigest()
+    def _get_compiled_validator(self, schema_ref: str) -> Draft7Validator:
+        """Get a compiled validator for a schema ref, with caching.
 
-        if schema_hash not in self._compiled_validators:
+        Takes the ref (not a loaded schema dict): ``pinned_schema.validator_for``
+        owns both loading and $ref-registry wiring together, so there is no
+        loaded-schema-only entry point to cache on independently.
+        """
+        normalized = self._normalize_ref(schema_ref)
+        if normalized not in self._compiled_validators:
+            self._compiled_validators[normalized] = self._resolve_pinned(normalized, pinned_schema.validator_for)
+        return self._compiled_validators[normalized]
 
-            def _retrieve(uri: str) -> referencing.Resource:
-                """Resolve a $ref against the pinned SDK tree — loudly, never a fallback.
-
-                Bundled schemas are self-contained, so this should never fire;
-                if it does, the miss raises (naming the ref) instead of
-                substituting a reject-everything schema.
-                """
-                return DRAFT7.create_resource(self._load_json(self._schema_path(self._normalize_ref(uri))))
-
-            registry = referencing.Registry(retrieve=_retrieve)
-            # Seed the registry with the root schema
-            root_resource = DRAFT7.create_resource(schema)
-            root_id = schema.get("$id", "")
-            if root_id:
-                registry = registry.with_resource(root_id, root_resource)
-
-            self._compiled_validators[schema_hash] = Draft7Validator(schema, registry=registry)
-
-        return self._compiled_validators[schema_hash]
+    @staticmethod
+    def _resolve_pinned(normalized_ref: str, resolver):
+        """Call a ``pinned_schema`` resolver, translating its ``AssertionError``
+        (missing schema, or a ref that escapes the schema tree) into
+        ``SchemaError`` — the type this module's callers branch on to mean
+        "resolution failed", distinct from ``SchemaValidationError`` (payload
+        violates the contract)."""
+        try:
+            return resolver(normalized_ref)
+        except AssertionError as e:
+            raise SchemaError(str(e)) from e
 
     async def _find_schema_ref_for_task(self, task_name: str, request_or_response: str) -> str | None:
         """Find the schema reference for a specific task and type.
@@ -261,8 +244,7 @@ class AdCPSchemaValidator:
             SchemaValidationError: If validation fails
         """
         try:
-            schema = await self.get_schema(schema_ref)
-            validator = self._get_compiled_validator(schema)
+            validator = self._get_compiled_validator(schema_ref)
 
             errors = list(validator.iter_errors(data))
             if errors:
