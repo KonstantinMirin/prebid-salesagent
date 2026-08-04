@@ -1334,6 +1334,37 @@ class TestInlineCreativeObligations:
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     @pytest.mark.asyncio
+    async def test_malformed_registered_agent_url_skipped_not_hard_failed(self, integration_db):
+        """A malformed PRE-EXISTING registered creative agent_url (admin-ingested
+        data the buyer never touched) is excluded from registration matching
+        with a log, rather than hard-failing every format_id in the request.
+
+        Covers salesagent-9azh.
+        """
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from tests.factories import CreativeAgentFactory
+
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # Well-formed registration the buyer's format_id should match.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://creative.example.com", enabled=True)
+            # Malformed pre-existing registration -- bypasses admin-ingestion
+            # validation entirely by writing directly to the DB, which is
+            # exactly how such a row would already exist in production.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://exämple.com", enabled=True)
+
+            # No get_format mocking needed: ADCP_TESTING=true (autouse fixture)
+            # makes CreativeAgentRegistry serve the checked-in reference formats
+            # for any agent_url, so this exercises the real registry lookup.
+            result = await _validate_and_convert_format_ids(
+                format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}],
+                tenant_id=tenant.tenant_id,
+                package_idx=0,
+            )
+
+        assert result == [{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}]
+
+    @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
         """Unapproved creatives may trigger manual approval path.
 

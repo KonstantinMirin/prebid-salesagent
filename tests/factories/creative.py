@@ -5,12 +5,30 @@ from __future__ import annotations
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
 
-from src.core.database.models import Creative, CreativeAssignment
+from src.core.database.models import Creative, CreativeAgent, CreativeAssignment
 
 from .core import TenantFactory
 from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
+
+
+class CreativeAgentFactory(SQLAlchemyModelFactory):
+    """A tenant's registered creative agent (src.core.database.models.CreativeAgent)."""
+
+    class Meta:
+        model = CreativeAgent
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+        exclude = ("tenant",)
+
+    tenant = factory.SubFactory(TenantFactory)
+    tenant_id = factory.LazyAttribute(lambda o: o.tenant.tenant_id)
+    agent_url = "https://creative.example.com"
+    name = factory.LazyAttribute(lambda o: f"Test Creative Agent {o.agent_url}")
+    enabled = True
+    priority = 10
+    timeout = 30
 
 
 class CreativeFactory(SQLAlchemyModelFactory):

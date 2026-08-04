@@ -26,7 +26,7 @@ from tests.factories.core import (
     PublisherPartnerFactory,
     TenantFactory,
 )
-from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
+from tests.factories.creative import CreativeAgentFactory, CreativeAssignmentFactory, CreativeFactory
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.delivery_simulation import DeliverySimulationConfigFactory
 from tests.factories.format import FormatFactory, FormatIdFactory
@@ -63,6 +63,7 @@ ALL_FACTORIES = [
     PushNotificationConfigFactory,
     DeliverySimulationConfigFactory,
     CreativeFactory,
+    CreativeAgentFactory,
     CreativeAssignmentFactory,
     FormatPerformanceMetricsFactory,
     UserFactory,
@@ -78,6 +79,7 @@ __all__ = [
     "AgentAccountAccessFactory",
     "BusinessEntityFactory",
     "CollectionListReferenceFactory",
+    "CreativeAgentFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",

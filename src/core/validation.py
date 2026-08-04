@@ -6,6 +6,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from src.core.signing import reject_malformed_target
+
 logger = logging.getLogger(__name__)
 
 
@@ -265,9 +267,19 @@ def normalize_agent_url(url: str) -> str:
 
     Returns:
         Normalized base URL
+
+    Raises:
+        TargetUriMalformedError: If the URL's authority is malformed per the
+            RFC 9421 signing layer's canonicalization gate (src.core.signing.canonical)
+            -- e.g. empty authority, unterminated/zone-id IPv6, raw non-ASCII host,
+            port-but-no-host. Shares the predicate with the signing verifier so this
+            validation-layer path can never accept a URL the verifier would reject
+            (salesagent-9azh).
     """
     if not url:
         return url
+
+    reject_malformed_target(url)
 
     # First, remove trailing slashes
     normalized = url.rstrip("/")

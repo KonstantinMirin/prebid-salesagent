@@ -1525,6 +1525,48 @@ def _validate_pricing_model_selection(
     }
 
 
+def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -> set[str]:
+    """Normalize each registered agent's URL for registration-matching comparison.
+
+    A malformed PRE-EXISTING registered agent_url (admin-ingested data the buyer
+    never touched) is skipped with a warning rather than raised: it can never
+    legitimately equal a well-formed incoming agent_url, so excluding it changes
+    nothing for a correct match, but hard-failing here would let ONE unrelated
+    bad registration break every format_id validation in the request
+    (salesagent-9azh).
+    """
+    from src.core.signing import TargetUriMalformedError
+    from src.core.validation import normalize_agent_url
+
+    registered_agent_urls = set()
+    for agent in registered_agents:
+        try:
+            registered_agent_urls.add(normalize_agent_url(agent.agent_url))
+        except TargetUriMalformedError as e:
+            logger.warning(
+                f"Tenant {tenant_id}: registered creative agent_url {agent.agent_url!r} is malformed "
+                f"per RFC 9421 canonicalization ({e.reason}); excluded from registration matching."
+            )
+    return registered_agent_urls
+
+
+def _normalize_incoming_agent_url(agent_url: str, package_idx: int, idx: int) -> str:
+    """Normalize a buyer-supplied format_id.agent_url, or raise with the same
+    'Package N, format_ids[idx]' context every sibling validation in
+    ``_validate_and_convert_format_ids`` carries (salesagent-9azh).
+    """
+    from src.core.signing import TargetUriMalformedError
+    from src.core.validation import normalize_agent_url
+
+    try:
+        return normalize_agent_url(agent_url)
+    except TargetUriMalformedError as e:
+        raise AdCPValidationError(
+            f"Package {package_idx + 1}, format_ids[{idx}]: agent_url is malformed: {e.reason}. "
+            f"Got: agent_url={agent_url!r}.",
+        ) from e
+
+
 async def _validate_and_convert_format_ids(
     format_ids: list[Any], tenant_id: str, package_idx: int
 ) -> list[dict[str, str]]:
@@ -1556,13 +1598,11 @@ async def _validate_and_convert_format_ids(
     registry = CreativeAgentRegistry()
     validated_format_ids = []
 
-    # Get registered agents for this tenant
+    # Get registered agents for this tenant, normalized for consistent comparison
+    # (strips /mcp, /a2a, /.well-known/*, trailing slashes): "https://example.com/mcp/"
+    # -> "https://example.com".
     registered_agents = registry._get_tenant_agents(tenant_id)
-    # Normalize agent URLs for consistent comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-    # This ensures all URL variations match: "https://example.com/mcp/" -> "https://example.com"
-    from src.core.validation import normalize_agent_url
-
-    registered_agent_urls = {normalize_agent_url(agent.agent_url) for agent in registered_agents}
+    registered_agent_urls = _build_registered_agent_urls(registered_agents, tenant_id)
 
     for idx, fmt_id in enumerate(format_ids):
         # STRICT ENFORCEMENT: Reject plain strings
@@ -1592,7 +1632,7 @@ async def _validate_and_convert_format_ids(
 
         # VALIDATION: Check agent is registered
         # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-        normalized_agent_url = normalize_agent_url(agent_url)
+        normalized_agent_url = _normalize_incoming_agent_url(agent_url, package_idx, idx)
         if normalized_agent_url not in registered_agent_urls:
             raise AdCPAuthorizationError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Creative agent not registered: {agent_url}. "
