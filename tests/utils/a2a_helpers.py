@@ -52,8 +52,8 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
     the real a2a-sdk wire (jsonrpc_dispatcher.MessageToDict) does too. Passing
     the result through restore_a2a_integer_types keeps this "real A2A wire"
     capture (tests/CLAUDE.md) honest for known integer-typed AdCP fields
-    (salesagent-hogf) instead of silently diverging from what production
-    (src/app.py's /a2a route wrapper) emits.
+    instead of silently diverging from what production (src/app.py's /a2a
+    route wrapper) emits.
 
     Args:
         artifact: A2A Artifact from response

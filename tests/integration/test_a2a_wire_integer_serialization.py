@@ -1,4 +1,4 @@
-"""Regression test for salesagent-hogf: A2A wire coerces integer fields to floats.
+"""Regression test: A2A wire coerces integer fields to floats.
 
 Core Invariant: an AdCP-spec integer field (e.g.
 ``adcp.idempotency.replay_ttl_seconds``, typed ``integer`` in
@@ -78,7 +78,7 @@ class TestA2AWireIntegerSerialization:
     """AdCP integer-typed fields must stay integers on the real A2A wire."""
 
     def test_replay_ttl_seconds_is_an_integer_on_the_a2a_wire(self, integration_db):
-        """@salesagent-hogf: adcp.idempotency.replay_ttl_seconds is `type: integer`
+        """adcp.idempotency.replay_ttl_seconds is `type: integer`
         in the pinned v3.1.1 get-adcp-capabilities-response.json schema. The real
         A2A wire (captured via extract_data_from_artifact -> MessageToJson, the
         same conversion the production jsonrpc_dispatcher performs) must not

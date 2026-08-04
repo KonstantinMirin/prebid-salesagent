@@ -1,6 +1,6 @@
-"""Structural guard for salesagent-hogf.
+"""Structural guard for the A2A wire integer-type fix.
 
-Pins two invariants that keep the A2A wire integer-type fix (see
+Pins two invariants that keep the fix (see
 ``restore_a2a_integer_types`` in ``src/a2a_server/adcp_a2a_server.py``) from
 silently regressing:
 
@@ -53,7 +53,7 @@ class TestOnlyOneStructValueConstructionSite:
             "found a struct_pb2.Value/Struct() construction site outside "
             f"{allowed_file}: {stray}. A2A wire data must be built through "
             "_dict_to_value so integer-typed fields stay covered by "
-            "restore_a2a_integer_types (salesagent-hogf) -- a parallel "
+            "restore_a2a_integer_types -- a parallel "
             "construction site bypasses that fix."
         )
         assert sites, "expected at least the known _dict_to_value construction sites -- scan may be broken"
@@ -85,8 +85,7 @@ class TestA2ARoutesWrapWithIntegerRestoration:
         ]
         assert not unwrapped, (
             f"these /a2a routes are missing the integer-restoration wrapper: {unwrapped} -- "
-            "the real HTTP wire would silently widen integer fields to floats again "
-            "(salesagent-hogf)"
+            "the real HTTP wire would silently widen integer fields to floats again"
         )
 
     def test_unwrapped_route_would_be_caught(self):

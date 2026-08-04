@@ -1,4 +1,4 @@
-"""Unit test for salesagent-hogf's production-side fix: src/app.py wraps the
+"""Unit test for the production-side fix: src/app.py wraps the
 real ``/a2a`` JSON-RPC route so integer-typed AdCP fields survive the
 a2a-sdk's protobuf Struct/Value -> JSON conversion (which otherwise widens
 every number to a double; see restore_a2a_integer_types in

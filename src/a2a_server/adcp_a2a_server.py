@@ -142,10 +142,9 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 # 86400.0) from ANY subsequent json_format.MessageToJson/MessageToDict call
 # -- ours or the a2a-sdk's own jsonrpc_dispatcher.py, which performs the
 # identical conversion to build the real HTTP response body. There is no way
-# to preserve the distinction inside the Struct/Value representation itself
-# (salesagent-hogf); the only fix point is a coercion applied to the JSON
-# produced FROM the Struct/Value, driven by which fields are known to be
-# integer-typed per spec.
+# to preserve the distinction inside the Struct/Value representation itself;
+# the only fix point is a coercion applied to the JSON produced FROM the
+# Struct/Value, driven by which fields are known to be integer-typed per spec.
 #
 # Spec: v3.1.1 (adcp==6.6.0) -- replay_ttl_seconds:
 # get-adcp-capabilities-response.json #/properties/adcp/properties/idempotency

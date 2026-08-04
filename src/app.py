@@ -303,7 +303,7 @@ def _restore_a2a_wire_integers(endpoint):
     recursively converts every ``Part.data`` (a ``google.protobuf.Value``) to
     a dict. ``Value`` has no integer variant -- every number comes back as a
     JSON float (86400 -> 86400.0), regardless of what type was originally
-    placed there (salesagent-hogf). This is the one point where we see the
+    placed there. This is the one point where we see the
     real outgoing JSON body for the ``/a2a`` route and can restore known
     integer-typed AdCP fields before it reaches the client -- see
     ``restore_a2a_integer_types`` for the shared coercion logic and the
