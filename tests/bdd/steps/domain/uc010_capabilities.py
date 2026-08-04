@@ -1863,7 +1863,7 @@ def then_experimental_features_contains(ctx: dict, feature: str) -> None:
 # top-level errors[] array, or a config-derived specialisms set, and advertises
 # only the media_buy protocol. The Givens record declared intent; the Thens grade
 # the exact v3.1.1-pinned shape on the wire. Every scenario in this batch strict-
-# xfails on the unemitted/hard-coded block (#1592), never a dormant skip.
+# xfails on the genuinely-unemitted block (per-family GH homes: #1855/#1856/#1724), never a dormant skip.
 # ══════════════════════════════════════════════════════════════════════════
 
 
