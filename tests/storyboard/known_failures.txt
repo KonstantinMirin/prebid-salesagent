@@ -1,0 +1,24 @@
+# Known-failing storyboard-conformance checks — GENUINE production gaps only.
+#
+# One test id per line, matching a tests/storyboard/test_storyboard_conformance.py
+# parametrized test keyed on (track, storyboard_id, step_id) from the real
+# @adcp/sdk storyboard runner's measured output. Loaded by tests/storyboard/conftest.py
+# to xfail(strict=False) exactly these test ids — a graduation (entry no longer
+# failing) or a regression (new un-ledgered failure) both fail CI.
+#
+# Locked by tests/unit/test_storyboard_ledger_state.py — keep that test in sync.
+#
+# Runner-reported SKIPS (missing_test_controller, missing_tool, prerequisite_failed)
+# are NOT ledgered here — they map to a native pytest.skip() in the test module
+# instead (SB-4b Core Invariant). Only genuine check FAILURES belong in this file.
+#
+# comply_test_controller/pagination-integrity is the sole PERMANENT won't-fix
+# family (missing_test_controller — no test controller wired for these checks).
+# RFC 9421 signing entries, when ledgered, are regular shrinking genuine-gap
+# entries tied to #1291 (RFC 9421 message signing epic) — NOT permanent.
+#
+# EMPTY today: nothing has been measured through the in-network pytest pipeline
+# yet (SB-1d's numbers were a host-side run against a different webhook-receiver
+# topology than the in-network proxy:8000 target and do not carry over — see
+# salesagent-syhj architect review HIGH finding). Seed this file from the FIRST
+# real in-network CI run of this job, not from tests/storyboard/runner/results/.

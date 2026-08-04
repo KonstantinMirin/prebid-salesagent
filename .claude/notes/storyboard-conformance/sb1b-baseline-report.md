@@ -37,7 +37,7 @@ Run date: 2026-08-03. Branch: `test/storyboard-binding-baseline`.
 
 1. **SDK / spec pin.** `@adcp/sdk@9.3.0` (matches spec 3.1.1 per
    `.claude/research/salesagent-7voe.md`, SB-1a). Sidecar at
-   `.claude/notes/storyboard-conformance/sb1b-runner/` (`package.json` +
+   `tests/storyboard/runner/` (`package.json` +
    `package-lock.json`, committed; `node_modules/` is not).
 2. **Exact-3.1.1 schema/compliance bundle.** Downloaded the `v3.1.1` GitHub
    release asset `3.1.1.tgz` from `adcontextprotocol/adcp` (sha256
@@ -80,7 +80,7 @@ Run date: 2026-08-03. Branch: `test/storyboard-binding-baseline`.
 
 ```bash
 # 1. sidecar deps
-cd .claude/notes/storyboard-conformance/sb1b-runner && npm ci
+cd tests/storyboard/runner && npm ci
 
 # 2. exact-3.1.1 compliance/schema bundle (not committed)
 gh release download v3.1.1 --repo adcontextprotocol/adcp -p "3.1.1.tgz" -p "3.1.1.tgz.sha256"
@@ -235,7 +235,7 @@ verified passing behavior.
 
 ## Artifacts
 
-- `sb1b-runner/package.json`, `sb1b-runner/package-lock.json` — the sidecar
+- `tests/storyboard/runner/package.json`, `tests/storyboard/runner/package-lock.json` — the sidecar
   (pins `@adcp/sdk@9.3.0`; `node_modules/` not committed, restore with
   `npm ci`).
 - `results/sb1b-full.json` — full `ComplianceResult` from the corrected
@@ -278,7 +278,7 @@ Run date: 2026-08-03. Same branch, same method as SB-1b (`docker-compose.e2e.yml
 of the remote CI box — the local machine had Docker available this session),
 run **after** `salesagent-xg5w.1` and `salesagent-xg5w.2`'s fixes were committed
 to this branch. One change from the SB-1b command: `--webhook-receiver loopback`
-added to the full run. Raw data: `sb1b-runner/results/sb1d-full.json`,
+added to the full run. Raw data: `tests/storyboard/runner/results/sb1d-full.json`,
 `sb1d-summary.json`, `smoke-webhook.json`.
 
 ### Primary result: webhook receiver unlocks 3 of 9 previously coverage-blocked storyboards cleanly
@@ -361,7 +361,7 @@ schema bug (`salesagent-xg5w.12`) fixed first.
 
 ### Artifacts (this addendum)
 
-- `sb1b-runner/results/sb1d-full.json` — full `ComplianceResult`, same shape as `sb1b-full.json`.
-- `sb1b-runner/results/sb1d-summary.json` — narrow summary artifact.
-- `sb1b-runner/results/smoke-webhook.json` — single-storyboard smoke test (post-fix).
-- `sb1b-runner/results/sb1d-stderr.log` — the run's `STORYBOARD-FAIL` stderr summary.
+- `tests/storyboard/runner/results/sb1d-full.json` — full `ComplianceResult`, same shape as `sb1b-full.json`.
+- `tests/storyboard/runner/results/sb1d-summary.json` — narrow summary artifact.
+- `tests/storyboard/runner/results/smoke-webhook.json` — single-storyboard smoke test (post-fix).
+- `tests/storyboard/runner/results/sb1d-stderr.log` — the run's `STORYBOARD-FAIL` stderr summary.

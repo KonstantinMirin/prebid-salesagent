@@ -27,17 +27,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.helpers.ledger import load_ledger_nodeids
+
 # Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
 # to the separate server, so in-process mock injection (set_registry_formats /
 # set_adapter_response / account billing-state fixtures) is invisible to it and
 # the scenario cannot pass. xfail(strict=False)'d by exact nodeid in the
 # collection hook. Regenerate from a clean in-network e2e_rest run. See the beads
 # ledger task. File lives next to this conftest.
-_E2E_REST_KNOWN_FAILURES: frozenset[str] = frozenset(
-    line.strip()
-    for line in (Path(__file__).parent / "e2e_rest_known_failures.txt").read_text().splitlines()
-    if line.strip() and not line.lstrip().startswith("#")
-)
+_E2E_REST_KNOWN_FAILURES: frozenset[str] = load_ledger_nodeids(Path(__file__).parent / "e2e_rest_known_failures.txt")
 
 if TYPE_CHECKING:
     pass
