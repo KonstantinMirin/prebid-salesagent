@@ -131,6 +131,84 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     return s
 
 
+# Field names typed `integer` (not `number`) in the pinned AdCP v3.1.1 schema
+# that this server can place in an A2A Part.data (via _dict_to_value above).
+#
+# google.protobuf.Value/Struct -- the well-known types backing Part.data --
+# have NO integer variant: every JSON number is stored as number_value (a
+# double), by protobuf's own well-known-type design. Any int placed in a
+# Part.data is therefore irreversibly widened to a double the moment it
+# enters the Struct/Value, and comes back out as a JSON float (86400 ->
+# 86400.0) from ANY subsequent json_format.MessageToJson/MessageToDict call
+# -- ours or the a2a-sdk's own jsonrpc_dispatcher.py, which performs the
+# identical conversion to build the real HTTP response body. There is no way
+# to preserve the distinction inside the Struct/Value representation itself
+# (salesagent-hogf); the only fix point is a coercion applied to the JSON
+# produced FROM the Struct/Value, driven by which fields are known to be
+# integer-typed per spec.
+#
+# Spec: v3.1.1 (adcp==6.6.0) -- replay_ttl_seconds:
+# get-adcp-capabilities-response.json #/properties/adcp/properties/idempotency
+# (type: integer). limit: get-creative-delivery-response.json
+# #/properties/limit. Others below are verified `type: integer` fields on
+# this server's other explicit-skill responses (sync/assign counts, delivery
+# totals, revision, attribution window). Extend this set as new integer
+# fields are found on the A2A wire -- coercion only fires for a listed name
+# whose value is a whole-numbered float, so an unlisted or genuinely
+# fractional field is never touched.
+A2A_WIRE_INTEGER_FIELDS = frozenset(
+    {
+        "replay_ttl_seconds",
+        "limit",
+        "returned_count",
+        "revision",
+        "interval",
+        "attribution_window_days",
+        "total_processed",
+        "created",
+        "updated",
+        "unchanged",
+        "failed",
+        "deleted",
+        "total_assignments_processed",
+        "assigned",
+        "unassigned",
+        "total_impressions",
+        "active_count",
+        "impressions",
+    }
+)
+
+
+def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
+    """Recursively coerce known integer-typed fields back to ``int``.
+
+    Reverses the double-widening every number undergoes when it round-trips
+    through a protobuf Struct/Value (see A2A_WIRE_INTEGER_FIELDS above).
+    Only touches a value that is BOTH a whole-numbered float AND at a key in
+    ``integer_field_names`` -- an unlisted key or a genuinely fractional
+    value is returned unchanged, so this cannot silently corrupt real
+    ``number``-typed fields.
+
+    Shared by the production ``/a2a`` route wrapper (src/app.py) and the test
+    harness's ``extract_data_from_artifact`` (tests/utils/a2a_helpers.py) --
+    both perform the same Struct/Value -> JSON conversion the a2a-sdk itself
+    performs, so both need the same restoration to keep the harness's "real
+    A2A wire" claim honest.
+    """
+    if isinstance(data, dict):
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            if key in integer_field_names and isinstance(value, float) and value.is_integer():
+                result[key] = int(value)
+            else:
+                result[key] = restore_a2a_integer_types(value, integer_field_names)
+        return result
+    if isinstance(data, list):
+        return [restore_a2a_integer_types(item, integer_field_names) for item in data]
+    return data
+
+
 # ADCP Discovery Skills: Skills that don't require authentication
 # Per AdCP spec section 3.2, these endpoints allow optional authentication for public discovery.
 # IMPORTANT: This is the single source of truth for auth-optional skills in A2A.
