@@ -150,6 +150,13 @@ def load_json_schema(schema_ref: str) -> dict[str, Any]:
 
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
     """Generate a reasonable example value for a JSON schema type."""
+    # Inline enum (e.g. cache_scope: {"type": "string", "enum": ["public", "account"]}):
+    # a generic "test_<field>_value" string is not a member of the enum and fails
+    # Pydantic validation on construction — checked before the $ref/oneOf/allOf
+    # branches below since an inline enum can appear on any of those field shapes.
+    if field_spec and "enum" in field_spec:
+        return field_spec["enum"][0]
+
     # Handle $ref fields (complex nested objects)
     if field_spec and "$ref" in field_spec:
         # Generate sensible defaults for known $ref types
@@ -856,12 +863,62 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
 ]
 
 
+def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
+    """Domain-level required fields from every arm of a schema's top-level
+    ``allOf`` — e.g. a shared error/pricing sub-schema composed in alongside
+    the domain shape. A response schema with no top-level ``oneOf``/``required``
+    of its own (get-products-response.json in 3.1.1) can still spec-require
+    fields via allOf; without merging them in, a schema-required field
+    silently drops out of grading instead of failing loudly (the exact bug
+    class this suite exists to catch).
+
+    Protocol Envelope fields (``status`` et al — see ``_PROTOCOL_ENVELOPE_FIELDS``)
+    are excluded: every AdCP response schema composes the same shared
+    core/protocol-envelope.json arm, which spec-requires ``status``, but that
+    field is populated by the PROTOCOL LAYER at the transport boundary, not
+    the domain Pydantic model — same distinction as ``_VERSION_FIELDS``.
+    """
+    required: set[str] = set()
+    for arm in schema.get("allOf", []) or []:
+        resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
+        required |= set(resolved.get("required", []))
+    return required - _PROTOCOL_ENVELOPE_FIELDS
+
+
+def _standard_branch_required_fields(schema: dict[str, Any]) -> set[str]:
+    """Required fields from the innermost ``else`` branch of an ``if``/``then``/``else`` chain.
+
+    3.1.1 response schemas (e.g. get-products-response.json, get-signals-response.json)
+    express conditional requiredness this way instead of a top-level ``required`` or a
+    root ``oneOf``: an outer if/then/else branches on the wholesale-unchanged shape,
+    nesting a second if/then/else inside its ``else`` that branches on ``status ==
+    "failed"`` vs. the standard success shape. The alignment suite's samples are all
+    ordinary successful responses, so the "standard" branch — the final ``else`` at the
+    end of the chain — is the one whose ``required`` applies; without walking it, these
+    fields silently drop out of grading (the schema has no OTHER top-level ``required``
+    to fall back on) instead of failing loudly.
+    """
+    node = schema
+    walked = False
+    while "else" in node:
+        node = node["else"]
+        walked = True
+    return set(node.get("required", [])) if walked else set()
+
+
 def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
     """Return the success (sub-)schema: the oneOf arm whose required[] names
     neither ``errors`` nor ``task_id`` (error / submitted arms), or the schema
-    itself when it is a flat single-shape response (no oneOf)."""
+    itself — with ``required`` merged from its top-level ``allOf`` arms and any
+    ``if``/``then``/``else`` standard branch — when it is a flat single-shape
+    response (no oneOf)."""
     if "oneOf" not in schema:
-        return schema
+        merged = (
+            set(schema.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
+        )
+        if merged == set(schema.get("required", [])):
+            return schema
+        return {**schema, "required": sorted(merged)}
     for arm in schema["oneOf"]:
         required = set(arm.get("required", []))
         if "errors" not in required and "task_id" not in required:
@@ -933,37 +990,17 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
 RESPONSE_ALIGNMENTS = _build_alignments_from_pinned(_RESPONSE_MODEL_REGISTRY) + _SUPPLEMENTAL_ALIGNMENTS
 
 
-def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
-    """Domain-level required fields from every arm of a schema's top-level
-    ``allOf`` — e.g. a shared error/pricing sub-schema composed in alongside
-    the domain shape. A response schema with no top-level ``oneOf``/``required``
-    of its own (get-products-response.json in 3.1.1) can still spec-require
-    fields via allOf; without merging them in, a schema-required field
-    silently drops out of grading instead of failing loudly (the exact bug
-    class this suite exists to catch).
-
-    Protocol Envelope fields (``status`` et al — see ``_PROTOCOL_ENVELOPE_FIELDS``)
-    are excluded: every AdCP response schema composes the same shared
-    core/protocol-envelope.json arm, which spec-requires ``status``, but that
-    field is populated by the PROTOCOL LAYER at the transport boundary, not
-    the domain Pydantic model — same distinction as ``_VERSION_FIELDS``.
-    """
-    required: set[str] = set()
-    for arm in schema.get("allOf", []) or []:
-        resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
-        required |= set(resolved.get("required", []))
-    return required - _PROTOCOL_ENVELOPE_FIELDS
-
-
 def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any]:
     """Resolve the pinned (sub-)schema a response model maps to.
 
     Handles flat single-shape responses (no oneOf → the schema is the success
     shape) and oneOf responses (pick the arm exposing ``selector``). Merges in
     required fields from the schema's own top-level ``allOf`` arms (the
-    shared Protocol/Version Envelope) — those apply regardless of which
+    shared Protocol/Version Envelope) and from the standard branch of any
+    top-level ``if``/``then``/``else`` chain — those apply regardless of which
     oneOf variant matched, and 3.1.1 moved some formerly-flat requirements
-    (e.g. ``status``) there for schemas with no oneOf of their own.
+    (e.g. ``status``, ``products``/``cache_scope``) into one of those two
+    composition forms for schemas with no oneOf of their own.
     """
     schema = load_json_schema(alignment.schema_ref)
     if "oneOf" in schema:
@@ -973,7 +1010,9 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
     if alignment.item_key:
         return variant["properties"][alignment.item_key]["items"]
 
-    merged_required = set(variant.get("required", [])) | _allof_required_fields(schema)
+    merged_required = (
+        set(variant.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
+    )
     if merged_required != set(variant.get("required", [])):
         variant = {**variant, "required": sorted(merged_required)}
     return variant
