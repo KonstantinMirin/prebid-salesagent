@@ -1,11 +1,12 @@
 """Guard: never fabricate a "<dynamic-value>.example.com" domain as a fallback.
 
-salesagent-piyo: src/core/tools/capabilities.py and src/core/database/models.py
-(Tenant.primary_domain) fabricated ``f"{subdomain}.example.com"`` whenever no real
-domain was configured -- ``example.com`` is RFC 2606 reserved, so the value is
-guaranteed unreachable, and callers treat these fields as claims (a publisher
-authorization the buyer resolves against, or a guard deciding whether real domain
-config exists). This guard bans the exact shape: an f-string literal whose LAST
+src/core/tools/capabilities.py and src/core/database/models.py
+(Tenant.primary_domain) used to fabricate ``f"{subdomain}.example.com"`` whenever
+no real domain was configured -- ``example.com`` is RFC 2606 reserved, so the
+value is guaranteed unreachable, and callers treat these fields as claims (a
+publisher authorization the buyer resolves against, or a guard deciding whether
+real domain config exists). This guard bans the exact shape: an f-string literal
+whose LAST
 segment is a constant string ending in ``.example.com`` and where at least one
 value is interpolated before it (the "fabricate a subdomain-based example.com"
 form). It intentionally does NOT match a plain literal ``"example.com"`` string
@@ -73,8 +74,8 @@ class TestNoFabricatedExampleDomain:
         violations = _scan() - ALLOWLIST
         assert not violations, (
             "src/ files fabricating a '{value}.example.com' fallback domain "
-            "(RFC 2606 reserved, guaranteed unreachable -- omit/return None instead, "
-            "see salesagent-piyo):\n" + "\n".join(f"  - {p}:{n}" for p, n in sorted(violations))
+            "(RFC 2606 reserved, guaranteed unreachable -- omit/return None instead):\n"
+            + "\n".join(f"  - {p}:{n}" for p, n in sorted(violations))
         )
 
     def test_allowlist_entries_are_still_violations(self):
@@ -98,17 +99,18 @@ class TestNoFabricatedExampleDomain:
         assert not found, "detector false-positived on a real (non-example.com) domain f-string"
 
     def test_negative_meta_ignores_plain_literal(self):
-        """Meta-test: a plain (non-interpolated) 'example.com' literal is out of
-        this guard's scope (database.py's dev-seed literal, salesagent-0vzy) --
-        different disposition, tracked separately, not this guard's job."""
+        """Meta-test: a plain (non-interpolated) 'example.com' literal (e.g. a
+        hardcoded dev-seed value) is a different pattern -- no interpolation
+        means it can't be the dynamic subdomain-fabrication shape this guard
+        targets, tracked separately, not this guard's job."""
         tree = ast.parse('x = "example.com"')
         found = [n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) and _ends_with_fabricated_example_com(n)]
         assert not found
 
     def test_negative_meta_ignores_interpolation_after_example_com(self):
         """Meta-test: an f-string where '.example.com' is a static substring
-        FOLLOWED by further interpolation (accounts.py's Setup.url shape,
-        salesagent-0jia) is a different pattern, out of this guard's scope."""
+        FOLLOWED by further interpolation (e.g. a URL path with a trailing
+        {param}) is a different pattern, out of this guard's scope."""
         tree = ast.parse('x = f"https://seller.example.com/review?tenant={tenant_id}"')
         found = [n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) and _ends_with_fabricated_example_com(n)]
         assert not found, "detector over-matched a URL-path f-string that isn't the subdomain-fabrication shape"

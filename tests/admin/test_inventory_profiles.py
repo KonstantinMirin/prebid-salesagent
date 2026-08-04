@@ -48,6 +48,10 @@ def test_tenant(integration_db):
             subdomain="inv-prof-test",
             ad_server="mock",
             is_active=True,
+            # A real virtual_host is required: Tenant.primary_domain no longer
+            # fabricates a placeholder domain, and the inventory-profiles create/edit
+            # routes refuse to proceed without a real one configured.
+            virtual_host="inv-prof-test.real-configured-domain.test",
         )
         session.add(tenant)
         session.commit()

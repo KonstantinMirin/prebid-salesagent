@@ -27,7 +27,7 @@ from __future__ import annotations
 import pytest
 from adcp.types.generated_poc.enums.channels import MediaChannel
 
-from tests.factories.core import set_adapter_test_behavior
+from tests.factories.core import PublisherPartnerFactory, set_adapter_test_behavior
 from tests.harness._base import IntegrationEnv
 
 
@@ -46,6 +46,11 @@ class TestAdapterUnavailableFaultInjection:
         with IntegrationEnv(tenant_id="t_fault_unavail", principal_id="p_fault_unavail") as env:
             tenant, _principal = env.setup_default_data()
             set_adapter_test_behavior(env, tenant.tenant_id, unavailable=True)
+            # A real publisher partner is seeded so portfolio is populated (portfolio
+            # is omitted entirely, never fabricated, when no real publisher domain
+            # exists) -- this test's concern is the adapter fault's channel
+            # degradation, not publisher domain resolution.
+            PublisherPartnerFactory(tenant=tenant, publisher_domain="fault-injection-fixture.com")
 
             from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
