@@ -1,6 +1,6 @@
 """Pins the invariants a single shared skill->AdCP-task map must satisfy.
 
-salesagent-1q8d.1 (PR #1838 review R1-10 measurement, ChrisHuie): two
+(PR #1838 review R1-10 measurement, ChrisHuie): two
 independent copies of the skill-name -> AdCP-task-name map exist —
 ``A2AAdCPValidator.SKILL_TO_SCHEMA_MAP`` in
 tests/integration/test_a2a_skill_invocation.py and the local ``skill_to_schema``

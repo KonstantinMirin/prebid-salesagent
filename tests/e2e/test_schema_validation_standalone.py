@@ -231,7 +231,7 @@ async def test_task_name_mapping():
 async def test_find_schema_ref_searches_every_index_section():
     """The resolver must search every task-bearing section of the pinned index, not just media-buy/signals.
 
-    salesagent-667l: _find_schema_ref_for_task only checked the media-buy and
+    #1838: _find_schema_ref_for_task only checked the media-buy and
     signals sections. The pinned 3.1.1 index carries tasks in 10 sections;
     sync-creatives and list-creatives live under "creative", get-task-status
     lives under "protocol" — none of them resolvable before this fix, so any
@@ -285,7 +285,7 @@ async def test_every_indexed_schema_ref_loads():
 async def test_unresolvable_task_name_raises_instead_of_silently_skipping():
     """An unresolvable task name must raise, not warn-and-return.
 
-    salesagent-667l: validate_request/validate_response printed a warning and
+    #1838: validate_request/validate_response printed a warning and
     returned on a resolver miss, so the caller observed success having graded
     nothing — a quiet failure (CLAUDE.md "No Quiet Failures").
     """

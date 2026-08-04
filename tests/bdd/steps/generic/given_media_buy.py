@@ -324,7 +324,7 @@ def _configure_persistence_timing(ctx: dict, approval: str, adapter_result: str)
 # ("auto_approve_adapter_success" vs "auto-approve success") — _PARTITION_MAP
 # and _BOUNDARY_MAP are derived from this single source so the two phrasings
 # can never diverge on the (approval, adapter_result) tuple they resolve to
-# (salesagent-1q8d.13).
+# (#1838).
 _PERSISTENCE_TIMING_SCENARIOS = [
     {"partition": "auto_approve_adapter_success", "boundary": "auto-approve success", "resolved": ("auto", "success")},
     {"partition": "auto_approve_adapter_failure", "boundary": "auto-approve failure", "resolved": ("auto", "failure")},

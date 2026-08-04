@@ -572,7 +572,7 @@ class TestA2ASkillInvocation:
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
     # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 
-    # test_adcp_schema_validation_integration removed (salesagent-1q8d.3): it built a
+    # test_adcp_schema_validation_integration removed (#1838): it built a
     # hand-rolled mock A2A Task/Artifact instead of exercising the real production path
     # — pure mocking in a file whose whole point is DB-backed integration coverage — and
     # its "assert valid or errors or warnings" could never fail regardless of outcome.
@@ -580,7 +580,7 @@ class TestA2ASkillInvocation:
     # already cover skill->schema resolution + validator invocation through the real
     # handler and a real database-backed product, which is strictly better coverage of
     # the same concept. (Making THEIR assertions non-vacuous is tracked separately —
-    # salesagent-1q8d.16 — since production's get_products response is not currently
+    # #1838 — since production's get_products response is not currently
     # AdCP schema-valid; strengthening those asserts here would just newly break this
     # ticket's own quality gate on an unrelated, larger defect.)
 
@@ -592,7 +592,7 @@ class TestA2ASkillInvocation:
         from the real dispatch map (missing create_creative/assign_creative,
         and carrying a phantom "get_creative_delivery" that was never a real
         skill), so this assertion silently stopped meaning anything
-        (salesagent-1q8d.9).
+        (#1838).
         """
         from src.a2a_server.adcp_a2a_server import SKILL_HANDLER_NAMES, create_agent_card
 

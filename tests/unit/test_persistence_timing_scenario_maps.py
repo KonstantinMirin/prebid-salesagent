@@ -7,7 +7,7 @@ scenario is: auto-approve success"). _PARTITION_MAP and _BOUNDARY_MAP used to
 be two independently hand-typed dicts over the same (approval, adapter_result)
 config space, with no test asserting they agreed — editing one row could
 silently diverge from the other without any scenario failing loudly
-(salesagent-1q8d.13). Both are now derived from one canonical
+(#1838). Both are now derived from one canonical
 _PERSISTENCE_TIMING_SCENARIOS list; this pins that derivation stays correct
 and that both phrasings for every scenario resolve identically.
 """

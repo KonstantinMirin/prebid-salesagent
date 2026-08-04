@@ -36,7 +36,7 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
 # instead of hand-copied — a hand-copied literal silently went stale and
 # missed 5 real skills (list_accounts, sync_accounts, get_media_buys,
 # create_creative, assign_creative), so this regression gate never exercised
-# their boundary/auth contract (salesagent-1q8d.9).
+# their boundary/auth contract (#1838).
 # ---------------------------------------------------------------------------
 ALL_SKILLS = list(SKILL_HANDLER_NAMES.keys())
 DISCOVERY_SKILLS = list(_PRODUCTION_DISCOVERY_SKILLS)

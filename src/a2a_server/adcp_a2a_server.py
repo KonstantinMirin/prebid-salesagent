@@ -174,7 +174,7 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 # Per AdCP spec section 3.2, these endpoints allow optional authentication for public discovery.
 # Single source of truth (src.core.auth.AUTH_OPTIONAL_SKILLS), shared with MCP
 # (mcp_auth_middleware.AUTH_OPTIONAL_TOOLS). list_accounts is NOT auth-optional —
-# see AUTH_OPTIONAL_SKILLS's docstring / salesagent-1q8d.17 for why.
+# see AUTH_OPTIONAL_SKILLS's docstring / #1838 for why.
 DISCOVERY_SKILLS = AUTH_OPTIONAL_SKILLS
 
 # Skill name -> handler METHOD NAME (not bound method — these are instance
@@ -182,7 +182,7 @@ DISCOVERY_SKILLS = AUTH_OPTIONAL_SKILLS
 # _handle_explicit_skill). Module-level so it's the single source of truth
 # for "which A2A skills exist" — tests import this instead of hand-copying
 # the roster, which silently went stale and missed 5 real skills
-# (salesagent-1q8d.9).
+# (#1838).
 SKILL_HANDLER_NAMES: dict[str, str] = {
     # Core AdCP Discovery Skills
     "get_adcp_capabilities": "_handle_get_adcp_capabilities_skill",

@@ -56,7 +56,7 @@ class TestA2AProtocolCompliance:
 
     # Skills with no request schema anywhere in the pinned index (verified via
     # AdCPSchemaValidator._find_schema_ref_for_task, which searches every
-    # section — see salesagent-667l). Shrink-only: when the spec adds a schema
+    # section — see #1838). Shrink-only: when the spec adds a schema
     # for one of these, remove it here — do not add new entries.
     _KNOWN_MISSING_SCHEMA_SKILLS = frozenset({"list_authorized_properties"})
 

@@ -54,7 +54,7 @@ _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODU
 # "auth-optional per BR-RULE-055", the graded BR-UC-011 BDD scenario
 # (@T-UC-011-list-unauth, wired and passing on all 3 transports) and
 # _list_accounts_impl's own require_principal_id both currently enforce auth —
-# see salesagent-1q8d.17 for the doc-vs-graded-behavior reconciliation this
+# see #1838 for the doc-vs-graded-behavior reconciliation this
 # needs before any transport is allowed to treat it as optional.
 AUTH_OPTIONAL_SKILLS = frozenset(
     {
