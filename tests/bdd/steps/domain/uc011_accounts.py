@@ -250,7 +250,7 @@ def given_agent_passthrough_only(ctx: dict) -> None:
     ``advertiser`` reject)." The correct fixture therefore declares agent (and
     advertiser) as *capability-supported* — the value is enum-valid AND in the
     seller's supported_billing — so the ONLY thing that could reject it is the
-    per-buyer-agent commercial gate. Production has no such gate (#1592), so it
+    per-buyer-agent commercial gate. Production has no such gate (GH #1772), so it
     accepts the capability-supported value and provisions the account; that is
     the gap these scenarios grade (strict xfail in conftest _XFAIL_TAGS).
 
@@ -1153,24 +1153,14 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# UC-011 sync settings-update / mode-exclusive wiring (salesagent-ce1u / eiww batch B2)
+# UC-011 sync settings-update / mode-exclusive wiring
 #
-# Wires the previously-dormant settings-update and mode-exclusive scenarios and
-# spec-grounds their Then assertions against v3.1.1 (the pinned target,
-# docs/adcp-spec-version.md). Each is a #1592 spec-production gap and stays a
-# strict tag-level xfail (tests/bdd/conftest.py _XFAIL_TAGS): the steps EXECUTE
-# non-dormant and fail on the real gap, not on a missing step definition.
-#
-# Production trace (src/core/tools/accounts.py, verified empirically):
-#   - _extract_natural_key reads entry.brand; a settings-update entry keyed only
-#     by `account` (AccountReference) has brand=None, so it raises an operation-
-#     level AdCPValidationError ("the account-reference (settings-update) form is
-#     not supported by this seller") instead of updating / surfacing a per-account
-#     UNSUPPORTED_PROVISIONING result. Settings-update mode is unimplemented.
-#   - A both-shapes entry (account + brand+operator+billing) validates as the
-#     ProvisioningMode arm of the item union; the extra `account` is retained but
-#     ignored, so production PROVISIONS it (action "created") instead of rejecting
-#     the oneOf(ProvisioningMode XOR SettingsUpdateMode) violation.
+# Graduated: settings-update (AccountReference) mode implemented via
+# _process_settings_update_entry (both AccountReference1/account_id and
+# AccountReference2/natural-key arms), mode-exclusivity enforced in _impl before
+# dispatch (VALIDATION_ERROR naming accounts[i]), unmatched references rejected
+# with UNSUPPORTED_PROVISIONING. The settings-update, no-provision, and
+# mode-exclusive tags are no longer xfailed (removed from conftest _XFAIL_TAGS).
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -1276,9 +1266,9 @@ def when_sync_settings_update_unknown_account(ctx: dict, account_id: str) -> Non
 def when_sync_both_account_and_trio(ctx: dict) -> None:
     """Dispatch an entry that satisfies BOTH item-oneOf arms (account AND the trio).
 
-    Such an entry violates oneOf(ProvisioningMode XOR SettingsUpdateMode) and must
-    be rejected as a request VALIDATION_ERROR. Production instead validates it as
-    the ProvisioningMode arm and ignores the extra ``account`` (the #1592 gap).
+    Such an entry violates oneOf(ProvisioningMode XOR SettingsUpdateMode) and is
+    rejected as a request VALIDATION_ERROR naming accounts[i] (mode-exclusivity is
+    now enforced in _impl before dispatch — graduated).
 
     Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf.
     """
@@ -1319,10 +1309,9 @@ def then_account_payment_terms(ctx: dict, pt: str) -> None:
 def then_settings_update_entry_action(ctx: dict, action: str) -> None:
     """Assert the single settings-update result entry has the expected action.
 
-    Requires a success-variant response (per-account results). When production
-    rejects the brandless settings-update entry with an operation-level error
-    instead, there is no response — this fails loudly (the honest #1592 gap),
-    rather than treating a request-level error as a per-account 'failed'.
+    Requires a success-variant response (per-account results). If an operation-level
+    error were returned instead there is no response — this fails loudly rather than
+    treating a request-level error as a per-account 'failed'.
 
     Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/action/enum
     = ["created","updated","unchanged","failed"].
@@ -1497,7 +1486,7 @@ def when_retry_sync_with_suggested_billing(ctx: dict) -> None:
     ``operator`` (error-details/billing-not-permitted-for-agent.json:
     "Typically ``operator`` for passthrough-only agents"; examples[0] =
     {"rejected_billing": "agent", "suggested_billing": "operator"}). Production
-    never emits ``suggested_billing`` (no per-agent gate, #1592), so this leg is
+    never emits ``suggested_billing`` (no per-agent gate, GH #1772), so this leg is
     only reached after the scenario has already xfailed on the missing
     BILLING_NOT_PERMITTED_FOR_AGENT error — the step exists so the scenario runs
     non-dormant.
@@ -3326,17 +3315,16 @@ def then_per_account_error_suggestion_mentions(ctx: dict, needle: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# UC-011 account-level notification_configs wiring (salesagent-psr7 / eiww batch B4)
+# UC-011 account-level notification_configs wiring
 #
-# Production trace (src/core/tools/accounts.py + src/core/schemas/account.py,
-# verified empirically): the sync_accounts pipeline does NOT process
-# accounts[].notification_configs — the per-account result model
-# (SyncResponseAccount) declares no notification_configs field, so nothing is
-# persisted or echoed. Every echo/read-back Then below therefore fails at the
-# first "echo exactly N subscriber" assertion (None → 0 ≠ expected), which is
-# the #1592 spec-production gap the strict tag-level xfails (conftest
-# _XFAIL_TAGS) record. The steps are wired so the scenarios EXECUTE (non-dormant)
-# and fail on the missing surface, not on StepDefinitionNotFoundError.
+# Graduated (T2 increment F4a): the sync_accounts pipeline now processes
+# accounts[].notification_configs — SyncResponseAccount persists and echoes the
+# whole-array JSONType column with declarative-replace semantics (omit
+# preserves, [] clears, re-sent subscriber_id replaces in place), scrubbing
+# authentication.credentials on echo. The register/replace-clear/omit-preserves
+# tags are no longer xfailed (removed from conftest _XFAIL_TAGS). The per-account
+# REJECTION families below (event-scope, duplicate-subscriber, activation-proof)
+# graduated separately as F4b/F4c.
 #
 # Spec (v3.1.1): core/notification-config.json (subscriber shape; write-only
 # credentials; active flag persisted even when false); account/
@@ -3394,9 +3382,8 @@ def _sub_attr(sub: Any, name: str) -> Any:
 def _echoed_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
     """Return the referenced account's echoed notification_configs (or [] when absent).
 
-    Reads the typed response's per-account notification_configs. Production echoes
-    none (the field is absent from SyncResponseAccount), so this yields [] and the
-    count assertion fails — the honest #1592 gap.
+    Reads the typed response's per-account notification_configs, which SyncResponseAccount
+    now persists and echoes (graduated, T2 increment F4a).
     """
     resp = _require_response(ctx)
     if domain is not None:
@@ -3454,7 +3441,7 @@ def given_account_with_notif_subscriber(ctx: dict, domain: str, sub: str, url: s
 
     Paused (``active: false``) deliberately, and it is the same prior state on every
     transport. An active seed would need a successful proof-of-control challenge to
-    persist (#1592 T2 F4c), and the scenario urls are under a reserved TLD that
+    persist (T2 increment F4c), and the scenario urls are under a reserved TLD that
     production's prover refuses by design — so on e2e_rest the seed itself would be
     rejected and the "prior set" the scenario grades would never exist.
 
@@ -3608,15 +3595,13 @@ def then_listed_account_echoes_subscriber(ctx: dict, domain: str, sub: str, flag
     )
 
 
-# ── UC-011 notification_configs — final batch (salesagent-m12f / eiww batch B5) ──
+# ── UC-011 notification_configs — final batch ──
 # event-scope-reject, duplicate-subscriber, activation-proof-fail, omit-preserves.
-# All four grade the account-level notification_configs surface, which production
-# does not implement (#1592): _sync_accounts_impl accepts and IGNORES
-# accounts[].notification_configs (SyncAccountsRequest models the field, but the
-# request validator does not reject media-buy-anchored event_types or duplicate
-# subscriber_ids, and SyncResponseAccount carries no notification_configs field).
-# So each error scenario is provisioned successfully (action 'created') instead of
-# the spec-mandated per-account rejection — the honest #1592 gap wired below.
+# All four grade the account-level notification_configs surface. Graduated
+# (T2 increments F4a/F4b/F4c): _validate_notification_configs runs pre-persist and
+# rejects media-buy-anchored event_types / duplicate subscriber_ids per entry;
+# SyncResponseAccount persists and echoes notification_configs; NotificationProofService
+# performs a bounded proof-of-control challenge before the write transaction opens.
 # Spec (v3.1.1): core/notification-config.json (event_types media-buy-anchored
 # rejection with INVALID_REQUEST/VALIDATION_ERROR at the event_types entry;
 # subscriber_id uniqueness rejection at the duplicate entry; active flag is
@@ -3634,11 +3619,8 @@ def then_listed_account_echoes_subscriber(ctx: dict, domain: str, sub: str, flag
 def given_account_with_paused_notif_subscriber(ctx: dict, domain: str, sub: str, url: str) -> None:
     """Pre-create an account carrying one PAUSED (active:false) notification subscriber.
 
-    F19 (salesagent-eiww triage): the omit-preserves Then asserts ``active false`` on
-    the read-back, so the seed MUST declare the paused state rather than lean on an
-    undeclared fixture default. Production ignores accounts[].notification_configs
-    (#1592) but still provisions the account, so the natural key exists for the
-    omit-preserves When (which sends no notification_configs at all).
+    F19: the omit-preserves Then asserts ``active false`` on the read-back, so the seed
+    MUST declare the paused state rather than lean on an undeclared fixture default.
 
     Spec: core/notification-config.json#/properties/active — "When false, the seller
     persists the configuration but suppresses fires"; the active flag is part of the

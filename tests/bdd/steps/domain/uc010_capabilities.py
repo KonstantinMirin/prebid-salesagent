@@ -1540,7 +1540,8 @@ def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:
 @given('"brand" is in supported_protocols')
 def given_brand_in_supported_protocols(ctx: dict) -> None:
     """Declare the brand protocol. Production advertises only media_buy, so the
-    brand top-level block is never emitted (#1592) — records intent."""
+    brand top-level block is never emitted (#1724 — the brand family is re-homed
+    entirely, not partially delivered) — records intent."""
     _config(ctx).setdefault("supported_protocols", []).append("brand")
 
 
@@ -1565,7 +1566,7 @@ def given_measurement_in_supported_protocols(ctx: dict) -> None:
 def given_brand_posture(ctx: dict) -> None:
     """Declare a concrete brand posture (rights/right_types/available_uses/
     generation_providers). Records intent; the capabilities builder does not emit
-    the brand block yet (#1592) so the value Thens xfail."""
+    the brand block (#1724) so the value Thens xfail."""
     _config(ctx)["brand"] = {
         "rights": True,
         "right_types": ["talent", "music"],
@@ -1577,8 +1578,10 @@ def given_brand_posture(ctx: dict) -> None:
 @given(parsers.parse("the tenant declares reporting delivery methods {methods} with offline protocols {protocols}"))
 def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) -> None:
     """Declare push-based reporting delivery methods + offline protocols. Records
-    intent; production never emits media_buy.reporting_delivery_methods /
-    offline_delivery_protocols (#1592)."""
+    intent; the declaration store deliberately carries no field for either under
+    the STRICT capability policy (#1291) — declaring [webhook] would fire the
+    schema must_equal_when forcing webhook_signing.supported=true, and no offline
+    report delivery is implemented."""
     _config(ctx)["reporting_delivery_methods"] = None if methods.strip() == "omitted" else _parse_bracket_list(methods)
     _config(ctx)["offline_delivery_protocols"] = (
         None if protocols.strip() == "omitted" else _parse_bracket_list(protocols)
@@ -1592,16 +1595,19 @@ def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) ->
 )
 def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
     """Declare a mutating-webhook emission posture (or its absence) for the
-    webhook-signing required_when invariant. Records intent; production emits no
-    webhook_signing block (#1592) so the must_equal_when invariant is ungraded."""
+    webhook-signing required_when invariant. Records intent; the declaration store
+    deliberately carries no webhook_signing field under the STRICT capability policy
+    (#1291) so the must_equal_when invariant is ungraded."""
     _config(ctx)["webhook_emission_state"] = emission_state.strip()
 
 
 @given(parsers.parse("the tenant declares {signing_posture} with identity block {identity_state}"))
 def given_signing_posture_with_identity(ctx: dict, signing_posture: str, identity_state: str) -> None:
     """Declare a signing posture + identity-block state for the identity
-    required_when invariant. Records intent; the builder never rejects
-    signing-without-brand_json_url (identity/signing posture not built, #1592)."""
+    required_when invariant. Records intent; the declaration store deliberately
+    carries no identity or request_signing field under the STRICT capability policy
+    (#1291), so a signing posture missing brand_json_url cannot be declared and the
+    required_when rejection has nothing to fire on."""
     _config(ctx)["signing_posture"] = signing_posture.strip()
     _config(ctx)["identity_state"] = identity_state.strip()
 
@@ -2122,11 +2128,12 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 # identity.brand_json_url required_when rule. Each <expected> column drives a
 # concrete graded observable — a schema-valid success whose emitted block satisfies
 # the pinned relation/bound, or a seller-side CONFIGURATION_ERROR rejection — never
-# a vague valid/invalid word. The capabilities builder emits no request_signing,
-# derives no idempotency posture from config, runs no version negotiation, and
-# builds no identity/signing posture (#1592); the Givens record declared intent and
-# the graded rows strict-xfail on the unemitted block (tag-level for the all-fail
-# outlines; selective for the identity outline whose no-rejection valid rows pass).
+# a vague valid/invalid word. Idempotency posture derivation and version negotiation
+# are now implemented; request_signing/webhook_signing/identity remain undeclarable —
+# the declaration store deliberately carries no field for these postures under the
+# STRICT capability policy (#1291); the Givens record declared intent and the graded
+# rows strict-xfail on the undeclarable block (tag-level for the all-fail outlines;
+# selective for the identity outline whose no-rejection valid rows pass).
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -2136,8 +2143,9 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 @given(parsers.parse("the tenant declares request_signing posture sets for {boundary_point}"))
 def given_request_signing_posture_sets(ctx: dict, boundary_point: str) -> None:
     """Declare a request_signing posture-set boundary (supported_for/required_for/
-    warn_for and their protocol_methods_* siblings). Records intent; the capabilities
-    builder emits no request_signing block (#1592)."""
+    warn_for and their protocol_methods_* siblings). Records intent; the declaration
+    store deliberately carries no request_signing field under the STRICT capability
+    policy (#1291)."""
     _config(ctx)["request_signing_boundary"] = boundary_point.strip()
 
 
@@ -2200,16 +2208,19 @@ def given_idempotency_posture_freeform(ctx: dict, posture: str) -> None:
 @given(parsers.parse("the seller's error-details builder is configured for {boundary_point}"))
 def given_error_details_builder(ctx: dict, boundary_point: str) -> None:
     """Declare a (malformed) VERSION_UNSUPPORTED details configuration — empty
-    supported_versions array or omitted. Records intent; the capabilities builder runs
-    no version negotiation and raises no VERSION_UNSUPPORTED (#1592)."""
+    supported_versions array or omitted. Records intent; version negotiation is
+    now implemented (src/core/version_negotiation.py) and grades this boundary
+    directly, so this Given only seeds the declared boundary_point value."""
     _config(ctx)["version_unsupported_details"] = boundary_point.strip()
 
 
 @given(parsers.parse("the tenant identity and signing posture are configured for {boundary_point}"))
 def given_identity_signing_posture(ctx: dict, boundary_point: str) -> None:
     """Declare an identity + signing-posture boundary for the brand_json_url
-    required_when rule. Records intent; the capabilities builder never builds
-    identity/the signing posture and so never rejects the invalid config (#1592)."""
+    required_when rule. Records intent; the declaration store deliberately carries
+    no identity or request_signing field under the STRICT capability policy (#1291),
+    so a signing posture missing brand_json_url cannot be declared and the
+    required_when rejection has nothing to fire on."""
     _config(ctx)["identity_signing_boundary"] = boundary_point.strip()
 
 
@@ -2344,8 +2355,9 @@ def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
 @given(parsers.parse("the tenant declares webhook_signing posture described as {boundary_point}"))
 def given_webhook_signing_boundary(ctx: dict, boundary_point: str) -> None:
     """Declare a webhook_signing boundary — a mutating-webhook trigger paired with a
-    supported value, or an algorithms set. Records intent; the capabilities builder emits
-    no webhook_signing block (#1592), so the outline strict-xfails on all transports."""
+    supported value, or an algorithms set. Records intent; the declaration store
+    deliberately carries no webhook_signing field under the STRICT capability policy
+    (#1291), so the outline strict-xfails on all transports."""
     _config(ctx)["webhook_signing_boundary"] = boundary_point.strip()
 
 

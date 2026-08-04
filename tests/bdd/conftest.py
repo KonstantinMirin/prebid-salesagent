@@ -477,7 +477,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated (salesagent-hh1f): _check_billing_policy now emits recovery="correctable"
     # + details={scope, supported_billing} (conditionally, honest-absence on an empty
     # policy) on the per-account BILLING_NOT_SUPPORTED error. T-UC-011-ext-c-rejected removed.
-    # ── UC-011 per-buyer-agent commercial gate wiring (FIXME(#1592), salesagent-9jiu) ──
+    # ── UC-011 per-buyer-agent commercial gate wiring (FIXME(#1772)) ──
     # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
     # v3.1.1 shape (error-details/billing-not-permitted-for-agent.json); each
     # fails because production (src/core/tools/accounts.py) has NO per-buyer-agent
@@ -489,38 +489,30 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-011-billing-agent-gate-reject": "no per-buyer-agent commercial gate exists in production — agent billing is "
     "capability-supported so _check_billing_policy accepts it and the account is provisioned (action 'created') "
     "instead of rejected with BILLING_NOT_PERMITTED_FOR_AGENT + clamped rejected_billing/suggested_billing details — "
-    "#1592 spec-production gap",
+    "#1772",
     "T-UC-011-billing-agent-gate-recover": "no per-buyer-agent commercial gate exists in production — the first leg "
     "never emits BILLING_NOT_PERMITTED_FOR_AGENT (capability-supported agent billing is provisioned), so the "
-    "autonomous suggested_billing recovery flow is unreachable — #1592 spec-production gap",
-    # ── UC-011 account-level notification_configs + sandbox capability gate (FIXME(#1592), salesagent-psr7) ──
-    # Graduated (salesagent-ck9v, #1592 T2 increment F4a): T-UC-011-notif-register-paused,
+    "autonomous suggested_billing recovery flow is unreachable — #1772",
+    # ── UC-011 account-level notification_configs + sandbox capability gate — ALL GRADUATED ──
+    # Graduated (T2 increment F4a): T-UC-011-notif-register-paused,
     # -notif-replace-clear and -notif-omit-preserves removed. accounts.notification_configs now
     # persists as a whole-array JSONType column with declarative-replace semantics (omit preserves,
     # [] clears, re-sent subscriber_id replaces in place) and is echoed on both sync_accounts and
     # list_accounts with authentication.credentials scrubbed. The three scenarios grade that surface
-    # on a2a/mcp/rest. The per-account REJECTION tags below stay: validation (F4b) and the
-    # proof-of-control challenge (F4c) are separate increments.
-    # Graduated (salesagent-5g8e): _check_sandbox_capability gate added -- rejects
+    # on a2a/mcp/rest.
+    # Graduated: _check_sandbox_capability gate added -- rejects
     # sandbox provisioning with UNSUPPORTED_FEATURE (accounts[i].sandbox) when the
     # tenant's account_sandbox capability is not declared. T-UC-011-sandbox-capability-not-declared removed.
-    # ── UC-011 notification_configs per-account rejections (FIXME(#1592), salesagent-m12f) ──
-    # Steps execute non-dormant on a2a/mcp/rest; each provisions the account and grades
-    # the spec-mandated per-account rejection, which production never emits because
-    # _sync_accounts_impl ignores accounts[].notification_configs (the request validator
-    # rejects neither media-buy-anchored event_types nor duplicate subscriber_ids, and no
-    # proof-of-control challenge exists). The account is provisioned (action 'created')
-    # instead of failing, so each fails at the "has action failed" assertion.
-    # Graduated (salesagent-ck9v, #1592 T2 increment F4b): T-UC-011-notif-event-scope-reject and
+    # ── UC-011 notification_configs per-account rejections — ALL GRADUATED ──
+    # Graduated (T2 increment F4b): T-UC-011-notif-event-scope-reject and
     # -notif-duplicate-subscriber removed. _validate_notification_configs runs pre-persist in BOTH
     # entry handlers and emits a per-account failure inside a transport-level success, with the
     # exact error.field pointers the storyboards grade.
-    # Graduated (salesagent-ck9v, #1592 T2 increment F4c): T-UC-011-notif-activation-proof-fail
+    # Graduated (T2 increment F4c): T-UC-011-notif-activation-proof-fail
     # removed. NotificationProofService performs a bounded proof-of-control challenge BEFORE the
-    # write transaction opens (KonstantinMirin's carve-out, 2026-07-27 — see
-    # .claude/notes/async-sync-architecture.md); a failed proof rejects the entry with
-    # VALIDATION_ERROR at notification_configs[j].url and writes nothing, so the prior array is
-    # untouched.
+    # write transaction opens (see .claude/notes/async-sync-architecture.md); a failed proof
+    # rejects the entry with VALIDATION_ERROR at notification_configs[j].url and writes nothing,
+    # so the prior array is untouched.
 }
 
 # FIXME(beads-dul): Selective xfail for parametrized scenarios where only
