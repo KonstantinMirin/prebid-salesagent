@@ -117,7 +117,9 @@ class TestFormatSpecDialGuardDetector:
         assert_detector_catches_ast_snippets(
             find_unguarded_dial_violations,
             snippets={
-                "unconditional call": ("def f(creative):\n    return _get_format_spec_sync(creative.agent_url, creative.format)\n"),
+                "unconditional call": (
+                    "def f(creative):\n    return _get_format_spec_sync(creative.agent_url, creative.format)\n"
+                ),
                 "guarded by an unrelated condition": (
                     "def f(creative):\n"
                     "    if creative.format:\n"
