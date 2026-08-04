@@ -18,6 +18,11 @@ exactly ONE home:
 * **Production-path key provisioning** — :func:`provision_signing_key_via_admin`,
   which drives the real admin route over real HTTP so the row is minted under
   the SERVER CONTAINER's KEK rather than the test runner's.
+* **The keyless-declaring-tenant fixture factory** — :func:`declaring_tenant_provisioner`
+  — and **the anonymous capabilities fetch** — :func:`fetch_capabilities` — both needed
+  by every module whose phase A proves a tenant that DECLARES a signing posture but owns
+  no key yet (``mint_key=False``): the key must arrive later through a production
+  transport, or the module grades its own fixture.
 """
 
 from __future__ import annotations
@@ -118,24 +123,138 @@ def seeded_capabilities_factory(body: dict):
 
 
 def drop_tenant(live_server: dict, tenant_id: str) -> None:
-    """Remove a test tenant and its children from the shared e2e database.
+    """Remove a test tenant and EVERY row that hangs off it, from the shared e2e database.
 
     Children go first, explicitly: the ORM ``backref`` relationships carry no
     delete cascade, so an ORM ``session.delete(tenant)`` tries to NULL a child's
     ``tenant_id`` — which is half of its composite primary key. The FK's
     ``ON DELETE CASCADE`` only applies to a database-level delete.
 
-    ``AuditLog`` is in the list because driving a PRODUCTION admin route writes
-    one (``@log_admin_action``), and its FK has no cascade — without this the
-    tenant row survives teardown and the NEXT run inherits its routing state.
+    And the deployed schema does not have the cascade the models claim. ``AuditLog``
+    was already in this list for that reason; the same gap covers three more tables:
+    ``initial_schema.py`` created ``principals``, ``products``, ``media_buys`` and
+    ``audit_logs`` with a plain ``tenant_id`` FK, and no later migration ever added
+    ``ON DELETE CASCADE`` — while ``models.py`` declares it on all four today. That
+    model/migration drift is a real, pre-existing bug (out of scope to fix here), and
+    reading the model metadata instead of the migrations is what would make this
+    teardown silently incomplete. ``adapter_config``, ``property_tags``,
+    ``pricing_options`` and ``contexts`` DO carry a real cascade in their creating
+    migrations; they are deleted anyway, because an explicit delete of an
+    already-cascaded row is a harmless no-op and depending on which half of a known
+    drift is true is not.
+
+    ``ObjectWorkflowMapping`` and ``WorkflowStep`` have no ``tenant_id`` at all, so
+    they are reached through ``contexts``.
+
+    A failure here must SURFACE. A tenant row that survives teardown keeps its
+    ``virtual_host`` — session-global routing state that ``get_tenant_by_virtual_host``
+    matches as an exact string — so a swallowed ``IntegrityError`` would turn one
+    module's incomplete list into every later module's tenant resolving to the wrong
+    row.
     """
-    from src.core.database.models import AuditLog, AuthorizedProperty, SigningKey, Tenant
+    from sqlalchemy import select
+
+    from src.core.database.models import (
+        AdapterConfig,
+        AuditLog,
+        AuthorizedProperty,
+        Context,
+        Creative,
+        CreativeAssignment,
+        MediaBuy,
+        MediaPackage,
+        ObjectWorkflowMapping,
+        Principal,
+        Product,
+        PropertyTag,
+        PushNotificationConfig,
+        SigningKey,
+        Tenant,
+        WebhookDeliveryLog,
+        WorkflowStep,
+    )
 
     with live_db_env(live_server) as env:
         session = env.get_session()
-        for model in (SigningKey, AuthorizedProperty, AuditLog, Tenant):
+        context_ids = select(Context.context_id).where(Context.tenant_id == tenant_id)
+        step_ids = select(WorkflowStep.step_id).where(WorkflowStep.context_id.in_(context_ids))
+        session.execute(delete(ObjectWorkflowMapping).where(ObjectWorkflowMapping.step_id.in_(step_ids)))
+        session.execute(delete(WorkflowStep).where(WorkflowStep.context_id.in_(context_ids)))
+        # ``media_packages`` has no tenant_id and its FK to media_buys carries no cascade,
+        # so a created media buy is unreachable from the tenant-scoped deletes below.
+        media_buy_ids = select(MediaBuy.media_buy_id).where(MediaBuy.tenant_id == tenant_id)
+        session.execute(delete(MediaPackage).where(MediaPackage.media_buy_id.in_(media_buy_ids)))
+        # ``PricingOption`` is deliberately NOT deleted directly: the
+        # ``prevent_empty_pricing_options`` trigger REFUSES to remove a product's last
+        # pricing option while that product still exists, and explicitly allows the same
+        # row to go via the product's cascade. The composite FK's ``ON DELETE CASCADE``
+        # (migration c3b75d304773) is real, so deleting ``Product`` takes it.
+        for model in (
+            Context,
+            CreativeAssignment,
+            WebhookDeliveryLog,
+            Creative,
+            PushNotificationConfig,
+            MediaBuy,
+            Product,
+            Principal,
+            PropertyTag,
+            AdapterConfig,
+            SigningKey,
+            AuthorizedProperty,
+            AuditLog,
+            Tenant,
+        ):
             session.execute(delete(model).where(model.tenant_id == tenant_id))
         session.commit()
+
+
+def _seed_buying_surface(env: Any, tenant: Any, *, access_token: str) -> None:
+    """Everything a live ``create_media_buy`` needs on *tenant*, and nothing more.
+
+    Seeded through the seam's OWN ``live_db_env`` session, which is why *env* is a
+    parameter rather than something opened here: the factory binding is global state and
+    :func:`~tests.e2e.utils.live_db_env` refuses to nest, so a caller cannot reach for
+    ``set_live_adapter_behavior`` while the seam's context is still open.
+
+    Deliberately NOT a ``CurrencyLimit``: ``TenantFactory`` already auto-creates the
+    USD one through its ``currency_usd`` ``RelatedFactory``, and a second insert would
+    collide rather than help.
+
+    ``PropertyTagFactory``'s ``tag_id`` is a ``Sequence`` (``tag_0001``), while
+    ``ProductFactory.property_tags`` defaults to ``["all_inventory"]`` — so the id is
+    passed explicitly or the product's tag reference dangles.
+
+    The access token is handed IN as a caller-supplied literal rather than read back
+    out of the created row: the seam's ``yield`` stays a 2-tuple, so the three call
+    sites that pass nothing are untouched by the existence of this seed.
+    """
+    from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, PropertyTagFactory
+    from tests.factories.core import set_adapter_test_behavior
+
+    PrincipalFactory(tenant=tenant, access_token=access_token)
+    PropertyTagFactory(tenant=tenant, tag_id="all_inventory")
+    # ``publisher_properties`` is spelled out rather than left to the model's fallback.
+    # The fallback derives ``publisher_domain`` from ``tenant.virtual_host``, which on
+    # this seam carries the stack's PORT — and the AdCP ``Product`` schema types that
+    # field as a bare hostname, so the derived value fails validation and every read of
+    # the product 500s before anything about signing is reached.
+    publisher_domain = (tenant.virtual_host or "").split(":")[0]
+    # ``property_tags`` is cleared in the same breath: ``ck_product_authorization`` is an
+    # XOR across properties / property_ids / property_tags, so the factory's default tag
+    # list and an explicit ``properties`` cannot both stand.
+    product = ProductFactory(
+        tenant=tenant,
+        property_tags=None,
+        properties=[
+            {"publisher_domain": publisher_domain, "property_tags": ["all_inventory"], "selection_type": "by_tag"}
+        ],
+    )
+    PricingOptionFactory(product=product)
+    # Creates the mock AdapterConfig row and pins approval in one call — e2e shares one
+    # database and pytest-randomly reorders, so leftover approval state is not something
+    # a delivery-dependent module can trust.
+    set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=False)
 
 
 @contextlib.contextmanager
@@ -147,6 +266,7 @@ def provisioned_trust_root_tenant(
     host: str,
     mint_key: bool = True,
     declarations_from_tenant: Callable[[Any], dict[str, Any]] | None = None,
+    buyer_access_token: str | None = None,
 ) -> Iterator[tuple]:
     """The tenant seam, shared by every signing e2e module.
 
@@ -173,6 +293,17 @@ def provisioned_trust_root_tenant(
     rather than a literal, which is what ``validate_signing_platform_backing``
     cross-checks.
 
+    *buyer_access_token* is opt-in and default-off. Passing one additionally seeds the
+    principal / adapter config / property tag / product / pricing option a live
+    ``create_media_buy`` needs (:func:`_seed_buying_surface`), authenticated by that
+    exact literal — which is how a caller that must DRIVE this tenant gets a usable
+    token without the yield growing a third element. Callers that pass nothing get
+    byte-for-byte the tenant they got before.
+
+    Note that the session below stays bound for the whole ``yield``: a caller cannot
+    open a second ``live_db_env`` from its test body, so anything that must be seeded
+    belongs in the seed above rather than in the test.
+
     The row is removed at both ends: ``virtual_host`` is host-routing state
     shared by the whole e2e session.
     """
@@ -188,12 +319,71 @@ def provisioned_trust_root_tenant(
             )
             key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{slug}-key") if mint_key else None
             AuthorizedPropertyFactory(tenant=tenant, publisher_domain=host, tags=["premium_news"])
+            if buyer_access_token is not None:
+                _seed_buying_surface(env, tenant, access_token=buyer_access_token)
             if declarations_from_tenant is not None:
                 tenant.capability_declarations = declarations_from_tenant(tenant)
             env._commit_factory_data()
             yield tenant, key
     finally:
         drop_tenant(live_server, tenant_id)
+
+
+@contextlib.contextmanager
+def declaring_tenant_provisioner(
+    live_server: dict,
+    *,
+    tenant_id: str,
+    slug: str,
+    declarations_from_tenant: Callable[[Any], dict[str, Any]],
+    buyer_access_token: str | None = None,
+) -> Iterator[Callable[[str], tuple]]:
+    """A per-host ``provision(host)`` factory for a keyless, signing-DECLARING tenant.
+
+    Shared by every phase-A fixture in this suite: the tenant must advertise a signing
+    posture (via *declarations_from_tenant*) while owning no key (``mint_key=False`` is
+    fixed here, not a parameter — a module whose phase A mints its own key grades its own
+    fixture rather than a production provisioning path). Wrapped in an ``ExitStack`` so
+    the assertions about *where* the TLS listener is happen in the caller's test body and
+    fail as failures, not as fixture-setup errors — ``provision(host)`` is called there,
+    not here.
+
+    *buyer_access_token* forwards to :func:`provisioned_trust_root_tenant` for modules
+    that must DRIVE the tenant (e.g. a real ``create_media_buy``); modules that only
+    fetch discovery documents leave it unset.
+    """
+    stack = contextlib.ExitStack()
+
+    def provision(host: str) -> tuple:
+        return stack.enter_context(
+            provisioned_trust_root_tenant(
+                live_server,
+                tenant_id=tenant_id,
+                slug=slug,
+                host=host,
+                mint_key=False,
+                declarations_from_tenant=declarations_from_tenant,
+                buyer_access_token=buyer_access_token,
+            )
+        )
+
+    with stack:
+        yield provision
+
+
+async def fetch_capabilities(client: httpx.AsyncClient, path: str = "/api/v1/capabilities") -> dict[str, Any]:
+    """The served capabilities document, fetched anonymously over the CA-verified client.
+
+    Anonymous on purpose: discovery responses describe the SELLER, not the caller
+    (AdCP INV-4), and the tenant is resolved from the Host header — which is what lets a
+    counterparty holding no credential reach this document at all.
+    """
+    response = await client.get(path)
+    assert response.status_code == 200, (
+        f"the capabilities document must be served anonymously over TLS at {path!r}; "
+        f"got HTTP {response.status_code}. Body: {response.text[:300]!r}"
+    )
+    return response.json()
 
 
 def provision_signing_key_via_admin(base_url: str, *, tenant_id: str, alg: str = "ed25519") -> str:

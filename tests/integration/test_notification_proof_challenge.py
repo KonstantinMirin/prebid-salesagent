@@ -37,7 +37,7 @@ signature base here: a test that recomputed the signature would be asserting our
 implementation against itself. ``WEBHOOK_TAG`` is imported for the same reason — a literal
 profile string would pass for a tag we never actually emit. The SDK's webhook ENTRY POINT
 diverges from the pin on one value, so verification runs through
-:func:`_verify_as_conformant_receiver`, which substitutes exactly that value and nothing
+:func:`tests.helpers.signing.verify_as_conformant_receiver`, which substitutes exactly that value and nothing
 else; the divergence itself is pinned by its own test so the substitution cannot outlive
 it.
 
@@ -61,7 +61,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -71,7 +70,12 @@ from adcp.types.generated_poc.core.webhook_challenge import WebhookChallenge
 
 from src.core.schemas.account import SyncAccountsRequest
 from tests.harness.account_sync import AccountSyncEnv
-from tests.helpers.signing import deployment_kek, provision_key, signing_key_repo
+from tests.helpers.signing import (
+    deployment_kek,
+    provision_key,
+    signing_key_repo,
+    verify_as_conformant_receiver,
+)
 from tests.helpers.webhook_wire import capture_outbound_webhooks, echoing_challenge_response, signature_input_params
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -180,60 +184,6 @@ def _entry_errors(response: Any) -> list[Any]:
     return list(getattr(response.accounts[0], "errors", None) or [])
 
 
-def _verify_as_conformant_receiver(challenge: Any, jwks: dict[str, Any]) -> Any:
-    """Run the SDK's verifier over *challenge* the way the PINNED spec defines it.
-
-    ``verify_webhook_signature`` is the SDK's webhook entry point and it is the right
-    machinery — the whole checklist, the tag pin, the required components, the digest
-    policy, the alg allowlist. It is called here through the request verifier with exactly
-    ONE substitution, because the SDK diverges from the pin on that one value:
-
-    security.mdx @ v3.1.1 :1426 — *"Webhooks are signed with the agent's ``adcp_use:
-    "request-signing"`` key; there is no separate webhook key purpose. Domain separation
-    between requests and webhooks is carried by the signature ``tag`` … not by the key
-    purpose."* Its required-JWK table pins ``adcp_use`` to ``"request-signing"``, :955
-    repeats it ("webhooks do not need their own purpose"), and :1438 makes
-    ``"webhook-signing"`` DEPRECATED — verifiers "MUST still accept it for backward
-    compatibility", while "new signers SHOULD publish and sign with ``"request-signing"``
-    keys only".
-
-    The SDK inverts that: ``verify_webhook_signature`` builds its options with
-    ``expected_adcp_use=ADCP_USE_WEBHOOK``, so it accepts ONLY the deprecated value and
-    REJECTS the one the spec mandates for new signers
-    (``webhook_signature_key_purpose_invalid``). Verifying through the substituted options
-    is therefore what a CONFORMANT receiver does; the divergence itself is pinned by
-    :meth:`TestChallengeIsSignedAndVerifiable.test_the_sdk_webhook_verifier_diverges_from_the_pin`
-    so it becomes a loud failure the moment the SDK is fixed and this substitution can go.
-
-    Everything except ``expected_adcp_use`` is copied from the SDK's own construction, so
-    this cannot drift into a weaker check than the SDK performs.
-    """
-    from adcp.signing.jwks import StaticJwksResolver
-    from adcp.signing.verifier import VerifierCapability, VerifyOptions, verify_request_signature
-    from adcp.signing.webhook_signer import WEBHOOK_TAG as _TAG
-
-    return verify_request_signature(
-        method="POST",
-        url=challenge.url,
-        headers=dict(challenge.headers),
-        body=challenge.content,
-        options=VerifyOptions(
-            now=time.time(),
-            capability=VerifierCapability(
-                supported=True, covers_content_digest="required", required_for=frozenset({"webhook"})
-            ),
-            operation="webhook",
-            # The SDK's own resolver over OUR published document: a JwksResolver maps a
-            # keyid to ONE JWK, so handing it the whole JWKS wrapper would have the
-            # verifier read `use` off the envelope and fail for a reason that is the
-            # test's, not production's.
-            jwks_resolver=StaticJwksResolver(jwks),
-            expected_tag=_TAG,
-            expected_adcp_use="request-signing",
-        ),
-    )
-
-
 class TestChallengeIsSignedAndVerifiable:
     """The acceptance: the emitted signature verifies against the JWKS A3 publishes."""
 
@@ -264,7 +214,7 @@ class TestChallengeIsSignedAndVerifiable:
             "request-profile tag here is a signature a webhook verifier rejects"
         )
 
-        verified = _verify_as_conformant_receiver(challenge, jwks)
+        verified = verify_as_conformant_receiver(challenge, jwks)
         assert verified.key_id, "the verifier returned no signer key id, so nothing was actually verified"
 
         # The other half of the acceptance: a proven challenge must ACTIVATE the
@@ -290,7 +240,7 @@ class TestChallengeIsSignedAndVerifiable:
         Asserted rather than remembered because the failure mode of an undocumented
         workaround is that it becomes permanent. When the SDK is fixed this test fails,
         which is the signal to delete both it and the substitution in
-        :func:`_verify_as_conformant_receiver`.
+        :func:`tests.helpers.signing.verify_as_conformant_receiver`.
         """
         from adcp.signing.errors import SignatureVerificationError
         from adcp.webhooks import WebhookVerifyOptions, verify_webhook_signature
@@ -315,7 +265,7 @@ class TestChallengeIsSignedAndVerifiable:
             "the SDK webhook verifier was expected to reject our conformant request-signing key on "
             f"its adcp_use check; it failed for a different reason instead: {raised.value}. If it now "
             "ACCEPTS the key, the divergence is fixed — delete this test and the expected_adcp_use "
-            "substitution in _verify_as_conformant_receiver"
+            "substitution in verify_as_conformant_receiver"
         )
 
 

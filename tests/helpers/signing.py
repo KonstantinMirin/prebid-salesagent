@@ -26,6 +26,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
 
+from tests.helpers.webhook_wire import CapturedWebhook
+
 # An RFC 9421 signature base: the canonicalized component list joined by LF with
 # ``"@signature-params"`` last. A SigningProvider signs this as a RAW MESSAGE —
 # never as a pre-hashed digest — so passing it verbatim is what the profile means.
@@ -485,6 +487,72 @@ def sign_wire_request(
         cover_content_digest=True,
     )
     return signed.as_dict()
+
+
+def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any]) -> Any:
+    """Run the SDK's verifier over *signed* the way the PINNED spec defines it.
+
+    *signed* is one outbound POST as the receiving socket saw it — the ``url`` a
+    receiver reconstructs from its own wire, the headers it received, the bytes it
+    read. Two graders need exactly this call: the C2 proof-of-control challenge
+    (in-process, ``tests/integration/test_notification_proof_challenge.py``) and the
+    E2E-3 delivery webhook (``tests/e2e/test_webhook_signature_e2e.py``). One
+    definition, here — a verifier that drifted between them would let one surface be
+    graded more weakly than the other.
+
+    ``verify_webhook_signature`` is the SDK's webhook entry point and it is the right
+    machinery — the whole checklist, the tag pin, the required components, the digest
+    policy, the alg allowlist. It is called here through the request verifier with exactly
+    ONE substitution, because the SDK diverges from the pin on that one value:
+
+    security.mdx @ v3.1.1 :1426 — *"Webhooks are signed with the agent's ``adcp_use:
+    "request-signing"`` key; there is no separate webhook key purpose. Domain separation
+    between requests and webhooks is carried by the signature ``tag`` … not by the key
+    purpose."* Its required-JWK table pins ``adcp_use`` to ``"request-signing"``, :955
+    repeats it ("webhooks do not need their own purpose"), and :1438 makes
+    ``"webhook-signing"`` DEPRECATED — verifiers "MUST still accept it for backward
+    compatibility", while "new signers SHOULD publish and sign with ``"request-signing"``
+    keys only".
+
+    The SDK inverts that: ``verify_webhook_signature`` builds its options with
+    ``expected_adcp_use=ADCP_USE_WEBHOOK``, so it accepts ONLY the deprecated value and
+    REJECTS the one the spec mandates for new signers
+    (``webhook_signature_key_purpose_invalid``). Verifying through the substituted options
+    is therefore what a CONFORMANT receiver does; the divergence itself is pinned by
+    ``TestChallengeIsSignedAndVerifiable.test_the_sdk_webhook_verifier_diverges_from_the_pin``
+    so it becomes a loud failure the moment the SDK is fixed and this substitution can go.
+
+    Everything except ``expected_adcp_use`` is copied from the SDK's own construction, so
+    this cannot drift into a weaker check than the SDK performs.
+
+    Nothing here reaches into ``src``: the decision is made by SDK code over the wire
+    bytes and a JWKS document, which is what lets an e2e caller claim its VERIFY path
+    holds no production import.
+    """
+    from adcp.signing.jwks import StaticJwksResolver
+    from adcp.signing.verifier import VerifierCapability, VerifyOptions, verify_request_signature
+    from adcp.signing.webhook_signer import WEBHOOK_TAG as _TAG
+
+    return verify_request_signature(
+        method="POST",
+        url=signed.url,
+        headers=dict(signed.headers),
+        body=signed.content,
+        options=VerifyOptions(
+            now=time.time(),
+            capability=VerifierCapability(
+                supported=True, covers_content_digest="required", required_for=frozenset({"webhook"})
+            ),
+            operation="webhook",
+            # The SDK's own resolver over OUR published document: a JwksResolver maps a
+            # keyid to ONE JWK, so handing it the whole JWKS wrapper would have the
+            # verifier read `use` off the envelope and fail for a reason that is the
+            # test's, not production's.
+            jwks_resolver=StaticJwksResolver(jwks),
+            expected_tag=_TAG,
+            expected_adcp_use="request-signing",
+        ),
+    )
 
 
 def just_after_provisioning() -> datetime:

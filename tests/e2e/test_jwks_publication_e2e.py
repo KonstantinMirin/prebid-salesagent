@@ -38,7 +38,6 @@ SDK resolver end to end, where no private CA is in the way.
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 import httpx
@@ -46,18 +45,15 @@ import pytest
 
 from tests.e2e._signing_e2e import (
     ca_verified_ssl_context,
+    declaring_tenant_provisioner,
+    fetch_capabilities,
     netloc,
     provision_signing_key_via_admin,
-    provisioned_trust_root_tenant,
     tls_base_url,
 )
 
 _SLUG = "jwkspub_e2e"
 _TENANT_ID = "jwkspub_e2e"
-
-#: Where an external process starts. The JWKS URL is never written down here —
-#: it is read out of the documents this one leads to.
-_CAPABILITIES_PATH = "/api/v1/capabilities"
 
 #: The one operation the tenant declares a ``request_signing`` posture for.
 #: ``supported_for``, never ``required_for``: ``/api/v1`` is an AdCP surface for
@@ -94,43 +90,14 @@ def _signing_declarations(tenant: Any) -> dict[str, Any]:
 def keyless_declaring_tenant(live_server):
     """A tenant that DECLARES a signing posture and owns NO key, at a caller-supplied netloc.
 
-    A factory rather than a plain fixture so the assertions about *where* the TLS
-    listener is happen in the test body and fail as failures, not as fixture-setup
-    errors. ``mint_key=False`` is the point of this module's first phase: the key
-    must arrive later, through a production transport, or the test grades its own
-    fixture.
+    ``mint_key=False`` (fixed inside :func:`declaring_tenant_provisioner`) is the point of
+    this module's first phase: the key must arrive later, through a production transport,
+    or the test grades its own fixture.
     """
-    stack = contextlib.ExitStack()
-
-    def provision(host: str):
-        return stack.enter_context(
-            provisioned_trust_root_tenant(
-                live_server,
-                tenant_id=_TENANT_ID,
-                slug=_SLUG,
-                host=host,
-                mint_key=False,
-                declarations_from_tenant=_signing_declarations,
-            )
-        )
-
-    with stack:
+    with declaring_tenant_provisioner(
+        live_server, tenant_id=_TENANT_ID, slug=_SLUG, declarations_from_tenant=_signing_declarations
+    ) as provision:
         yield provision
-
-
-async def _fetch_capabilities(client: httpx.AsyncClient) -> dict[str, Any]:
-    """The served capabilities document, fetched anonymously over the CA-verified client.
-
-    Anonymous on purpose: discovery responses describe the SELLER, not the caller
-    (AdCP INV-4), and the tenant is resolved from the Host header — which is what
-    lets a counterparty holding no credential reach this document at all.
-    """
-    response = await client.get(_CAPABILITIES_PATH)
-    assert response.status_code == 200, (
-        f"the capabilities document must be served anonymously over TLS at {_CAPABILITIES_PATH!r}; "
-        f"got HTTP {response.status_code}. Body: {response.text[:300]!r}"
-    )
-    return response.json()
 
 
 @pytest.mark.asyncio
@@ -158,7 +125,7 @@ async def test_advertised_key_origin_serves_a_key_the_tenant_actually_has(
 
     # ── Phase A — MISS. No key exists yet. ────────────────────────────────────
     async with httpx.AsyncClient(base_url=base_url, verify=verify, timeout=15.0) as client:
-        before = await _fetch_capabilities(client)
+        before = await fetch_capabilities(client)
 
     # The POSITIVE half first. "key_origins is absent" is equally satisfied by the
     # identity block being absent ENTIRELY — which is what happens when the seeded
@@ -202,7 +169,7 @@ async def test_advertised_key_origin_serves_a_key_the_tenant_actually_has(
     provisioned_kid = provision_signing_key_via_admin(base_url, tenant_id=_TENANT_ID, alg=_ALG)
 
     async with httpx.AsyncClient(base_url=base_url, verify=verify, timeout=15.0) as client:
-        after = await _fetch_capabilities(client)
+        after = await fetch_capabilities(client)
 
         identity_after = after.get("identity") or {}
         advertised_origin = (identity_after.get("key_origins") or {}).get("request_signing")

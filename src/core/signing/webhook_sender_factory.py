@@ -383,7 +383,8 @@ def _rfc9421_sender(
         _warn_keyless_once(tenant_id)
         return _unauthenticated_sender(client)
 
-    posture = webhook_signing_posture(repo, now=now, origin=_agent_origin(repo, tenant_id))
+    origin = _agent_origin(repo, tenant_id)
+    posture = webhook_signing_posture(repo, now=now, origin=origin)
     if not posture.supported:
         _warn_keyless_once(tenant_id)
         return _unauthenticated_sender(client)

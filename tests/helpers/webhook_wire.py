@@ -252,12 +252,15 @@ def capture_outbound_webhooks(
         yield captured
 
 
-def signature_input_params(captured: CapturedWebhook, label: str = "sig1") -> dict[str, str | int]:
-    """The RFC 9421 ``Signature-Input`` parameters, parsed by the SDK's own parser.
+def signature_input_label(captured: CapturedWebhook, label: str = "sig1") -> Any:
+    """The whole RFC 9421 ``Signature-Input`` entry for *label*, parsed by the SDK's parser.
 
-    Parsing rather than substring-matching is what makes the ``tag=`` assertion
-    real: ``tag`` is a structured-field parameter, and a hand-rolled ``in`` check
-    would also pass for a tag that merely CONTAINS the profile string.
+    Returns the SDK's ``SignatureInputLabel``: ``.components`` is what the signature
+    COVERS, ``.params`` carries ``tag`` / ``keyid`` / ``created`` / ``alg``. Parsing
+    rather than substring-matching is what makes either assertion real — both are
+    structured-field constructs, so a hand-rolled ``in`` check would pass for a tag
+    that merely CONTAINS the profile string, and equally for a ``content-digest``
+    that appears anywhere in the header rather than in the covered component list.
     """
     from adcp.signing.canonical import parse_signature_input_header
 
@@ -268,4 +271,14 @@ def signature_input_params(captured: CapturedWebhook, label: str = "sig1") -> di
     )
     parsed = parse_signature_input_header(header)
     assert label in parsed, f"Signature-Input carries labels {sorted(parsed)}, not {label!r}"
-    return parsed[label].params
+    return parsed[label]
+
+
+def signature_input_params(captured: CapturedWebhook, label: str = "sig1") -> dict[str, str | int]:
+    """The RFC 9421 ``Signature-Input`` parameters, parsed by the SDK's own parser.
+
+    Parsing rather than substring-matching is what makes the ``tag=`` assertion
+    real: ``tag`` is a structured-field parameter, and a hand-rolled ``in`` check
+    would also pass for a tag that merely CONTAINS the profile string.
+    """
+    return signature_input_label(captured, label).params

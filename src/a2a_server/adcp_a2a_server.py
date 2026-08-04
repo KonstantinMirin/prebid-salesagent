@@ -390,6 +390,7 @@ class AdCPRequestHandler(RequestHandler):
         status: str,
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        identity: ResolvedIdentity | None = None,
     ):
         """Send protocol-level push notification if configured.
 
@@ -398,6 +399,12 @@ class AdCPRequestHandler(RequestHandler):
         - Intermediate states (working, input-required, submitted): Send TaskStatusUpdateEvent
 
         Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
+
+        ``identity`` carries the tenant/principal resolved at the transport boundary
+        for this request. Without it, ``metadata`` lacks ``tenant_id`` and the RFC 9421
+        signing boundary (``webhook_sender_factory._rfc9421_sender``) takes that as
+        "no tenant to sign for" and delivers unauthenticated — silently, and regardless
+        of whether the tenant actually owns a signing key (#1291).
         """
         try:
             # Check if task has push notification config stored
@@ -418,10 +425,13 @@ class AdCPRequestHandler(RequestHandler):
             auth_type = auth.scheme if auth and auth.scheme else None
             auth_token = auth.credentials if auth and auth.credentials else None
 
+            tenant_id = identity.tenant_id if identity else None
+            principal_id = identity.principal_id if identity else None
+
             push_notification_config = DBPushNotificationConfig(
                 id=webhook_config.id or f"pnc_{uuid4().hex[:16]}",
-                tenant_id="",
-                principal_id="",
+                tenant_id=tenant_id or "",
+                principal_id=principal_id or "",
                 url=url,
                 authentication_type=auth_type,
                 authentication_token=auth_token,
@@ -457,6 +467,8 @@ class AdCPRequestHandler(RequestHandler):
             skills = list(meta_dict.get("skills_requested", []))
             metadata = {
                 "task_type": skills[0] if skills else "unknown",
+                "tenant_id": tenant_id,
+                "principal_id": principal_id,
             }
 
             await push_notification_service.send_notification(
@@ -737,7 +749,7 @@ class AdCPRequestHandler(RequestHandler):
                                 f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
                             )
                             # Send protocol-level webhook notification
-                            await self._send_protocol_webhook(task, status="submitted")
+                            await self._send_protocol_webhook(task, status="submitted", identity=identity)
                             self.tasks[task_id] = task
                             return task
 
@@ -796,7 +808,9 @@ class AdCPRequestHandler(RequestHandler):
                     error_messages = [
                         res["error_envelope"]["errors"][0]["message"] for res in results if not res["success"]
                     ]
-                    await self._send_protocol_webhook(task, status="failed", error="; ".join(error_messages))
+                    await self._send_protocol_webhook(
+                        task, status="failed", error="; ".join(error_messages), identity=identity
+                    )
 
                     return task
                 elif successful_skills:
@@ -998,7 +1012,7 @@ class AdCPRequestHandler(RequestHandler):
             task.status.CopyFrom(TaskStatus(state=task_state))
 
             # Send protocol-level webhook notification if configured
-            await self._send_protocol_webhook(task, status=task_status_str)
+            await self._send_protocol_webhook(task, status=task_status_str, identity=identity)
 
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
@@ -1031,7 +1045,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             )
 
-            await self._send_protocol_webhook(task, status="failed")
+            await self._send_protocol_webhook(task, status="failed", identity=identity)
 
             # Raise A2A error instead of creating failed task
             raise _internal_error_for("message processing", e)
