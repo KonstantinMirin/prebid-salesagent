@@ -88,36 +88,36 @@ class TestWebhookURLValidator:
         assert "blocked" in error.lower()
 
     def test_blocks_127_0_0_1(self):
-        """Should block 127.0.0.1."""
+        """Should block 127.0.0.1, with a message that does not name the range."""
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://127.0.0.1:8080/webhook")
         assert not is_valid
-        assert "127.0.0.0/8" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_private_network_10(self):
-        """Should block 10.0.0.0/8 private network."""
+        """Should block 10.0.0.0/8 private network, with a message that does not name the range."""
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://10.0.0.5/webhook")
         assert not is_valid
-        assert "10.0.0.0/8" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_private_network_192(self):
-        """Should block 192.168.0.0/16 private network."""
+        """Should block 192.168.0.0/16 private network, with a message that does not name the range."""
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://192.168.1.1/webhook")
         assert not is_valid
-        assert "192.168.0.0/16" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_private_network_172(self):
-        """Should block 172.16.0.0/12 private network."""
+        """Should block 172.16.0.0/12 private network, with a message that does not name the range."""
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://172.16.0.1/webhook")
         assert not is_valid
-        assert "172.16.0.0/12" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_link_local(self):
-        """Should block 169.254.0.0/16 link-local (AWS metadata service)."""
+        """Should block 169.254.0.0/16 link-local (AWS metadata service), naming no range."""
         # Use a non-hostname-allowlist IP so the CIDR path is graded (169.254.169.254
         # is also in BLOCKED_HOSTNAMES and short-circuits before network match).
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://169.254.1.1/webhook")
         assert not is_valid
-        assert "169.254.0.0/16" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_aws_metadata_hostname(self):
         """Literal metadata IP hostname is blocked by hostname allowlist."""
@@ -165,22 +165,22 @@ class TestWebhookURLValidator:
     def test_blocks_cgnat_range(self):
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://100.64.1.1/webhook")
         assert not is_valid
-        assert "100.64.0.0/10" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_multicast_range(self):
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://224.0.0.1/webhook")
         assert not is_valid
-        assert "224.0.0.0/4" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_ipv6_multicast_range(self):
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://[ff02::1]/")
         assert not is_valid
-        assert "ff00::/8" in error
+        assert error == "URL resolves to a restricted range."
 
     def test_blocks_nat64_well_known_prefix(self):
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://[64:ff9b::a9fe:a9fe]/")
         assert not is_valid
-        assert "64:ff9b::/96" in error
+        assert error == "URL resolves to a restricted range."
 
 
 class TestLocalhostAllowanceUnderTestingMode:
@@ -239,8 +239,10 @@ class TestLocalhostAllowanceUnderTestingMode:
         """The allowance is loopback-only — a private range stays refused under it.
 
         Carried over from the deleted ``validate_for_testing`` coverage: the
-        rescue keys on the loopback wording, so a 192.168/16 verdict must survive
-        it. Without this, widening the rescue predicate would go unnoticed.
+        rescue re-derives loopback-ness structurally from the URL (see
+        ``_maybe_allow_localhost``), so a 192.168/16 address — not loopback —
+        must survive it. Without this, widening the rescue predicate would go
+        unnoticed.
         """
         monkeypatch.setenv("ADCP_TESTING", "true")
         monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
@@ -248,7 +250,7 @@ class TestLocalhostAllowanceUnderTestingMode:
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("http://192.168.1.1/webhook")
 
         assert not is_valid, "the loopback allowance must not rescue a private-range address"
-        assert "192.168.0.0/16" in error
+        assert error == "URL resolves to a restricted range."
 
 
 class TestWebhookSchemeGateTracksTheEgressSeam:

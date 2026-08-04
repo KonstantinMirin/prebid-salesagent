@@ -56,9 +56,12 @@
 # / correctable / field / suggestion, message shaped `Invalid <field>:
 # <reason>` — and it is deliberately DNS-FREE: an unresolvable-but-public
 # hostname is ACCEPTED at ingest and re-checked when the callback is dialled
-# (gh-#1589 / gh-#1697). So the ingest scenario carries its own wire code, its
-# own per-row message, and its own causes; an unresolvable host is not one of
-# them.
+# (gh-#1589 / gh-#1697). So the ingest scenario carries its own wire code and
+# its own causes; an unresolvable host is not one of them. The <reason> itself
+# is now the SAME fixed, non-disclosing text for every address cause
+# (`url_validator._RESTRICTED_RANGE_MESSAGE`) — no CIDR, no resolved address —
+# matching the seam's one-message-for-every-cause posture, so every row below
+# expects the identical message.
 Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
 
   A URL the buyer supplies for us to fetch is an SSRF vector. When the egress
@@ -142,16 +145,24 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # (the gate reads BLOCKED_NETWORKS in src/core/security/url_validator.py, not
   # the egress hatches), so it grades one production on every transport. Both
   # rows are IPv6 reserved ranges spec point 2 covers — unique-local (RFC 4193)
-  # and multicast. A cloud-metadata literal and any IPv4 literal are
-  # deliberately NOT used here: the gate reports those by naming the blocked
-  # hostname (169.254.169.254) or the blocked dotted-quad range (10.0.0.0/8),
-  # which the non-disclosure Then below forbids.
+  # and multicast. Loopback (::1) is deliberately NOT an example here even
+  # though the fix below makes its message non-disclosing too: ADCP_TESTING is
+  # ambient true in this harness, and ::1 is loopback exactly like 127.0.0.1
+  # (tests/unit/conftest.py's own _LOOPBACK_PREFIXES treats it identically), so
+  # the registration gate's testing-mode allowance (WebhookURLValidator.
+  # _maybe_allow_localhost) RESCUES it here — the request would succeed, not
+  # refuse. A cloud-metadata literal and any IPv4 literal are not used here
+  # only because the IPv6 set already exercises every address-cause branch
+  # (named-network match and the loopback/private fallback) — not because
+  # either would still leak: the message below is now identical for every
+  # address cause.
   #
-  # The message is per-row here, unlike the seam scenarios above: a SEND-time
-  # refusal must not distinguish its cause, or it becomes a probe oracle. The
-  # ingest verdict distinguishes causes on purpose — no fetch happened, so the
-  # message is a statement about the buyer's OWN document, not about our
-  # network. The non-disclosure Then is what holds that line.
+  # The message is now cause-blind, same as the seam scenarios above: the
+  # registration gate used to report a per-cause reason (which CIDR, which
+  # resolved address) — the bug fixed here — and now returns the SAME fixed,
+  # non-disclosing text regardless of which reserved range matched
+  # (`url_validator._RESTRICTED_RANGE_MESSAGE`). The non-disclosure Then below
+  # holds that line independently of the exact-message Then above.
   @T-EGRESS-SSRF-ingest-refused-webhook-url @egress_create @invariant
   Scenario Outline: a refused push_notification_config.url is a correctable buyer error at ingest
     Given both outbound egress escape hatches are open
@@ -161,6 +172,6 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     And the error envelope names neither the supplied host nor any IP address
 
     Examples:
-      | webhook_url            | message                                                                                                    |
-      | https://[fc00::1]/hook | Invalid push_notification_config.url: URL resolves to blocked IP range fc00::/7 (private/internal network) |
-      | https://[ff02::1]/hook | Invalid push_notification_config.url: URL resolves to blocked IP range ff00::/8 (private/internal network) |
+      | webhook_url            | message                                                                    |
+      | https://[fc00::1]/hook | Invalid push_notification_config.url: URL resolves to a restricted range. |
+      | https://[ff02::1]/hook | Invalid push_notification_config.url: URL resolves to a restricted range. |

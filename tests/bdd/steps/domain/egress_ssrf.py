@@ -192,14 +192,16 @@ def then_refusal_message_is_exactly(ctx: dict, message: str) -> None:
     a regression to ``f"{_BLOCKED_MESSAGE} (host {h})"`` would still satisfy a
     substring check. Equality on both layers is what makes such a regression red.
 
-    The SEND-time scenarios pass one literal for every Examples row, which IS
-    spec point 6's second half: an unresolvable host and a blocked reserved
+    Both the SEND-time scenarios and the INGEST scenario now pass one literal
+    for every Examples row: an unresolvable host and a blocked reserved
     address must be indistinguishable on the wire, or the refusal is a
-    name-existence oracle. The INGEST scenario passes a per-row literal instead —
-    the registration gate refuses a URL no one has dialled, so its message is a
-    statement about the buyer's own document (``Invalid <field>: <reason>``) and
-    reveals nothing a fetch could have revealed. Non-disclosure there is carried
-    by :func:`then_envelope_discloses_nothing`, not by sameness.
+    name-existence oracle — spec point 6's second half. The registration gate
+    used to vary its ``<reason>`` per cause (which CIDR, which resolved
+    address); that was the disclosure bug this scenario now pins closed, via
+    ``url_validator._RESTRICTED_RANGE_MESSAGE``. Non-disclosure of the
+    buyer's OWN supplied host/address is still carried by
+    :func:`then_envelope_discloses_nothing`, not by sameness — the two Thens
+    check different things.
     """
     envelope = _wire_error_envelope(ctx)
     assert envelope["errors"][0]["message"] == message, (

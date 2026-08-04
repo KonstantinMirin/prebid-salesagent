@@ -36,6 +36,7 @@ coercion) that happens to live in this file.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from typing import Any
 from urllib.parse import urlparse
@@ -51,7 +52,11 @@ from src.core.exceptions import AdCPValidationError
 # ingest-side twin, not a third party reaching into it. There is no import
 # cycle: outbound_http imports only httpx, adcp.signing and src.core.exceptions.
 from src.core.security.outbound_http import _ALLOW_INSECURE_ENV, _env_flag
-from src.core.security.url_validator import check_url_ssrf
+
+# ``_scheme_error`` is imported (not restated) for the same reason as the two
+# names above: ``_maybe_allow_localhost`` must recognise a scheme refusal
+# without re-implementing the scheme rule, or the two copies can drift.
+from src.core.security.url_validator import _scheme_error, check_url_ssrf
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
@@ -169,12 +174,36 @@ class WebhookURLValidator:
     """Validates webhook URLs to prevent SSRF attacks."""
 
     @staticmethod
-    def _maybe_allow_localhost(is_valid: bool, error: str, *, allow_localhost: bool) -> tuple[bool, str]:
-        """Override localhost/loopback SSRF failures when testing allows them."""
-        if not is_valid and allow_localhost:
-            if "localhost" in error.lower() or "127.0.0" in error or "loopback" in error.lower():
-                return True, ""
-        return is_valid, error
+    def _maybe_allow_localhost(url: str, is_valid: bool, error: str, *, allow_localhost: bool) -> tuple[bool, str]:
+        """Override a loopback-ADDRESS refusal when ADCP_TESTING allows it.
+
+        Re-derives loopback-ness structurally from *url* rather than sniffing
+        the refusal message: the address-cause message is now one fixed
+        non-disclosing string for every blocked range
+        (``url_validator._RESTRICTED_RANGE_MESSAGE``), so it no longer carries
+        "which range matched" for a substring check to key on.
+
+        Must NOT rescue a SCHEME refusal — ``_scheme_error`` is checked first
+        and unconditionally blocks the rescue when it fires, which is what
+        ``test_adcp_testing_localhost_allowance_does_not_reopen_plain_http``
+        pins: a loopback capture server still needs the insecure hatch open to
+        be reached over plain http, exactly as the seam requires.
+        """
+        if is_valid or not allow_localhost:
+            return is_valid, error
+        parsed = urlparse(url)
+        if _scheme_error(parsed, require_https=WebhookURLValidator._require_https()):
+            return is_valid, error
+        hostname = parsed.hostname
+        if hostname is None:
+            return is_valid, error
+        if hostname.lower() == "localhost":
+            return True, ""
+        try:
+            is_loopback = ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            return is_valid, error
+        return (True, "") if is_loopback else (is_valid, error)
 
     @staticmethod
     def _require_https() -> bool:
@@ -218,4 +247,4 @@ class WebhookURLValidator:
             resolve_dns=False,
             require_https=cls._require_https(),
         )
-        return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)
+        return cls._maybe_allow_localhost(url, is_valid, error, allow_localhost=allow_localhost)

@@ -70,12 +70,20 @@ def _scheme_error(parsed: ParseResult, *, require_https: bool) -> str | None:
     return None
 
 
+# One fixed, non-disclosing reason for every address-cause refusal — no CIDR, no
+# resolved address. A refusal that names the blocked range or echoes the
+# resolved IP back hands the buyer our policy internals, which is exactly the
+# side channel AdCP 3.1.1 L1 security point 6 forbids. Whether the match came
+# from a named BLOCKED_NETWORKS entry or the loopback/link-local/private
+# fallback is an implementation detail the buyer has no use for.
+_RESTRICTED_RANGE_MESSAGE = "URL resolves to a restricted range."
+
+
 def _blocked_ip_error(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | None:
-    for network in BLOCKED_NETWORKS:
-        if ip in network:
-            return f"URL resolves to blocked IP range {network} (private/internal network)"
+    if any(ip in network for network in BLOCKED_NETWORKS):
+        return _RESTRICTED_RANGE_MESSAGE
     if ip.is_loopback or ip.is_link_local or ip.is_private:
-        return f"URL resolves to private/internal IP address: {ip}"
+        return _RESTRICTED_RANGE_MESSAGE
     return None
 
 
