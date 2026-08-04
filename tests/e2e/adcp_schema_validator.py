@@ -216,29 +216,28 @@ class AdCPSchemaValidator:
         """
         Extract the AdCP payload from protocol wrapper fields.
 
-        MCP and A2A protocols may add wrapper fields like:
-        - message: Human-readable message from the transport layer
-        - context_id: Session continuity identifier
-        - errors: Transport-layer errors (not part of AdCP spec)
-        - clarification_needed: Non-spec field that should be removed
-
-        This method removes these protocol-layer fields and returns only
-        the AdCP payload for validation.
+        The pinned schema's response envelope is an allOf of the version
+        fields plus a "Protocol Envelope" arm (e.g.
+        get-products-response.json allOf[1]) that spec-defines message and
+        context_id — both are populated by the protocol layer, not the
+        Pydantic response model, but they ARE modeled and typed on the wire
+        envelope the buyer actually receives, so they must be graded, not
+        exempted. "errors" is a spec-defined top-level property on several
+        response schemas too (and required on some "failed"/partial-failure
+        oneOf arms) — stripping it previously let a payload that should fail
+        validation (e.g. status="failed" with no errors array) pass
+        silently. Only "clarification_needed" has no basis in the pinned
+        schemas and stays stripped.
 
         Args:
             response_data: The full response including protocol wrapper fields
 
         Returns:
-            The AdCP payload with protocol-layer fields removed
+            The AdCP payload with genuinely non-spec fields removed
         """
-        # List of known protocol-layer fields that are not part of AdCP spec
+        # The only strip-set entry with no basis in the pinned schemas.
         protocol_fields = {
-            "message",  # MCP/A2A transport layer message
-            "context_id",  # MCP session continuity
-            "clarification_needed",  # Non-spec field
-            "errors",  # Transport-layer errors (not in AdCP spec)
-            # Note: Some AdCP responses do have "error" fields defined in spec,
-            # but "errors" (plural) is typically a transport-layer addition
+            "clarification_needed",
         }
 
         # Create a copy of the response without protocol fields

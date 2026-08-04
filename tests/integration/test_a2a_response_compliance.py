@@ -383,7 +383,11 @@ class TestA2AResponseRegressionPrevention:
         response = ListAuthorizedPropertiesResponse(publisher_domains=["test.com"])
         response_dict = response.model_dump()
 
-        # These fields should NOT be in the response data
+        # These fields should NOT be on the Pydantic response MODEL. 'message'
+        # is a genuine spec-defined field on the WIRE envelope's Protocol
+        # Envelope arm (see tests/e2e/adcp_schema_validator.py), but it's
+        # populated by the protocol layer (_serialize_for_a2a et al) at the
+        # transport boundary, not carried on the domain response model itself.
         forbidden_fields = {"success", "message", "total_count", "specification_version"}
         actual_fields = set(response_dict.keys())
 
@@ -398,7 +402,11 @@ class TestA2AResponseRegressionPrevention:
         response = GetProductsResponse(products=[])
         response_dict = response.model_dump()
 
-        # These are protocol-level fields, not AdCP response fields
+        # These are protocol-envelope fields (spec-defined on the WIRE
+        # envelope's Protocol Envelope arm — see
+        # tests/e2e/adcp_schema_validator.py — and populated by the protocol
+        # layer at the transport boundary), correctly absent from the
+        # Pydantic response MODEL itself.
         protocol_fields = {"task_id", "context_id"}  # status is actually in some AdCP responses
 
         violations = protocol_fields & set(response_dict.keys())
