@@ -15,11 +15,9 @@ all spec-compliant requests.
 
 import importlib
 import inspect
-import json
 import pkgutil
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -45,14 +43,18 @@ from src.core.schemas import (
 )
 from src.core.schemas.creative import ListCreativeFormatsResponse
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
+from tests.helpers import pinned_schema
 
-# Pinned AdCP schema fixtures. Source of truth is adcontextprotocol/adcp at the
-# immutable commit 04f59d2d5 (tag v3.1-04f59d2d5, 2026-05-13) — an INTENTIONAL frozen
-# reference point for AdCP 3.1. Upstream ships constantly and `/schemas/latest` drifts,
-# so we deliberately do NOT track it: the schemas are vendored (committed) and read
-# offline. To advance the pin, run tests/fixtures/adcp_schemas_pinned/_refresh.py.
-_PINNED_SHA = "04f59d2d56d3d77033162c310e99a1188e4eb419"
-_PINNED_SCHEMA_DIR = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned"
+# AdCP schemas are read from the installed adcp SDK's own pinned tree
+# (tests/helpers/pinned_schema.py) — the SDK's own version IS the pin (moves
+# with pyproject.toml's adcp version), so there is exactly one upstream pin
+# for this suite, not an independently vendored snapshot (that snapshot
+# previously lived here, pinned at adcontextprotocol/adcp@04f59d2d5, a full
+# spec-minor behind the SDK's).
+#
+# Ref strings in this file keep the "/schemas/<rest>" prefix as an internal
+# convention (unchanged from before) — load_json_schema() strips it and
+# resolves the rest against the SDK's tree.
 
 # Map AdCP schema refs to Pydantic model classes. Keys are the pinned schema `$id`
 # namespace (`/schemas/<category>/<file>.json`). At 04f59d2d5, sync/list-creatives
@@ -85,10 +87,32 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
-# Fields the pinned AdCP schema (04f59d2d5) defines but the adcp 5.7.0 Python library
-# / our local model does not yet model. These are spec-vs-library mismatches, not bugs
-# in our code. Re-derived against the pinned schemas — entries describing fields the
-# pin no longer defines were dropped. #1388 tracks the adcp 5.7 alignment.
+# Every AdCP response schema's Protocol Envelope arm (core/protocol-envelope.json,
+# shared via a top-level allOf) types these fields, and spec-requires "status" —
+# but they are populated by the PROTOCOL LAYER (_serialize_for_a2a et al) at the
+# transport boundary, not carried on the domain response model itself (same
+# distinction already established for message/context_id — see
+# test_a2a_response_compliance.py and tests/e2e/adcp_schema_validator.py). The
+# Pydantic response model is not the right layer to enforce them as required;
+# exclude from requiredness checks the same way _VERSION_FIELDS is excluded.
+_PROTOCOL_ENVELOPE_FIELDS: frozenset[str] = frozenset(
+    {
+        "status",
+        "task_id",
+        "context_id",
+        "context",
+        "message",
+        "timestamp",
+        "replayed",
+        "adcp_error",
+        "push_notification_config",
+        "governance_context",
+        "payload",
+    }
+)
+
+# Fields the SDK's current schema tree defines but the local model does not yet
+# model. These are spec-vs-library mismatches, not bugs in our code.
 #
 # Keys MUST use the pinned schema namespace (`/schemas/media-buy/...`,
 # `/schemas/creative/...`) to match the `schema_ref` values in SCHEMA_TO_MODEL_MAP;
@@ -104,26 +128,24 @@ KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
 
 
 def load_json_schema(schema_ref: str) -> dict[str, Any]:
-    """Load a vendored AdCP schema pinned at adcontextprotocol/adcp@04f59d2d5.
+    """Load an AdCP schema from the installed adcp SDK's pinned tree.
 
-    ``schema_ref`` is in the schema ``$id``/``$ref`` namespace (``/schemas/<rest>``),
-    used both for the top-level request schemas and for nested ``$ref`` resolution.
-    Reads the committed fixture offline — never fetches ``/schemas/latest`` (which
-    drifts). A missing file is a HARD FAILURE (the pin moved, or a ``$ref`` is outside
-    the vendored closure), never a silent skip.
+    ``schema_ref`` carries this file's internal ``/schemas/<rest>`` prefix
+    convention for the top-level request schemas
+    (``SCHEMA_TO_MODEL_MAP``/``KNOWN_SCHEMA_LIBRARY_MISMATCHES`` keys) — that
+    prefix is stripped before delegating to ``tests.helpers.pinned_schema``,
+    the single source of truth for resolving pinned AdCP schemas. Every
+    ``$ref`` inside the returned dict is canonicalized to root-relative form
+    (``pinned_schema.load_canonicalized``, no ``/schemas/`` prefix), so a
+    ``$ref`` value found while walking the returned schema is ALSO a valid
+    input here without re-adding that prefix — this function accepts both
+    forms. A missing file is a HARD FAILURE (the pin moved, or a ``$ref`` is
+    outside the resolvable tree), never a silent skip.
     """
     rel = schema_ref.split("#")[0]
-    if not rel.startswith("/schemas/"):
-        raise AssertionError(f"Unexpected schema ref (expected '/schemas/...'): {schema_ref!r}")
-    path = _PINNED_SCHEMA_DIR / rel[len("/schemas/") :]
-    if not path.exists():
-        raise AssertionError(
-            f"Pinned schema not vendored: {schema_ref} -> {path}\n"
-            f"Source: adcontextprotocol/adcp@{_PINNED_SHA[:9]}. "
-            f"Re-run tests/fixtures/adcp_schemas_pinned/_refresh.py to vendor it."
-        )
-    with open(path) as f:
-        return json.load(f)
+    if rel.startswith("/schemas/"):
+        rel = rel[len("/schemas/") :]
+    return pinned_schema.load_canonicalized(rel)
 
 
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
@@ -911,11 +933,37 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
 RESPONSE_ALIGNMENTS = _build_alignments_from_pinned(_RESPONSE_MODEL_REGISTRY) + _SUPPLEMENTAL_ALIGNMENTS
 
 
+def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
+    """Domain-level required fields from every arm of a schema's top-level
+    ``allOf`` — e.g. a shared error/pricing sub-schema composed in alongside
+    the domain shape. A response schema with no top-level ``oneOf``/``required``
+    of its own (get-products-response.json in 3.1.1) can still spec-require
+    fields via allOf; without merging them in, a schema-required field
+    silently drops out of grading instead of failing loudly (the exact bug
+    class this suite exists to catch).
+
+    Protocol Envelope fields (``status`` et al — see ``_PROTOCOL_ENVELOPE_FIELDS``)
+    are excluded: every AdCP response schema composes the same shared
+    core/protocol-envelope.json arm, which spec-requires ``status``, but that
+    field is populated by the PROTOCOL LAYER at the transport boundary, not
+    the domain Pydantic model — same distinction as ``_VERSION_FIELDS``.
+    """
+    required: set[str] = set()
+    for arm in schema.get("allOf", []) or []:
+        resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
+        required |= set(resolved.get("required", []))
+    return required - _PROTOCOL_ENVELOPE_FIELDS
+
+
 def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any]:
     """Resolve the pinned (sub-)schema a response model maps to.
 
     Handles flat single-shape responses (no oneOf → the schema is the success
-    shape) and oneOf responses (pick the arm exposing ``selector``).
+    shape) and oneOf responses (pick the arm exposing ``selector``). Merges in
+    required fields from the schema's own top-level ``allOf`` arms (the
+    shared Protocol/Version Envelope) — those apply regardless of which
+    oneOf variant matched, and 3.1.1 moved some formerly-flat requirements
+    (e.g. ``status``) there for schemas with no oneOf of their own.
     """
     schema = load_json_schema(alignment.schema_ref)
     if "oneOf" in schema:
@@ -924,6 +972,10 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
         variant = schema
     if alignment.item_key:
         return variant["properties"][alignment.item_key]["items"]
+
+    merged_required = set(variant.get("required", [])) | _allof_required_fields(schema)
+    if merged_required != set(variant.get("required", [])):
+        variant = {**variant, "required": sorted(merged_required)}
     return variant
 
 
@@ -951,7 +1003,21 @@ class TestResponseModelAlignment:
 
     @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
     def test_required_fields_enforced(self, alignment: ResponseAlignment):
-        """The model enforces every field the pinned schema marks required."""
+        """The model enforces every field the pinned schema marks required.
+
+        A schema-required field is "enforced" one of two ways, both valid:
+        - the model has no default -> omitting it MUST raise ValidationError
+          (the model rejects an incomplete construction), or
+        - the model declares a spec-correct literal default (e.g.
+          CreateMediaBuySuccess.status/confirmed_at/revision — see that
+          class's docstring: these are invariant for a synchronous success,
+          so the model guarantees the value itself rather than threading an
+          identical literal through every call site) -> omitting it must NOT
+          raise, and the constructed model must still carry a non-None value
+          for it. Either way the schema's requiredness invariant holds; only
+          silently accepting an omitted field with no value at all would be
+          a real gap.
+        """
         item = _resolve_response_item_schema(alignment)
         required = set(item.get("required", [])) - _VERSION_FIELDS
         if not required:
@@ -959,16 +1025,35 @@ class TestResponseModelAlignment:
         assert alignment.sample, (
             f"{alignment.model.__name__}: schema requires {sorted(required)} but no sample provided"
         )
-        assert required <= set(alignment.sample), (
-            f"sample for {alignment.model.__name__} missing required keys: {sorted(required - set(alignment.sample))}"
+        model_defaulted = {
+            fname
+            for fname in required
+            if (mf := alignment.model.model_fields.get(fname)) is not None and not mf.is_required()
+        }
+        # A model-defaulted field guarantees its own value, so the caller-supplied
+        # sample need not carry it — only fields the model can't fill in itself
+        # must be present in the sample.
+        required_from_sample = required - model_defaulted
+        assert required_from_sample <= set(alignment.sample), (
+            f"sample for {alignment.model.__name__} missing required keys: "
+            f"{sorted(required_from_sample - set(alignment.sample))}"
         )
         # The complete required set constructs cleanly.
         assert alignment.model(**alignment.sample) is not None
-        # Omitting any required field must raise (the model enforces it, not the call sites).
         for fname in required:
             partial = {k: v for k, v in alignment.sample.items() if k != fname}
-            with pytest.raises(ValidationError):
-                alignment.model(**partial)
+            if fname in model_defaulted:
+                # Model-defaulted: omission must NOT raise, and the default must
+                # still satisfy the schema's requiredness (a real, non-None value).
+                instance = alignment.model(**partial)
+                assert getattr(instance, fname) is not None, (
+                    f"{alignment.model.__name__}.{fname} is schema-required but the model's "
+                    f"own default left it None when omitted from the constructor call"
+                )
+            else:
+                # No model default: the model itself must reject an incomplete construction.
+                with pytest.raises(ValidationError):
+                    alignment.model(**partial)
 
 
 def _enumerate_grounded_response_models() -> set[type]:

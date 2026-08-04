@@ -181,16 +181,17 @@ async def test_resolution_failure_is_not_a_validation_error():
     assert not isinstance(exc_info.value, SchemaValidationError)
 
 
-def test_schema_path_rejects_embedded_traversal():
+@pytest.mark.asyncio
+async def test_schema_path_rejects_embedded_traversal():
     """A ref that normalizes clean but traverses mid-path is contained.
 
     '_normalize_ref' only rejects '..' prefixes; the containment check in
-    '_schema_path' must stop 'media-buy/../../../../etc/hosts' before any
-    filesystem probe.
+    'tests.helpers.pinned_schema._resolve_filename' must stop
+    'media-buy/../../../../etc/hosts' before any filesystem read.
     """
     validator = AdCPSchemaValidator()
     with pytest.raises(SchemaError, match="escapes the pinned SDK schema tree"):
-        validator._schema_path("media-buy/" + "../" * 8 + "etc/hosts")
+        await validator.get_schema("media-buy/" + "../" * 8 + "etc/hosts")
 
 
 @pytest.mark.asyncio
@@ -208,8 +209,8 @@ async def test_schema_caching():
         assert schema1 is schema2
 
         # Check that compiled validators are also cached
-        validator1 = validator._get_compiled_validator(schema1)
-        validator2 = validator._get_compiled_validator(schema1)
+        validator1 = validator._get_compiled_validator(schema_ref)
+        validator2 = validator._get_compiled_validator(schema_ref)
         assert validator1 is validator2
 
 
@@ -249,6 +250,35 @@ async def test_find_schema_ref_searches_every_index_section():
                         unresolved.append(f"{section_name}/{task_name}/{request_or_response}")
 
         assert not unresolved, f"tasks unreachable by the resolver: {unresolved}"
+
+
+@pytest.mark.asyncio
+async def test_every_indexed_schema_ref_loads():
+    """Every schema ref the pinned index names must actually load, not just resolve by name.
+
+    Regression for the validator previously serving only the SDK's bundled/
+    subtree, which physically ships 8 of the SDK's 16 top-level categories
+    (no account/, enums/, governance/, etc.). The index resolves task names
+    to refs in ALL categories (see test_find_schema_ref_searches_every_index_section
+    above), so a category outside bundled/ (e.g. account/list-accounts-response.json)
+    resolved by name but then raised "not found" the moment get_schema() tried
+    to actually load it — a gap only a real load exercises, not a name lookup.
+    """
+    async with AdCPSchemaValidator() as validator:
+        index = await validator.get_schema_index()
+        failed = []
+        for section in index.get("schemas", {}).values():
+            for task_info in section.get("tasks", {}).values():
+                for request_or_response in ("request", "response"):
+                    if request_or_response not in task_info:
+                        continue
+                    ref = task_info[request_or_response]["$ref"]
+                    try:
+                        await validator.get_schema(ref)
+                    except SchemaError as e:
+                        failed.append(f"{ref}: {e}")
+
+        assert not failed, f"indexed schema refs that failed to load: {failed}"
 
 
 @pytest.mark.asyncio

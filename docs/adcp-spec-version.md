@@ -96,28 +96,49 @@ A spec version bump is a deliberate change with downstream impact:
 6. Run `make quality` and address Pydantic field/type changes.
 7. Re-verify integration and BDD test coverage.
 
-## Pinned schema sources (currently two)
+## Pinned schema sources
 
-The repo grades against pinned AdCP JSON schemas in two places, and they are
-**not the same pin**:
+Every JSON-schema-SHAPE consumer in the repo resolves through one module,
+`tests/helpers/pinned_schema.py`, which reads the installed `adcp` SDK's own
+"plain" tree (`adcp/_schemas/<major.minor>/`, sibling of the SDK's `bundled/`
+subset). That tree moves automatically with the `pyproject.toml` SDK pin —
+there is exactly one upstream pin for schema *structure* (request/response
+shapes, `$ref` graphs, `required`/`properties`), and the CI guard above
+(`tests/unit/test_adcp_spec_version.py`) keeps it honest. Consumers:
+`tests/unit/test_pydantic_schema_alignment.py`, `tests/e2e/adcp_schema_validator.py`,
+and the schema-validating integration tests (`tests/integration/test_get_products_placement_schema.py`
+and friends). The plain tree is deliberately used over `bundled/`: `bundled/`
+only physically ships 8 of the SDK's 16 top-level categories (no `account/`,
+`enums/`, `governance/`, etc.), so validating a task in a missing category
+against `bundled/` alone would raise "not found" even though the schema
+exists. `pinned_schema.py` resolves the plain tree's relative `$ref`s
+(`../core/x.json`) via a synthetic `$id` injected into every loaded schema,
+wired through a `referencing.Registry`.
 
-1. **The installed SDK's bundled tree** (`adcp/_schemas/<major.minor>/bundled/`)
-   — used by `tests/e2e/adcp_schema_validator.py`. Moves automatically with
-   the `pyproject.toml` SDK pin; the CI guard above keeps it honest.
-2. **The vendored fixture tree** (`tests/fixtures/adcp_schemas_pinned/`, at the
-   upstream commit recorded in its `_refresh.py` `PINNED_SHA`) — used by
-   `tests/unit/test_pydantic_schema_alignment.py`. Moves only when `PINNED_SHA`
-   is bumped and the tree re-vendored, independently of the SDK pin.
-
-The two can (and currently do) diverge — the fixture tree is an older snapshot
-whose schemas are strict subsets of the SDK's. Unifying the unit alignment
-suite onto the SDK tree and retiring the vendored fixture is tracked as a
-follow-up; until then, a spec bump must consider both sources.
+A second, DELIBERATELY separate and independent pin remains for one thing:
+error-code **enumMetadata content** (the `recovery`/`suggestion`
+classification per code), read from the vendored fixture
+(`tests/fixtures/adcp_schemas_pinned/enums/error-code.json`, at the upstream
+commit recorded in its `_refresh.py` `PINNED_SHA`) by
+`tests/harness/transport.py`, `tests/unit/test_architecture_error_recovery_enum_conformance.py`,
+`tests/unit/test_architecture_error_suggestion_enum_conformance.py`, and
+`scripts/verify_feature_error_codes.py`. This is NOT the same kind of pin as
+the schema-shape one above and must NOT be unified onto the SDK tree without
+first doing the reconciliation: the installed SDK's error-code enum has grown
+independently (92+ codes vs. the fixture's 66) and its `recovery`/`suggestion`
+values diverge from the fixture's on several codes — moving these 4 readers
+onto the SDK tree would silently change which recovery/suggestion values
+production is graded against. That reconciliation is tracked as its own
+epic (BDD error-code reconciliation); until it lands, this fixture is the
+correct, intentional source for these 4 consumers and a spec bump must
+consider it separately from the schema-shape pin above.
 
 ## Related files
 
 - `pyproject.toml` — SDK pin
 - `tests/unit/test_adcp_spec_version.py` — CI guard
-- `tests/e2e/adcp_schema_validator.py` — e2e validation against the SDK's bundled schema tree
-- `tests/fixtures/adcp_schemas_pinned/` — vendored schema snapshot for the unit alignment suite (independent pin)
+- `tests/helpers/pinned_schema.py` — single source of truth for schema-SHAPE resolution (the installed SDK's plain tree)
+- `tests/unit/test_pinned_schema_single_source.py` — pins that `pinned_schema.py` tracks the SDK's own version, not an independently vendored one
+- `tests/e2e/adcp_schema_validator.py` — e2e request/response validation, delegates to `pinned_schema.py`
+- `tests/fixtures/adcp_schemas_pinned/` — vendored error-code `enumMetadata` source (independent pin, error-code reconciliation epic only — NOT a general schema-shape source)
 - `docs/adcp-spec-version.md` — this document
