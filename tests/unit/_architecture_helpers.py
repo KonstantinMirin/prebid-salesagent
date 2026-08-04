@@ -309,25 +309,6 @@ def src_python_files(repo: Path) -> Iterator[Path]:
     yield from (repo / "src").rglob("*.py")
 
 
-def iter_src_and_test_python_files(repo: Path, *, exclude: frozenset[str] = frozenset()) -> Iterator[tuple[Path, str]]:
-    """Yield ``(path, repo_relative_str)`` for every .py file under src/ and tests/.
-
-    Skips ``__pycache__`` and any path whose repo-relative string is in
-    *exclude* (typically the guard's own file, so it doesn't scan its own
-    known-bad meta-test snippets as source).
-    """
-    for scan_root in (repo / "src", repo / "tests"):
-        if not scan_root.exists():
-            continue
-        for path in sorted(scan_root.rglob("*.py")):
-            if "__pycache__" in str(path):
-                continue
-            rel = str(path.relative_to(repo))
-            if rel in exclude:
-                continue
-            yield path, rel
-
-
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
     """.yml and .yaml files in .github/workflows/."""
     wf_dir = repo / ".github" / "workflows"

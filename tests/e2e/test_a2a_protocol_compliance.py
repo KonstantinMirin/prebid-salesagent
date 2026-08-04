@@ -54,6 +54,12 @@ class TestA2AProtocolCompliance:
     # Real schema conformance is covered by tests/unit/test_adcp_contract.py against
     # the pinned adcp library version. See PR #1186 notes.
 
+    # Skills with no request schema anywhere in the pinned index (verified via
+    # AdCPSchemaValidator._find_schema_ref_for_task, which searches every
+    # section — see salesagent-667l). Shrink-only: when the spec adds a schema
+    # for one of these, remove it here — do not add new entries.
+    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset({"list_authorized_properties"})
+
     @pytest.mark.asyncio
     async def test_all_adcp_skills_have_schemas(self):
         """
@@ -63,6 +69,11 @@ class TestA2AProtocolCompliance:
         1. Add them to the schema validation map
         2. Create tests for them
         3. Validate their request/response formats
+
+        Uses AdCPSchemaValidator._find_schema_ref_for_task (searches every
+        index section) rather than a hardcoded 'media-buy/' path, so a skill
+        whose schema lives outside media-buy (e.g. sync_creatives, under
+        creative/) is correctly found instead of silently treated as missing.
         """
         # Define which skills are AdCP-compliant (should have schemas)
         # Note: signals skills removed - should come from dedicated signals agents
@@ -79,26 +90,29 @@ class TestA2AProtocolCompliance:
 
         async with AdCPSchemaValidator() as validator:
             missing_schemas = []
+            newly_resolved = []
 
             for skill in adcp_skills:
-                # Map skill name to schema path
-                schema_path = f"media-buy/{skill.replace('_', '-')}-request.json"
+                task_name = skill.replace("_", "-")
+                schema_ref = await validator._find_schema_ref_for_task(task_name, "request")
 
-                try:
-                    schema = await validator.get_schema(schema_path)
-                    assert schema is not None, f"Schema loaded but is None for {skill}"
-                except Exception as e:
-                    # Some schemas might not exist yet (e.g., list_creative_formats)
-                    # Log but don't fail - we'll track these separately
-                    if "404" not in str(e) and "not found" not in str(e).lower():
-                        missing_schemas.append(f"{skill}: {e}")
+                if skill in self._KNOWN_MISSING_SCHEMA_SKILLS:
+                    if schema_ref is not None:
+                        newly_resolved.append(skill)
+                    continue
 
-            # Report findings (informational, not a hard failure)
-            if missing_schemas:
-                pytest.skip(
-                    f"Some AdCP skills don't have schemas yet (expected during development): "
-                    f"{', '.join(missing_schemas)}"
-                )
+                if schema_ref is None:
+                    missing_schemas.append(skill)
+                else:
+                    schema = await validator.get_schema(schema_ref)
+                    assert schema is not None, f"Schema resolved but failed to load for {skill}"
+
+            assert not missing_schemas, (
+                f"AdCP skill(s) have no request schema anywhere in the pinned index: {missing_schemas}"
+            )
+            assert not newly_resolved, (
+                f"Skill(s) in _KNOWN_MISSING_SCHEMA_SKILLS now HAVE a schema — shrink the allowlist: {newly_resolved}"
+            )
 
     @pytest.mark.asyncio
     async def test_get_media_buy_delivery_request_schema(self):
