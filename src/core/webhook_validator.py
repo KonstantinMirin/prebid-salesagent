@@ -43,7 +43,6 @@ from urllib.parse import urlparse
 
 from adcp.types import ContextObject, TaskType
 
-from src.core.config import is_production
 from src.core.exceptions import AdCPValidationError
 
 # The scheme decision is the SEAM's, not ours: importing its env-var name and
@@ -82,20 +81,6 @@ def _adcp_testing() -> bool:
     return os.environ.get("ADCP_TESTING") == "true"
 
 
-def _strict_mode() -> bool:
-    """Production SSRF posture: no testing localhost bypass.
-
-    Kept for the buyer-facing suggestion wording only. It no longer decides the
-    scheme — that moved onto the seam's hatch
-    (:meth:`WebhookURLValidator._require_https`) — so the dev wording can
-    currently say "http(s)" in a non-production process whose hatch is closed
-    and therefore rejects http. Reconciling the wording means also updating
-    ``tests/unit/test_protocol_webhook_ssrf.py``, which pins
-    ``WEBHOOK_SSRF_SUGGESTION_DEV`` for that case.
-    """
-    return is_production() and not _adcp_testing()
-
-
 def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE_FALLBACK) -> str:
     """Coerce a task_type to a value accepted by the SDK webhook payload builder.
 
@@ -125,8 +110,17 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
 
 
 def webhook_ssrf_suggestion() -> str:
-    """Buyer-facing suggestion for registration/outbound SSRF rejections."""
-    if _strict_mode():
+    """Buyer-facing suggestion for registration/outbound SSRF rejections.
+
+    Keyed on exactly the scheme verdict the registration gate itself uses
+    (:meth:`WebhookURLValidator._require_https`) — never on production/testing
+    posture directly — so the advice can never contradict the refusal it
+    accompanies. It used to key on a separate production/ADCP_TESTING check
+    (the deleted ``_strict_mode``) while the scheme decision had already moved
+    onto the seam's hatch, which let a hatch-closed non-production process
+    reject plain http while still advising "http(s)".
+    """
+    if WebhookURLValidator._require_https():
         return WEBHOOK_SSRF_SUGGESTION
     return WEBHOOK_SSRF_SUGGESTION_DEV
 

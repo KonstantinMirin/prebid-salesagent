@@ -41,7 +41,11 @@ from src.core.security import outbound_http
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION_DEV, reject_unsafe_webhook_registration_url
+from src.core.webhook_validator import (
+    WEBHOOK_SSRF_SUGGESTION,
+    WEBHOOK_SSRF_SUGGESTION_DEV,
+    reject_unsafe_webhook_registration_url,
+)
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
@@ -255,15 +259,39 @@ async def test_send_notification_does_not_follow_redirect_to_metadata() -> None:
 
 
 def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> None:
-    with pytest.raises(AdCPValidationError) as exc_info:
-        reject_unsafe_webhook_registration_url(
-            "http://metadata.google.internal/computeMetadata/v1/",
-            field="reporting_webhook.url",
-        )
-    assert exc_info.value.field == "reporting_webhook.url"
-    assert "Invalid reporting_webhook.url" in exc_info.value.message
-    assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION_DEV
-    assert exc_info.value.recovery == "correctable"
+    """The suggestion must match the scheme verdict — never the ambient posture.
+
+    Graded under BOTH hatch postures, set explicitly via ``_egress_hatches``:
+    an ambient ``ADCP_OUTBOUND_ALLOW_INSECURE`` would otherwise silently pick
+    one arm for us (salesagent-ql1f — the suggestion used to key on a separate
+    production/ADCP_TESTING check while the scheme decision had already moved
+    onto this hatch, so a hatch-closed non-production process rejected plain
+    http while still advising "http(s)"). ``https://`` on the URL itself keeps
+    the scheme fine under either posture, so both arms grade the same
+    hostname-blocklist refusal rather than one of them grading the scheme rule
+    instead.
+    """
+    with _egress_hatches(private=False, insecure=False):
+        with pytest.raises(AdCPValidationError) as exc_info:
+            reject_unsafe_webhook_registration_url(
+                "https://metadata.google.internal/computeMetadata/v1/",
+                field="reporting_webhook.url",
+            )
+        assert exc_info.value.field == "reporting_webhook.url"
+        assert "Invalid reporting_webhook.url" in exc_info.value.message
+        assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION, "https is required, so the strict wording"
+        assert exc_info.value.recovery == "correctable"
+
+    with _egress_hatches(private=False, insecure=True):
+        with pytest.raises(AdCPValidationError) as exc_info:
+            reject_unsafe_webhook_registration_url(
+                "https://metadata.google.internal/computeMetadata/v1/",
+                field="reporting_webhook.url",
+            )
+        assert exc_info.value.field == "reporting_webhook.url"
+        assert "Invalid reporting_webhook.url" in exc_info.value.message
+        assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION_DEV, "the hatch is open, so the dev wording"
+        assert exc_info.value.recovery == "correctable"
 
 
 @pytest.mark.parametrize("blank", [None, "", "   "])
