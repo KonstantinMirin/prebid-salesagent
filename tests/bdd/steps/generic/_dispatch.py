@@ -6,9 +6,47 @@ used across UC-004, UC-011, and future domain step files.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tests.harness.transport import TransportResult
 
 _SENTINEL = object()
+
+
+def _populate_ctx_from_result(ctx: dict, result: TransportResult) -> None:
+    """Populate ctx's dispatch-result contract from a ``TransportResult``.
+
+    Shared post-processing for every dispatch path (``dispatch_request`` via
+    ``env.call_via``, ``dispatch_via_client`` via ``AdCPTestClient.call``) so
+    they populate the identical six-key contract the wire-first Then steps
+    (``then_error.py``'s ``_wire_code``/``_wire_suggestion``/``_wire_error_object``)
+    read — ``ctx['result']`` is the only key with exactly one producer; leaving
+    it unset silently downgrades those Then steps to the lossy reconstructed
+    ``ctx['error']`` fallback (salesagent-957x.1/.2 disease scan).
+    """
+    # Expose the normalized TransportResult so Then-steps can use the
+    # harness-provided, transport-independent assertions (result.assert_wire_error)
+    # instead of hand-rolling envelope parsing.
+    ctx["result"] = result
+    if result.is_error:
+        ctx["error"] = result.error
+        # Capture the real wire envelope (A2A/REST/MCP) and the
+        # synthesized envelope (IMPL has no wire) so Then steps can
+        # assert the two-layer AdCP shape per the Error Verification
+        # Policy. Both are None-safe; absent keys mean "no envelope".
+        ctx["wire_error_envelope"] = result.wire_error_envelope
+        ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
+    else:
+        ctx["response"] = result.payload
+        # Propagate the real serialized success-path wire body so Then steps
+        # can assert on what the buyer actually receives (ctx["wire_response"]),
+        # not the reconstructed typed payload (REST HTTP body; A2A/MCP artifact
+        # only when the env routes through _run_a2a_handler/_run_mcp_client).
+        # None on IMPL / non-stashing envs; the wire_field() helper guards
+        # against silent tautologies (#1417). See tests/CLAUDE.md
+        # "TransportResult.wire_response".
+        ctx["wire_response"] = result.wire_response
 
 
 def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> None:
@@ -56,27 +94,34 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         transport = transport_map[transport]
     try:
         result = env.call_via(transport, **kwargs)
-        # Expose the normalized TransportResult so Then-steps can use the
-        # harness-provided, transport-independent assertions (result.assert_wire_error)
-        # instead of hand-rolling envelope parsing.
-        ctx["result"] = result
-        if result.is_error:
-            ctx["error"] = result.error
-            # Capture the real wire envelope (A2A/REST/MCP) and the
-            # synthesized envelope (IMPL has no wire) so Then steps can
-            # assert the two-layer AdCP shape per the Error Verification
-            # Policy. Both are None-safe; absent keys mean "no envelope".
-            ctx["wire_error_envelope"] = result.wire_error_envelope
-            ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
-        else:
-            ctx["response"] = result.payload
-            # Propagate the real serialized success-path wire body so Then steps
-            # can assert on what the buyer actually receives (ctx["wire_response"]),
-            # not the reconstructed typed payload (REST HTTP body; A2A/MCP artifact
-            # only when the env routes through _run_a2a_handler/_run_mcp_client).
-            # None on IMPL / non-stashing envs; the wire_field() helper guards
-            # against silent tautologies (#1417). See tests/CLAUDE.md
-            # "TransportResult.wire_response".
-            ctx["wire_response"] = result.wire_response
+        _populate_ctx_from_result(ctx, result)
     except Exception as exc:
         ctx["error"] = exc
+
+
+def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identity: Any = _SENTINEL) -> None:
+    """Dispatch through ``AdCPTestClient.call`` instead of ``env.call_via``.
+
+    Additive alternative to ``dispatch_request`` for scenarios wired onto the
+    transport-generic ``AdCPTestClient`` (``tests/harness/client.py``, design
+    doc ``.claude/notes/storyboard-conformance/sb2a-transport-generic-client-
+    design.md`` §6). Populates the identical ctx contract via
+    ``_populate_ctx_from_result`` so every existing wire-first Then step works
+    unmodified regardless of dispatch path.
+
+    Deliberately does NOT wrap ``client.call()`` in a blanket
+    ``except Exception`` the way ``dispatch_request`` does for
+    ``env.call_via``: ``AdCPTestClient.call`` already converts ordinary
+    transport errors into an error ``TransportResult`` internally, and
+    re-raises ``NotImplementedError`` / lets ``NoAddressForTransport``
+    propagate on purpose — a harness wiring gap must surface as a hard
+    failure, not get silently downgraded into ``ctx["error"]`` where
+    ``then_operation_fails`` would mistake it for a real AdCP rejection
+    (client.py's own anti-vacuity comment on ``call()``).
+    """
+    client = ctx["client"]
+    if identity is not _SENTINEL:
+        result = client.call(tool, payload, ctx["transport"], identity=identity)
+    else:
+        result = client.call(tool, payload, ctx["transport"])
+    _populate_ctx_from_result(ctx, result)

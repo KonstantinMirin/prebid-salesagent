@@ -60,6 +60,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc002_nfr",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
+    "tests.bdd.steps.domain.uc003_storyboard_generic_client",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
@@ -3335,6 +3336,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
         }
+        # The transport-generic-client demonstrator (SB-4a, salesagent-35to):
+        # wires ONE storyboard scenario through AdCPTestClient instead of
+        # MediaBuyDualEnv, additive-only — every other UC-003 scenario is
+        # untouched. Background still seeds "mb_existing" (BR-UC-003-update-
+        # media-buy.feature:24-28 runs for this scenario too), so the env
+        # setup mirrors _UC003_MANUAL_APPROVAL's shape; what the client
+        # actually replaces is the create-vs-update dispatch routing.
+        _UC003_STORYBOARD_GENERIC_CLIENT = {
+            "T-UC-003-storyboard-media-buy-not-found",
+        }
         if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
@@ -3388,6 +3399,32 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["principal"] = principal
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
+                ctx["existing_media_buy"] = existing_media_buy
+                yield
+        elif marker_names & _UC003_STORYBOARD_GENERIC_CLIENT:
+            # SB-4a demonstrator: BareIntegrationEnv (no external patches) +
+            # AdCPTestClient, NOT MediaBuyDualEnv. Background still seeds
+            # "mb_existing" so this mirrors _UC003_MANUAL_APPROVAL's shape;
+            # dispatch goes through ctx["client"] via dispatch_via_client
+            # instead of ctx["env"].call_via via dispatch_request.
+            request.getfixturevalue("integration_db")
+            from tests.factories import MediaBuyFactory
+            from tests.harness._base import BareIntegrationEnv
+            from tests.harness.client import AdCPTestClient
+
+            with BareIntegrationEnv(e2e_config=e2e_config) as env:
+                tenant, principal = env.setup_default_data()
+                existing_media_buy = MediaBuyFactory(
+                    tenant=tenant,
+                    principal=principal,
+                    media_buy_id="mb_existing",
+                    status="active",
+                )
+                env._commit_factory_data()
+                ctx["env"] = env
+                ctx["client"] = AdCPTestClient(env)
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
                 ctx["existing_media_buy"] = existing_media_buy
                 yield
         else:
