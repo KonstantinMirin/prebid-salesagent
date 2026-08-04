@@ -18,16 +18,18 @@ Two deliberate seams, each with its reason:
      ``GET``". Our ``/mcp`` answers GET with a redirect to an SSE stream and
      ``/a2a`` is JSON-RPC POST, so an unseeded hop 1 fails no matter what A3
      publishes.
-   * *``identity`` is still gated.* ``capability_declarations._UNBACKED_BLOCKS``
-     lists ``identity`` and ``validate_backing`` rejects it by name, so a REAL
-     capabilities response carries no ``identity`` and hop 2 would raise
-     ``brand_json_url_missing`` before brand.json is ever fetched. Un-gating it is
-     D1's scope (salesagent-z6nr.20), DOWNSTREAM of A3.
+   * *This module grades A3, whose scope stops at the published documents.* Seeding
+     hop 1 from A3's own helpers is what keeps a failure here attributable to
+     brand.json or the JWKS rather than to the capabilities builder.
+
+   ``identity`` is no longer gated: it is DERIVED platform state today
+   (``_DERIVED_BLOCKS``, ``src/core/signing/posture.py``) and ``emitted_identity``
+   puts it on the wire, so the served capabilities document really does carry it.
+   Grading THAT document — fetched, not seeded — is
+   ``test_jwks_publication_e2e`` (salesagent-mp53.7), not this module.
 
    So the seeded body's ``identity`` is built from **A3's own** helpers, and the
    test asserts the values the resolver ends up using are those helpers' output.
-   That assertion is what makes D1's later reuse of this module GRADED rather than
-   hoped for: when D1 emits ``identity`` for real, it must emit these strings.
 
 2. **Hops 2 and 3 are live.** No ``_brand_jwks_client_factory`` is passed —
    brand.json and the JWKS are fetched from the running stack over real HTTP,
@@ -42,16 +44,19 @@ the verifier actually runs).
 from __future__ import annotations
 
 import contextlib
-import os
 import ssl
-from collections.abc import Iterator
-from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import delete
 
-from tests.e2e.utils import live_db_env
+from tests.e2e._signing_e2e import (
+    ca_bundle,
+    netloc,
+    origin,
+    provisioned_trust_root_tenant,
+    seeded_capabilities_factory,
+    tls_base_url,
+)
 
 _SLUG = "trustroot_e2e"
 _TENANT_ID = "tr_e2e"
@@ -64,92 +69,14 @@ _TLS_SLUG = "trustroot_e2e_tls"
 _TLS_TENANT_ID = "tr_e2e_tls"
 
 
-def _netloc(url: str) -> str:
-    return httpx.URL(url).netloc.decode()
-
-
-def _origin(url: str) -> str:
-    parsed = httpx.URL(url)
-    return f"{parsed.scheme}://{parsed.netloc.decode()}"
-
-
-def _seeded_capabilities_factory(body: dict):
-    """A ``_capabilities_client_factory`` that serves *body* for hop 1.
-
-    ``async_resolve_agent`` calls ``factory(agent_url)`` and uses the result as an
-    async context manager, so an ``httpx.AsyncClient`` over a ``MockTransport`` is
-    a drop-in — no monkeypatching of the SDK.
-    """
-
-    def factory(_url: str) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=body)))
-
-    return factory
-
-
-def _drop_tenant(live_server: dict, tenant_id: str) -> None:
-    """Remove a test tenant and its children from the shared e2e database.
-
-    Children go first, explicitly: the ORM ``backref`` relationships carry no
-    delete cascade, so an ORM ``session.delete(tenant)`` tries to NULL a child's
-    ``tenant_id`` — which is half of its composite primary key. The FK's
-    ``ON DELETE CASCADE`` only applies to a database-level delete.
-    """
-    from src.core.database.models import AuthorizedProperty, SigningKey, Tenant
-
-    with live_db_env(live_server) as env:
-        session = env.get_session()
-        for model in (SigningKey, AuthorizedProperty, Tenant):
-            session.execute(delete(model).where(model.tenant_id == tenant_id))
-        session.commit()
-
-
-@contextlib.contextmanager
-def _provisioned_trust_root_tenant(live_server: dict, *, tenant_id: str, slug: str, host: str) -> Iterator[tuple]:
-    """The tenant seam, shared by the plaintext and TLS fixtures.
-
-    ``virtual_host`` is set to the stack's own host:port so that
-    ``canonical_agent_url`` resolves to somewhere a resolver can actually reach —
-    otherwise the hops below would be pointed at a domain that does not exist and
-    the test would grade nothing. That is not hypothetical: 635 of 638
-    ``TenantFactory`` sites leave ``virtual_host`` NULL, which makes the server
-    derive ``<subdomain>.sales-agent.example.com`` — already dotted, so already
-    https, at a host that serves no JWKS. A test written against one of those
-    passes vacuously.
-
-    ``get_tenant_by_virtual_host`` (``src/core/config_loader.py``:252) is an
-    EXACT string match against the Host header, so *host* must carry the port
-    whenever the client will send one.
-
-    The row is removed at both ends: ``virtual_host`` is host-routing state
-    shared by the whole e2e session.
-    """
-    from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory, TenantFactory
-
-    _drop_tenant(live_server, tenant_id)
-    try:
-        with live_db_env(live_server) as env:
-            tenant = TenantFactory(
-                tenant_id=tenant_id,
-                subdomain=f"seller-{slug}".replace("_", "-"),
-                virtual_host=host,
-            )
-            key = SigningKeyFactory(tenant=tenant, kid=f"adcp-{slug}-key")
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=host, tags=["premium_news"])
-            env._commit_factory_data()
-            yield tenant, key
-    finally:
-        _drop_tenant(live_server, tenant_id)
-
-
 @pytest.fixture
 def trust_root_tenant(live_server):
     """A tenant whose canonical agent URL IS the live PLAINTEXT stack, plus one key."""
-    with _provisioned_trust_root_tenant(
+    with provisioned_trust_root_tenant(
         live_server,
         tenant_id=_TENANT_ID,
         slug=_SLUG,
-        host=_netloc(live_server["mcp"]),
+        host=netloc(live_server["mcp"]),
     ) as provisioned:
         yield provisioned
 
@@ -167,7 +94,7 @@ def tls_trust_root_tenant(live_server):
 
     def provision(host: str):
         return stack.enter_context(
-            _provisioned_trust_root_tenant(
+            provisioned_trust_root_tenant(
                 live_server,
                 tenant_id=_TLS_TENANT_ID,
                 slug=_TLS_SLUG,
@@ -177,44 +104,6 @@ def tls_trust_root_tenant(live_server):
 
     with stack:
         yield provision
-
-
-def _tls_base_url(live_server: dict) -> str:
-    """The origin the stack serves TLS on, as the stack itself reports it.
-
-    salesagent-tgzb makes the https branch SERVABLE: a tls-proxy sidecar
-    terminating TLS at a dotted name with a generated CA. Until it does, there is
-    nothing here — and that absence must read as a failure, never as a skip: a
-    skipped https test and a passing http one are the same green.
-    """
-    url = live_server.get("tls") or os.environ.get("E2E_TLS_BASE_URL")
-    assert url, (
-        "the e2e stack publishes no TLS listener: neither live_server['tls'] nor E2E_TLS_BASE_URL is set. "
-        "salesagent-tgzb must serve TLS at a dotted host alongside the existing plaintext port, and export "
-        "its origin, or hop 1 of the discovery chain can only ever be graded over http"
-    )
-    assert url.startswith("https://"), f"the TLS base URL must be an https origin; got {url!r}"
-    return url.rstrip("/")
-
-
-def _ca_bundle() -> str:
-    """The CA that signed the test stack's leaf certificate.
-
-    A private CA is not "publicly trusted" — the exact wording of
-    ``_get_protocol_for_domain``'s rationale. That rationale is about
-    reachability BY A COUNTERPARTY; here the counterparty is our own client,
-    which trusts this CA explicitly. The production predicate needs no change.
-    """
-    path = os.environ.get("E2E_CA_BUNDLE")
-    assert path, (
-        "E2E_CA_BUNDLE is not set, so this test cannot verify the stack's certificate. Trusting it "
-        "unconditionally instead (verify=False) would make the TLS leg prove nothing"
-    )
-    assert os.path.isabs(path), (
-        f"E2E_CA_BUNDLE must be absolute — pytest does not always run from the repo root; got {path!r}"
-    )
-    assert Path(path).is_file(), f"E2E_CA_BUNDLE points at no file: {path!r}"
-    return path
 
 
 @pytest.mark.asyncio
@@ -279,7 +168,7 @@ async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
         agent_type="sales",
         agent_id=entry_id,
         allow_private_destinations=True,
-        _capabilities_client_factory=_seeded_capabilities_factory(capabilities_body),
+        _capabilities_client_factory=seeded_capabilities_factory(capabilities_body),
     )
 
     failed = [hop for hop in resolution.trace if hop.status == "error"]
@@ -300,10 +189,10 @@ async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
         f"the live brand.json advertised {resolution.jwks_uri!r}; A3's helper says "
         f"{jwks_uri(tenant)!r}. These are the same string or key discovery is a coin flip."
     )
-    assert _origin(resolution.jwks_uri) == seeded_identity["key_origins"]["request_signing"], (
+    assert origin(resolution.jwks_uri) == seeded_identity["key_origins"]["request_signing"], (
         "the declared request_signing key origin must equal the origin the JWKS actually resolved "
         f"at — otherwise a verifier raises request_signature_key_origin_mismatch; declared "
-        f"{seeded_identity['key_origins']['request_signing']!r}, resolved {_origin(resolution.jwks_uri)!r}"
+        f"{seeded_identity['key_origins']['request_signing']!r}, resolved {origin(resolution.jwks_uri)!r}"
     )
 
     assert {jwk["kid"] for jwk in resolution.jwks["keys"]} == {key.kid}, (
@@ -339,19 +228,21 @@ async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, 
     So the scheme assertion is only the first line; the JWKS coming back over the
     CA-verified connection is the assertion that has content.
 
-    Scope: this grades hop 1 being SERVABLE. It does NOT grade a DECLARED signing
-    posture — ``identity`` is still in ``capability_declarations._UNBACKED_BLOCKS``
-    and un-gating it is D1's (salesagent-z6nr.20), which depends on this.
+    Scope: this grades hop 1 being SERVABLE, starting from a HARDCODED path built
+    from a ``src`` helper, against a key the TEST PROCESS minted. Grading the same
+    chain from the SERVED capabilities document, against a key a PRODUCTION path
+    minted inside the container, is ``test_jwks_publication_e2e``
+    (salesagent-mp53.7).
     """
     from src.core.agent_identity import BRAND_JSON_PATH, JWKS_PATH, canonical_agent_url, jwks_uri
 
-    tls_base_url = _tls_base_url(live_server)
-    ca_bundle = _ca_bundle()
+    published_tls_base_url = tls_base_url(live_server)
+    verify = ssl.create_default_context(cafile=ca_bundle())
 
     # The netloc INCLUDES the port: get_tenant_by_virtual_host (config_loader.py:252)
     # matches the Host header as an exact string, and httpx only omits the port
     # when it is the scheme default.
-    tenant, key = tls_trust_root_tenant(_netloc(tls_base_url))
+    tenant, key = tls_trust_root_tenant(netloc(published_tls_base_url))
 
     # 1. The scheme we publish is derived from the stored host by the unchanged
     #    production predicate — nothing here forces it.
@@ -360,16 +251,15 @@ async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, 
         f"a tenant whose virtual_host is the TLS netloc must publish an https origin; got {published!r}. "
         f"If this fails, _get_protocol_for_domain was weakened or the TLS host is not dotted"
     )
-    assert published == tls_base_url, (
+    assert published == published_tls_base_url, (
         f"the URL we publish must be the URL we are reachable at; published {published!r}, "
-        f"TLS listener at {tls_base_url!r}"
+        f"TLS listener at {published_tls_base_url!r}"
     )
 
     # 2. Hop 1, for real: brand.json fetched over TLS, verified against the CA the
     #    stack's leaf was signed with. A plaintext listener at this address fails
     #    the handshake here — which is exactly what makes the scheme assertion
     #    above non-vacuous.
-    verify = ssl.create_default_context(cafile=ca_bundle)
     async with httpx.AsyncClient(base_url=published, verify=verify, timeout=15.0) as client:
         brand_response = await client.get(BRAND_JSON_PATH)
         assert brand_response.status_code == 200, (

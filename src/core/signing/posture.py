@@ -529,7 +529,13 @@ def unsupported_webhook_signing_posture() -> WebhookSigningPosture:
     )
 
 
-def webhook_signing_posture(repo: SigningKeyRepository, *, now: datetime, origin: str | None) -> WebhookSigningPosture:
+def webhook_signing_posture(
+    repo: SigningKeyRepository,
+    *,
+    now: datetime,
+    origin: str | None,
+    key_backing: KeyBacking | None = None,
+) -> WebhookSigningPosture:
     """The posture *repo*'s tenant can HONESTLY hold at *now* on *origin*.
 
     Derived from platform state, never from a constant or a declaration:
@@ -551,10 +557,19 @@ def webhook_signing_posture(repo: SigningKeyRepository, *, now: datetime, origin
     ``webhook_sender_factory`` imports this module at module level, so the
     ``legacy_hmac_fallback`` predicate is imported function-locally there and here — the
     same shape as the function-local ``get_config`` in :func:`signing_key_backed`.
+
+    *key_backing*: pass an already-derived :class:`KeyBacking` when the caller also
+    needs ``.publishes`` (e.g. capabilities' identity/key_origins gate) so
+    :func:`signing_key_backed` runs ONCE per request instead of being re-derived here
+    -- a second derivation is how the advertised posture and the enforced one drift
+    apart (see :class:`KeyBacking`'s own docstring). Defaults to ``None`` so the two
+    ``webhook_sender_factory`` call sites (the actual signing decision, out of scope
+    for this ticket) are unaffected and keep deriving it themselves.
     """
     from src.core.signing.webhook_sender_factory import legacy_hmac_fallback_supported
 
-    if not (signing_key_backed(repo, now=now).signs and origin_is_publishable(origin)):
+    backing = key_backing if key_backing is not None else signing_key_backed(repo, now=now)
+    if not (backing.signs and origin_is_publishable(origin)):
         return unsupported_webhook_signing_posture()
 
     active = repo.active_at(now=now)

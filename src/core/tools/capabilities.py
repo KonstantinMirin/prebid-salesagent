@@ -57,6 +57,7 @@ from src.core.signing import (
     origin_is_publishable,
     posture_for_tenant,
     posture_from_declarations,
+    signing_key_backed,
     unsupported_webhook_signing_posture,
     webhook_signing_posture,
 )
@@ -211,7 +212,11 @@ def _resolve_signing_blocks(
         )
 
     origin = canonical_agent_url(agent)
-    webhook_signing = webhook_signing_posture(uow.signing_keys, now=now, origin=origin)
+    # ONE key-presence derivation for this request, shared by webhook_signing (.signs)
+    # and the identity/key_origins gate below (.publishes) -- never re-derived, per
+    # KeyBacking's own docstring ("THE single key-presence derivation").
+    key_backing = signing_key_backed(uow.signing_keys, now=now)
+    webhook_signing = webhook_signing_posture(uow.signing_keys, now=now, origin=origin, key_backing=key_backing)
 
     # The derived pointer is handed to the validator UNCONDITIONALLY, including on a host
     # that cannot serve https: a declared `https://elsewhere/...` on such a host must be
@@ -226,11 +231,17 @@ def _resolve_signing_blocks(
         )
 
     publishable = origin_is_publishable(origin)
+    # jwks_origin is additionally gated on key_backing.publishes (salesagent-mp53.7):
+    # a keyless tenant on a publishable https origin must NOT advertise a key_origins
+    # pointer whose JWKS can only ever answer {"keys": []} (salesagent-7x8t). Safe
+    # because KeyBacking.publishes uses the SAME publishable_at(now, grace_seconds)
+    # selector that well_known._build_document feeds into build_jwks -- gating on
+    # .publishes can never advertise an origin whose JWKS is actually empty.
     return _build_signing_blocks(
         posture=posture,
         webhook_signing=webhook_signing,
         brand_json_url=brand_json_url(agent) if publishable else None,
-        jwks_origin=jwks_origin(agent) if publishable else None,
+        jwks_origin=jwks_origin(agent) if (publishable and key_backing.publishes) else None,
     )
 
 
