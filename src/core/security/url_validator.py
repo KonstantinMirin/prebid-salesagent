@@ -23,6 +23,26 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network("fe80::/10"),
     ipaddress.ip_network("ff00::/8"),  # IPv6 multicast (AdCP L1 SSRF step 2)
     ipaddress.ip_network("64:ff9b::/96"),  # NAT64 well-known prefix (RFC 6052)
+    # The rest of adcontextprotocol/adcp-client-python#974's reserved-range
+    # additions, carried here verbatim rather than by bumping to adcp 7.x — that
+    # bump is a major-version jump carrying far more than this SSRF fix (owner
+    # decision, salesagent-yw69). Each is a distinct reserved allocation the SDK
+    # started blocking, not something we independently discovered.
+    # FIXME(adcontextprotocol/adcp-client-python#974): drop once we adopt a
+    # release that carries these ranges upstream.
+    ipaddress.ip_network("192.88.99.0/24"),  # 6to4 relay anycast (RFC 7526)
+    # FIXME(adcontextprotocol/adcp-client-python#974): drop once we adopt a
+    # release that carries these ranges upstream.
+    ipaddress.ip_network("192.31.196.0/24"),  # AS112-v4 (RFC 7535)
+    # FIXME(adcontextprotocol/adcp-client-python#974): drop once we adopt a
+    # release that carries these ranges upstream.
+    ipaddress.ip_network("192.52.193.0/24"),  # AMT (RFC 7450)
+    # FIXME(adcontextprotocol/adcp-client-python#974): drop once we adopt a
+    # release that carries these ranges upstream.
+    ipaddress.ip_network("192.175.48.0/24"),  # AS112 direct (RFC 7534)
+    # FIXME(adcontextprotocol/adcp-client-python#974): drop once we adopt a
+    # release that carries these ranges upstream.
+    ipaddress.ip_network("2001:20::/28"),  # ORCHIDv2 (RFC 7343)
 ]
 
 # Blocked hostnames (cloud metadata services, localhost aliases, Docker-internal hostnames)

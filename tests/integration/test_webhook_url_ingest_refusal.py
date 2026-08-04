@@ -95,9 +95,26 @@ _UPDATE_REPORTING_WEBHOOK_TRANSPORTS = [Transport.MCP, Transport.A2A, Transport.
 # Buyer-supplied URLs the seam refuses before opening a connection: one for
 # scheme policy, one for address policy. Neither resolves DNS or touches the
 # network, so both are hermetic (nbbe exemplar).
+#
+# The five ``192.x``/``2001:20::/28`` rows are the reserved ranges carried
+# verbatim from adcontextprotocol/adcp-client-python#974 into
+# ``url_validator.BLOCKED_NETWORKS`` rather than by bumping to adcp 7.x (owner
+# decision, salesagent-yw69 — that bump is a major version jump carrying far
+# more than this SSRF fix). ``cgnat-metadata-address`` is the one address the
+# spike actually found leaking (Alibaba Cloud's metadata service at
+# 100.100.100.200, inside the CGNAT block) — it is graded on its own row,
+# distinct from the generic ``cgnat-range`` row, because it is the specific
+# gap that motivated re-scoping this ticket.
 _REFUSED_WEBHOOK_URLS = [
     pytest.param("http://buyer-callback.example.com/hook", id="non-https-scheme"),
     pytest.param("https://169.254.169.254/hook", id="cloud-metadata-address"),
+    pytest.param("https://100.64.0.1/hook", id="cgnat-range"),
+    pytest.param("https://100.100.100.200/hook", id="cgnat-metadata-address"),
+    pytest.param("https://192.88.99.1/hook", id="6to4-relay-anycast"),
+    pytest.param("https://192.31.196.1/hook", id="as112-v4"),
+    pytest.param("https://192.52.193.1/hook", id="amt"),
+    pytest.param("https://192.175.48.1/hook", id="as112-direct"),
+    pytest.param("https://[2001:20::1]/hook", id="orchidv2"),
 ]
 
 # One representative refused URL for the surfaces where the two causes share
@@ -240,6 +257,32 @@ class TestCreateMediaBuyRefusedPushNotificationConfigUrl:
             result = env.call_via(
                 transport,
                 push_notification_config={"url": url},
+                **_create_kwargs(product),
+            )
+
+            _assert_refused_at_ingest(result, _PNC_FIELD, surface="create_media_buy", code=_REGISTRATION_GATE_CODE)
+            _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
+
+    def test_cgnat_metadata_address_stays_refused_under_allow_private(self, integration_db, monkeypatch):
+        """100.100.100.200 (Alibaba Cloud metadata, inside the CGNAT block) is refused
+        even with ADCP_OUTBOUND_ALLOW_PRIVATE=true.
+
+        This is the address the original spike actually found leaking (salesagent-yw69):
+        the registration gate (``src/core/security/url_validator.py`` ``BLOCKED_NETWORKS``)
+        never reads that hatch at all — it is a SEND-time seam knob — so this pins that
+        fact rather than the seam's own metadata-outranks-the-override behaviour, which
+        is graded separately in ``tests/integration/test_outbound_http.py``.
+        """
+        from tests.integration.test_outbound_http import set_flags
+
+        set_flags(monkeypatch, private=True)
+
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+
+            result = env.call_via(
+                Transport.MCP,
+                push_notification_config={"url": "https://100.100.100.200/hook"},
                 **_create_kwargs(product),
             )
 
