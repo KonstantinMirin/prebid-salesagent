@@ -314,9 +314,18 @@ def given_full_degradation_baseline(ctx: dict) -> None:
 
 @given("a tenant is resolvable but adapter is unavailable")
 def given_tenant_adapter_unavailable(ctx: dict) -> None:
-    """adapter_fail row: tenant resolves, adapter factory raises → [display] default."""
+    """adapter_fail row: tenant resolves, adapter factory raises → [display] default.
+
+    A real publisher partner is seeded so portfolio stays populated (salesagent-piyo:
+    portfolio is omitted entirely, never fabricated, when no real publisher domain
+    exists) -- this row's concern is the adapter failure's channel degradation, not
+    publisher domain resolution (db_fail/adapter_and_db_fail cover that).
+    """
+    from tests.factories.core import PublisherPartnerFactory
+
     ctx["has_tenant"] = True
     ctx["env"].make_adapter_unavailable()
+    PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain="degradation-fixture.com")
 
 
 @given("a tenant is resolvable but database query fails")
@@ -1026,6 +1035,17 @@ def then_portfolio_domains(ctx: dict, domains: str) -> None:
     assert sorted(actual) == sorted(_quoted_list(domains)), f"publisher_domains {actual!r} != {domains}"
 
 
+@then("media_buy.portfolio should be omitted, never a fabricated publisher domain")
+def then_portfolio_omitted_never_fabricated(ctx: dict) -> None:
+    """salesagent-piyo: when no real publisher_domain data exists, media_buy.portfolio
+    must be omitted entirely (never a fabricated <subdomain>.example.com placeholder) --
+    portfolio.publisher_domains is REQUIRED+minItems:1 whenever portfolio is present
+    (pinned v3.1.1 get-adcp-capabilities-response.json), and media_buy has no required
+    fields, so omission is the only spec-legal response.
+    """
+    wire_absent(ctx, "media_buy.portfolio")
+
+
 @then(parsers.parse("the response should include media_buy.portfolio with primary_channels {channels}"))
 def then_portfolio_channels(ctx: dict, channels: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
@@ -1431,23 +1451,23 @@ def _deg_display_default(ctx: dict) -> None:
         wire_absent(ctx, path)
 
 
-def _assert_placeholder_domain(ctx: dict) -> None:
-    domains = wire_field(ctx, "media_buy.portfolio.publisher_domains")
-    assert isinstance(domains, list) and len(domains) == 1 and str(domains[0]).endswith(".example.com"), (
-        f"publisher_domains not the single placeholder domain: {domains!r}"
-    )
+def _assert_portfolio_omitted_never_fabricated(ctx: dict) -> None:
+    """salesagent-piyo: portfolio.publisher_domains is REQUIRED+minItems:1 (pinned
+    v3.1.1 get-adcp-capabilities-response.json) whenever portfolio is present, and
+    media_buy has no required fields -- so a DB failure (no real publisher_domain
+    data read) has no spec-legal portfolio to emit. Production used to fabricate a
+    '<subdomain>.example.com' placeholder here; the honest, schema-legal response
+    omits media_buy.portfolio entirely instead.
+    """
+    wire_absent(ctx, "media_buy.portfolio")
 
 
 def _deg_db_fail(ctx: dict) -> None:
-    _assert_placeholder_domain(ctx)
-    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert channels == ["display", "social", "ctv"], f"adapter channels degraded on a DB-only failure: {channels!r}"
+    _assert_portfolio_omitted_never_fabricated(ctx)
 
 
 def _deg_adapter_and_db_fail(ctx: dict) -> None:
-    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert channels == ["display"], f"primary_channels not the [display] default: {channels!r}"
-    _assert_placeholder_domain(ctx)
+    _assert_portfolio_omitted_never_fabricated(ctx)
     for path in ("media_buy.audience_targeting", "media_buy.conversion_tracking"):
         wire_absent(ctx, path)
 
@@ -1472,8 +1492,8 @@ _SATISFY_TABLE: dict[str, Any] = {
     "supported_versions and idempotency": _deg_no_tenant,
     "primary_channels equals [display] and targeting equals exactly {geo_countries: true, "
     "geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking": _deg_display_default,
-    "publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]": _deg_db_fail,
-    "primary_channels equals [display] and publisher_domains equals the placeholder domain, "
+    "media_buy.portfolio is omitted (no real publisher domain, never fabricated)": _deg_db_fail,
+    "media_buy.portfolio is omitted (no real publisher domain, never fabricated), "
     "adapter-dependent sections absent": _deg_adapter_and_db_fail,
     "account present with non-empty supported_billing and no optional account fields": _deg_account_degraded,
     "media_buy.audience_targeting absent": lambda ctx: wire_absent(ctx, "media_buy.audience_targeting"),

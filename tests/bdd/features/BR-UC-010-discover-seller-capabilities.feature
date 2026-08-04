@@ -362,18 +362,23 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should pass schema validation for get-adcp-capabilities-response
     And the wire response should not contain an adcp_error field
-    And the response should include media_buy.portfolio with primary_channels "display"
+    And media_buy.portfolio should be omitted, never a fabricated publisher domain
     # INV-5 (local): degrade-don't-error; the schema-validity half is the spec-hard invariant
     # (storyboard validation check: response_schema). Rewritten (salesagent-ytq6): the two
     # vague Thens ("no error should be propagated", "degradation warnings should be logged
     # internally") were replaced with wire-observable assertions — the envelope MUST NOT carry
-    # adcp_error for a non-failure (protocol-envelope), and the adapter-unavailable degradation
-    # path MUST still produce a valid response whose primary_channels fall back to the [display]
-    # default (consistency anchor: the adapter_and_db_fail row of the sibling ext-b-degradation
-    # outline). "degradation warnings logged internally" was intentionally NOT re-added: internal
-    # logs are not on the wire, so the degradation is instead graded by its observable output
-    # (primary_channels=[display]) rather than by an untestable internal-log side effect.
+    # adcp_error for a non-failure (protocol-envelope). "degradation warnings logged internally"
+    # was intentionally NOT re-added: internal logs are not on the wire.
+    # Corrected (salesagent-piyo, 2026-08-04): this row combines adapter-unavailable AND
+    # database-query-fails, so no real publisher_domain data was read at all. Was pinned to
+    # "primary_channels falls back to [display]" via a fabricated placeholder portfolio, which
+    # was salesagent-piyo's bug -- portfolio.publisher_domains is REQUIRED+minItems:1 (pinned
+    # v3.1.1 schema) whenever portfolio is present, and media_buy has no required fields, so the
+    # honest, schema-legal response with no real domain is to OMIT portfolio entirely (and
+    # primary_channels along with it, since it lives inside portfolio). Same correction as the
+    # adapter_and_db_fail row of the sibling ext-b-degradation outline.
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (check: response_schema)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/bundled/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/adcp_error (envelope error-signal for fatal failures — absent on a successful degraded response)
 
   @T-UC-010-degradation-account @extension @degradation @partition @boundary @post-s3
@@ -465,10 +470,15 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-ext-c-mcp @extension @ext-c @auth @mcp @degradation
   Scenario: MCP request with invalid auth token — silently ignored
     Given a tenant is resolvable from the request context
+    And the tenant has registered publisher partnerships with domains "verified-partner.com"
     And the Buyer has an invalid authentication token
     When the Buyer Agent calls get_adcp_capabilities via MCP with the token
     Then the response should be a success carrying adcp.major_versions, adcp.idempotency and supported_protocols
     And the response should carry the tenant's normal capabilities, not gated on the invalid token
+    # A real publisher partnership is seeded (salesagent-piyo) so media_buy.portfolio is
+    # populated -- portfolio is omitted entirely, never fabricated, when no real publisher
+    # domain exists, and this scenario's concern is the invalid-token/channels interaction,
+    # not publisher domain resolution.
     # LOCAL CONTRACT (documented reading): treat-invalid-as-absent sits in tension with the
     # AUTH_INVALID seller-MUST, which governs an Authorization header; this project's MCP
     # token rides x-adcp-auth and discovery is the spec's no-prerequisite first call —
@@ -616,9 +626,13 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-channel-all-canonical @channel @boundary
   Scenario: All 20 canonical channels enum values are valid
     Given a tenant is resolvable from the request context
+    And the tenant has registered publisher partnerships with domains "verified-partner.com"
     And the adapter reports all 20 channels enum values
     When the Buyer Agent calls get_adcp_capabilities
     Then primary_channels should equal the channels enum's 20 canonical values
+    # A real publisher partnership is seeded (salesagent-piyo) so media_buy.portfolio is
+    # populated -- portfolio is omitted entirely, never fabricated, when no real publisher
+    # domain exists, and this scenario's concern is the channel enum, not domain resolution.
     # 3.1.1 enum has 20 values: display, olv, social, search, ctv, linear_tv, radio,
     # streaming_audio, podcast, dooh, ooh, print, cinema, email, gaming, retail_media,
     # influencer, affiliate, product_placement, sponsored_intelligence
@@ -792,23 +806,32 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # no_principal "default targeting" → the exact production default {geo_countries: true,
     # geo_regions: true} (spec-silent on degradation — production authoritative; the same
     # concrete value is pinned by @T-UC-010-targeting-partitions' adapter_unavailable_defaults
-    # row); db_fail "other sections unaffected" → the two observables (placeholder
-    # publisher_domains + intact [display, social, ctv] channels). PRODUCTION GAPS (strict
-    # per-row xfail via conftest _SELECTIVE_XFAIL): the account block, adcp.supported_versions,
-    # and no_principal's [display] degradation (INV-4 keeps the adapter principal-free, so a
-    # missing principal does NOT degrade adapter-derived channels) are not emitted/enforced —
-    # those rows execute and fail; the rows that DO hold (adapter_fail, db_fail,
-    # adapter_and_db_fail, *_absent) pass on the wire (#1592).
+    # row). PRODUCTION GAPS (strict per-row xfail via conftest _SELECTIVE_XFAIL): the account
+    # block, adcp.supported_versions, and no_principal's [display] degradation (INV-4 keeps
+    # the adapter principal-free, so a missing principal does NOT degrade adapter-derived
+    # channels) are not emitted/enforced — those rows execute and fail; the rows that DO hold
+    # (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass on the wire (#1592).
+    # db_fail/adapter_and_db_fail corrected (salesagent-piyo, 2026-08-04): production used to
+    # fabricate a "<subdomain>.example.com" placeholder domain when no real PublisherPartner
+    # row existed; portfolio.publisher_domains is REQUIRED+minItems:1 (pinned v3.1.1
+    # get-adcp-capabilities-response.json) whenever portfolio is present, and media_buy has no
+    # required fields, so the honest, schema-legal response when a DB failure means no real
+    # domain data was read is to OMIT media_buy.portfolio entirely -- never a fabricated
+    # domain, and (since primary_channels lives inside portfolio too) primary_channels is not
+    # separately observable in that case either. adapter_fail's Given now seeds a real
+    # publisher partner (unrelated to the DB-failure row) so this partition's own concern
+    # (adapter channel degradation) stays testable independent of domain resolution.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/bundled/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
 
     Examples:
       | partition                  | precondition                                                                | expected_degradation                                                                                                      |
       | full_response              | a tenant is resolvable and adapter and DB are available with all features   | top-level keys include adcp, supported_protocols, account, media_buy and last_updated with account.supported_billing non-empty and adcp.idempotency present |
       | no_tenant                  | no tenant can be resolved from the request context                          | only adcp and supported_protocols at top level, with adcp carrying major_versions, supported_versions and idempotency     |
       | adapter_fail               | a tenant is resolvable but adapter is unavailable                           | primary_channels equals [display] and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking |
-      | db_fail                    | a tenant is resolvable but database query fails                             | publisher_domains equals the placeholder domain and primary_channels equals [display, social, ctv]                        |
-      | adapter_and_db_fail        | a tenant is resolvable but both adapter and DB fail                         | primary_channels equals [display] and publisher_domains equals the placeholder domain, adapter-dependent sections absent  |
+      | db_fail                    | a tenant is resolvable but database query fails                             | media_buy.portfolio is omitted (no real publisher domain, never fabricated)                                                |
+      | adapter_and_db_fail        | a tenant is resolvable but both adapter and DB fail                         | media_buy.portfolio is omitted (no real publisher domain, never fabricated), adapter-dependent sections absent            |
       | no_principal               | a tenant is resolvable but no auth principal available                      | primary_channels equals [display] and targeting equals exactly {geo_countries: true, geo_regions: true} with no reporting_delivery_methods, audience_targeting or conversion_tracking |
       | account_degraded           | a tenant is resolvable with partial account config                          | account present with non-empty supported_billing and no optional account fields                                           |
       | audience_targeting_absent  | a tenant is resolvable but adapter unavailable or audience targeting disabled | media_buy.audience_targeting absent                                                                                       |

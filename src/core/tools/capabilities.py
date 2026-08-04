@@ -488,11 +488,6 @@ def _get_adcp_capabilities_impl(
         # The session itself could not be opened, so neither read happened.
         _record_degradation(advisories, "tenant configuration", e)
 
-    # If no domains found, use a placeholder
-    if not publisher_domains:
-        # Use tenant name as placeholder domain
-        publisher_domains = [PublisherDomain(root=f"{tenant.get('subdomain', 'unknown')}.example.com")]
-
     # Get advertising policies from tenant config
     advertising_policies: str | None = None
     if tenant.get("advertising_policy"):
@@ -500,12 +495,21 @@ def _get_adcp_capabilities_impl(
         if isinstance(policy, dict) and policy.get("description"):
             advertising_policies = policy["description"]
 
-    # Build portfolio
-    portfolio = Portfolio(
-        description=f"Advertising inventory from {tenant_name}",
-        primary_channels=primary_channels if primary_channels else None,
-        publisher_domains=publisher_domains,
-        advertising_policies=advertising_policies,
+    # Build portfolio -- publisher_domains is REQUIRED+minItems:1 on Portfolio (pinned
+    # v3.1.1 get-adcp-capabilities-response.json), so a tenant with no real
+    # PublisherPartner rows has no spec-legal non-fabricated portfolio to emit.
+    # media_buy has no required fields, so omitting portfolio entirely is the honest,
+    # spec-legal response -- never a fabricated <subdomain>.example.com domain
+    # (salesagent-piyo).
+    portfolio = (
+        Portfolio(
+            description=f"Advertising inventory from {tenant_name}",
+            primary_channels=primary_channels if primary_channels else None,
+            publisher_domains=publisher_domains,
+            advertising_policies=advertising_policies,
+        )
+        if publisher_domains
+        else None
     )
 
     # Build features - be honest about what we actually support

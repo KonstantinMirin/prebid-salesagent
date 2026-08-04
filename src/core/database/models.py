@@ -224,8 +224,13 @@ class Tenant(Base, JSONValidatorMixin):
 
     @property
     def primary_domain(self) -> str | None:
-        """Get primary domain for this tenant (virtual_host or subdomain-based)."""
-        return self.virtual_host or (f"{self.subdomain}.example.com" if self.subdomain else None)
+        """Get primary domain for this tenant (virtual_host), or None if unconfigured.
+
+        Never fabricates a <subdomain>.example.com placeholder (salesagent-piyo) --
+        callers (e.g. admin/blueprints/inventory_profiles.py) rely on None to signal
+        "no real domain configured" and refuse to proceed.
+        """
+        return self.virtual_host
 
     @property
     def is_gam_tenant(self) -> bool:

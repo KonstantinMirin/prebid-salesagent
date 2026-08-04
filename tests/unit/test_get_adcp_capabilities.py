@@ -217,9 +217,15 @@ class TestGetAdcpCapabilitiesWithTenant:
         current_tenant.set(mock_tenant)
 
         try:
-            # Mock CapabilitiesUoW to avoid actual DB calls
+            # Mock CapabilitiesUoW to avoid actual DB calls. A real publisher partner is
+            # seeded so portfolio is populated (salesagent-piyo: portfolio is omitted
+            # entirely, never fabricated, when no real publisher domain exists) -- this
+            # test's concern is the OTHER portfolio fields (description, features), not
+            # publisher domain resolution, which TestPublisherDomains covers directly.
+            mock_partner = MagicMock()
+            mock_partner.publisher_domain = "testpub.com"
             mock_repo = MagicMock()
-            mock_repo.list_publisher_partners.return_value = []
+            mock_repo.list_publisher_partners.return_value = [mock_partner]
             mock_uow = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -442,6 +448,17 @@ def _patch_capabilities_deps(
     return stack
 
 
+def _mock_domain_partner() -> MagicMock:
+    """A PublisherPartner mock with a real domain -- pass via db_partners= so
+    portfolio is populated (salesagent-piyo: portfolio is omitted entirely,
+    never fabricated, when no real publisher domain exists) in tests whose
+    concern is some OTHER portfolio field (channels, policies, description).
+    """
+    partner = MagicMock()
+    partner.publisher_domain = "testpub.com"
+    return partner
+
+
 class TestChannelMapping:
     """Test CHANNEL_MAPPING integration in _get_adcp_capabilities_impl."""
 
@@ -456,7 +473,7 @@ class TestChannelMapping:
         mock_adapter.get_targeting_capabilities.return_value = None
 
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -476,7 +493,7 @@ class TestChannelMapping:
         mock_adapter.get_targeting_capabilities.return_value = None
 
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -495,7 +512,7 @@ class TestChannelMapping:
         mock_adapter.get_targeting_capabilities.return_value = None
 
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -514,7 +531,7 @@ class TestChannelMapping:
         # Adapter without default_channels attribute
         mock_adapter = MagicMock(spec=[])
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -534,8 +551,12 @@ class TestGracefulDegradation:
 
         identity = _make_capabilities_identity()
 
+        # A real publisher partner is seeded so portfolio is populated
+        # (salesagent-piyo: portfolio is omitted entirely, never fabricated, when
+        # no real publisher domain exists) -- this test's concern is the adapter
+        # exception's channel fallback, not publisher domain resolution.
         mock_repo = MagicMock()
-        mock_repo.list_publisher_partners.return_value = []
+        mock_repo.list_publisher_partners.return_value = [_mock_domain_partner()]
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
@@ -555,8 +576,16 @@ class TestGracefulDegradation:
         assert response.media_buy is not None
         assert MediaChannel.display in response.media_buy.portfolio.primary_channels
 
-    def test_db_exception_uses_placeholder_domain(self):
-        """Database exception during publisher domain query uses placeholder domain."""
+    def test_db_exception_omits_portfolio_never_fabricates_a_domain(self):
+        """Database exception during publisher domain query omits portfolio entirely.
+
+        Was test_db_exception_uses_placeholder_domain, asserting the fabricated
+        '<subdomain>.example.com' placeholder -- that was the bug (salesagent-piyo).
+        A DB failure means no real publisher_domain data was read, which is the same
+        "no real domain" case as an empty PublisherPartner table: portfolio.publisher_domains
+        is REQUIRED+minItems:1 (pinned v3.1.1 schema), so the only spec-legal response
+        is to omit portfolio entirely, never fabricate a domain.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(
@@ -574,9 +603,10 @@ class TestGracefulDegradation:
             response = _get_adcp_capabilities_impl(None, identity)
 
         assert response.media_buy is not None
-        domains = response.media_buy.portfolio.publisher_domains
-        assert len(domains) == 1
-        assert "testpub.example.com" in domains[0].root
+        assert response.media_buy.portfolio is None, (
+            f"expected portfolio to be omitted on a DB failure (no real domain data was "
+            f"read), got portfolio={response.media_buy.portfolio!r}"
+        )
 
 
 class TestAdvertisingPolicies:
@@ -593,7 +623,7 @@ class TestAdvertisingPolicies:
             "advertising_policy": {"description": "No adult content allowed"},
         }
         identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
-        stack = _patch_capabilities_deps()
+        stack = _patch_capabilities_deps(db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -607,7 +637,7 @@ class TestAdvertisingPolicies:
 
         tenant = {"tenant_id": "t1", "name": "No Policy Pub", "subdomain": "nopolicy"}
         identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
-        stack = _patch_capabilities_deps()
+        stack = _patch_capabilities_deps(db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -705,7 +735,7 @@ class TestResponseShapeCapabilities:
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(principal_id=None)
-        stack = _patch_capabilities_deps()
+        stack = _patch_capabilities_deps(db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
