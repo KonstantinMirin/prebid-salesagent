@@ -130,6 +130,53 @@ def _gh_issue_cross_reference(repo: Path) -> dict[str, str]:
     return result
 
 
+ISSUE_MAP = Path("docs") / "test-obligations" / "storyboard-issue-map.yaml"
+
+
+def _load_issue_map(repo: Path) -> dict[str, dict[str, Any]]:
+    """Curated storyboard -> GitHub-issue map. The one hand-maintained input here.
+
+    Keyed by STORYBOARD, deliberately. The older cross-reference above joins by
+    SCENARIO, which structurally cannot express "this storyboard has no scenario
+    but issue #N tracks the gap" -- and that is the majority case (51 of 62
+    on-path storyboards have no scenario). Keying on the storyboard is what lets
+    an uncovered gap carry a ticket, or be explicitly marked as carrying none.
+
+    A `coverage: none` row with no issues is a real answer, not a hole: it means
+    3.1.1 grades this, we do not test it, and nobody is tracking it.
+    """
+    import yaml
+
+    path = repo / ISSUE_MAP
+    if not path.is_file():
+        return {}
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return loaded.get("storyboards") or {}
+
+
+def check_issue_map_complete(repo: Path, on_path: list[str]) -> list[str]:
+    """Return the on-path storyboards absent from the issue map.
+
+    A spec bump that introduces a storyboard must not silently add an untracked
+    conformance gap -- the new storyboard has to be triaged into the map, even
+    if the triage outcome is `coverage: none`. Same ratchet discipline as the
+    structural guards: the map may not fall behind the spec.
+    """
+    return sorted(set(on_path) - set(_load_issue_map(repo)))
+
+
+def _render_issue_cell(entry: dict[str, Any] | None) -> str:
+    """One table cell: the tracking status of a storyboard's gap."""
+    if entry is None:
+        return "**UNTRIAGED**"
+    issues = entry.get("issues") or []
+    coverage = entry.get("coverage", "none")
+    if not issues:
+        return "**NO TICKET**"
+    refs = ", ".join(f"#{n}" for n in issues)
+    return f"{refs} ({coverage})" if coverage != "full" else refs
+
+
 def _load_runner_scenarios(results_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Load SB-1d's real per-step results, preferring it over the older SB-1b run."""
     for name in ("sb1d-full.json", "sb1b-full.json"):
@@ -176,8 +223,10 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     runner_results_dir = repo / "tests" / "storyboard" / "runner" / "results"
     runner_scenarios, runner_summary = _load_runner_scenarios(runner_results_dir)
     gh_issues = _gh_issue_cross_reference(repo)
+    issue_map = _load_issue_map(repo)
 
     on_path = [r for r in coverage["storyboards"] if r["status"] == "ON-PATH"]
+    untriaged = check_issue_map_complete(repo, [r["storyboard"] for r in on_path])
 
     rows: list[dict[str, Any]] = []
     joined = 0
@@ -193,6 +242,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             joined += 1
 
         gh_refs = sorted({gh_issues[ident] for ident in row["covered_by"] if ident in gh_issues})
+        tracking = issue_map.get(row["storyboard"])
 
         rows.append(
             {
@@ -205,6 +255,10 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "measured": measured or {"status": "not_yet_run"},
                 "divergence": _COMPLY_TEST_CONTROLLER_DIVERGENCE.get(row["stem"]),
                 "gh_issues": gh_refs,
+                "tracking": _render_issue_cell(tracking),
+                "tracking_issues": (tracking or {}).get("issues") or [],
+                "tracking_coverage": (tracking or {}).get("coverage", "untriaged"),
+                "tracking_note": (tracking or {}).get("note", ""),
             }
         )
 
@@ -220,12 +274,24 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "broken, not the data. Fix _measured_status() before trusting this output."
         )
 
+    if untriaged:
+        raise SystemExit(
+            f"{len(untriaged)} on-path storyboard(s) are absent from {ISSUE_MAP}. A storyboard the "
+            "pinned spec grades us on must be triaged before this table can claim to be the "
+            "conformance gap record — even if the triage outcome is `coverage: none`:\n"
+            + "\n".join(f"  {s}" for s in untriaged)
+        )
+
     return {
         "pinned_version": coverage["pinned_version"],
         "totals": {
             "on_path": len(on_path),
             "measured_join": joined,
             "runner_reported": runner_ran_count,
+            "no_scenario": sum(1 for r in rows if not r["scenarios"]),
+            "no_ticket": sum(1 for r in rows if not r["tracking_issues"]),
+            "no_scenario_no_ticket": sum(1 for r in rows if not r["scenarios"] and not r["tracking_issues"]),
+            "distinct_issues": len({i for r in rows for i in r["tracking_issues"]}),
         },
         "rows": rows,
     }
@@ -235,20 +301,45 @@ def render(result: dict[str, Any]) -> str:
     out = [
         f"# Storyboard roadmap — AdCP {result['pinned_version']}",
         "",
-        "One row per on-path storyboard: the 3.1.1 clause, which scenario(s) claim it, "
+        "**What AdCP 3.1.1 grades this agent on, what we test, and what is tracked.**",
+        "",
+        "One row per on-path storyboard: the 3.1.1 clause, which BDD scenario(s) claim it, "
         "the static check-type inventory, real measured status where the SB-1d runner "
-        "executed it, and any known GitHub issue. Generated — do not hand-edit; regenerate "
-        "with `scripts/audit/storyboard_roadmap.py`.",
+        "executed it, and whether an open GitHub issue tracks the gap. Generated — do not "
+        "hand-edit; regenerate with `scripts/audit/storyboard_roadmap.py`. Every column but "
+        "**Tracking** is derived from the pinned compliance tree and this repo's `.feature` "
+        "files; **Tracking** comes from the curated `storyboard-issue-map.yaml`.",
         "",
         f"- on-path storyboards: **{result['totals']['on_path']}**",
+        f"- **no BDD scenario: {result['totals']['no_scenario']}**",
+        f"- **no tracking issue: {result['totals']['no_ticket']}**",
+        f"- **neither scenario nor ticket: {result['totals']['no_scenario_no_ticket']}**",
+        f"- existing issues that track part of the gap: **{result['totals']['distinct_issues']}**",
         f"- joined to real runner measurement: **{result['totals']['measured_join']}** "
         f"(runner reports {result['totals']['runner_reported']} executed/missing-tools)",
+        "",
+        "This table deliberately files **no new issues**. The uncovered storyboards are a "
+        "conformance gap, not a work plan — decomposing them into tickets is a decision for "
+        "the project's roadmap, not for the PR that measured them. `NO TICKET` is the "
+        "finding, stated plainly, with the spec clause and check inventory attached so the "
+        "triage conversation can start from evidence.",
+        "",
+        "Reading the cells:",
+        "",
+        "- **Scenario(s)** — `— NOT COVERED —` means no `@storyboard-v3.1` scenario claims it. "
+        "A scenario being listed does *not* mean its checks all pass; compare against Checks.",
+        "- **Tracking** — `#N (partial)` means the issue covers some of this storyboard's "
+        "checks; the map's `note:` says what it leaves out. `NO TICKET` means nothing in the "
+        "tracker covers it.",
+        "- **Divergence** — `DETERMINISTIC INJECTION` marks storyboards requiring "
+        "`comply_test_controller`, which will not be implemented (it is a production "
+        "test-control backdoor). Those checks are permanently ungradable here by design.",
         "",
         "Scenario-level reconciliation (VERDICT/action per proposal) is a separate artifact — "
         "see `storyboard-reconciliation.md`; its rows key by proposal-file slug, not by "
         "scenario id, so it is not joined into this table.",
         "",
-        "| Storyboard | Citation | Scenario(s) | Required tools | Checks | Measured | Divergence | GH issue |",
+        "| Storyboard | Citation | Scenario(s) | Required tools | Checks | Measured | Divergence | Tracking |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in result["rows"]:
@@ -263,11 +354,47 @@ def render(result: dict[str, Any]) -> str:
                 f" ({measured['steps_failed_skip_affected']} skip-affected)" if measured["steps_failed"] else ""
             )
         divergence = r["divergence"] or "—"
-        gh = ", ".join(r["gh_issues"]) or "—"
         out.append(
             f"| `{r['storyboard']}` | {r['citation']} | {scenarios} | {tools} | {checks} | "
-            f"{measured_cell} | {divergence} | {gh} |"
+            f"{measured_cell} | {divergence} | {r['tracking']} |"
         )
+
+    # The gap, restated as the only two lists a reader actually acts on.
+    out += [
+        "",
+        "## Graded, untested, untracked",
+        "",
+        "On our conformance path at the pin, with no BDD scenario **and** no open issue. "
+        "This is the list to take to roadmap triage.",
+        "",
+        "| Storyboard | Checks | Why it matters |",
+        "|---|---|---|",
+    ]
+    for r in result["rows"]:
+        if r["scenarios"] or r["tracking_issues"]:
+            continue
+        total = sum(r["checks"].values())
+        note = (r["tracking_note"] or "—").replace("\n", " ").strip()
+        out.append(f"| `{r['storyboard']}` | {total} | {note} |")
+
+    out += [
+        "",
+        "## Graded and untested, but already tracked",
+        "",
+        "No BDD scenario, but an open issue covers some or all of it — these map onto work "
+        "the project has already accepted.",
+        "",
+        "| Storyboard | Checks | Issue(s) | What the issue does not cover |",
+        "|---|---|---|---|",
+    ]
+    for r in result["rows"]:
+        if r["scenarios"] or not r["tracking_issues"]:
+            continue
+        total = sum(r["checks"].values())
+        refs = ", ".join(f"#{n}" for n in r["tracking_issues"])
+        note = (r["tracking_note"] or "—").replace("\n", " ").strip()
+        out.append(f"| `{r['storyboard']}` | {total} | {refs} | {note} |")
+
     return "\n".join(out) + "\n"
 
 

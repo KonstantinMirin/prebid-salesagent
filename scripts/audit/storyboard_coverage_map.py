@@ -103,7 +103,39 @@ def classify(
     tools: set[str],
     required_by: dict[str, list[str]] | None = None,
 ) -> tuple[str, str]:
-    """Return (status, reason) for one storyboard file.
+    """Return (status, reason) for one storyboard file, reading gates from raw YAML text.
+
+    Thin adapter over :func:`classify_gates` — it extracts the three gate values from
+    the storyboard's text and delegates. Callers that already hold structured gates
+    (the vendored index, for instance) should call ``classify_gates`` directly rather
+    than re-serialising to YAML: the extraction regexes match the upstream files'
+    exact layout, and a round-trip through ``yaml.safe_dump`` silently parses as
+    "no gates at all", which reads every gated storyboard as ON-PATH.
+    """
+    return classify_gates(
+        rel,
+        required_tools=storyboard_spec.required_tools(text),
+        requires_capability=storyboard_spec.requires_capability(text),
+        decl=decl,
+        tools=tools,
+        required_by=required_by,
+    )
+
+
+def classify_gates(
+    rel: str,
+    required_tools: set[str],
+    requires_capability: tuple[str, str] | None,
+    decl: dict[str, set[str]],
+    tools: set[str],
+    required_by: dict[str, list[str]] | None = None,
+) -> tuple[str, str]:
+    """Return (status, reason) for one storyboard from its already-extracted gates.
+
+    This is the single implementation of applicability. The gate logic has been wrong
+    four separate times during this sweep — loose phase matching, `Path.stem` collapse,
+    `requires_scenarios` read as a whitelist, and gating by directory — so it exists
+    exactly once and every caller routes through it.
 
     Applicability follows the gates the storyboard schema actually defines:
 
@@ -127,9 +159,8 @@ def classify(
         return "OFF-PATH", f"only required by {sorted(owners)} — all behind gates we do not declare"
 
     def tool_gate() -> tuple[str, str] | None:
-        listed = storyboard_spec.required_tools(text)
-        if listed and not (listed & tools):
-            return "OFF-PATH", f"advertises none of required_tools {sorted(listed)}"
+        if required_tools and not (required_tools & tools):
+            return "OFF-PATH", f"advertises none of required_tools {sorted(required_tools)}"
         return None
 
     if rel.startswith("universal/"):
@@ -145,8 +176,8 @@ def classify(
         protocol = rel.split("/")[1]
         if protocol not in decl["protocols"]:
             return "OFF-PATH", f"protocol {protocol!r} not declared"
-        if capability := storyboard_spec.requires_capability(text):
-            return "GATED", f"requires_capability {capability[0]} == {capability[1]}"
+        if requires_capability:
+            return "GATED", f"requires_capability {requires_capability[0]} == {requires_capability[1]}"
         return tool_gate() or ("ON-PATH", f"protocol {protocol!r}, required_tools advertised")
 
     return "UNKNOWN", "unclassified tier"
