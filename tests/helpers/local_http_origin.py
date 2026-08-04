@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import json
 import socket
+import ssl
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -78,6 +79,7 @@ def serve_in_thread(
     *,
     listen_host: str = "127.0.0.1",
     server_attrs: dict[str, Any] | None = None,
+    ssl_context: ssl.SSLContext | None = None,
 ) -> Iterator[ThreadingHTTPServer]:
     """Serve ``handler_class`` on an ephemeral port of ``listen_host``, in a daemon thread.
 
@@ -89,10 +91,19 @@ def serve_in_thread(
     ``server_attrs`` are set on the server instance *before* the serving thread
     starts, so a handler may read per-server state (e.g. the programmable
     origin) on its very first request without a data race.
+
+    ``ssl_context``, if given, wraps the listening socket in TLS before the
+    serving thread starts accepting — every accepted connection then comes
+    back already negotiated, so nothing downstream of ``accept()`` changes.
+    Callers build the context from the SAME generated CA/leaf material the
+    rest of the e2e stack trusts (``scripts/dev/gen_test_tls.py``); this
+    helper does not generate or know about any certificate itself.
     """
     server = _server_class_for(listen_host)((listen_host, 0), handler_class)
     for name, value in (server_attrs or {}).items():
         setattr(server, name, value)
+    if ssl_context is not None:
+        server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
 
     Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -225,6 +236,7 @@ class LocalOrigin:
 
     host: str = "127.0.0.1"
     port: int = 0
+    scheme: str = "http"
     requests: list[OriginRequest] = field(default_factory=list)
 
     # Programmable response state. ``mode`` selects which branch the handler takes.
@@ -241,8 +253,12 @@ class LocalOrigin:
 
     @property
     def base_url(self) -> str:
-        """``http://host:port`` — no trailing slash, no scheme choice (plain HTTP only)."""
-        return f"http://{self.host}:{self.port}"
+        """``{scheme}://host:port`` — no trailing slash. ``scheme`` defaults to plain ``http``;
+        callers running the origin over TLS (see :func:`run_local_origin`'s ``ssl_context``)
+        set it to ``https`` so assertions and URLs built from this origin agree with what
+        actually went over the wire.
+        """
+        return f"{self.scheme}://{self.host}:{self.port}"
 
     @property
     def hits(self) -> int:
@@ -530,17 +546,25 @@ class ProgrammableOriginHandler(BaseHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def run_local_origin(*, listen_host: str = "127.0.0.1") -> Iterator[LocalOrigin]:
+def run_local_origin(
+    *, listen_host: str = "127.0.0.1", ssl_context: ssl.SSLContext | None = None
+) -> Iterator[LocalOrigin]:
     """Run a programmable local origin and yield its control surface.
 
     In-process callers only, so the listen host is loopback by default: nothing
     outside this machine should be able to reach a test origin.
+
+    ``ssl_context``, if given, serves the origin over TLS (see
+    :func:`serve_in_thread`) and the yielded origin's ``base_url``/``scheme``
+    report ``https`` accordingly — existing callers that never pass it keep the
+    plain-``http`` origin unchanged.
     """
-    origin = LocalOrigin(host=listen_host)
+    origin = LocalOrigin(host=listen_host, scheme="https" if ssl_context is not None else "http")
     with serve_in_thread(
         ProgrammableOriginHandler,
         listen_host=listen_host,
         server_attrs={"origin": origin},
+        ssl_context=ssl_context,
     ) as server:
         origin.port = server.server_address[1]
         yield origin

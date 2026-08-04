@@ -49,6 +49,19 @@ CA_CERT = TLS_DIR / "ca.pem"
 CA_KEY = TLS_DIR / "ca.key"
 SERVER_CERT = TLS_DIR / "server.pem"
 SERVER_KEY = TLS_DIR / "server.key"
+# CA_CERT alone (private CA only) is deliberately what `--cacert` flags and
+# E2E_CA_BUNDLE use — a caller checking one of the new TLS fronts should trust
+# ONLY this stack's own leaf, not the whole public web. COMBINED_CERT below is
+# a DIFFERENT use: SSL_CERT_FILE (salesagent-40qh) replaces the process's
+# entire default cafile, so anything else in that process needing REAL public
+# HTTPS (uv sync fetching from pypi.org, in particular — this broke a full
+# suite run before this file learned to produce it) needs the public roots
+# too. One file serving both trust anchors.
+COMBINED_CERT = TLS_DIR / "combined-ca.pem"
+# Debian/Ubuntu's system bundle (confirmed present in python:3.12-slim-bookworm,
+# this project's base image) — the same file `ssl.get_default_verify_paths()`
+# resolves to via /usr/lib/ssl/cert.pem when SSL_CERT_FILE is unset.
+_SYSTEM_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
 
 VALIDITY = dt.timedelta(days=30)
 RENEW_WITHIN = dt.timedelta(days=7)
@@ -165,6 +178,21 @@ def _is_current() -> bool:
     return min(ca.not_valid_after_utc, leaf.not_valid_after_utc) > _now() + RENEW_WITHIN
 
 
+def _refresh_combined_cert() -> None:
+    """Rebuild ``COMBINED_CERT`` = the system CA bundle + our private CA.
+
+    Cheap (a file read and concatenation, no crypto), so it runs every call
+    regardless of whether the CA/leaf themselves needed regenerating — it
+    must stay in sync with CA_CERT even on the "already current" fast path
+    (e.g. upgrading a ``.test-tls/`` directory written before this existed).
+    Silently skipped if the system bundle isn't at the expected path: SSL_CERT_FILE
+    callers still get private-CA trust, just not combined with public roots.
+    """
+    if not _SYSTEM_CA_BUNDLE.is_file():
+        return
+    _write(COMBINED_CERT, _SYSTEM_CA_BUNDLE.read_bytes() + CA_CERT.read_bytes(), private=False)
+
+
 def ensure_test_tls(*, force: bool = False) -> Path:
     """Make sure ``.test-tls/`` holds a usable CA + leaf; return the CA bundle path.
 
@@ -172,6 +200,7 @@ def ensure_test_tls(*, force: bool = False) -> Path:
     stacks serving the existing leaf are never disturbed.
     """
     if not force and _is_current():
+        _refresh_combined_cert()
         return CA_CERT
 
     TLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -212,6 +241,7 @@ def ensure_test_tls(*, force: bool = False) -> Path:
     # not need it, but a chain costs nothing and makes the file usable by tools
     # that do walk it.
     _write(SERVER_CERT, _pem_cert(leaf_cert) + _pem_cert(ca_cert), private=False)
+    _refresh_combined_cert()
     return CA_CERT
 
 

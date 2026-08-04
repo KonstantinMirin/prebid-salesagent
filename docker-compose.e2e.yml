@@ -60,12 +60,16 @@ services:
       ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
       # ─── Outbound egress escape hatches — TEST STACK ONLY ──────────────────
       # The seam (src/core/security/outbound_http.py) refuses non-https schemes
-      # and reserved/private addresses. EVERY outbound URL this server uses in
-      # this stack violates both at once: it calls back to the runner at
-      # http://tests:<port>/webhook (tests/e2e/_webhook_capture.py) and resolves
-      # format specs against http://creative-agent:8080 — plain http, on Docker
-      # network addresses that are private by definition. Without these two, the
-      # entire e2e/bdd_e2e surface fails at the seam rather than at its assertions.
+      # and reserved/private addresses. ADCP_OUTBOUND_ALLOW_PRIVATE stays open
+      # regardless: every origin on a compose network resolves to a private
+      # bridge address. ADCP_OUTBOUND_ALLOW_INSECURE, as of salesagent-40qh, is
+      # no longer load-bearing for the two origins that used to need it — the
+      # webhook capture (tests/e2e/_webhook_capture.py, now https in-process on
+      # the tests.adcp.test alias) and creative-agent (now https via
+      # tls-proxy-creative below) both verify over real TLS. It stays open here
+      # because the LocalOrigin-backed integration suites (test_mcp_client_egress.py
+      # and siblings) still dial plain http through this same seam with no
+      # per-test hatch of their own; salesagent-e6h0 tracks closing it.
       #
       # Deliberately NOT set in docker-compose.yml: that is the developer stack
       # (CLAUDE.md: `docker compose up -d` -> localhost:8000) and is what gets
@@ -97,13 +101,26 @@ services:
       # ALLOW_PRIVATE has to stay open regardless.
       ADCP_OUTBOUND_ALLOW_PRIVATE: "true"
       ADCP_OUTBOUND_ALLOW_INSECURE: "true"
+      # Trust anchor for the generated private CA (scripts/dev/gen_test_tls.py,
+      # salesagent-tgzb). The seam's TLS client (adcp.signing's
+      # ip_pinned_transport) builds a bare ssl.create_default_context(), which
+      # only trusts this container's SYSTEM store — SSL_CERT_FILE is what makes
+      # it trust *.adcp.test too, which is what lets CREATIVE_AGENT_URL below
+      # actually verify (salesagent-40qh). combined-ca.pem, NOT ca.pem alone:
+      # SSL_CERT_FILE REPLACES the process's entire default cafile, and this
+      # container also needs to trust real public roots for its own reasons —
+      # confirmed the hard way (a full suite run failing `uv sync` against
+      # pypi.org with UnknownIssuer) when this first pointed at ca.pem alone.
+      SSL_CERT_FILE: /app/.test-tls/combined-ca.pem
       # The SERVER must know about the pinned in-network creative agent: sync/
       # create flows resolve format specs server-side, and references carry the
       # PUBLIC canonical agent_url — without this, the registry's connection
       # alias has nothing to route to and the server calls the LIVE public host,
       # which rate-limits under CI load (salesagent-9qe2). The runner service
       # already sets the same value for the direct integration tests.
-      CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
+      # https, via the tls-proxy-creative front below (salesagent-40qh) — no
+      # longer needs ADCP_OUTBOUND_ALLOW_INSECURE open for this origin.
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
       CREATE_DEMO_TENANT: "true"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
@@ -188,6 +205,33 @@ services:
       timeout: 5s
       retries: 5
 
+  # ─── TLS front for the creative-agent origin (salesagent-40qh) ─────────────
+  # Same primitive as `tls-proxy` above — the exact same image + template +
+  # generated CA/leaf — fronting a DIFFERENT upstream. This CANNOT be a second
+  # instance of `tls-proxy` itself: compose network aliases are per-SERVICE,
+  # not per-container, so a service already aliased `proxy.adcp.test` cannot
+  # also answer to `creative-agent.adcp.test` pointed at a different upstream.
+  # A distinct service reusing the same image + template is the correct reuse
+  # of the primitive, not a second TLS mechanism.
+  tls-proxy-creative:
+    image: nginx:stable
+    environment:
+      TLS_UPSTREAM: creative-agent:8080
+    volumes:
+      - ./config/nginx/nginx-tls-test.conf.template:/etc/nginx/templates/tls-test.conf.template:ro
+      - ./.test-tls:/app/.test-tls:ro
+    depends_on:
+      - creative-agent
+    networks:
+      default:
+        aliases:
+          - creative-agent.adcp.test
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://creative-agent.adcp.test:8443/api/creative-agent/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # In-network test runner (Option 1). Reaches Postgres/the server by SERVICE
   # NAME on the compose network — postgres:5432, proxy:8000 — so it needs NO
   # published host ports. Each `docker compose -p <project>` gets its own
@@ -236,13 +280,18 @@ services:
       ADCP_TEST_DB_HOST: postgres
       ADCP_TEST_DB_PORT: "5432"
       # Webhook reverse-addressing: the server calls back to this runner by its
-      # network alias (requires `docker compose run --use-aliases`). Overrides
-      # the host-run default 'host.docker.internal' in tests/e2e/_webhook_capture.py;
-      # the server delivers the registered hostname verbatim.
-      ADCP_WEBHOOK_HOST: tests
+      # network alias (requires `docker compose run --use-aliases`, and the
+      # `tests.adcp.test` alias below). Overrides the host-run default
+      # 'host.docker.internal' in tests/e2e/_webhook_capture.py; the server
+      # delivers the registered hostname verbatim. Dotted (not bare `tests`)
+      # so it falls under the generated CA's `*.adcp.test` wildcard SAN — the
+      # webhook capture serves TLS in-process on this name (salesagent-40qh),
+      # no longer needing ADCP_OUTBOUND_ALLOW_INSECURE for this origin.
+      ADCP_WEBHOOK_HOST: tests.adcp.test
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
-      CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
+      # https, via the tls-proxy-creative front above (salesagent-40qh).
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
       # Playwright chromium is pre-installed in Dockerfile.test at this path.
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       # bdd runs truly serial in-network: -n0 (no xdist subprocess). Two reasons:
@@ -281,16 +330,26 @@ services:
       ADCP_AUTH_TEST_MODE: "true"
       # ─── Outbound egress escape hatches — TEST STACK ONLY ──────────────────
       # Same reason as the adcp-server entry above, for the calls the RUNNER
-      # makes itself: http://proxy:8000 (E2E_BASE_URL, the e2e_rest transport)
-      # and http://creative-agent:8080 (CREATIVE_AGENT_URL, the live-agent
-      # integration tests). Plain http on private Docker-network addresses —
-      # refused on both counts by src/core/security/outbound_http.py otherwise.
-      # tox only forwards these to pytest because they are listed in tox.ini
-      # pass_env. See the adcp-server entry for why docker-compose.yml is left
-      # alone, and for the constraint this places on refusal grading (it cannot
-      # happen in this stack; it stays in-process via the set_flags monkeypatch).
+      # makes itself: http://proxy:8000 (E2E_BASE_URL, the e2e_rest transport —
+      # dialed with a raw httpx client, tests/harness/dispatchers.py, NOT through
+      # this seam, so ALLOW_INSECURE is not actually what makes that one work;
+      # it stays open here for the LocalOrigin-backed integration suites that DO
+      # dial through the seam without their own per-test hatch). The
+      # creative-agent origin (CREATIVE_AGENT_URL, the live-agent integration
+      # tests) no longer needs this: it is https via tls-proxy-creative
+      # (salesagent-40qh). tox only forwards these to pytest because they are
+      # listed in tox.ini pass_env. See the adcp-server entry for why
+      # docker-compose.yml is left alone, and for the constraint this places on
+      # refusal grading (it cannot happen in this stack; it stays in-process via
+      # the set_flags monkeypatch).
       ADCP_OUTBOUND_ALLOW_PRIVATE: "true"
       ADCP_OUTBOUND_ALLOW_INSECURE: "true"
+      # Same trust anchor as the adcp-server entry (combined-ca.pem, not ca.pem
+      # alone — see that entry's comment) — this service also dials the
+      # creative-agent https front directly (test_creative_agent_live.py), AND
+      # runs `uv sync` against real pypi.org during tox provisioning, which
+      # needs the public roots this combined file still carries.
+      SSL_CERT_FILE: /app/.test-tls/combined-ca.pem
       CREATE_SAMPLE_DATA: "true"
       DELIVERY_WEBHOOK_INTERVAL: "5"
       # The source is bind-mounted, so the host's in-tree __pycache__ comes with
@@ -319,6 +378,15 @@ services:
     # the race. (Host runs use localhost, so they never hit DNS at all.)
     dns_opt:
       - single-request-reopen
+    # The `tests.adcp.test` alias makes ADCP_WEBHOOK_HOST above resolve for
+    # real over the Docker network — requires `docker compose run --use-aliases`
+    # (run_all_tests.sh already passes it) to actually apply this block; a
+    # bare `run` without the flag gets no alias at all, not even the default
+    # service name (salesagent-40qh).
+    networks:
+      default:
+        aliases:
+          - tests.adcp.test
     volumes:
       - .:/app
       - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
