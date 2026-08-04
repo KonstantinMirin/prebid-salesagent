@@ -115,23 +115,26 @@ exists. `pinned_schema.py` resolves the plain tree's relative `$ref`s
 (`../core/x.json`) via a synthetic `$id` injected into every loaded schema,
 wired through a `referencing.Registry`.
 
-A second, DELIBERATELY separate and independent pin remains for one thing:
-error-code **enumMetadata content** (the `recovery`/`suggestion`
-classification per code), read from the vendored fixture
-(`tests/fixtures/adcp_schemas_pinned/enums/error-code.json`, at the upstream
-commit recorded in its `_refresh.py` `PINNED_SHA`) by
-`tests/harness/transport.py`, `tests/unit/test_architecture_error_recovery_enum_conformance.py`,
-`tests/unit/test_architecture_error_suggestion_enum_conformance.py`, and
-`scripts/verify_feature_error_codes.py`. This is NOT the same kind of pin as
-the schema-shape one above and must NOT be unified onto the SDK tree without
-first doing the reconciliation: the installed SDK's error-code enum has grown
-independently (92+ codes vs. the fixture's 66) and its `recovery`/`suggestion`
-values diverge from the fixture's on several codes — moving these 4 readers
-onto the SDK tree would silently change which recovery/suggestion values
-production is graded against. That reconciliation is tracked as its own
-epic (BDD error-code reconciliation); until it lands, this fixture is the
-correct, intentional source for these 4 consumers and a spec bump must
-consider it separately from the schema-shape pin above.
+A second, DELIBERATELY separate and independent pin remains for exactly one
+thing: error-code **enumMetadata `suggestion` text**, read from the vendored
+fixture (`tests/fixtures/adcp_schemas_pinned/enums/error-code.json`, at the
+upstream commit recorded in its `_refresh.py` `PINNED_SHA`) by
+`tests/unit/test_architecture_error_suggestion_enum_conformance.py` only.
+Verified at migration time: the installed SDK's error-code enum is a strict
+superset of the fixture's (92 vs. 66 codes, fixture-only set empty), and its
+`recovery` classification is IDENTICAL across all 66 shared codes (0
+divergences; 30 `AdCPError` subclasses graded, unchanged before/after) — so
+every OTHER error-code reader (`tests/harness/transport.py`,
+`tests/unit/test_architecture_error_recovery_enum_conformance.py`, and
+`scripts/verify_feature_error_codes.py`, which only reads the `enum` code
+list) migrated onto `tests/helpers/pinned_schema.py` alongside the
+schema-shape consumers above. Only `suggestion` wording diverges (4 codes:
+`CREDENTIAL_IN_ARGS`, `MEDIA_BUY_NOT_FOUND`, `PACKAGE_NOT_FOUND`,
+`REQUOTE_REQUIRED`) — moving the one remaining reader onto the SDK tree
+requires first reconciling that divergence (tracked as its own epic, BDD
+error-code reconciliation); until it lands, this fixture is the correct,
+intentional source for that one consumer, and a spec bump must consider it
+separately from the schema-shape pin above.
 
 ## Related files
 
@@ -140,5 +143,5 @@ consider it separately from the schema-shape pin above.
 - `tests/helpers/pinned_schema.py` — single source of truth for schema-SHAPE resolution (the installed SDK's plain tree)
 - `tests/unit/test_pinned_schema_single_source.py` — pins that `pinned_schema.py` tracks the SDK's own version, not an independently vendored one
 - `tests/e2e/adcp_schema_validator.py` — e2e request/response validation, delegates to `pinned_schema.py`
-- `tests/fixtures/adcp_schemas_pinned/` — vendored error-code `enumMetadata` source (independent pin, error-code reconciliation epic only — NOT a general schema-shape source)
+- `tests/fixtures/adcp_schemas_pinned/` — vendored error-code `enumMetadata` `suggestion` text, sole remaining consumer `test_architecture_error_suggestion_enum_conformance.py` (independent pin, error-code reconciliation epic only — NOT a general schema-shape source)
 - `docs/adcp-spec-version.md` — this document
