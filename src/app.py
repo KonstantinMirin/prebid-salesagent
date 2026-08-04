@@ -320,8 +320,9 @@ def _restore_a2a_wire_integers(endpoint):
 
     # Marker for test_guards_a2a_integer_restoration.py -- lets the structural
     # guard confirm every /a2a route endpoint is wrapped without depending on
-    # closure internals or function identity.
-    _wrapped.__a2a_integer_restoration_wrapped__ = True
+    # closure internals or function identity. setattr (not dot-assignment)
+    # since _wrapped has no statically-declared attribute for this.
+    setattr(_wrapped, "__a2a_integer_restoration_wrapped__", True)  # noqa: B010
     return _wrapped
 
 
