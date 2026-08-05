@@ -516,19 +516,24 @@ def test_gam_report_download_parses_the_gzipped_csv(local_origin_tls, monkeypatc
 
 
 def test_approximated_base_url_is_injectable():
-    """``settings.py``'s four Approximated calls must not hardcode the host.
+    """The Approximated service's four calls must not hardcode the host.
 
     Gate 2 of the ticket ("adapter happy paths against a local origin") cannot
     be written for these four while ``https://cloud.approximated.app`` is a
     string literal repeated at each call site: a test has no seam to point
     anywhere. Hoisting the base to one module-level constant is what makes the
     gate writable, and it deletes three copies of a URL at the same time.
-    """
-    from src.admin.blueprints import settings
 
-    base = getattr(settings, "APPROXIMATED_BASE_URL", None)
+    Lives in ``src/services/approximated_client.py`` since salesagent-47n9.7
+    moved the vendor client out of the admin blueprint into the services layer
+    — every other operator-configured vendor already routed through
+    ``src/adapters/`` or a service, not a Flask blueprint.
+    """
+    from src.services import approximated_client
+
+    base = getattr(approximated_client, "APPROXIMATED_BASE_URL", None)
     assert base is not None, (
-        "src/admin/blueprints/settings.py hardcodes https://cloud.approximated.app at "
+        "src/services/approximated_client.py hardcodes https://cloud.approximated.app at "
         "each of its four call sites, so none of them can be driven at a local "
         "origin. Hoist the host to a module-level APPROXIMATED_BASE_URL."
     )

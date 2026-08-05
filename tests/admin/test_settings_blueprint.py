@@ -277,14 +277,16 @@ class TestApproximatedToken:
         factory_session.commit()
         _auth_session(client, tenant.tenant_id)
 
-        # Patch the SEAM, not _approximated: the api-key header is built inside
-        # _approximated now, and the security assertion below is precisely that the
-        # key travels as a header. Doubling _approximated would patch out the code
-        # under test and the assertion would grade nothing.
+        # Patch the SEAM, not get_dns_token: the api-key header is built inside
+        # approximated_client._api now, and the security assertion below is
+        # precisely that the key travels as a header. Doubling get_dns_token
+        # would patch out the code under test and the assertion would grade
+        # nothing. Lives in src.services.approximated_client since
+        # salesagent-47n9.7 moved the client out of this blueprint.
         mock_result = MagicMock()
         mock_result.json.return_value = {"token": "opaque-widget-token-123"}
 
-        with patch("src.admin.blueprints.settings.send", return_value=mock_result) as mock_get:
+        with patch("src.services.approximated_client.send", return_value=mock_result) as mock_get:
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
 
         assert response.status_code == 200
@@ -306,10 +308,14 @@ class TestApproximatedToken:
 
         # The seam raises on a non-2xx and discards the response, so the upstream
         # status now arrives on the typed failure rather than on a returned object.
+        # get_dns_token (src.services.approximated_client, imported into this
+        # blueprint since salesagent-47n9.7) never catches OutboundError -- every
+        # status it can receive is a genuine failure -- so the exception reaches
+        # this route's own except OutboundError arm unchanged.
         from src.core.security.outbound_http import OutboundDeliveryFailed
 
         with patch(
-            "src.admin.blueprints.settings._approximated",
+            "src.admin.blueprints.settings.get_dns_token",
             side_effect=OutboundDeliveryFailed(attempts=1, last_status=401),
         ):
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")

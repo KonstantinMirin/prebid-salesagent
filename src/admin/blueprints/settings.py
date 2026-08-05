@@ -12,30 +12,6 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-# The Approximated vhost API host, in ONE place. It was repeated at all four call
-# sites, which made the ticket's own "drive it at a local origin" gate unreachable.
-from src.core.security.outbound_http import OutboundError, OutboundResult, send
-
-APPROXIMATED_BASE_URL = os.environ.get("APPROXIMATED_BASE_URL", "https://cloud.approximated.app")
-
-
-def _approximated(method: str, path: str, api_key: str, *, json_body: Any = None) -> OutboundResult:
-    """One Approximated call through the egress seam.
-
-    max_attempts=1: these are vhost mutations and a status read, none of which
-    retried before — turning one failed vhost create into three is exactly the
-    drift this migration must not introduce.
-    """
-    return send(
-        f"{APPROXIMATED_BASE_URL}{path}",
-        method=method,
-        headers={"api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"},
-        json=json_body,
-        timeout=10.0,
-        max_attempts=1,
-    )
-
-
 from babel import numbers as babel_numbers
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
@@ -46,7 +22,14 @@ from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import uses_legacy_gemini_api_key
+from src.services.approximated_client import (
+    get_dns_token,
+    get_domain_status,
+    register_domain,
+    unregister_domain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1283,30 +1266,26 @@ def check_approximated_domain_status(tenant_id):
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
-        # Check domain registration status using correct Approximated API endpoint.
-        # A 404 is a MEANINGFUL answer here ("not registered"), and the seam raises a
-        # non-2xx rather than returning it — so that case is recovered from the typed
-        # error's status rather than from a status_code branch.
+        # Check domain registration status via the Approximated service. A
+        # not-registered domain is a meaningful result the service already
+        # translated from the vendor's 404 -- not an error this route interprets.
         try:
-            response = _approximated("GET", f"/api/vhosts/by/incoming/{domain}", approximated_api_key)
+            domain_status = get_domain_status(domain, approximated_api_key)
         except OutboundError as exc:
-            if exc.last_status == 404:
-                return jsonify({"success": True, "registered": False})
-            logger.error(f"Approximated API error: {exc}")
+            logger.error("Approximated API error: %s", exc)
             return jsonify({"success": False, "error": "API error"}), 500
 
-        response_data = response.json()
-        # Approximated API wraps data in 'data' key
-        domain_data = response_data.get("data", response_data)
+        if not domain_status.registered:
+            return jsonify({"success": True, "registered": False})
 
         return jsonify(
             {
                 "success": True,
                 "registered": True,
-                "status": domain_data.get("status"),
-                "tls_enabled": domain_data.get("has_ssl", False),
-                "ssl_active": domain_data.get("status", "").startswith("ACTIVE_SSL"),
-                "target_address": domain_data.get("target_address"),
+                "status": domain_status.status,
+                "tls_enabled": domain_status.tls_enabled,
+                "ssl_active": domain_status.ssl_active,
+                "target_address": domain_status.target_address,
             }
         )
 
@@ -1341,24 +1320,20 @@ def register_approximated_domain(tenant_id):
         # Get backend target address from environment
         backend_url = os.getenv("APPROXIMATED_BACKEND_URL", "adcp-sales-agent.fly.dev")
 
-        # Register domain with Approximated using correct API endpoint
-        # 409 means "already registered", which this handler treats as success. The
-        # seam raises a non-2xx, so that case is read off the typed error's status.
+        # Register the domain via the Approximated service. Already-registered
+        # is a meaningful result the service already translated from the
+        # vendor's 409 -- not an error this route interprets.
         try:
-            response = _approximated(
-                "POST",
-                "/api/vhosts",
-                approximated_api_key,
-                json_body={"incoming_address": domain, "target_address": backend_url},
-            )
+            result = register_domain(domain, backend_url, approximated_api_key)
         except OutboundError as exc:
-            if exc.last_status == 409:
-                logger.info(f"✅ Domain already registered: {domain}")
-                return jsonify({"success": True, "message": f"Domain {domain} already registered"})
-            logger.error(f"Approximated API error registering {domain}: {exc}")
+            logger.error("Approximated API error registering %s: %s", domain, exc)
             return jsonify({"success": False, "error": "Approximated API error"}), 502
 
-        logger.info(f"✅ Registered domain with Approximated: {domain}")
+        if result.already_registered:
+            logger.info("✅ Domain already registered: %s", domain)
+            return jsonify({"success": True, "message": f"Domain {domain} already registered"})
+
+        logger.info("✅ Registered domain with Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
 
     except Exception as e:
@@ -1381,18 +1356,20 @@ def unregister_approximated_domain(tenant_id):
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
-        # Unregister domain from Approximated using correct API endpoint
-        # 404 means "already unregistered", which this handler treats as success.
+        # Unregister the domain via the Approximated service.
+        # Already-unregistered is a meaningful result the service already
+        # translated from the vendor's 404 -- not an error this route interprets.
         try:
-            _approximated("DELETE", f"/api/vhosts/by/incoming/{domain}", approximated_api_key)
+            result = unregister_domain(domain, approximated_api_key)
         except OutboundError as exc:
-            if exc.last_status == 404:
-                logger.info(f"✅ Domain already unregistered: {domain}")
-                return jsonify({"success": True, "message": f"Domain {domain} was not registered"})
-            logger.error(f"Approximated API error unregistering {domain}: {exc}")
+            logger.error("Approximated API error unregistering %s: %s", domain, exc)
             return jsonify({"success": False, "error": "Approximated API error"}), 502
 
-        logger.info(f"✅ Unregistered domain from Approximated: {domain}")
+        if result.already_unregistered:
+            logger.info("✅ Domain already unregistered: %s", domain)
+            return jsonify({"success": True, "message": f"Domain {domain} was not registered"})
+
+        logger.info("✅ Unregistered domain from Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
 
     except Exception as e:
@@ -1420,19 +1397,17 @@ def get_approximated_token(tenant_id):
             if not tenant:
                 return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            # Request token from Approximated API. The seam raises on a non-2xx
-            # rather than returning it, so the upstream status is propagated from the
-            # typed failure — an operator with bad Approximated credentials must still
-            # see 401 here, not a blanket 500.
+            # Request a token via the Approximated service. Every status this
+            # operation can receive is a genuine failure, so the upstream status
+            # is propagated from the typed error -- an operator with bad
+            # Approximated credentials must still see 401 here, not a blanket 500.
             try:
-                response = _approximated("GET", "/api/dns/token", approximated_api_key)
+                token_data = get_dns_token(approximated_api_key)
             except OutboundError as exc:
-                upstream = exc.last_status
-                logger.error(f"Approximated API error requesting a DNS token: {exc}")
-                return jsonify({"success": False, "error": "Approximated API error"}), upstream or 502
+                logger.error("Approximated API error requesting a DNS token: %s", exc)
+                return jsonify({"success": False, "error": "Approximated API error"}), exc.last_status or 502
 
-            token_data = response.json()
-            logger.info(f"Approximated API response: {token_data}")
+            logger.info("Approximated API response: %s", token_data)
             return jsonify({"success": True, "token": token_data.get("token"), "proxy_ip": approximated_proxy_ip})
 
     except Exception as e:

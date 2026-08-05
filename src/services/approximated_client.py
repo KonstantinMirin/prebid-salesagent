@@ -1,0 +1,141 @@
+"""Approximated vendor client (TLS/domain-routing proxy).
+
+Every other operator-configured vendor this repo talks to (Kevel, Triton,
+Xandr, GAM) routes through ``src/adapters/`` or a service, never a Flask
+blueprint. Approximated was the one exception: new code built fresh inside
+``src/admin/blueprints/settings.py``. Moved here so the layer choice matches
+every other vendor, and so the vendor-specific status-code interpretation
+(404 meaning "not registered", 409 meaning "already registered") lives beside
+the client that produces those statuses instead of inline in the blueprint.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Any
+
+from src.core.security.outbound_http import OutboundError, OutboundResult, send
+
+# The Approximated vhost API host, in ONE place. It was repeated at all four
+# call sites, which made the ticket's own "drive it at a local origin" gate
+# unreachable.
+APPROXIMATED_BASE_URL = os.environ.get("APPROXIMATED_BASE_URL", "https://cloud.approximated.app")
+
+
+def _api(method: str, path: str, api_key: str, *, json_body: Any = None) -> OutboundResult:
+    """One Approximated call through the egress seam.
+
+    max_attempts=1: these are vhost mutations and a status read, none of which
+    retried before — turning one failed vhost create into three is exactly the
+    drift this migration must not introduce.
+    """
+    return send(
+        f"{APPROXIMATED_BASE_URL}{path}",
+        method=method,
+        headers={"api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"},
+        json=json_body,
+        timeout=10.0,
+        max_attempts=1,
+    )
+
+
+@dataclass
+class DomainStatus:
+    """The outcome of checking a domain's Approximated registration.
+
+    ``registered=False`` is a meaningful, non-error answer (Approximated's
+    404), not a failure — every other field is only present when registered.
+    """
+
+    registered: bool
+    status: str | None = None
+    tls_enabled: bool = False
+    ssl_active: bool = False
+    target_address: str | None = None
+
+
+def get_domain_status(domain: str, api_key: str) -> DomainStatus:
+    """Check whether ``domain`` is registered with Approximated.
+
+    Raises ``OutboundError`` for anything other than a 404 -- the caller
+    handles that as a generic upstream failure, not a domain outcome.
+    """
+    try:
+        response = _api("GET", f"/api/vhosts/by/incoming/{domain}", api_key)
+    except OutboundError as exc:
+        if exc.last_status == 404:
+            return DomainStatus(registered=False)
+        raise
+
+    response_data = response.json()
+    # Approximated API wraps data in a 'data' key.
+    domain_data = response_data.get("data", response_data)
+    return DomainStatus(
+        registered=True,
+        status=domain_data.get("status"),
+        tls_enabled=domain_data.get("has_ssl", False),
+        ssl_active=(domain_data.get("status") or "").startswith("ACTIVE_SSL"),
+        target_address=domain_data.get("target_address"),
+    )
+
+
+@dataclass
+class RegisterResult:
+    """The outcome of registering a domain with Approximated."""
+
+    already_registered: bool
+
+
+def register_domain(domain: str, backend_url: str, api_key: str) -> RegisterResult:
+    """Register ``domain`` with Approximated, pointing it at ``backend_url``.
+
+    Raises ``OutboundError`` for anything other than a 409 -- "already
+    registered" is the one vendor status this operation treats as success,
+    not a failure to translate generically.
+    """
+    try:
+        _api(
+            "POST",
+            "/api/vhosts",
+            api_key,
+            json_body={"incoming_address": domain, "target_address": backend_url},
+        )
+    except OutboundError as exc:
+        if exc.last_status == 409:
+            return RegisterResult(already_registered=True)
+        raise
+    return RegisterResult(already_registered=False)
+
+
+@dataclass
+class UnregisterResult:
+    """The outcome of unregistering a domain from Approximated."""
+
+    already_unregistered: bool
+
+
+def unregister_domain(domain: str, api_key: str) -> UnregisterResult:
+    """Unregister ``domain`` from Approximated.
+
+    Raises ``OutboundError`` for anything other than a 404 -- "already
+    unregistered" is the one vendor status this operation treats as success.
+    """
+    try:
+        _api("DELETE", f"/api/vhosts/by/incoming/{domain}", api_key)
+    except OutboundError as exc:
+        if exc.last_status == 404:
+            return UnregisterResult(already_unregistered=True)
+        raise
+    return UnregisterResult(already_unregistered=False)
+
+
+def get_dns_token(api_key: str) -> dict[str, Any]:
+    """Request an Approximated DNS widget token.
+
+    Every status this operation can receive is a genuine failure -- there is
+    no vendor-status outcome to translate, so callers read ``OutboundError``
+    directly (e.g. ``exc.last_status`` to propagate an upstream 401/403).
+    """
+    response = _api("GET", "/api/dns/token", api_key)
+    return response.json()
