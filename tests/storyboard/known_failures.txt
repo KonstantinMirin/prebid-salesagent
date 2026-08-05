@@ -17,8 +17,118 @@
 # RFC 9421 signing entries, when ledgered, are regular shrinking genuine-gap
 # entries tied to #1291 (RFC 9421 message signing epic) — NOT permanent.
 #
-# EMPTY today: nothing has been measured through the in-network pytest pipeline
-# yet (SB-1d's numbers were a host-side run against a different webhook-receiver
-# topology than the in-network proxy:8000 target and do not carry over — see
-# salesagent-syhj architect review HIGH finding). Seed this file from the FIRST
-# real in-network CI run of this job, not from tests/storyboard/runner/results/.
+
+# SEEDED from the first real in-network CI run of this job (run 30962437988,
+# commit 1348eed70): 72 failed, 11 skipped, 0 passed across 83 graded checks.
+# Measured against the branch AFTER reverting this PR's two production fixes, so
+# these numbers describe origin/main's real conformance, which is the point of a
+# baseline. #1512 (adcp_version rejected) and #1861 (auth masks DB errors) are
+# both live here and account for a share of the cascade below.
+#
+# 0 passed is not a typo: the runner's capability probe (get_adcp_capabilities)
+# is itself rejected, so most storyboards never reach their assertions.
+
+# --- signed_requests (40) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-001-no-signature-header]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-002-wrong-tag]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-003-expired-signature]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-004-window-too-long]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-005-alg-not-allowed]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-006-missing-covered-component]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-007-missing-content-digest]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-008-unknown-keyid]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-009-key-ops-missing-verify]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-010-content-digest-mismatch]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-011-malformed-header]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-012-missing-expires-param]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-013-expires-le-created]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-014-missing-nonce-param]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-015-signature-invalid]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-016-replayed-nonce]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-017-key-revoked]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-018-digest-covered-when-forbidden]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-019-signature-without-signature-input]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-020-rate-abuse]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-021-duplicate-signature-input-label]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-022-multi-valued-content-type]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-023-multi-valued-content-digest]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-024-unquoted-string-param]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-025-jwk-alg-crv-mismatch]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-027-webhook-registration-authentication-unsigned]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-028-unsigned-protocol-method-required]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-001-basic-post]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-002-post-with-content-digest]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-003-es256-post]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-004-multiple-signature-labels]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-005-default-port-stripped]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-006-dot-segment-path]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-007-query-byte-preserved]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-008-percent-encoded-path]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-009-percent-encoded-unreserved-decoded]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-010-percent-encoded-slash-preserved]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-011-ipv6-authority]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-012-ipv6-authority-default-port-stripped]
+
+# --- read_tool_idempotency (8) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::assert_omitted_key_grace_handled]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_capabilities_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_reject]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_products_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::list_accounts_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::list_creatives_with_idempotency_key]
+
+# --- error_compliance (7) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::missing_fields]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::nonexistent_product]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::reversed_dates_error]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::supported_major_version]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::unsupported_major_version]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::unsupported_release_version]
+
+# --- billing_gate_dispatch (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::billing_gate_dispatch::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
+
+# --- capability_discovery (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::capability_discovery::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::capability_discovery::get_capabilities_filtered]
+
+# --- security_baseline (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security::security_baseline::assert_mechanism]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security::security_baseline::probe_unauth]
+
+# --- stale_response_advisory (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::stale_response_advisory::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::stale_response_advisory::no_stale_on_healthy_upstream]
+
+# --- notification_config_event_scope (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
+
+# --- notification_config_lifecycle (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
+
+# --- notification_config_rejections (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
+
+# --- v3_envelope_integrity (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::v3_envelope_integrity::no_legacy_status_fields]
+
+# --- version_negotiation (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::version_negotiation::get_capabilities_with_version]
+
+# --- wholesale_feed_bulk_webhooks (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::wholesale_feed_bulk_webhooks::register_bulk_change_webhook]
+
+# --- wholesale_feed_product_webhooks (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[media_buy::wholesale_feed_product_webhooks::register_product_pricing_webhook]
+
+# --- wholesale_feed_products (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[media_buy::wholesale_feed_products::bootstrap_products]
+
+# --- wholesale_feed_signal_webhooks (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[signals::wholesale_feed_signal_webhooks::register_signal_pricing_webhook]
+

@@ -32,15 +32,95 @@ from pathlib import Path
 
 from tests.helpers.ledger import load_ledger_nodeids
 
-# Nothing has been measured through the storyboard-conformance pytest pipeline yet
-# (SB-4b is not implemented: no runner module, no ledger file, no conftest loader).
-# Per the Core Invariant ("MEASURED ... never re-derived/inferred"), this must not be
-# pre-populated with numbers carried over from the SB-1b/SB-1d host-side manual runs --
-# those used a different receiver topology (host ports vs. in-network proxy:8000) and
-# the architect review's HIGH finding is explicit that the two do not agree. Update this
-# to the real seeded set together with tests/storyboard/known_failures.txt once SB-4b's
-# first in-network CI run produces the summary JSON.
-EXPECTED_LEDGER: frozenset[str] = frozenset()
+# SEEDED from the first real in-network CI run of the Storyboard Conformance job
+# (run 30962437988, commit 1348eed70): 72 failed, 11 skipped, 0 passed over 83 graded
+# checks. Measured, never re-derived -- the architect review's HIGH finding stands,
+# and SB-1b/SB-1d's host-side numbers were NOT carried over here.
+#
+# Measured with this PR's two production fixes reverted, so the set describes
+# origin/main's real conformance. #1512 (adcp_version rejected on MCP wrappers) and
+# #1861 (auth masks DB errors) are both live in it: the runner's capability probe is
+# itself rejected, which is why 0 checks pass and most storyboards never reach their
+# assertions. Landing either fix should GRADUATE entries -- that is the signal.
+#
+# 40 of the 72 are signed_requests, which we do not advertise. The runner grades them
+# anyway rather than skipping (#1291 is the implementation epic).
+EXPECTED_LEDGER: frozenset[str] = frozenset(
+    {
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::capability_discovery::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::capability_discovery::get_capabilities_filtered]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::assert_omitted_key_grace_handled]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_capabilities_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_reject]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::get_products_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::list_accounts_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::list_creative_formats_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::read_tool_idempotency::list_creatives_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::v3_envelope_integrity::no_legacy_status_fields]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::version_negotiation::get_capabilities_with_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::wholesale_feed_bulk_webhooks::register_bulk_change_webhook]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::billing_gate_dispatch::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::missing_fields]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::nonexistent_product]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::reversed_dates_error]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::supported_major_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::unsupported_major_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::error_compliance::unsupported_release_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::stale_response_advisory::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[error_handling::stale_response_advisory::no_stale_on_healthy_upstream]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[media_buy::wholesale_feed_product_webhooks::register_product_pricing_webhook]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[media_buy::wholesale_feed_products::bootstrap_products]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security::security_baseline::assert_mechanism]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security::security_baseline::probe_unauth]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-001-no-signature-header]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-002-wrong-tag]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-003-expired-signature]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-004-window-too-long]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-005-alg-not-allowed]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-006-missing-covered-component]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-007-missing-content-digest]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-008-unknown-keyid]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-009-key-ops-missing-verify]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-010-content-digest-mismatch]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-011-malformed-header]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-012-missing-expires-param]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-013-expires-le-created]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-014-missing-nonce-param]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-015-signature-invalid]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-016-replayed-nonce]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-017-key-revoked]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-018-digest-covered-when-forbidden]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-019-signature-without-signature-input]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-020-rate-abuse]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-021-duplicate-signature-input-label]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-022-multi-valued-content-type]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-023-multi-valued-content-digest]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-024-unquoted-string-param]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-025-jwk-alg-crv-mismatch]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-027-webhook-registration-authentication-unsigned]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::negative-028-unsigned-protocol-method-required]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-001-basic-post]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-002-post-with-content-digest]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-003-es256-post]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-004-multiple-signature-labels]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-005-default-port-stripped]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-006-dot-segment-path]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-007-query-byte-preserved]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-008-percent-encoded-path]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-009-percent-encoded-unreserved-decoded]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-010-percent-encoded-slash-preserved]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-011-ipv6-authority]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-012-ipv6-authority-default-port-stripped]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[signals::wholesale_feed_signal_webhooks::register_signal_pricing_webhook]",
+    }
+)
 
 _LEDGER_PATH = Path(__file__).parent.parent / "storyboard" / "known_failures.txt"
 

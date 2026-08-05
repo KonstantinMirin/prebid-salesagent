@@ -64,9 +64,13 @@ storyboards:
 
   universal/signed-requests.yaml:
     issues: [1291]
-    coverage: full
+    coverage: partial
     note: >-
-      Not advertised today, so the runner skips it. #1291 is the implementation.
+      #1291 is the implementation epic. This note previously claimed the runner
+      SKIPS signed_requests because we do not advertise it — the first real
+      in-network run disproved that: it grades them and they FAIL, 40 of the 72
+      ledgered failures. Not advertising a capability does not exempt you from
+      its storyboard.
 
   universal/idempotency.yaml:
     issues: [1683, 1685, 1470, 1075]
