@@ -26,6 +26,7 @@ import json
 import adcp
 
 from tests.helpers.pinned_schema import _resolve_filename
+from tests.helpers.sdk_schema_root import sdk_schema_root
 
 
 class TestPinnedSchemaTracksSDKVersion:
@@ -75,4 +76,25 @@ class TestPinnedSchemaTracksSDKVersion:
             f"error-code.json resolved by pinned_schema.py has only {len(codes)} codes "
             "(the old vendored fixture had 64) — expected the SDK's current ~92-code "
             "enum, indicating resolution still reads the stale, independently-pinned tree."
+        )
+
+    def test_resolved_tree_version_equals_installed_sdk_pin(self):
+        """sdk_schema_root()'s resolved tree must equal the installed SDK's own
+        version claim (R3-19, salesagent-1zq3.19).
+
+        The three tests above grade content FLOORS (property presence, code
+        count >= 90) — a future spec bump that leaves sdk_schema_root()
+        pointing at a stale tree (e.g. major_minor hardcoded, derivation
+        severed) would still satisfy every floor and go green. This asserts
+        EQUALITY between the resolved tree's own index.json["adcp_version"]
+        and adcp.get_adcp_spec_version() — the actual derivation the
+        docstring promises ("must resolve to the SAME AdCP spec version the
+        installed adcp SDK is pinned to"), not just a shape that happens to
+        still satisfy today.
+        """
+        index = json.loads((sdk_schema_root() / "index.json").read_text())
+        assert index["adcp_version"] == adcp.get_adcp_spec_version(), (
+            f"sdk_schema_root()'s resolved tree carries adcp_version={index['adcp_version']!r}, "
+            f"but the installed SDK is pinned to {adcp.get_adcp_spec_version()!r} — the "
+            "derivation from the SDK's pin to the resolved schema tree is severed."
         )
