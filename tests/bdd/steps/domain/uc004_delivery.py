@@ -1839,8 +1839,8 @@ def then_webhook_marked_failed(ctx: dict) -> None:
 def then_webhook_skipped_no_post(ctx: dict) -> None:
     """Assert the refusal happened BEFORE any connection, not after a failed one.
 
-    The two outcome assertions are kept, and neither of them discriminates on its
-    own — that is the point of the third one:
+    The two outcome assertions are wire-observable on every transport, e2e_rest
+    included, and are checked unconditionally first:
 
     * ``delivery_attempts`` is the hit count of the REAL local origin this env
       runs (``LocalOriginMixin``), and this scenario deliberately points the
@@ -1852,13 +1852,11 @@ def then_webhook_skipped_no_post(ctx: dict) -> None:
       take the identical ``record_failure(); return False`` branch in
       ``WebhookDeliveryService._deliver_with_backoff``.
 
-    The discriminator is the retry SCHEDULE. ``outbound_http.send`` refuses inside
-    ``_prepare``, before the attempt loop exists, so no wait is ever taken; a
-    delivery that was actually attempted against an unreachable address burns its
-    three attempts and sleeps ``_wait_seconds`` between them. ``env.mock["sleep"]``
-    IS that seam's ``time.sleep`` (``CircuitBreakerEnv.EXTERNAL_PATCHES``), so a
-    zero call count is the observable difference between "skipped" and "tried and
-    failed" — and it is what goes red if the address gate is disarmed.
+    The discriminator is the retry SCHEDULE, checked last via
+    ``env.assert_no_retry_schedule_entered()``: process-local
+    (``env.mock["sleep"]``), so it is declared e2e-unsupported there (see
+    ``CircuitBreakerMixin`` in ``tests/harness/_mixins.py``) rather than
+    silently dropping the whole scenario from e2e_rest.
     """
     env = ctx["env"]
     success = _extract_webhook_success(ctx)
@@ -1866,26 +1864,19 @@ def then_webhook_skipped_no_post(ctx: dict) -> None:
     assert env.delivery_attempts == 0, (
         f"Expected no HTTP POST after SSRF rejection, the origin received {env.delivery_attempts} request(s)"
     )
-    backoff_waits = env.mock["sleep"].call_count
-    assert backoff_waits == 0, (
-        f"Expected the refusal to happen before any connection attempt, but the seam's retry "
-        f"schedule was entered {backoff_waits} time(s) — the destination was dialled, not refused"
-    )
+    env.assert_no_retry_schedule_entered()
 
 
 @then("the circuit breaker should record a failure")
 def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
-    """Assert the send-time SSRF path called circuit_breaker.record_failure()."""
+    """Assert the send-time SSRF path called circuit_breaker.record_failure().
+
+    Process-local (``service._circuit_breakers``) — declared e2e-unsupported by
+    ``CircuitBreakerMixin.assert_circuit_breaker_failure_recorded``.
+    """
     env = ctx["env"]
-    service = env.get_service()
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
-    cb = service._circuit_breakers.get(endpoint_key)
-    assert cb is not None, (
-        f"Expected circuit breaker for {endpoint_key!r} after SSRF skip, found keys={list(service._circuit_breakers)}"
-    )
-    assert cb.failure_count >= 1, (
-        f"Expected failure_count >= 1 after SSRF rejection for {endpoint_key!r}, got {cb.failure_count}"
-    )
+    env.assert_circuit_breaker_failure_recorded(endpoint_key)
 
 
 @then(parsers.parse('the circuit breaker should be in "{state}" state'))

@@ -571,6 +571,43 @@ class CircuitBreakerMixin(LocalOriginMixin):
                     worst = CircuitState.HALF_OPEN
         return worst.value
 
+    @realize_e2e(
+        e2e_unsupported(
+            "the seam's BR-RULE-029 retry-schedule sleep count is process-local "
+            "(env.mock['sleep']), not observable across the Docker HTTP boundary"
+        )
+    )
+    def assert_no_retry_schedule_entered(self) -> None:
+        """Prove a refusal happened pre-flight, before any retry/backoff attempt.
+
+        In-process only — declared e2e-unsupported (see the decorator).
+        """
+        backoff_waits = self.mock["sleep"].call_count  # type: ignore[attr-defined]
+        assert backoff_waits == 0, (
+            f"Expected the refusal to happen before any connection attempt, but the seam's retry "
+            f"schedule was entered {backoff_waits} time(s) — the destination was dialled, not refused"
+        )
+
+    @realize_e2e(
+        e2e_unsupported(
+            "get_service() constructs a fresh in-process WebhookDeliveryService under e2e_rest, "
+            "disconnected from the live server's real circuit-breaker state — no wire surface"
+        )
+    )
+    def assert_circuit_breaker_failure_recorded(self, endpoint_key: str) -> None:
+        """Prove the circuit breaker recorded a failure for *endpoint_key*.
+
+        In-process only — declared e2e-unsupported (see the decorator).
+        """
+        service = self.get_service()
+        cb = service._circuit_breakers.get(endpoint_key)
+        assert cb is not None, (
+            f"Expected circuit breaker for {endpoint_key!r} after SSRF skip, found keys={list(service._circuit_breakers)}"
+        )
+        assert cb.failure_count >= 1, (
+            f"Expected failure_count >= 1 after SSRF rejection for {endpoint_key!r}, got {cb.failure_count}"
+        )
+
 
 class ProductMixin:
     """Shared fluent API for _get_products_impl testing.
