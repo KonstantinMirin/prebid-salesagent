@@ -1041,8 +1041,7 @@ def gam_callback():
             # body is not readable here by design — the seam discards a failed
             # response — so the specific-cause messages below now key off the status.
             status = exc.last_status
-            logger.error(f"Token exchange failed: status={status}, error={exc}")
-            error_details: dict = {"status": status}
+            logger.error("Token exchange failed: status=%s, error=%s", status, exc)
 
             # A 400 from this endpoint is one of redirect_uri_mismatch / invalid_grant
             # / invalid_client, and the three-way message that distinguished them read

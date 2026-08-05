@@ -73,18 +73,18 @@ def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger:
     from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPRateLimitError
 
     if isinstance(exc, OutboundRequestBlocked):
-        logger.error(f"Egress policy refused the configured endpoint for {agent_label}")
+        logger.error("Egress policy refused the configured endpoint for %s", agent_label)
         raise AdCPConfigurationError(
             f"The configured endpoint for {agent_label} is not reachable under this deployment's egress policy."
         ) from exc
 
     if isinstance(exc, OutboundDeliveryFailed) and exc.last_status == 429:
-        logger.warning(f"{agent_label} rate-limited after {exc.attempts} attempts")
+        logger.warning("%s rate-limited after %s attempts", agent_label, exc.attempts)
         raise AdCPRateLimitError(f"{agent_label} is rate-limited.", retry_after=exc.retry_after) from exc
 
     terminal_status = terminal_client_error_status(exc)
     if terminal_status is not None:
-        logger.error(f"{agent_label} rejected the request (HTTP {terminal_status})")
+        logger.error("%s rejected the request (HTTP %s)", agent_label, terminal_status)
         raise AdCPAdapterError(f"{agent_label} rejected the request.", recovery="terminal") from exc
 
     raise exc

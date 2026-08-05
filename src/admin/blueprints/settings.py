@@ -42,6 +42,7 @@ from sqlalchemy import select
 
 from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.url_policy import redirect_if_url_blocked
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.database.repositories.tenant_config import TenantConfigRepository
@@ -510,8 +511,6 @@ def update_adapter(tenant_id):
 def update_slack(tenant_id):
     """Update Slack integration settings."""
     try:
-        from src.admin.utils.url_policy import redirect_if_url_blocked
-
         webhook_url = request.form.get("slack_webhook_url", "").strip()
         audit_webhook_url = request.form.get("slack_audit_webhook_url", "").strip()
 

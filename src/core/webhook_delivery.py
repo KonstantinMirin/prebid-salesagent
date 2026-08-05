@@ -22,6 +22,7 @@ from src.core.security.outbound_http import (
     terminal_client_error_status,
 )
 from src.core.security.webhook_egress import deliver_signed_webhook
+from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
         # Refused before a connection was opened. attempts=0 is the honest count:
         # nothing was sent. NOTE this bucket now also catches an UNRESOLVABLE host,
         # which previously exhausted retries and booked max_retries_exceeded.
-        logger.error(f"[Webhook Delivery] REFUSED: {delivery_id} to {delivery.webhook_url}")
+        logger.error("[Webhook Delivery] REFUSED: %s to %s", delivery_id, webhook_url_for_log(delivery.webhook_url))
         return _record_failure(
             delivery,
             delivery_id,
@@ -383,6 +384,10 @@ def _set_auth_blocked(tenant_id: str, webhook_url: str) -> None:
             )
             session.execute(stmt)
             session.commit()
-            logger.warning(f"[Webhook Delivery] Auth failure blocked endpoint {webhook_url} for tenant {tenant_id}")
+            logger.warning(
+                "[Webhook Delivery] Auth failure blocked endpoint %s for tenant %s",
+                webhook_url_for_log(webhook_url),
+                tenant_id,
+            )
     except Exception as e:
         logger.error(f"[Webhook Delivery] Failed to set auth block: {e}", exc_info=True)

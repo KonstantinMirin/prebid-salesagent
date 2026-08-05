@@ -63,22 +63,21 @@ EXEMPT_FILES = frozenset({SEAM_FILE})
 # name and the attribute form.
 SLEEP_NAME = "sleep"
 
-# Pre-existing violations: (module_path, geometric_sleep_count).
-# Seeded at the maximum when salesagent-4fya.6 centralised the schedule. It only
-# shrinks — the named ticket for each entry is what removes it.
+# Sites: (module_path, geometric_sleep_count). Not pre-existing debt with a
+# removal ticket per entry — each is a taxonomy entry, kept visible because the
+# detector's proxy ("geometric sleep anywhere in src/") cannot statically tell
+# "not outbound HTTP" from the real thing; the comment on each entry below is
+# what makes that call. The set only shrinks (a site migrating onto the seam
+# removes its entry); it does not grow by exempting a real violation.
 ALLOWLIST = {
-    # Counterparty-supplied URLs — these migrate onto the seam and inherit its
-    # schedule. Tickets: salesagent-4fya.11, .10, salesagent-cnkq
-    # (salesagent-4fya.8 and .9 migrated order_approval_service and
-    # creative_agent_registry, removing their entries.)
-    # (The two entries the salesagent-4fya.6 disease scan filed are gone:
-    # salesagent-fwid deleted oauth_retry.py, and salesagent-zlwz moved
-    # mcp_client onto the seam's sleep_backoff — the awaitable that hands the
-    # call site no number, so this detector's same-module blindness to an
-    # imported helper cannot become a drift channel.)
-    # Geometric, but not outbound HTTP — so the seam is not where they belong,
-    # and they stay listed with the reason in writing rather than exempted by a
-    # path rule the next reader has to reverse-engineer.
+    # All three entries below are geometric, but not outbound HTTP — so the
+    # seam is not where they belong, and they stay listed with the reason in
+    # writing rather than exempted by a path rule the next reader has to
+    # reverse-engineer. (Every entry that WAS outbound HTTP has already
+    # migrated onto the seam and been removed: salesagent-4fya.8-.11,
+    # salesagent-cnkq migrated the counterparty-URL call sites;
+    # salesagent-fwid deleted oauth_retry.py; salesagent-zlwz moved
+    # mcp_client onto the seam's sleep_backoff.)
     #
     # GAM forecasting readiness (NO_FORECAST_YET): a business-state poll.
     ("src/adapters/gam/managers/orders.py", 1),
@@ -211,14 +210,18 @@ class TestNoCallSiteBackoff:
 
     @pytest.mark.arch_guard
     def test_allowlist_only_shrinks(self):
-        """The allowlist is a ratchet: its size is pinned to its seeded maximum.
+        """The allowlist is a ratchet: its size is pinned exactly, not just capped.
 
-        Update this number DOWNWARD when a site migrates. Raising it means a new
-        call site grew its own schedule, which is the thing the guard exists to
-        prevent.
+        A ``<=`` ceiling above the real count leaves slack a new call-site
+        backoff could fill without tripping THIS assertion by name — only
+        ``test_no_new_call_site_backoff``'s membership check would catch it.
+        Update this number DOWNWARD when a site migrates. Raising it means a
+        new call site grew its own schedule, which is the thing the guard
+        exists to prevent.
         """
-        assert len(ALLOWLIST) <= 5, (
-            f"allowlist grew to {len(ALLOWLIST)} entries — a new call-site backoff was admitted. {FIX_HINT}"
+        assert len(ALLOWLIST) == 3, (
+            f"allowlist is {len(ALLOWLIST)} entries, expected exactly 3 — a call-site backoff was "
+            f"added or removed without updating this pin. {FIX_HINT}"
         )
 
 
