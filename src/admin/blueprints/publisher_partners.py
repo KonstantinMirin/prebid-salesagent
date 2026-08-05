@@ -347,7 +347,9 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             async def check_publisher(domain: str) -> tuple[str, dict]:
                 """Check a single publisher and return status."""
                 try:
-                    # Fetch adagents.json
+                    # Sanctioned self-pinning dialer, deliberately outside the
+                    # egress seam -- see src/core/security/outbound_http.py's
+                    # module docstring.
                     adagents_data = await fetch_adagents(domain, timeout=10.0)
 
                     # Check if agent is authorized
@@ -503,7 +505,9 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
             logger.info(f"Fetching properties for {partner.publisher_domain}")
 
             try:
-                # Fetch adagents.json
+                # Sanctioned self-pinning dialer, deliberately outside the
+                # egress seam -- see src/core/security/outbound_http.py's
+                # module docstring.
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:

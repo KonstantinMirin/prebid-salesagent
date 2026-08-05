@@ -77,6 +77,9 @@ class PropertyVerificationService:
                 # Use adcp library to fetch and validate adagents.json
                 try:
                     logger.info(f"🌐 Fetching adagents.json from: {property_obj.publisher_domain}")
+                    # Sanctioned self-pinning dialer, deliberately outside the
+                    # egress seam -- see src/core/security/outbound_http.py's
+                    # module docstring.
                     adagents_data = await fetch_adagents(property_obj.publisher_domain)
                     logger.info("✅ Successfully fetched and validated adagents.json")
 

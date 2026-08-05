@@ -18,6 +18,35 @@ would only move the recurrence. Deleting our copy entirely and routing every
 call through one seam backed by a maintained library is what makes the
 recurrence structurally impossible.
 
+**Sanctioned dialers outside this seam.** A handful of outbound calls
+deliberately do not go through ``send``/``asend``, and each is recorded here
+so the next reader can tell a sanctioned dialer from an unnoticed bypass
+without archaeology through a PR description:
+
+* ``adcp.adagents.fetch_adagents`` (called from
+  ``src/admin/blueprints/publisher_partners.py``,
+  ``src/services/property_discovery_service.py``,
+  ``src/services/property_verification_service.py`` — all dialing a
+  tenant-admin-configured ``publisher_domain``). Its ``_owned_pinned_client``
+  builds an ``AsyncIpPinnedTransport`` on the validated IP with
+  ``trust_env=False`` and mints a FRESH pinned client per redirect hop — this
+  is *stronger* than injecting this seam's client would be: our client
+  resolves once and pins, which would collapse into a TOCTOU pre-check across
+  ``fetch_adagents``' own multi-host redirect chain rather than re-pinning at
+  each hop. Injecting our client here would weaken, not tighten, the address
+  policy.
+* authlib (OIDC/OAuth discovery and token exchange, ``requests``-backed): not
+  TID251-expressible, because the URL arrives inside a kwarg the ban cannot
+  see. Ingest-time validation of ``discovery_url``/``logout_url`` is the
+  defence (``src/admin/blueprints/oidc.py``); the second-order
+  ``token_endpoint``/``jwks_uri`` read out of the discovery document is
+  tracked separately (prebid/salesagent#1872).
+* Fixed-destination SDKs — ``googleads``, ``google.auth``,
+  ``google.cloud.iam``, ``pydantic_ai`` providers. No attacker- or
+  tenant-controlled URL ever reaches these; their destinations are vendor
+  constants dialled under operator credentials. Banning them would be noqa
+  ceremony with no threat behind it.
+
 Spec grounding: AdCP 3.1.1, ``building/by-layer/L1/security.mdx``, "Webhook URL
 validation (SSRF)". Before any outbound fetch to a counterparty-controlled URL a
 fetcher MUST (1) reject non-HTTPS in production, (2) reject reserved ranges,

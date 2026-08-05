@@ -239,6 +239,9 @@ class PropertyDiscoveryService:
                 try:
                     await asyncio.sleep(delay)
                     logger.info(f"Fetching adagents.json from {domain}")
+                    # Sanctioned self-pinning dialer, deliberately outside the
+                    # egress seam -- see src/core/security/outbound_http.py's
+                    # module docstring.
                     adagents_data = await fetch_adagents(domain)
                     return (domain, adagents_data)
                 except Exception as e:
