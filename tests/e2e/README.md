@@ -187,7 +187,7 @@ pytest tests/e2e/test_schema_validation_standalone.py -v
 ```
 
 ### Schema Source (pinned)
-- **Location**: the installed `adcp` SDK package (`adcp/_schemas/<major.minor>/bundled/`)
+- **Location**: the installed `adcp` SDK package (`adcp/_schemas/<major.minor>/`)
 - **Purpose**: validate exactly the spec version production is built against;
   the live adcontextprotocol.org registry serves "latest" and drifts ahead of the pin
 - **Update**: bump the `adcp` pin in `pyproject.toml` (guarded by
