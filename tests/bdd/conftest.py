@@ -1276,6 +1276,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
             if tag in marker_names:
+                if is_e2e_rest and tag == "T-UC-005-main":
+                    # E2E_REST-only harness gap (#1721 M4 dormancy tripwire caught
+                    # this): given_registry_multi_categories builds synthetic
+                    # FormatFactory formats (audio-spot/banner/pre-roll) whose ids
+                    # aren't in the live reference catalog. In-process this is a
+                    # no-op (the registry is mocked directly) and the scenario
+                    # genuinely reaches and fails on the real production gap this
+                    # tag's blanket reason names (audio-spot lacks
+                    # asset_requirements/render_capabilities). Over e2e_rest the
+                    # Given never gets that far -- CreativeFormatsEnv's
+                    # _validate_registry_formats (already a declared/pinned
+                    # E2EUnsupportedSetup escape hatch) raises first, since the
+                    # live stack can't be told to serve arbitrary synthetic
+                    # format ids. Test-wiring, not the graded production gap.
+                    item.add_marker(
+                        pytest.mark.xfail(
+                            reason="E2E_REST harness gap: given_registry_multi_categories' synthetic "
+                            "format ids aren't in the live reference catalog, so "
+                            "CreativeFormatsEnv._validate_registry_formats rejects the Given before "
+                            "reaching the graded audio-spot asset_requirements gap — FIXME(salesagent-hzlp)",
+                            strict=False,
+                        )
+                    )
+                    break
                 if is_e2e_rest and tag == "T-UC-005-main-referrals":
                     # GRADUATED for e2e_rest (#1417): with a seeded tenant the
                     # live server populates creative_agents (>=DEFAULT_AGENT), so referrals

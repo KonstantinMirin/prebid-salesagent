@@ -89,6 +89,7 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",
+    "is_e2e_rest and tag == 'T-UC-005-main'",
     "is_e2e_rest and tag in uc005_filter_e2e_untestable",
     "is_e2e_rest and tag in uc005_filter_e2e_untestable",
     "marker_names & _UC005_PARTIAL_TAGS and (not is_e2e_rest)",
