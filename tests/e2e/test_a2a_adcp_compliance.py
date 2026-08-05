@@ -251,10 +251,11 @@ class TestA2AAdCPCompliance:
         )
 
         validation_result = await compliance_client.validate_skill_response("get_products", response)
+        # Deliberately no assertion here: collect results for reporting only.
+        # validate_skill_response sets "skill" on every return path, so
+        # `assert "skill" in validation_result` was always-true dead weight
+        # (R3-34, salesagent-1zq3.33), not a real check.
         compliance_report.add_result(validation_result)
-
-        # Don't fail test - just collect results for reporting
-        assert "skill" in validation_result
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products(self, compliance_client, compliance_report):
@@ -303,7 +304,6 @@ class TestA2AAdCPCompliance:
         validation_result = await compliance_client.validate_skill_response("create_media_buy", response)
         compliance_report.add_result(validation_result)
 
-        assert "skill" in validation_result
         # Verify response is structured (payload extracted), even if it's a validation error
         payload = compliance_client.extract_adcp_payload_from_a2a_response(response)
         assert payload is not None, "Server should return structured response, not crash"
