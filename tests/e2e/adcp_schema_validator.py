@@ -29,13 +29,16 @@ Usage:
 """
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from jsonschema.validators import Draft7Validator
 
 from tests.helpers import pinned_schema
 from tests.helpers.sdk_schema_root import sdk_schema_root as _sdk_schema_root
+
+_T = TypeVar("_T")
 
 
 class SchemaError(Exception):
@@ -125,7 +128,7 @@ class AdCPSchemaValidator:
         return self._compiled_validators[normalized]
 
     @staticmethod
-    def _resolve_pinned(normalized_ref: str, resolver):
+    def _resolve_pinned(normalized_ref: str, resolver: Callable[[str], _T]) -> _T:
         """Call a ``pinned_schema`` resolver, translating its ``AssertionError``
         (missing schema, or a ref that escapes the schema tree) into
         ``SchemaError`` — the type this module's callers branch on to mean
