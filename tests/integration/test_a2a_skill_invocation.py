@@ -579,10 +579,10 @@ class TestA2ASkillInvocation:
     # test_natural_language_get_products and test_explicit_skill_get_products below
     # already cover skill->schema resolution + validator invocation through the real
     # handler and a real database-backed product, which is strictly better coverage of
-    # the same concept. (Making THEIR assertions non-vacuous is tracked separately —
-    # salesagent-1q8d.16 — since production's get_products response is not currently
-    # AdCP schema-valid; strengthening those asserts here would just newly break this
-    # ticket's own quality gate on an unrelated, larger defect.)
+    # the same concept. (salesagent-1q8d.16: their assertions were non-vacuous
+    # placeholders here too; production's get_products response is now AdCP
+    # schema-valid, so `assert validation_result["valid"] is True` below actually
+    # grades the response — not just "or errors or warnings".)
 
     def test_skill_handler_mapping(self, handler):
         """Test that all advertised skills have handlers."""
