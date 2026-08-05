@@ -1291,7 +1291,7 @@ def check_approximated_domain_status(tenant_id):
         try:
             response = _approximated("GET", f"/api/vhosts/by/incoming/{domain}", approximated_api_key)
         except OutboundError as exc:
-            if getattr(exc, "last_status", None) == 404:
+            if exc.last_status == 404:
                 return jsonify({"success": True, "registered": False})
             logger.error(f"Approximated API error: {exc}")
             return jsonify({"success": False, "error": "API error"}), 500
@@ -1353,7 +1353,7 @@ def register_approximated_domain(tenant_id):
                 json_body={"incoming_address": domain, "target_address": backend_url},
             )
         except OutboundError as exc:
-            if getattr(exc, "last_status", None) == 409:
+            if exc.last_status == 409:
                 logger.info(f"✅ Domain already registered: {domain}")
                 return jsonify({"success": True, "message": f"Domain {domain} already registered"})
             logger.error(f"Approximated API error registering {domain}: {exc}")
@@ -1387,7 +1387,7 @@ def unregister_approximated_domain(tenant_id):
         try:
             _approximated("DELETE", f"/api/vhosts/by/incoming/{domain}", approximated_api_key)
         except OutboundError as exc:
-            if getattr(exc, "last_status", None) == 404:
+            if exc.last_status == 404:
                 logger.info(f"✅ Domain already unregistered: {domain}")
                 return jsonify({"success": True, "message": f"Domain {domain} was not registered"})
             logger.error(f"Approximated API error unregistering {domain}: {exc}")
@@ -1428,7 +1428,7 @@ def get_approximated_token(tenant_id):
             try:
                 response = _approximated("GET", "/api/dns/token", approximated_api_key)
             except OutboundError as exc:
-                upstream = getattr(exc, "last_status", None)
+                upstream = exc.last_status
                 logger.error(f"Approximated API error requesting a DNS token: {exc}")
                 return jsonify({"success": False, "error": "Approximated API error"}), upstream or 502
 

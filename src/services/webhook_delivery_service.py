@@ -21,7 +21,7 @@ from typing import Any
 
 from adcp import get_adcp_spec_version
 
-from src.core.security.outbound_http import OutboundError, terminal_client_error_status
+from src.core.security.outbound_http import OutboundError, OutboundRequestBlocked, terminal_client_error_status
 from src.core.security.webhook_egress import deliver_signed_webhook
 from src.core.webhook_validator import webhook_url_for_log
 
@@ -531,18 +531,21 @@ class WebhookDeliveryService:
                     safe_url,
                     terminal_status,
                 )
+            elif isinstance(exc, OutboundRequestBlocked):
+                # Refused before a connection was opened -- attempts/last_status are
+                # both None (nothing was attempted), so "failed after None attempts"
+                # would misreport a refusal as a delivery that was tried and failed.
+                logger.warning("Webhook delivery to %s was refused by egress policy", safe_url)
             else:
                 # Name the status and the attempt count. The seam's own message is a
                 # fixed constant by design, so interpolating only the exception tells
                 # an operator nothing about WHY — a rate limit, a 5xx and a dead
                 # socket would read identically.
-                attempts = getattr(exc, "attempts", None)
-                last_status = getattr(exc, "last_status", None)
-                cause = f"status {last_status}" if last_status is not None else "no response"
+                cause = f"status {exc.last_status}" if exc.last_status is not None else "no response"
                 logger.warning(
                     "Webhook delivery to %s failed after %s attempts (%s)",
                     safe_url,
-                    attempts,
+                    exc.attempts,
                     cause,
                 )
             circuit_breaker.record_failure()

@@ -150,8 +150,18 @@ class OutboundError(Exception):
     Raise one of the two concrete subclasses instead.
 
     It defines no ``__init__`` on purpose — one would shadow ``AdCPError``'s
-    through the MRO of those subclasses.
+    through the MRO of those subclasses. Class attributes are safe: they do
+    not touch ``__init__``, and declaring them here — rather than leaving
+    ``last_status``/``attempts`` as fields only ``OutboundDeliveryFailed``
+    happens to set — is what makes ``exc.last_status`` a typed read on
+    ``OutboundError`` instead of a ``getattr(exc, "last_status", None)`` at
+    every call site that only has the base type. ``OutboundRequestBlocked``
+    never overrides either, so both read as ``None`` on a refusal — which is
+    the honest value: nothing was attempted, so there is no status or count.
     """
+
+    last_status: int | None = None
+    attempts: int | None = None
 
 
 class OutboundRequestBlocked(OutboundError, AdCPInvalidRequestError):
@@ -169,6 +179,14 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
     HTTP status observed, or ``None`` when the failure was a transport
     exception and there was never a response to read a status from.
     """
+
+    # Narrower than the base's ``int | None``: a delivery that reaches this
+    # class was tried at least once (``__init__`` requires ``attempts: int``,
+    # no default), so callers that have already caught this concrete type
+    # read a plain ``int``, not ``int | None``. ``last_status`` stays inherited
+    # — it is genuinely optional even here (a transport exception vs a
+    # response).
+    attempts: int
 
     # Only these two fields ride to the buyer. `details` is buyer-visible —
     # build_two_layer_error_envelope passes it straight into the adcp_error

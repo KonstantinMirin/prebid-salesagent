@@ -1040,7 +1040,7 @@ def gam_callback():
             # be an `if not token_response.ok` branch is this handler. Google's error
             # body is not readable here by design — the seam discards a failed
             # response — so the specific-cause messages below now key off the status.
-            status = getattr(exc, "last_status", None)
+            status = exc.last_status
             logger.error(f"Token exchange failed: status={status}, error={exc}")
             error_details: dict = {"status": status}
 
