@@ -162,3 +162,47 @@ class TestCoreFieldsDoNotForceInvalidNull:
             "format_ids=None must be omitted, not force-included as null "
             "(the pinned schema types it as a non-nullable array)"
         )
+
+
+class TestOptionalFieldsOmittedWhenUnset:
+    """delivery_measurement and is_custom get the same omit-when-unset
+    treatment as the core_fields above, but unlike format_ids and
+    reporting_capabilities they are genuinely optional per the pinned
+    core/product.json (not required) — so omission here is already correct
+    behavior, not a bug. Pure test-coverage; no production code change.
+    """
+
+    def test_delivery_measurement_omitted_when_unset(self):
+        """delivery_measurement=None must not appear as an explicit null.
+
+        create_test_product(delivery_measurement=None) still defaults it to a
+        populated dict (the factory treats None as "not provided"), so this
+        constructs Product directly to get a genuinely unset field, same as
+        test_format_ids_omitted_when_unset above.
+        """
+        product = Product(
+            product_id="test",
+            name="Test",
+            description="Test",
+            publisher_properties=[create_test_publisher_properties_by_tag()],
+            format_ids=[create_test_format_id("display_300x250")],
+            delivery_type="guaranteed",
+            pricing_options=[create_test_cpm_pricing_option()],
+            reporting_capabilities={"metrics": ["impressions"]},
+            delivery_measurement=None,
+        )
+        data = product.model_dump()
+
+        assert "delivery_measurement" not in data, (
+            "delivery_measurement=None must be omitted from model_dump() output when unset"
+        )
+
+    def test_is_custom_omitted_when_unset(self):
+        """is_custom=None must not appear as an explicit null.
+
+        create_test_product() never sets is_custom, so it is unset by default.
+        """
+        product = create_test_product()
+        data = product.model_dump()
+
+        assert "is_custom" not in data, "is_custom=None must be omitted from model_dump() output when unset"
