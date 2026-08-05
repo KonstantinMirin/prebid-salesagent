@@ -13,8 +13,9 @@ installed SDK's error-code enum has grown independently (92+ codes vs. this
 fixture's 64) and its ``suggestion`` wording diverges from this fixture's on
 4 codes (CREDENTIAL_IN_ARGS, MEDIA_BUY_NOT_FOUND, PACKAGE_NOT_FOUND,
 REQUOTE_REQUIRED, verified at migration time) — moving that reader onto the
-SDK tree requires first reconciling that divergence (tracked as its own
-epic; see docs/adcp-spec-version.md), not a mechanical resolver swap.
+SDK tree requires first reconciling that divergence (tracked as
+github.com/prebid/salesagent/issues/1753; see docs/adcp-spec-version.md),
+not a mechanical resolver swap.
 
 Every OTHER pinned-schema consumer — structural request/response shape,
 ``$ref`` resolution, AND the ``recovery`` half of this same enumMetadata

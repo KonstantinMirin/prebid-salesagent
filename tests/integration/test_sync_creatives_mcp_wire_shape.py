@@ -96,9 +96,13 @@ def test_mcp_wire_validates_against_pinned_response_schema(integration_db):
     "Synchronous tasks... MUST emit status: 'completed'") — inject that
     known-correct value in place of the known gap so this test still
     exercises everything ELSE that could regress. Remove this injection once
-    MCP's structured_content is fixed to genuinely carry status (tracked
-    separately from this change, same class of gap as the null-serialization
-    question above).
+    MCP's structured_content is fixed to genuinely carry status — same root
+    cause (structured_content bypasses model_dump) as
+    [#1710](https://github.com/prebid/salesagent/issues/1710) and the general
+    sweep tracked in
+    [#1623](https://github.com/prebid/salesagent/issues/1623); this file's own
+    null-serialization gap above is the pre-existing, separately-scoped
+    PR #1567 item.
     """
     wire = _sync_one_creative_via_mcp()
     payload = _nulls_as_absent(wire)
