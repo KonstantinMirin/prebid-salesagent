@@ -214,7 +214,7 @@ def strip_none_deep(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: strip_none_deep(v) for k, v in value.items() if v is not None}
     if isinstance(value, list):
-        return [strip_none_deep(v) for v in value]
+        return [strip_none_deep(v) for v in value if v is not None]
     return value
 
 
