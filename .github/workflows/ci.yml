@@ -403,14 +403,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: tests/storyboard/runner/package-lock.json
-      - name: Install storyboard runner deps
-        working-directory: tests/storyboard/runner
-        run: npm ci
+      # The pinned compliance/schema bundle is a GitHub release asset, not an npm
+      # dependency, so it is fetched host-side into the bind-mounted tree that the
+      # runner container sees at /app. npm deps are NOT installed here: the
+      # `storyboard` tox env's commands_pre runs `npm ci` inside that container,
+      # where the Node that executes the runner actually lives.
       - name: Download pinned 3.1.1 compliance/schema bundle
         working-directory: tests/storyboard/runner
         run: |
@@ -419,62 +416,18 @@ jobs:
           tar -xzf 3.1.1.tgz
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: ./.github/actions/_setup-env
-      # docker-compose.e2e.yml pins `image: adcp-creative-agent` -- a local tag that
-      # nothing publishes, so a bare `compose up` tries to pull it from Docker Hub and
-      # is denied. This script is what materialises that tag: it pulls the pinned
-      # image from GHCR (CREATIVE_AGENT_GHCR_IMAGE) and re-tags it, falling back to a
-      # local build. run_all_tests.sh calls it for the same reason.
-      - name: Build/pull the pinned creative agent
-        run: scripts/creative-agent-stack.sh build
+      # No _setup-env / host Postgres / host ports: run_all_tests.sh builds the
+      # pinned creative agent, brings the stack up, waits for health, and executes
+      # tox inside the compose network — the runner reaches the agent at
+      # proxy:8000 by service name, which is tests/storyboard's own default.
+      # Identical shape to the BDD In-Network job above; hand-rolling a compose
+      # lifecycle here is what made this job fail on every earlier attempt.
+      - name: Run storyboard conformance in-network
+        run: ./run_all_tests.sh storyboard
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
-      # The ports overlay is required because this job runs pytest ON THE HOST: the
-      # base compose file publishes no host ports so in-network runners can share a
-      # machine, and reaches services by name. A host runner cannot resolve `proxy`.
-      - name: Bring up the stack with host ports published
-        run: |
-          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml \
-            up -d postgres adcp-server proxy creative-pg creative-agent
-        env:
-          DOCKER_BUILDKIT: 1
-          COMPOSE_DOCKER_CLI_BUILD: 1
-          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
-      # `up -d` returns as soon as containers are created, not when they serve. The
-      # seed step below execs into adcp-server and the runner drives the proxy, so
-      # both must actually be up first -- same poll-with-deadline shape as
-      # scripts/test-stack.sh, which is the other host-side path onto this stack.
-      - name: Wait for the stack to serve
-        run: |
-          set -euo pipefail
-          deadline=$(( $(date +%s) + 180 ))
-          pg=false; srv=false
-          while [ "$(date +%s)" -lt "$deadline" ]; do
-            if [ "$pg" = false ] && docker compose -f docker-compose.e2e.yml exec -T postgres \
-                 pg_isready -U adcp_user >/dev/null 2>&1; then pg=true; echo "PostgreSQL ready"; fi
-            if [ "$srv" = false ] && curl -sf http://127.0.0.1:8092/health >/dev/null 2>&1; then
-              srv=true; echo "Proxy ready"; fi
-            [ "$pg" = true ] && [ "$srv" = true ] && exit 0
-            sleep 2
-          done
-          echo "::error::stack did not become ready within 180s (postgres=$pg proxy=$srv)"
-          exit 1
-      - name: Seed the CI test principal
-        run: docker compose -f docker-compose.e2e.yml exec -T adcp-server python scripts/setup/init_database_ci.py
-      - name: Run storyboard-conformance pytest module
-        run: uv run pytest tests/storyboard/ -v --tb=short
-        env:
-          # Host-side URL. 8092 is docker-compose.e2e.ports.yml's ADCP_SALES_PORT
-          # default, which this job does not override.
-          STORYBOARD_AGENT_URL: http://127.0.0.1:8092/mcp/
-          STORYBOARD_AUTH_TOKEN: ci-test-token
-          STORYBOARD_COMPLIANCE_DIR: tests/storyboard/runner/adcp-3.1.1/compliance
-          STORYBOARD_SCHEMA_ROOT: tests/storyboard/runner/adcp-3.1.1/schemas
-      - name: Dump stack logs on failure
-        if: failure()
-        run: docker compose -f docker-compose.e2e.yml logs --tail=120 adcp-server proxy creative-agent
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
