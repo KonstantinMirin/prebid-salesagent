@@ -1,6 +1,6 @@
 """Single source of truth for A2A skill-name -> AdCP-task-name resolution.
 
-salesagent-1q8d.1 (PR #1838 review R1-10 measurement): two independent copies
+salesagent-1q8d.1 (PR #1838): two independent copies
 of this map existed — ``A2AAdCPValidator.SKILL_TO_SCHEMA_MAP`` in
 tests/integration/test_a2a_skill_invocation.py and a local ``skill_to_schema``
 dict inside ``A2AAdCPComplianceClient.validate_skill_response`` in

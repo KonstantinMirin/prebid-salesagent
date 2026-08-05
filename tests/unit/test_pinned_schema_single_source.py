@@ -1,8 +1,8 @@
 """tests/helpers/pinned_schema.py must resolve to the SAME AdCP spec version
 the installed adcp SDK is pinned to — not an independently vendored SHA.
 
-Regression for PR #1838 review R1-3/R1-3b (ChrisHuie), reframed as a tier-1
-DRY defect: pinned_schema.py vendored its own frozen schema tree
+Regression for PR #1838, reframed as a tier-1 DRY defect:
+pinned_schema.py vendored its own frozen schema tree
 (tests/fixtures/adcp_schemas_pinned/, pinned to
 adcontextprotocol/adcp@04f59d2d5 / tag v3.1-04f59d2d5, the 3.1.0-beta.3 era)
 independently of the installed adcp SDK's own pin (pyproject.toml, currently

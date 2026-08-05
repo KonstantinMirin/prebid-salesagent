@@ -1,6 +1,6 @@
 """AdCPSchemaValidator._extract_adcp_payload strips only genuinely non-spec fields.
 
-Regression for PR #1838 review R1-11 (ChrisHuie): the strip-set used to
+Regression for PR #1838: the strip-set used to
 remove "message", "context_id", and "errors" before validation, with a
 comment claiming they're transport-layer additions "not part of the AdCP
 spec". All three are genuine spec-defined properties on the pinned schema's
