@@ -1533,7 +1533,7 @@ def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -
     legitimately equal a well-formed incoming agent_url, so excluding it changes
     nothing for a correct match, but hard-failing here would let ONE unrelated
     bad registration break every format_id validation in the request
-    (salesagent-9azh).
+    (#1291).
     """
     from src.core.signing import TargetUriMalformedError
     from src.core.validation import normalize_agent_url
@@ -1553,7 +1553,7 @@ def _build_registered_agent_urls(registered_agents: list[Any], tenant_id: str) -
 def _normalize_incoming_agent_url(agent_url: str, package_idx: int, idx: int) -> str:
     """Normalize a buyer-supplied format_id.agent_url, or raise with the same
     'Package N, format_ids[idx]' context every sibling validation in
-    ``_validate_and_convert_format_ids`` carries (salesagent-9azh).
+    ``_validate_and_convert_format_ids`` carries (#1291).
     """
     from src.core.signing import TargetUriMalformedError
     from src.core.validation import normalize_agent_url

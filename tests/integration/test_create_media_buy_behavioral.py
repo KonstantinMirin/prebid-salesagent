@@ -1339,7 +1339,7 @@ class TestInlineCreativeObligations:
         data the buyer never touched) is excluded from registration matching
         with a log, rather than hard-failing every format_id in the request.
 
-        Covers salesagent-9azh.
+        Covers #1291.
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
         from tests.factories import CreativeAgentFactory

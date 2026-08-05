@@ -274,7 +274,7 @@ def normalize_agent_url(url: str) -> str:
             -- e.g. empty authority, unterminated/zone-id IPv6, raw non-ASCII host,
             port-but-no-host. Shares the predicate with the signing verifier so this
             validation-layer path can never accept a URL the verifier would reject
-            (salesagent-9azh).
+            (#1291).
     """
     if not url:
         return url

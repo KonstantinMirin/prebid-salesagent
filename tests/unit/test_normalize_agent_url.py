@@ -87,7 +87,7 @@ def test_normalize_agent_url_rejects_malformed_authority(malformed_url):
     """normalize_agent_url must reject exactly what the signing layer's
     canonicalization gate (src.core.signing.canonical) rejects as malformed.
 
-    Bug salesagent-9azh: normalize_agent_url hand-rolls its own normalization
+    Bug #1291: normalize_agent_url hand-rolls its own normalization
     instead of sharing canonical.py's malformed_authority_reason predicate, so
     a URL our RFC 9421 verifier would refuse as malformed can still be
     silently accepted and compared/stored by the validation-layer path.

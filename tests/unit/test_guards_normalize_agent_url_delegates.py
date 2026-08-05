@@ -1,6 +1,6 @@
 """Guard: normalize_agent_url must delegate authority validation to the signing layer.
 
-salesagent-9azh. ``src.core.validation.normalize_agent_url`` hand-rolled its own
+#1291. ``src.core.validation.normalize_agent_url`` hand-rolled its own
 URL normalization and never checked whether the authority was malformed per
 RFC 9421's canonicalization rules -- a URL the signing verifier
 (``src.core.signing.canonical``) would reject could still be silently
@@ -61,7 +61,7 @@ def test_normalize_agent_url_delegates_to_signing_gate():
     func = _find_function(VALIDATION_MODULE, FUNCTION_NAME)
     assert function_delegates_to_signing_gate(func), (
         f"{FUNCTION_NAME} no longer calls {REQUIRED_CALLEE}() -- it would silently accept a URL "
-        "the RFC 9421 signing verifier rejects as malformed (salesagent-9azh). Re-add the "
+        "the RFC 9421 signing verifier rejects as malformed (#1291). Re-add the "
         "`from src.core.signing import reject_malformed_target` delegation before any hand-rolled "
         "normalization."
     )
