@@ -297,15 +297,13 @@ class TestSendWebhookEnhancedHmacSigning:
 
         Covers: UC-004-EXT-G-06
         """
-        import hashlib
-        import hmac
-
         from tests.factories import (
             PrincipalFactory,
             PushNotificationConfigFactory,
             TenantFactory,
         )
         from tests.harness import CircuitBreakerEnv
+        from tests.helpers import assert_signature_verifies_over_wire_body
 
         secret = "b" * 32
         payload = {"media_buy_id": "mb_001", "impressions": 5000}
@@ -329,23 +327,7 @@ class TestSendWebhookEnhancedHmacSigning:
                 delivery_payload=payload,
             )
 
-            request = env.last_delivery
-            sent_signature = request.headers["X-ADCP-Signature"]
-            sent_timestamp = request.headers["X-ADCP-Timestamp"]
-            assert sent_signature.startswith("sha256="), sent_signature
-
-            # Reproduce the signature over the raw bytes the origin received.
-            expected = hmac.new(
-                secret.encode("utf-8"),
-                f"{sent_timestamp}.".encode() + request.body,
-                hashlib.sha256,
-            ).hexdigest()
-
-            assert sent_signature == f"sha256={expected}", (
-                "the buyer's endpoint could not verify this webhook: X-ADCP-Signature was "
-                f"computed over bytes other than the {len(request.body)} that crossed the "
-                f"socket ({request.body[:120]!r}...)"
-            )
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
 
 # ---------------------------------------------------------------------------

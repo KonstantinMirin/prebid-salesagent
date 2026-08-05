@@ -204,21 +204,28 @@ class TestWebhookDelivery:
             assert result["response_code"] == 204
 
     def test_hmac_signature_added(self):
-        """Test that HMAC signature is added when signing_secret provided."""
+        """The HMAC signature verifies against the exact bytes that crossed the socket.
+
+        Recomputes over ``env.last_delivery.body`` (the raw wire bytes), not a
+        fresh serialization of the payload dict -- a recompute from the dict
+        can silently agree with a sender that signed one serialization and
+        transmitted another, which is exactly the defect salesagent-47n9.1
+        fixed. Spec header name (X-AdCP-Signature, from
+        adcp.sign_legacy_webhook) since salesagent-47n9.1 -- the non-spec
+        X-Webhook-Signature no longer exists.
+        """
         from tests.harness.delivery_webhook_unit import WebhookEnv
+        from tests.helpers import assert_signature_verifies_over_wire_body
+
+        secret = "test-secret-key"
 
         with WebhookEnv() as env:
             env.set_http_status(200)
 
-            success, result = env.call_deliver(payload={"test": "data"}, signing_secret="test-secret-key")
+            success, result = env.call_deliver(payload={"test": "data"}, signing_secret=secret)
 
-            # The signature must be on the request the endpoint actually received.
-            # Spec header name (X-AdCP-Signature, from adcp.sign_legacy_webhook)
-            # since salesagent-47n9.1 -- the non-spec X-Webhook-Signature no
-            # longer exists, and nothing in src/ ever emitted X-Hub-Signature-256.
-            headers = env.last_delivery.headers
-            assert "X-AdCP-Signature" in headers
             assert success is True
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
     def test_invalid_webhook_url_validation(self):
         """Test that invalid webhook URLs are rejected."""

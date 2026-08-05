@@ -72,10 +72,8 @@ migration must not cost.
 
 from __future__ import annotations
 
-import hmac
 import logging
 import time
-from hashlib import sha256
 from urllib.parse import urlparse
 
 import httpx
@@ -85,6 +83,7 @@ from adcp.webhook_receiver import LegacyWebhookHmacError, LegacyWebhookHmacOptio
 
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.harness.protocol_webhook import AUDIT_LOGGER_NAME, ProtocolWebhookEnv
+from tests.helpers import assert_signature_verifies_over_wire_body
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 
@@ -187,14 +186,7 @@ class TestSignedBodyIntegrity:
 
             assert await env.send(config=config) is True
 
-            request = env.last_delivery
-            timestamp = request.headers["X-AdCP-Timestamp"]
-            expected = hmac.new(
-                secret.encode("utf-8"),
-                f"{timestamp}.".encode() + request.body,
-                sha256,
-            ).hexdigest()
-            assert request.headers["X-AdCP-Signature"] == f"sha256={expected}"
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
 
 class TestDeliveryLogParity:

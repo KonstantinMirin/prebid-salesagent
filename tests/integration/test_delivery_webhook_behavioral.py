@@ -454,11 +454,18 @@ class TestEXT_G_06_HmacAuthRejection:
             assert f"Client error {status_code}" in result["error"]
 
     def test_hmac_headers_sent_before_rejection(self, integration_db):
-        """When signing_secret is provided, HMAC signature headers are added.
+        """HMAC signature headers are added and verify against the wire bytes, even when rejected.
+
+        Recomputes over the raw received body rather than a re-serialization
+        of the payload dict, so a sender that signs one serialization and
+        transmits another cannot pass this test vacuously (salesagent-47n9.1).
 
         Covers: UC-004-EXT-G-06
         """
         from tests.harness import WebhookEnv
+        from tests.helpers import assert_signature_verifies_over_wire_body
+
+        secret = "my-webhook-secret-key"
 
         with WebhookEnv() as env:
             env.set_http_status(401, "Invalid signature")
@@ -466,7 +473,7 @@ class TestEXT_G_06_HmacAuthRejection:
             env.call_deliver(
                 webhook_url=env.webhook_url,
                 payload={"media_buy_id": "mb_001", "event": "delivery.report"},
-                signing_secret="my-webhook-secret-key",
+                signing_secret=secret,
                 event_type="delivery.report",
                 tenant_id="test_tenant",
                 object_id="mb_001",
@@ -474,10 +481,7 @@ class TestEXT_G_06_HmacAuthRejection:
 
             # Spec header names (X-AdCP-Signature/X-AdCP-Timestamp) since
             # salesagent-47n9.1 -- the non-spec X-Webhook-* pair no longer exists.
-            sent_headers = env.last_delivery.headers
-            assert "X-AdCP-Signature" in sent_headers
-            assert sent_headers["X-AdCP-Signature"].startswith("sha256=")
-            assert "X-AdCP-Timestamp" in sent_headers
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
     def test_auth_rejection_vs_server_error_retry_behavior(self, integration_db):
         """Contrast: 401 does NOT retry, but 500 DOES retry.

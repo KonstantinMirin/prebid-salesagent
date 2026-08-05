@@ -31,12 +31,10 @@ through one shared serialize-once -> sign -> send(content=) function
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-
 import pytest
 
 from tests.harness import CircuitBreakerEnv, WebhookEnv
+from tests.helpers import assert_signature_verifies_over_wire_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -74,23 +72,7 @@ class TestWebhookDeliveryWithRetrySignedBodyIntegrity:
 
             assert delivered is True
             assert env.delivery_attempts == 1
-            request = env.last_delivery
-
-            sent_signature = request.headers["X-AdCP-Signature"]
-            timestamp = request.headers["X-AdCP-Timestamp"]
-            assert sent_signature.startswith("sha256="), sent_signature
-
-            expected = hmac.new(
-                secret.encode("utf-8"),
-                f"{timestamp}.".encode() + request.body,
-                hashlib.sha256,
-            ).hexdigest()
-
-            assert sent_signature == f"sha256={expected}", (
-                "the buyer's endpoint could not verify this webhook: X-AdCP-Signature was "
-                f"computed over bytes other than the {len(request.body)} that crossed the "
-                f"socket ({request.body[:120]!r}...)"
-            )
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
 
 class TestWebhookDeliveryServiceSignedBodyIntegrity:
@@ -136,20 +118,4 @@ class TestWebhookDeliveryServiceSignedBodyIntegrity:
 
             assert delivered is True
             assert env.delivery_attempts == 1
-            request = env.last_delivery
-
-            sent_signature = request.headers["X-ADCP-Signature"]
-            timestamp = request.headers["X-ADCP-Timestamp"]
-            assert sent_signature.startswith("sha256="), sent_signature
-
-            expected = hmac.new(
-                secret.encode("utf-8"),
-                f"{timestamp}.".encode() + request.body,
-                hashlib.sha256,
-            ).hexdigest()
-
-            assert sent_signature == f"sha256={expected}", (
-                "the buyer's endpoint could not verify this webhook: X-ADCP-Signature was "
-                f"computed over bytes other than the {len(request.body)} that crossed the "
-                f"socket ({request.body[:120]!r}...)"
-            )
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
