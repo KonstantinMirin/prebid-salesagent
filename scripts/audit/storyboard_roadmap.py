@@ -165,6 +165,22 @@ def check_issue_map_complete(repo: Path, on_path: list[str]) -> list[str]:
     return sorted(set(on_path) - set(_load_issue_map(repo)))
 
 
+def _status_cell(row: dict[str, Any]) -> str:
+    """Objective measured state for one storyboard, from the in-network CI ledger.
+
+    Three answers, and the distinction between the last two is the point of the
+    column. `FAILING` is measured. `no ledger entries` means the job ran the
+    storyboard and nothing failed. `ungradable` means the job could not reach the
+    assertions at all — a coverage hole that a naive "0 failures" reading would
+    score as a pass.
+    """
+    if failures := row["ledgered_failures"]:
+        return f"**FAILING** — {len(failures)} ledgered"
+    if row["divergence"]:
+        return "ungradable (comply_test_controller)"
+    return "no ledger entries"
+
+
 def _render_issue_cell(entry: dict[str, Any] | None) -> str:
     """One table cell: the tracking status of a storyboard's gap."""
     if entry is None:
@@ -175,6 +191,43 @@ def _render_issue_cell(entry: dict[str, Any] | None) -> str:
         return "**NO TICKET**"
     refs = ", ".join(f"#{n}" for n in issues)
     return f"{refs} ({coverage})" if coverage != "full" else refs
+
+
+LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
+
+_LEDGER_ID_RE = re.compile(r"test_storyboard_check\[([^:]*)::([^:]+)::(.+)\]\s*$")
+
+
+def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
+    """storyboard_id -> failing step ids, from the in-network CI ledger.
+
+    This is the authoritative measured state. `tests/storyboard/known_failures.txt`
+    is seeded exclusively from real runs of the Storyboard Conformance job, which
+    executes the runner IN-NETWORK against a live stack — the same topology the
+    agent ships in.
+
+    It deliberately supersedes the older `runner/results/sb1b-*.json` and
+    `sb1d-*.json` captures as the join source for this table. Those were host-side
+    runs against published ports, taken before this branch reverted its two
+    production fixes, so they describe neither the current topology nor the current
+    code. The architect review's HIGH finding on this ticket says exactly that:
+    host-side numbers do not carry over. They stay in the repo as history.
+    """
+    path = repo / LEDGER
+    if not path.is_file():
+        return {}
+    failures: dict[str, list[str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if match := _LEDGER_ID_RE.search(line):
+            # Normalize to underscores: the ledger carries the runner's
+            # underscore spelling (webhook_emission) while coverage_map stems
+            # are hyphenated for universal/ (webhook-emission). Joining raw
+            # silently matched nothing and rendered every row as passing.
+            failures.setdefault(match.group(2).replace("-", "_"), []).append(match.group(3))
+    return failures
 
 
 def _load_runner_scenarios(results_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -224,6 +277,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     runner_scenarios, runner_summary = _load_runner_scenarios(runner_results_dir)
     gh_issues = _gh_issue_cross_reference(repo)
     issue_map = _load_issue_map(repo)
+    ledgered = _ledgered_failures(repo)
 
     on_path = [r for r in coverage["storyboards"] if r["status"] == "ON-PATH"]
     untriaged = check_issue_map_complete(repo, [r["storyboard"] for r in on_path])
@@ -232,6 +286,13 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     joined = 0
     for row in on_path:
         text = (dist / row["storyboard"]).read_text(encoding="utf-8")
+        # The runner keys results on the storyboard's DECLARED `id:`, which
+        # differs from the filename for 69 of 121 storyboards at 3.1.1
+        # (universal/security.yaml -> security_baseline; every media-buy
+        # scenario is namespaced media_buy_seller/<name>). Joining on the
+        # filename stem matched only where the two happen to coincide.
+        id_match = re.search(r"^id:\s*(\S+)", text, re.M)
+        storyboard_id = id_match.group(1) if id_match else row["stem"].replace("-", "_")
         checks: dict[str, int] = {}
         for phase_id in storyboard_spec.phases(text):
             for check_type in storyboard_spec.checks_for_phase(text, phase_id):
@@ -259,6 +320,8 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "tracking_issues": (tracking or {}).get("issues") or [],
                 "tracking_coverage": (tracking or {}).get("coverage", "untriaged"),
                 "tracking_note": (tracking or {}).get("note", ""),
+                "storyboard_id": storyboard_id,
+                "ledgered_failures": sorted(ledgered.get(storyboard_id, [])),
             }
         )
 
@@ -272,6 +335,13 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             f"measured-status join resolved 0 of {len(on_path)} on-path rows, but the runner "
             f"reports {runner_ran_count} storyboards executed/missing-tools — the join key is "
             "broken, not the data. Fix _measured_status() before trusting this output."
+        )
+
+    if ledgered and not any(r["ledgered_failures"] for r in rows):
+        raise SystemExit(
+            f"ledger has {sum(len(v) for v in ledgered.values())} failing checks across "
+            f"{len(ledgered)} storyboards, but none joined to an on-path row — the join key is "
+            "broken, not the data. Every row would render as passing. Fix _ledgered_failures()."
         )
 
     if untriaged:
@@ -292,6 +362,8 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "no_ticket": sum(1 for r in rows if not r["tracking_issues"]),
             "no_scenario_no_ticket": sum(1 for r in rows if not r["scenarios"] and not r["tracking_issues"]),
             "distinct_issues": len({i for r in rows for i in r["tracking_issues"]}),
+            "failing": sum(1 for r in rows if r["ledgered_failures"]),
+            "ledgered_checks": sum(len(r["ledgered_failures"]) for r in rows),
         },
         "rows": rows,
     }
@@ -311,6 +383,8 @@ def render(result: dict[str, Any]) -> str:
         "files; **Tracking** comes from the curated `storyboard-issue-map.yaml`.",
         "",
         f"- on-path storyboards: **{result['totals']['on_path']}**",
+        f"- **measured FAILING: {result['totals']['failing']} storyboards, "
+        f"{result['totals']['ledgered_checks']} ledgered checks**",
         f"- **no BDD scenario: {result['totals']['no_scenario']}**",
         f"- **no tracking issue: {result['totals']['no_ticket']}**",
         f"- **neither scenario nor ticket: {result['totals']['no_scenario_no_ticket']}**",
@@ -339,24 +413,17 @@ def render(result: dict[str, Any]) -> str:
         "see `storyboard-reconciliation.md`; its rows key by proposal-file slug, not by "
         "scenario id, so it is not joined into this table.",
         "",
-        "| Storyboard | Citation | Scenario(s) | Required tools | Checks | Measured | Divergence | Tracking |",
+        "| Storyboard | Citation | Scenario(s) | Required tools | Checks | Status | Divergence | Tracking |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in result["rows"]:
         scenarios = ", ".join(f"`{s}`" for s in r["scenarios"]) or "**— NOT COVERED —**"
         tools = ", ".join(f"`{t}`" for t in r["required_tools"]) or "—"
         checks = ", ".join(f"{k}×{v}" for k, v in r["checks"].items()) or "—"
-        measured = r["measured"]
-        if measured.get("status") == "not_yet_run":
-            measured_cell = "not yet run"
-        else:
-            measured_cell = f"{measured['steps_passed']} passed / {measured['steps_failed']} failed" + (
-                f" ({measured['steps_failed_skip_affected']} skip-affected)" if measured["steps_failed"] else ""
-            )
         divergence = r["divergence"] or "—"
         out.append(
             f"| `{r['storyboard']}` | {r['citation']} | {scenarios} | {tools} | {checks} | "
-            f"{measured_cell} | {divergence} | {r['tracking']} |"
+            f"{_status_cell(r)} | {divergence} | {r['tracking']} |"
         )
 
     # The gap, restated as the only two lists a reader actually acts on.
