@@ -42,6 +42,17 @@ _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
 
+# Webhook receiver. Without one, every expect_webhook* step reports
+# `requirement_unmet: webhook_receiver` and is silently ungraded.
+#
+# The address the SERVER must use to call back to this runner. In-network that is
+# the runner container's compose alias (ADCP_WEBHOOK_HOST=tests, set on the tests
+# service) — deliberately not "localhost", which the server rewrites to
+# host.docker.internal. Unset on the host path, where loopback is correct.
+_WEBHOOK_CALLBACK_HOST_ENV = "ADCP_WEBHOOK_HOST"
+_WEBHOOK_PORT_ENV = "STORYBOARD_WEBHOOK_PORT"
+_DEFAULT_WEBHOOK_PORT = "9998"
+
 
 def _missing_env() -> list[str]:
     return [name for name in (_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV) if not os.environ.get(name)]
@@ -62,6 +73,43 @@ def _bundle_path(env_name: str) -> str:
     """
     raw = Path(os.environ[env_name])
     return str(raw if raw.is_absolute() else (_REPO_ROOT / raw).resolve())
+
+
+def _webhook_receiver_args() -> tuple[list[str], dict[str, str]]:
+    """CLI args + extra env that let the runner host a reachable webhook receiver.
+
+    Two topologies, and the difference is which interface the receiver must listen on:
+
+    * **In-network** (the CI path): the server and this runner are separate
+      containers. The server calls back to the runner's compose alias, so the
+      receiver has to bind something other than loopback or the delivery lands on
+      the container's eth0 with nothing listening. `proxy_url` mode is the SDK's
+      sanctioned way to do that -- it takes the URL to advertise, and (unlike
+      `loopback_mock`) permits a non-loopback bind.
+    * **Host-side**: runner and published ports share a network namespace, so the
+      SDK's default loopback receiver already works. Returns no args at all.
+
+    ADCP_WEBHOOK_RECEIVER_HOST is NOT an upstream feature. The CLI has no
+    `--webhook-receiver-host`, so it cannot pass `host` through to
+    createWebhookReceiver() even though the library accepts it -- filed as
+    adcontextprotocol/adcp-client#2448 and bridged meanwhile by
+    tests/storyboard/runner/patches/@adcp+sdk+9.3.0.patch, which adds exactly the
+    env var the issue proposes. Delete both when the flag ships.
+    """
+    callback_host = os.environ.get(_WEBHOOK_CALLBACK_HOST_ENV)
+    if not callback_host:
+        return [], {}
+
+    port = os.environ.get(_WEBHOOK_PORT_ENV, _DEFAULT_WEBHOOK_PORT)
+    args = [
+        "--webhook-receiver",
+        "proxy",
+        "--webhook-receiver-port",
+        port,
+        "--webhook-receiver-public-url",
+        f"http://{callback_host}:{port}/",
+    ]
+    return args, {"ADCP_WEBHOOK_RECEIVER_HOST": "0.0.0.0"}
 
 
 def _run_storyboard_runner() -> dict[str, Any]:
@@ -93,7 +141,16 @@ def _run_storyboard_runner() -> dict[str, Any]:
         "--summary-output",
         str(_SUMMARY_PATH),
     ]
-    result = subprocess.run(cmd, cwd=_RUNNER_DIR, capture_output=True, text=True, timeout=700)  # noqa: S603
+    webhook_args, webhook_env = _webhook_receiver_args()
+    cmd += webhook_args
+    result = subprocess.run(  # noqa: S603
+        cmd,
+        cwd=_RUNNER_DIR,
+        capture_output=True,
+        text=True,
+        timeout=700,
+        env={**os.environ, **webhook_env},
+    )
     if not _SUMMARY_PATH.exists():
         pytest.fail(
             f"storyboard runner did not produce a summary (exit={result.returncode}): "
