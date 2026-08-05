@@ -41,18 +41,16 @@ _SCAN_FILES = [
 #: Ratchet like EXPECTED_LEDGER -- shrinks as those tickets land, never grows.
 ALLOWLIST_DEFERRED: frozenset[tuple[str, str, str, str]] = frozenset(
     {
-        # MCP wrappers for list_accounts/sync_accounts/list_authorized_properties
-        # have NO adcp_validation_boundary at all (unlike their A2A/REST siblings,
-        # which are already boundary-wrapped -- just missing a shared builder,
-        # a dedup concern out of THIS guard's scope). This is the genuine
-        # boundary-protection gap.
-        ("src/core/tools/accounts.py", "list_accounts", "ListAccountsRequest", "salesagent-2ari"),
-        ("src/core/tools/accounts.py", "sync_accounts", "SyncAccountsRequest", "salesagent-2ari"),
+        # MCP wrapper for list_authorized_properties has NO adcp_validation_boundary
+        # at all (unlike its A2A/REST siblings, which are already boundary-wrapped --
+        # just missing a shared builder, a dedup concern out of THIS guard's scope).
+        # This is the genuine boundary-protection gap. (list_accounts/sync_accounts
+        # in accounts.py were the same gap -- fixed as part of salesagent-2bpt.2.)
         (
             "src/core/tools/properties.py",
             "list_authorized_properties",
             "ListAuthorizedPropertiesRequest",
-            "salesagent-2ari",
+            "FIXME(#1882)",
         ),
     }
 )

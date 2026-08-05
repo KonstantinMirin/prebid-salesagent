@@ -59,6 +59,7 @@ from src.core.schemas.account import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
+from src.core.validation_helpers import adcp_validation_boundary
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
 
 if TYPE_CHECKING:
@@ -269,15 +270,16 @@ async def list_accounts(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    req = ListAccountsRequest(
-        account=account,
-        status=status,
-        pagination=pagination,
-        sandbox=sandbox,
-        idempotency_key=idempotency_key,
-        ext=ext,
-        context=context,
-    )
+    with adcp_validation_boundary(context="list_accounts request"):
+        req = ListAccountsRequest(
+            account=account,
+            status=status,
+            pagination=pagination,
+            sandbox=sandbox,
+            idempotency_key=idempotency_key,
+            ext=ext,
+            context=context,
+        )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_accounts_impl(req, identity)
@@ -1958,13 +1960,14 @@ async def sync_accounts(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    req = SyncAccountsRequest(
-        accounts=accounts or [],
-        delete_missing=delete_missing,
-        dry_run=dry_run,
-        context=context,
-        idempotency_key=str(uuid.uuid4()),
-    )
+    with adcp_validation_boundary(context="sync_accounts request"):
+        req = SyncAccountsRequest(
+            accounts=accounts or [],
+            delete_missing=delete_missing,
+            dry_run=dry_run,
+            context=context,
+            idempotency_key=str(uuid.uuid4()),
+        )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)
 
