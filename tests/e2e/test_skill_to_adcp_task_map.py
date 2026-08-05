@@ -1,19 +1,24 @@
 """Pins the invariants a single shared skill->AdCP-task map must satisfy.
 
 salesagent-1q8d.1 (PR #1838 review R1-10 measurement, ChrisHuie): two
-independent copies of the skill-name -> AdCP-task-name map exist —
+independent copies of the skill-name -> AdCP-task-name map existed —
 ``A2AAdCPValidator.SKILL_TO_SCHEMA_MAP`` in
 tests/integration/test_a2a_skill_invocation.py and the local ``skill_to_schema``
 dict inside ``A2AAdCPComplianceClient.validate_skill_response`` in
-tests/e2e/test_a2a_adcp_compliance.py. They diverge (e.g. ``approve_creative``
-resolves to ``"approve-creative"`` in one and ``None`` in the other), and
-neither is validated against the pinned index, so an entry can claim a schema
-exists when it does not — the validation call for that skill then silently
-grades nothing.
+tests/e2e/test_a2a_adcp_compliance.py. They diverged (e.g. ``approve_creative``
+resolved to ``"approve-creative"`` in one and ``None`` in the other), and
+neither was validated against the pinned index, so an entry could claim a
+schema exists when it does not — the validation call for that skill then
+silently graded nothing.
 
-These tests exercise both maps' real behavior (not source text) and will keep
-passing once both files are migrated to import one shared, index-validated
-map.
+Both files have since been migrated to import the single shared,
+index-validated map (``tests/helpers/skill_to_adcp_task.SKILL_TO_ADCP_TASK``).
+``test_map_a_is_the_shared_map_not_a_second_copy`` below is the identity
+assertion that forbids a second copy from reappearing; the index-resolution
+test is what actually grades a divergence, proven by mutation (R3-26,
+salesagent-1zq3.26): mutating a single mapped task name still passes the
+identity check (there's still only one object), so it alone is not
+sufficient — the index-resolution test is what catches it.
 """
 
 from __future__ import annotations
@@ -36,32 +41,6 @@ async def _map_b_resolution(skill_name: str) -> str | None:
     client = A2AAdCPComplianceClient(a2a_url="http://test.invalid", auth_token="test")
     result = await client.validate_skill_response(skill_name, {})
     return result["schema_tested"]
-
-
-def _map_a_resolution(skill_name: str) -> str | None:
-    """What tests/integration/test_a2a_skill_invocation.py's map resolves *skill_name* to."""
-    return A2AAdCPValidator.SKILL_TO_SCHEMA_MAP.get(skill_name)
-
-
-@pytest.mark.asyncio
-async def test_skill_to_task_maps_agree_on_every_shared_skill():
-    """The two independent maps must not diverge on a skill both of them cover."""
-    shared_skills = set(A2AAdCPValidator.SKILL_TO_SCHEMA_MAP) & {
-        "get_products",
-        "create_media_buy",
-        "add_creative_assets",
-        "approve_creative",
-        "get_media_buy_status",
-        "optimize_media_buy",
-    }
-    divergent = []
-    for skill in sorted(shared_skills):
-        map_a = _map_a_resolution(skill)
-        map_b = await _map_b_resolution(skill)
-        if map_a != map_b:
-            divergent.append(f"{skill}: map_a={map_a!r} map_b={map_b!r}")
-
-    assert not divergent, f"skill->task maps disagree: {divergent}"
 
 
 @pytest.mark.asyncio
