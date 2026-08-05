@@ -5,8 +5,15 @@ Debug script to understand validation issues.
 
 import asyncio
 import json
+import sys
+from pathlib import Path
 
-from adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
+# Not pytest-collected -- run directly (`uv run python tests/e2e/debug_validation.py`),
+# so the repo root isn't on sys.path the way it is under pytest. adcp_schema_validator
+# imports `tests.helpers` at module scope (R2-2, salesagent-1zq3.42), which needs it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError  # noqa: E402
 
 
 async def debug_validation():
