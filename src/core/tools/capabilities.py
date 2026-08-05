@@ -231,9 +231,9 @@ def _resolve_signing_blocks(
         )
 
     publishable = origin_is_publishable(origin)
-    # jwks_origin is additionally gated on key_backing.publishes (salesagent-mp53.7):
+    # jwks_origin is additionally gated on key_backing.publishes (#1291):
     # a keyless tenant on a publishable https origin must NOT advertise a key_origins
-    # pointer whose JWKS can only ever answer {"keys": []} (salesagent-7x8t). Safe
+    # pointer whose JWKS can only ever answer {"keys": []} (#1291). Safe
     # because KeyBacking.publishes uses the SAME publishable_at(now, grace_seconds)
     # selector that well_known._build_document feeds into build_jwks -- gating on
     # .publishes can never advertise an origin whose JWKS is actually empty.

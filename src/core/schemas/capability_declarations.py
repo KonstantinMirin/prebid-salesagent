@@ -72,19 +72,19 @@ from src.core.signing import (
 # wholesale_feed_webhooks have no implementation of ANY kind, so signing landing does
 # not make either declarable and an entry citing #1291 would point at a closed issue
 # the moment it merges. Re-homing them is the same fix commit 3b92577b0 applied to
-# offline_delivery_protocols; each reason therefore names the MISSING SURFACE rather
-# than a ticket, and a tracking issue is filed alongside this change.
+# offline_delivery_protocols; each reason therefore names the MISSING SURFACE, tracked
+# on its own issue: content_standards on #1855, wholesale_feed_webhooks on #1867.
 #
 # wholesale_feed_webhooks has no field on the model either -- it is listed here so the
 # operator learns why rather than reading pydantic's generic extra-field error, and
 # because it is the third ``must_equal_when`` trigger.
 _UNBACKED_BLOCKS: dict[str, str] = {
     "content_standards": (
-        "no content-standards surface exists in this deployment: nothing implements local "
-        "evaluation, artifacts, verdicts or artifact_webhook delivery"
+        "#1855 (no content-standards surface exists in this deployment: nothing implements local "
+        "evaluation, artifacts, verdicts or artifact_webhook delivery)"
     ),
     "wholesale_feed_webhooks": (
-        "no wholesale feed surface exists in this deployment, so no feed webhooks are ever emitted"
+        "#1867 (no wholesale feed surface exists in this deployment, so no feed webhooks are ever emitted)"
     ),
     "offline_delivery_protocols": "#1729 (no offline report delivery is implemented; see reporting_bucket)",
 }
@@ -406,9 +406,11 @@ class CapabilityDeclarations(BaseModel):
         """Raise the one error shape every rule above uses, naming *field*."""
         from src.core.exceptions import AdCPConfigurationError
 
+        qualified_field = f"capability_declarations.{field}"
         raise AdCPConfigurationError(
-            f"capability_declarations.{field} {message}",
-            details={"field": f"capability_declarations.{field}", **details},
+            f"{qualified_field} {message}",
+            field=qualified_field,
+            details=details,
         )
 
     def _validate_signing_relations(self) -> None:
@@ -460,17 +462,18 @@ class CapabilityDeclarations(BaseModel):
                     superset_field=f"capability_declarations.request_signing.{superset_field}",
                 )
 
-        both = sorted(bucket_names(posture.warn_for) & bucket_names(posture.required_for))
-        both += sorted(
-            bucket_names(posture.protocol_methods_warn_for) & bucket_names(posture.protocol_methods_required_for)
-        )
-        if both:
-            self._reject(
-                "request_signing.warn_for",
-                f"and request_signing.required_for both name {', '.join(both)}: an operation is "
-                f"graded in shadow mode or rejected outright, never both.",
-                overlapping_operations=both,
-            )
+        for warn_field, required_field in (
+            ("warn_for", "required_for"),
+            ("protocol_methods_warn_for", "protocol_methods_required_for"),
+        ):
+            both = sorted(bucket_names(getattr(posture, warn_field)) & bucket_names(getattr(posture, required_field)))
+            if both:
+                self._reject(
+                    f"request_signing.{warn_field}",
+                    f"and request_signing.{required_field} both name {', '.join(both)}: an operation is "
+                    f"graded in shadow mode or rejected outright, never both.",
+                    overlapping_operations=both,
+                )
 
     def _validate_identity_relations(self, posture: RequestSigningPosture | None) -> None:
         """Rules (e), (f-pattern) and (g) — the trust-root pointer's obligations.
