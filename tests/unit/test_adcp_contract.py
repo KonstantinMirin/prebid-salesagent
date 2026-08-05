@@ -2998,13 +2998,26 @@ class TestProductV36FieldContract:
         assert dump["placements"][0]["name"] == "Top Banner"
         assert dump["placements"][1]["placement_id"] == "sidebar"
 
-    # --- reporting_capabilities (required in adcp 4.3) ---
+    # --- reporting_capabilities (optional here, default=None) ---
 
-    def test_reporting_capabilities_present_when_null(self):
-        """reporting_capabilities always in model_dump (required in adcp 4.3)."""
+    def test_reporting_capabilities_absent_when_null(self):
+        """reporting_capabilities not force-included as null when unset (R3-8, salesagent-1zq3.8).
+
+        adcp 4.3 makes reporting_capabilities required on the *wire* schema,
+        but the pinned core/product.json types it as a $ref object that
+        rejects null — so when it is genuinely unset here, model_dump() must
+        OMIT the key like every other optional field in this class
+        (product_card, placements, etc.), not force it in as an explicit
+        null. This class's own docstring already documents
+        "reporting_capabilities (optional): presence-when-set +
+        absence-when-null"; forcing null contradicted that. The primary
+        production path (product_conversion.py) backfills a real value
+        before this ever runs, so the wire-required invariant is enforced
+        upstream, not by force-including null here.
+        """
         product = self._make_base_product()
         dump = product.model_dump()
-        assert "reporting_capabilities" in dump
+        assert "reporting_capabilities" not in dump
 
     def test_reporting_capabilities_present_when_set(self):
         """reporting_capabilities appears in model_dump with correct structure."""

@@ -20,6 +20,7 @@ from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_format_id,
     create_test_product,
+    create_test_publisher_properties_by_tag,
 )
 
 
@@ -110,3 +111,54 @@ class TestEmptyPricingOptionsInModelDump:
 
         assert "pricing_options" in data
         assert len(data["pricing_options"]) > 0
+
+
+class TestCoreFieldsDoNotForceInvalidNull:
+    """core_fields must never force-include a field the pinned schema types
+    non-nullable (R3-8, salesagent-1zq3.8).
+
+    Per the pinned core/product.json: format_ids is typed "array" and
+    reporting_capabilities is a $ref object — neither accepts null. The
+    comment directly above core_fields already says format_ids "must not be
+    force-included as null"; this pins that both fields actually behave that
+    way when unset, rather than only documenting it.
+    """
+
+    def test_reporting_capabilities_omitted_when_unset(self):
+        """reporting_capabilities=None must not appear as an explicit null.
+
+        Spec: core/product.json properties.reporting_capabilities is a $ref
+        to reporting-capabilities.json (object), which rejects null.
+        """
+        product = create_test_product(reporting_capabilities=None)
+        data = product.model_dump()
+
+        assert "reporting_capabilities" not in data, (
+            "reporting_capabilities=None must be omitted, not force-included as null "
+            "(the pinned schema types it as a non-nullable object)"
+        )
+
+    def test_format_ids_omitted_when_unset(self):
+        """format_ids=None must not appear as an explicit null.
+
+        Spec: core/product.json properties.format_ids is typed "array",
+        which rejects null. Constructed directly (bypassing the factory,
+        which always defaults format_ids) to get a Product with format_ids
+        genuinely unset.
+        """
+        product = Product(
+            product_id="test",
+            name="Test",
+            description="Test",
+            publisher_properties=[create_test_publisher_properties_by_tag()],
+            format_ids=None,
+            delivery_type="guaranteed",
+            pricing_options=[create_test_cpm_pricing_option()],
+            reporting_capabilities={"metrics": ["impressions"]},
+        )
+        data = product.model_dump()
+
+        assert "format_ids" not in data, (
+            "format_ids=None must be omitted, not force-included as null "
+            "(the pinned schema types it as a non-nullable array)"
+        )

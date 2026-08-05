@@ -159,19 +159,24 @@ class Product(LibraryProduct):
             data["format_ids"] = data.pop("formats")
 
         # Remove null fields per AdCP spec
-        # Only truly required fields should always be present (per the pinned
-        # get-products-response.json schema: product_id, name, description,
-        # publisher_properties, delivery_type, pricing_options,
-        # reporting_capabilities, plus format_ids under the legacy named-format
-        # anyOf arm). is_custom and delivery_measurement are NOT spec-required
-        # and must not be force-included as null.
+        # Only fields the Pydantic model guarantees are never None belong here.
+        # product_id/name/description/delivery_type are required (non-Optional)
+        # fields on the library base, so they can never actually be null —
+        # listing them is a no-op safety net. format_ids and
+        # reporting_capabilities must NOT be listed: both are Optional here
+        # (see the field overrides above) and the pinned product.json schema
+        # types format_ids "array" and reporting_capabilities as a $ref
+        # object — neither accepts null, so force-including either as None
+        # would emit schema-invalid output (R3-8, salesagent-1zq3.8). When
+        # actually unset, they must be OMITTED like any other optional field
+        # (product_conversion.py enforces both are populated on the primary
+        # path: it raises with no format_ids and backfills
+        # reporting_capabilities).
         core_fields = {
             "product_id",
             "name",
             "description",
-            "format_ids",
             "delivery_type",
-            "reporting_capabilities",
         }
 
         # Nested optional fields (format_ids[].width, pricing_options[].floor_price,
