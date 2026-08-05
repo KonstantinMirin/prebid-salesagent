@@ -29,6 +29,7 @@ from typing import Any
 
 import pytest
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
 _ADCP_BIN = _RUNNER_DIR / "node_modules" / ".bin" / "adcp"
 _SUMMARY_PATH = _RUNNER_DIR / "results" / "ci-summary.json"
@@ -44,6 +45,23 @@ _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
 
 def _missing_env() -> list[str]:
     return [name for name in (_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV) if not os.environ.get(name)]
+
+
+def _bundle_path(env_name: str) -> str:
+    """Resolve a bundle path env var to an absolute path.
+
+    The runner is spawned with ``cwd=_RUNNER_DIR`` so it can find its own
+    ``node_modules``, but these paths are naturally written relative to the REPO
+    ROOT (that is where the CI job's other paths are rooted, and where a developer
+    runs pytest from). Passed through verbatim they resolve against the runner
+    directory instead -- ``tests/storyboard/runner/tests/storyboard/runner/...`` --
+    and the runner reports the cache as missing, which reads like a broken download
+    rather than a path bug.
+
+    Absolute values are passed through untouched.
+    """
+    raw = Path(os.environ[env_name])
+    return str(raw if raw.is_absolute() else (_REPO_ROOT / raw).resolve())
 
 
 def _run_storyboard_runner() -> dict[str, Any]:
@@ -66,9 +84,9 @@ def _run_storyboard_runner() -> dict[str, Any]:
         "--compliance-version",
         "3.1.1",
         "--compliance-dir",
-        os.environ[_COMPLIANCE_DIR_ENV],
+        _bundle_path(_COMPLIANCE_DIR_ENV),
         "--schema-root",
-        os.environ[_SCHEMA_ROOT_ENV],
+        _bundle_path(_SCHEMA_ROOT_ENV),
         "--timeout",
         "600",
         "--json",
