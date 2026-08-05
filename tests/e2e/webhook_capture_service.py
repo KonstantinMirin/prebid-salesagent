@@ -26,6 +26,20 @@ never be silently lost.
 readback client can assert it is talking to its own stack, not a cross-wired
 sibling on the same host port (a real risk once the readback port is
 published per-stack — see ``docker-compose.e2e.ports.yml``).
+
+Runs in the compose service on a bare ``python:3.12-slim`` image — no project
+dependencies, no build step (see docker-compose.e2e.yml's ``webhook-capture``
+service comment for why: ``Dockerfile.test`` bakes a multi-minute
+playwright/chromium install this service has no use for). That constraint is
+why the thread-serving bootstrap below is INLINED rather than imported from
+``tests.helpers.local_http_origin.serve_in_thread``, the otherwise-obvious
+reuse target: importing anything under ``tests.helpers`` runs its package
+``__init__.py``, which transitively imports ``tests.factories`` (``factory-boy``
+et al.) — dev-only dependencies a bare stdlib image does not have. Confirmed
+the hard way: the container exited on import before ever binding a socket.
+``tests/e2e/webhook_capture_service.py`` itself and its two package
+``__init__.py`` files stay stdlib-only so `python -m
+tests.e2e.webhook_capture_service`` never touches that chain.
 """
 
 from __future__ import annotations
@@ -34,13 +48,41 @@ import contextlib
 import json
 import os
 import re
+import socket
 import threading
 from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler
-
-from tests.helpers.local_http_origin import serve_in_thread
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _WEBHOOK_PATH_RE = re.compile(r"^/webhook/(?P<key>[^/]+)/?$")
+
+
+@contextlib.contextmanager
+def _serve_in_thread(
+    handler_class: type[BaseHTTPRequestHandler], *, host: str, port: int, server_attrs: dict[str, object]
+) -> Iterator[ThreadingHTTPServer]:
+    """Bind, serve on a daemon thread, tear down — the same shape as
+    ``tests.helpers.local_http_origin.serve_in_thread``, inlined rather than
+    imported (see module docstring).
+
+    ``request_queue_size`` overrides ``socketserver``'s default backlog of 5 —
+    too small for this service's real concurrency (many xdist workers under
+    ``run_all_tests.sh`` all posting/reading at once). Confirmed the hard way:
+    a burst of 20 concurrent writers reliably produced ``ConnectionResetError``
+    on a many-core box (fine on a quieter machine, which is exactly how a
+    backlog-too-small bug hides until it doesn't).
+    """
+    family = socket.getaddrinfo(host, None)[0][0]
+    server_class = type("_Server", (ThreadingHTTPServer,), {"address_family": family, "request_queue_size": 128})
+    server = server_class((host, port), handler_class)
+    for name, value in server_attrs.items():
+        setattr(server, name, value)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 class _CaptureStore:
@@ -129,9 +171,9 @@ def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[
     which compose stack this instance belongs to.
     """
     compose_project_name = os.environ.get("COMPOSE_PROJECT_NAME", "")
-    with serve_in_thread(
+    with _serve_in_thread(
         _CaptureRequestHandler,
-        listen_host=host,
+        host=host,
         port=port,
         server_attrs={"store": _CaptureStore(), "compose_project_name": compose_project_name},
     ) as server:
