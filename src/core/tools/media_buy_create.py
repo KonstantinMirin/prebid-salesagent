@@ -160,6 +160,7 @@ from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, reso
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
+from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -2050,6 +2051,24 @@ async def _create_media_buy_impl(
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
 
+    # SSRF gate at registration — after auth so unauthenticated callers get AUTH
+    # first. Must run before workflow metadata / DB writes.
+    # Use str(url): library ReportingWebhook.url is pydantic AnyUrl, not str.
+    if req.reporting_webhook:
+        rw_url = getattr(req.reporting_webhook, "url", None)
+        reject_unsafe_webhook_registration_url(
+            str(rw_url) if rw_url is not None else None,
+            field="reporting_webhook.url",
+            context=req.context,
+        )
+    if push_notification_config:
+        pnc_url = push_notification_config.get("url")
+        reject_unsafe_webhook_registration_url(
+            str(pnc_url) if pnc_url is not None else None,
+            field="push_notification_config.url",
+            context=req.context,
+        )
+
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:
         try:
@@ -2129,24 +2148,27 @@ async def _create_media_buy_impl(
         )
 
         # Register push notification config if provided (MCP/A2A protocol support)
-        # Skip for dry_run mode (no database writes)
+        # Skip for dry_run mode (no database writes). URL was SSRF-checked above;
+        # persist via repository upsert (registration gate + defense in depth).
         if push_notification_config:
             # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import PushNotificationConfigUoW
 
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
-
-            # Extract config details
             url = push_notification_config.get("url")
             authentication = push_notification_config.get("authentication", {})
 
-            if url:
-                # Extract authentication details (A2A format: schemes + credentials)
+            # Match the pre-gate: whitespace-only URL must not reach upsert.
+            # Log only inside the guard so blank URLs stay silent (same as sync).
+            if url is not None and str(url).strip():
+                # Log scheme+host+path only — never credentials / full auth blob.
+                logger.info(
+                    "[MCP/A2A] Registering push notification config id=%s url=%s",
+                    push_notification_config.get("id"),
+                    webhook_url_for_log(str(url)),
+                )
                 schemes = authentication.get("schemes", []) if authentication else []
                 auth_type = schemes[0] if schemes else None
                 credentials = authentication.get("credentials") if authentication else None
-
-                # Generate config ID
                 config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
 
                 # Save to database. validation_token/session_id are omitted on
@@ -2157,12 +2179,14 @@ async def _create_media_buy_impl(
                     _config, created = pnc_uow.push_notification_configs.upsert(
                         config_id=config_id,
                         principal_id=principal_id,
-                        url=url,
+                        url=str(url),
                         authentication_type=auth_type,
                         authentication_token=credentials,
                     )
                     logger.info(
-                        f"[MCP/A2A] Push notification config {'created' if created else 'updated'}: {config_id}"
+                        "[MCP/A2A] Push notification config %s: %s",
+                        "created" if created else "updated",
+                        config_id,
                     )
 
     try:

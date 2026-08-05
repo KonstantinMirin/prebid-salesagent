@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PushNotificationConfig
+from src.core.webhook_validator import WebhookURLValidator
 
 # Preserve-if-not-passed sentinel for upsert(): distinguishes "caller did not
 # supply this field" (keep the existing row's value) from an explicit None
@@ -123,7 +124,21 @@ class PushNotificationConfigRepository:
         Returns:
             (config, created): ``created`` is True if a new row was inserted,
             False if an existing row was updated (or reactivated).
+
+        Raises:
+            ValueError: If ``url`` fails the *registration* SSRF gate
+                (``WebhookURLValidator.validate_webhook_url_registration`` —
+                no DNS; optional localhost under ``ADCP_TESTING``). Deliberate
+                defense-in-depth: callers also gate before upsert. Outbound
+                protocol send uses ``validate_outbound_webhook_url``;
+                application delivery (``kind="Application"``) uses the same
+                ``reject_unsafe_outbound_webhook_url`` /
+                ``validate_outbound_webhook_url`` path.
         """
+        is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
+        if not is_valid:
+            raise ValueError(f"Invalid webhook URL: {error_msg}")
+
         existing = self.get_by_id(config_id, principal_id, active_only=False)
         now = datetime.now(UTC)
 
