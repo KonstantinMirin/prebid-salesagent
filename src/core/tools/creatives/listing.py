@@ -14,7 +14,6 @@ from adcp.types.generated_poc.creative.list_creatives_request import (
     Sort,
 )
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field as PydanticField
 
 from src.core.audit_logger import get_audit_logger
@@ -30,6 +29,7 @@ from src.core.schemas import (
     ListCreativesResponse,
 )
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
@@ -544,10 +544,7 @@ async def list_creatives(
         page=page,
         identity=identity,
     )
-    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
-    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
-    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    return mcp_result(response)
 
 
 def list_creatives_raw(

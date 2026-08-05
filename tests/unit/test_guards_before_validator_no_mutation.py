@@ -19,9 +19,11 @@ wire serializer's ``json.dumps(default=str)`` fallback then silently stringified
 
 Rule: every ``@model_validator(mode="before")`` method that mutates its input
 parameter (subscript assignment, ``.pop()``, ``.update()``, ``.setdefault()``,
-``.clear()``) must first reassign that parameter to a copy
-(``values = values.copy()`` / ``values = dict(values)``) before any such mutation.
-A validator that never mutates its input (read-only / raises) is exempt.
+``.clear()``) must first reassign that parameter to a copy via the shared
+``copy_before_mutating()`` helper (``values = copy_before_mutating(values)``)
+before any such mutation -- the abstraction must be used, not just a raw
+``.copy()``/``dict()`` call, so the rationale lives in one place. A validator
+that never mutates its input (read-only / raises) is exempt.
 
 Ships with ZERO violations; no allowlist (repo hard rule: allowlists never grow).
 """
@@ -67,7 +69,7 @@ def _param_name(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
 
 
 def _is_copy_reassignment(stmt: ast.stmt, param: str) -> bool:
-    """True for `<param> = <param>.copy()` or `<param> = dict(<param>)`."""
+    """True for `<param> = copy_before_mutating(<param>)`."""
     if not isinstance(stmt, ast.Assign):
         return False
     if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name) or stmt.targets[0].id != param:
@@ -75,10 +77,11 @@ def _is_copy_reassignment(stmt: ast.stmt, param: str) -> bool:
     value = stmt.value
     if isinstance(value, ast.Call):
         fn = value.func
-        if isinstance(fn, ast.Attribute) and fn.attr == "copy" and isinstance(fn.value, ast.Name):
-            return True
-        if isinstance(fn, ast.Name) and fn.id == "dict":
-            return True
+        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        if name == "copy_before_mutating" and len(value.args) == 1:
+            arg = value.args[0]
+            if isinstance(arg, ast.Name) and arg.id == param:
+                return True
     return False
 
 
@@ -168,7 +171,8 @@ class TestGuardDetector:
         )
         assert _detect({"src/t.py": src})
 
-    def test_negative_copy_then_mutate(self):
+    def test_positive_raw_copy_then_mutate(self):
+        # A raw .copy() is no longer accepted -- must go through the shared helper.
         src = (
             "class M:\n"
             "    @model_validator(mode='before')\n"
@@ -178,9 +182,9 @@ class TestGuardDetector:
             "        values['x'] = 1\n"
             "        return values\n"
         )
-        assert not _detect({"src/t.py": src})
+        assert _detect({"src/t.py": src})
 
-    def test_negative_dict_copy_then_mutate(self):
+    def test_positive_raw_dict_copy_then_mutate(self):
         src = (
             "class M:\n"
             "    @model_validator(mode='before')\n"
@@ -188,6 +192,18 @@ class TestGuardDetector:
             "    def v(cls, values):\n"
             "        values = dict(values)\n"
             "        values.pop('x', None)\n"
+            "        return values\n"
+        )
+        assert _detect({"src/t.py": src})
+
+    def test_negative_copy_before_mutating_then_mutate(self):
+        src = (
+            "class M:\n"
+            "    @model_validator(mode='before')\n"
+            "    @classmethod\n"
+            "    def v(cls, values):\n"
+            "        values = copy_before_mutating(values)\n"
+            "        values['x'] = 1\n"
             "        return values\n"
         )
         assert not _detect({"src/t.py": src})

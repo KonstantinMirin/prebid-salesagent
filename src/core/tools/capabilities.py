@@ -40,6 +40,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp import mcp_result
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -317,11 +318,7 @@ async def get_adcp_capabilities(
 
     summary = "\n".join(summary_parts)
 
-    # Return ToolResult with human-readable text and structured data.
-    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
-    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
-    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
-    return ToolResult(content=summary, structured_content=response.model_dump(mode="json"))
+    return mcp_result(response, content=summary)
 
 
 async def get_adcp_capabilities_raw(

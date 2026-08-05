@@ -6,12 +6,12 @@ from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, CreativeAsset, ValidationMode
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp import mcp_result
 
 from ._sync import _sync_creatives_impl
 
@@ -70,13 +70,7 @@ async def sync_creatives(
         context=context,
         identity=identity,
     )
-    # structured_content must be a plain dict serialized via model_dump(), not the raw
-    # model: FastMCP's ToolResult passes non-dict structured_content through
-    # pydantic_core.to_jsonable_python(), which bypasses our model_dump() overrides
-    # (Pattern #4 nested serialization) and AdCPBaseModel's exclude_none=True default —
-    # so protocol/spec-optional fields the model leaves unset (e.g. per-creative
-    # `status`) would otherwise serialize as invalid `null` instead of being omitted.
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    return mcp_result(response)
 
 
 def sync_creatives_raw(

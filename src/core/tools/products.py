@@ -15,7 +15,6 @@ from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
@@ -68,6 +67,7 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 # Import conversion utilities from dedicated module to avoid circular imports
 from src.core.product_conversion import convert_product_model_to_schema
+from src.core.tools._mcp import mcp_result
 
 
 def extract_product_property_ids(
@@ -828,8 +828,7 @@ async def get_products(
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
     response = await _get_products_impl(req, identity)
 
-    # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    return mcp_result(response)
 
 
 async def get_products_raw(

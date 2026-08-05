@@ -218,6 +218,27 @@ def strip_none_deep(value: Any) -> Any:
     return value
 
 
+def copy_before_mutating(values: dict) -> dict:
+    """Defensive copy for a ``mode="before"`` validator about to mutate its input.
+
+    pydantic-core hands a ``mode="before"`` validator its input dict BY
+    REFERENCE -- notably, when validating a ``list[Model]`` field on a parent
+    model, each list item's dict is passed to the item model's before-validator
+    without a defensive copy. A validator that mutates that dict in place
+    therefore corrupts whatever dict the caller still holds a reference to.
+
+    Traced production bug: ``src/a2a_server/adcp_a2a_server.py``'s
+    ``_reconstruct_response_object`` reconstructs a typed response FROM the
+    same dict about to be sent on the A2A wire (purely to build a
+    human-readable text part). ``Creative.validate_format_id`` mutated its
+    input dict in place, silently replacing a spec-compliant
+    ``{agent_url, id}`` nested dict with a live ``FormatId`` Python object in
+    the caller's dict -- which the wire serializer's
+    ``json.dumps(default=str)`` fallback then silently stringified.
+    """
+    return values.copy()
+
+
 class NestedModelSerializerMixin:
     """Mixin that ensures nested Pydantic models use their custom model_dump().
 
@@ -1254,9 +1275,7 @@ class Targeting(TargetingOverlay):
         if not isinstance(values, dict):
             return values
 
-        # Defensive copy: see Creative.validate_format_id (creative.py) for the
-        # traced production bug this in-place-mutation hazard caused elsewhere.
-        values = values.copy()
+        values = copy_before_mutating(values)
 
         for v2_key, v3_key, transform in _LEGACY_GEO_FIELDS:
             if v2_key not in values:
@@ -1571,13 +1590,7 @@ def _upgrade_legacy_format_ids(values: dict) -> dict:
     if not isinstance(values, dict):
         return values
 
-    # Defensive copy: a mode="before"
-    # validator must not mutate its input in place -- pydantic-core hands list-item
-    # dicts to it BY REFERENCE, so mutating `values` can corrupt a dict the caller
-    # still holds (see Creative.validate_format_id for the traced production bug
-    # this pattern caused). Matches the precedent already used by
-    # PackageRequest.remove_invalid_fields for the same hazard class.
-    values = values.copy()
+    values = copy_before_mutating(values)
 
     format_ids = values.get("format_ids")
     if format_ids and isinstance(format_ids, list):
@@ -1653,8 +1666,7 @@ class PackageRequest(LibraryPackageRequest):
         if not isinstance(values, dict):
             return values
 
-        # Create copy to avoid mutating input dict (critical for shared/cached dicts)
-        values = values.copy()
+        values = copy_before_mutating(values)
 
         # Remove response-only fields when reconstructing from database
         values.pop("status", None)
@@ -2060,9 +2072,7 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         if not isinstance(values, dict):
             return values
 
-        # Defensive copy: see Creative.validate_format_id (creative.py) for the
-        # traced production bug this in-place-mutation hazard caused elsewhere.
-        values = values.copy()
+        values = copy_before_mutating(values)
 
         # Normalize package instances to dicts so the list[AdCPPackageUpdate] field
         # validates them. FastMCP coerces the incoming param to its annotated type
