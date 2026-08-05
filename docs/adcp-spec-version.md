@@ -135,7 +135,7 @@ schema-shape consumers above. Only `suggestion` wording diverges (4 codes:
 `CREDENTIAL_IN_ARGS`, `MEDIA_BUY_NOT_FOUND`, `PACKAGE_NOT_FOUND`,
 `REQUOTE_REQUIRED`) — moving the one remaining reader onto the SDK tree
 requires first reconciling that divergence (tracked as
-[#1753](https://github.com/prebid/salesagent/issues/1753)); until it lands,
+[#1883](https://github.com/prebid/salesagent/issues/1883)); until it lands,
 this fixture is the correct, intentional source for that one consumer, and a
 spec bump must consider it separately from the schema-shape pin above.
 
