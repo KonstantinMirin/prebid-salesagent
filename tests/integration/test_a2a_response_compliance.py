@@ -102,8 +102,10 @@ class TestA2ASpecCompliance:
         ctx = {"user_id": "1234567890"}
         response = SyncCreativesResponse(**response_data, context=ctx)
 
-        # Check no extra fields
-        spec_fields = {"creatives", "dry_run", "context"}
+        # Check no extra fields.
+        # status is a protocol-envelope default (GH #1710) -- same pattern as
+        # GetProductsResponse/ListCreativesResponse above.
+        spec_fields = {"creatives", "dry_run", "context", "status"}
         response_fields = set(response.model_dump().keys())
         extra_fields = response_fields - spec_fields
 

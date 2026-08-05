@@ -484,6 +484,16 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Design decision (salesagent-g3c): error variant never constructed.
     """
 
+    # Protocol-envelope status (core/protocol-envelope.json): REQUIRED on every task
+    # response envelope, a sibling field at the MCP/REST wire root (not nested under
+    # a "payload" key). This class only ever represents a synchronously-completed
+    # sync (the error/submitted branches are never constructed here — see class
+    # docstring), so "completed" is invariant. Declared directly on the response
+    # (the pattern already used by CreateMediaBuySuccess/UpdateMediaBuySuccess/
+    # ListCreativeFormatsResponse) rather than left to a wrapper that never actually
+    # ran (GH #1710): the library parent has no status field at all.
+    status: Literal["completed"] = "completed"
+
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.
     # Required (no default): pinned 3.1 SyncCreativesSuccess.required=['creatives'] — a
