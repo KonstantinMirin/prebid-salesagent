@@ -123,7 +123,7 @@ class CapabilitiesEnv(IntegrationEnv):
         e2e_unsupported(
             "no production test_behavior channel for overriding reported default_channels "
             "(only 'unavailable' and 'targeting_capabilities' are wired to AdapterConfig "
-            "test_behavior — salesagent-689e)"
+            "test_behavior) — #1871"
         )
     )
     def set_adapter_channels(self, channels: list[str]) -> None:
@@ -167,7 +167,7 @@ class CapabilitiesEnv(IntegrationEnv):
     @realize_e2e(
         e2e_unsupported(
             "no production tenant-config surface for the seller's advertised adcp version set "
-            "(SUPPORTED_ADCP_VERSIONS/MAJORS are process-wide constants, salesagent-rldj) — a "
+            "(SUPPORTED_ADCP_VERSIONS/MAJORS are process-wide constants) — a "
             "module-constant monkeypatch cannot cross a real HTTP process boundary"
         )
     )
@@ -189,8 +189,8 @@ class CapabilitiesEnv(IntegrationEnv):
     @realize_e2e(
         e2e_unsupported(
             "no production tenant-config surface for the seller's advertised build_version "
-            "(src.core.version.get_version() is a process-wide package-metadata read, "
-            "salesagent-rldj) — cannot be injected over real HTTP"
+            "(src.core.version.get_version() is a process-wide package-metadata read) "
+            "— cannot be injected over real HTTP"
         )
     )
     def set_build_version(self, build_version: str) -> None:
@@ -202,7 +202,7 @@ class CapabilitiesEnv(IntegrationEnv):
     @realize_e2e(
         e2e_unsupported(
             "no production tenant-config surface for the adcp.idempotency posture "
-            "(get_idempotency_posture() is a process-wide provider, salesagent-rldj) — a "
+            "(get_idempotency_posture() is a process-wide provider) — a "
             "module-function monkeypatch cannot cross a real HTTP process boundary"
         )
     )
