@@ -15,7 +15,8 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig, SyncJob
-from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundRequestBlocked, send
+from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundRequestBlocked
+from src.core.security.webhook_egress import deliver_signed_webhook
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import webhook_url_for_log
 
@@ -370,7 +371,14 @@ def _post_approval_webhook(
     """
     safe_url = webhook_url_for_log(webhook_url)
     try:
-        result = send(webhook_url, json=payload, headers=headers, timeout=10.0, max_attempts=3)
+        # secret=None here: no PushNotificationConfig field currently carries an
+        # HMAC secret for this path (salesagent-47n9.15 tracks wiring one for
+        # authentication_type == "HMAC-SHA256"). Routing through
+        # deliver_signed_webhook now, even unsigned, means that once a secret is
+        # wired the send call itself needs no change.
+        result = deliver_signed_webhook(
+            webhook_url, payload, secret=None, headers=headers, timeout=10.0, max_attempts=3
+        )
     except OutboundRequestBlocked:
         # The URL never left the process. Deliberately opaque: the seam has
         # already logged which policy refused it and why.

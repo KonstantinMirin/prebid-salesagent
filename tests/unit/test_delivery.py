@@ -1811,36 +1811,6 @@ class TestDeliveryWebhookHappyPath:
         assert "next_expected_at" in payload
         assert payload["notification_type"] == "scheduled"
 
-    def test_hmac_sha256_signature_headers(self):
-        """UC-004-WH-07: webhook payload signed with HMAC-SHA256.
-
-        Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
-        CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification.
-        Tests that WebhookDeliveryService._generate_hmac_signature produces a valid hex signature,
-        and that signing with the same inputs is deterministic.
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-        """
-        service = WebhookDeliveryService()
-
-        payload = {"media_buy_id": "mb_wh07", "impressions": 1000}
-        secret = "a" * 32  # 32-char minimum secret
-        timestamp = "2025-06-15T12:00:00Z"
-
-        sig1 = service._generate_hmac_signature(payload, secret, timestamp)
-        sig2 = service._generate_hmac_signature(payload, secret, timestamp)
-
-        # Signature is a hex string
-        assert isinstance(sig1, str)
-        assert len(sig1) == 64  # SHA-256 hex = 64 chars
-
-        # Deterministic
-        assert sig1 == sig2
-
-        # Different payload produces different signature
-        different_payload = {"media_buy_id": "mb_wh07", "impressions": 2000}
-        sig3 = service._generate_hmac_signature(different_payload, secret, timestamp)
-        assert sig3 != sig1
-
     def test_webhook_excludes_aggregated_totals(self):
         """UC-004-WH-09: webhook does NOT include aggregated_totals.
 

@@ -613,7 +613,7 @@ class TestDeliverWithBackoffGenericException:
         def _unexpected(*args, **kwargs):
             raise RuntimeError("unexpected")
 
-        with patch("src.services.webhook_delivery_service.send", _unexpected):
+        with patch("src.services.webhook_delivery_service.deliver_signed_webhook", _unexpected):
             result = svc._deliver_with_backoff("test_endpoint", cb, queue)
 
         assert result is False

@@ -212,9 +212,12 @@ class TestWebhookDelivery:
 
             success, result = env.call_deliver(payload={"test": "data"}, signing_secret="test-secret-key")
 
-            # The signature must be on the request the endpoint actually received
+            # The signature must be on the request the endpoint actually received.
+            # Spec header name (X-AdCP-Signature, from adcp.sign_legacy_webhook)
+            # since salesagent-47n9.1 -- the non-spec X-Webhook-Signature no
+            # longer exists, and nothing in src/ ever emitted X-Hub-Signature-256.
             headers = env.last_delivery.headers
-            assert "X-Webhook-Signature" in headers or "X-Hub-Signature-256" in headers
+            assert "X-AdCP-Signature" in headers
             assert success is True
 
     def test_invalid_webhook_url_validation(self):

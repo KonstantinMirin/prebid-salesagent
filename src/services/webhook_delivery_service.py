@@ -11,9 +11,6 @@ This service implements the AdCP webhook specification from PR #86:
 """
 
 import atexit
-import hashlib
-import hmac
-import json
 import logging
 import os
 import threading
@@ -24,7 +21,8 @@ from typing import Any
 
 from adcp import get_adcp_spec_version
 
-from src.core.security.outbound_http import OutboundError, send, terminal_client_error_status
+from src.core.security.outbound_http import OutboundError, terminal_client_error_status
+from src.core.security.webhook_egress import deliver_signed_webhook
 from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -334,26 +332,6 @@ class WebhookDeliveryService:
             )
             return False
 
-    def _generate_hmac_signature(self, payload: dict[str, Any], secret: str, timestamp: str) -> str:
-        """Generate HMAC-SHA256 signature for webhook payload.
-
-        Args:
-            payload: Webhook payload
-            secret: Webhook secret (min 32 characters)
-            timestamp: ISO format timestamp
-
-        Returns:
-            HMAC signature as hex string
-        """
-        # Create signature input: timestamp + json payload
-        payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        message = f"{timestamp}.{payload_str}"
-
-        # Generate HMAC-SHA256
-        signature = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-
-        return signature
-
     def _verify_secret_strength(self, secret: str) -> bool:
         """Verify webhook secret meets minimum strength requirements.
 
@@ -494,26 +472,24 @@ class WebhookDeliveryService:
 
         config = webhook_data["config"]
         payload = webhook_data["payload"]
-        timestamp = webhook_data["timestamp"].isoformat()
         safe_url = webhook_url_for_log(config.url)
 
-        # Generate HMAC signature if webhook secret is configured
+        # Signing (X-ADCP-Signature / X-ADCP-Timestamp) is owned entirely by
+        # deliver_signed_webhook below -- it serializes, signs and stamps the
+        # timestamp as one decision, so this function never holds a signature
+        # and a body serialization as two independent things to keep in sync.
         webhook_secret = getattr(config, "webhook_secret", None)
+        if webhook_secret and not self._verify_secret_strength(webhook_secret):
+            logger.warning(
+                "⚠️ Webhook secret for %s is too weak (min 32 characters required)",
+                safe_url,
+            )
+            webhook_secret = None
+
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
-            "X-ADCP-Timestamp": timestamp,  # For replay prevention
         }
-
-        if webhook_secret:
-            if not self._verify_secret_strength(webhook_secret):
-                logger.warning(
-                    "⚠️ Webhook secret for %s is too weak (min 32 characters required)",
-                    safe_url,
-                )
-            else:
-                signature = self._generate_hmac_signature(payload, webhook_secret, timestamp)
-                headers["X-ADCP-Signature"] = signature
 
         # Add authentication
         if config.authentication_type == "bearer" and config.authentication_token:
@@ -533,9 +509,10 @@ class WebhookDeliveryService:
         # ``config.url``: a buyer's webhook URL may carry credentials in userinfo
         # or a token in the query string, and these lines land in operator logs.
         try:
-            result = send(
+            result = deliver_signed_webhook(
                 config.url,
-                json=payload,
+                payload,
+                secret=webhook_secret,
                 headers=headers,
                 timeout=_delivery_timeout_seconds(),
                 max_attempts=3,

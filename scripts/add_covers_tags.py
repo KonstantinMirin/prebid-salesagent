@@ -484,7 +484,10 @@ MAPPINGS: dict[tuple[str, str], list[str]] = {
     ("tests/unit/test_delivery.py", "test_adapter_error_no_state_change"): ["UC-004-EXT-F-04"],
     # Webhook
     ("tests/unit/test_delivery.py", "test_next_expected_at_computed"): ["UC-004-ALT-WEBHOOK-PUSH-REPORTING-06"],
-    ("tests/unit/test_delivery.py", "test_hmac_sha256_signature_headers"): ["UC-004-ALT-WEBHOOK-PUSH-REPORTING-07"],
+    # UC-004-ALT-WEBHOOK-PUSH-REPORTING-07 moved off test_delivery.py (salesagent-47n9.1):
+    # test_hmac_sha256_signature_headers pinned the deleted WebhookDeliveryService._generate_hmac_signature.
+    # Now covered by tests/integration/test_webhook_sender_signed_body_integrity.py::
+    # TestWebhookDeliveryServiceSignedBodyIntegrity.
     ("tests/unit/test_delivery.py", "test_webhook_excludes_aggregated_totals"): [
         "UC-004-ALT-WEBHOOK-PUSH-REPORTING-09"
     ],

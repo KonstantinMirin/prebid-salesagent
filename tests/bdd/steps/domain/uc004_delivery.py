@@ -2051,39 +2051,49 @@ def then_hmac_header(ctx: dict, header: str) -> None:
     assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
 
 
-@then(parsers.parse('the request should include header "{header}" with ISO timestamp'))
+@then(parsers.parse('the request should include header "{header}" with unix timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
-    """Assert timestamp header is present and contains a valid ISO 8601 datetime."""
-    from datetime import datetime as _dt
+    """Assert timestamp header is present and contains a unix-seconds integer.
 
+    Per AdCP 3.1.1 (dist/docs/3.1.1/building/by-layer/L3/webhooks.mdx:404-418):
+    ``X-ADCP-Timestamp: <unix timestamp in seconds>``, an exact ASCII integer.
+    """
     headers = _get_last_webhook_headers(ctx)
     assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
     value = headers[header]
-    try:
-        _dt.fromisoformat(value)
-    except (ValueError, TypeError) as exc:
-        raise AssertionError(f"Header {header!r} is not a valid ISO 8601 timestamp: {value!r}") from exc
+    assert value.isdigit(), f"Header {header!r} is not a unix-seconds integer: {value!r}"
 
 
 @then('the HMAC should be computed over "timestamp.payload" concatenation')
 def then_hmac_computation(ctx: dict) -> None:
-    """Assert HMAC signature is reproduced by signing timestamp.payload with the secret."""
+    """Assert the HMAC verifies against the RAW bytes the origin actually received.
+
+    Recomputes over the wire body (``deliveries[-1].body``), not a fresh
+    ``json.dumps`` of the parsed payload — a recompute from the dict can
+    silently agree with a sender that signed one serialization and
+    transmitted another, which is exactly the defect salesagent-47n9.1 fixed.
+    """
     import hashlib
     import hmac as hmac_lib
-    import json as json_lib
 
-    headers = _get_last_webhook_headers(ctx)
-    payload = _get_last_webhook_payload(ctx)
-    timestamp = headers.get("X-ADCP-Timestamp") or headers.get("X-Webhook-Timestamp", "")
-    raw_sig = headers.get("X-ADCP-Signature") or headers.get("X-Webhook-Signature", "")
+    deliveries = _webhook_deliveries(ctx)
+    assert deliveries, "No webhook POST was made"
+    request = deliveries[-1]
+
+    headers = request.headers
+    timestamp = headers.get("X-ADCP-Timestamp", "")
+    raw_sig = headers.get("X-ADCP-Signature", "")
     signature = raw_sig.removeprefix("sha256=")
     assert signature, "Expected HMAC signature header to be present and non-empty"
     signing_secret: str = ctx.get("webhook_secret", "")
     assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
-    payload_str = json_lib.dumps(payload, sort_keys=True, separators=(",", ":"))
-    message = f"{timestamp}.{payload_str}".encode()
+    message = f"{timestamp}.".encode() + request.body
     expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
-    assert signature == expected, f"HMAC signature mismatch: got {signature!r}, expected {expected!r}"
+    assert signature == expected, (
+        f"the buyer's endpoint could not verify this webhook: X-ADCP-Signature was computed over "
+        f"bytes other than the {len(request.body)} that crossed the socket (got {signature!r}, "
+        f"expected {expected!r})"
+    )
 
 
 @then(parsers.parse('the request should include header "{header}" with the bearer token'))

@@ -12,7 +12,6 @@ Application-level webhooks are configured via:
 - AdCP: CreateMediaBuyRequest.reporting_webhook
 """
 
-import json
 import logging
 import time
 from collections.abc import Mapping
@@ -21,7 +20,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import extract_webhook_result_data, sign_legacy_webhook
+from adcp import extract_webhook_result_data
 from adcp.types import McpWebhookPayload
 from google.protobuf.json_format import MessageToDict
 
@@ -35,6 +34,7 @@ from src.core.security.outbound_http import (
     asend,
     terminal_client_error_status,
 )
+from src.core.security.webhook_egress import prepare_signed_request
 from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -230,29 +230,28 @@ class ProtocolWebhookService:
         # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
         payload_dict: dict[str, Any] = _to_wire_dict(payload)
 
-        # Apply authentication based on schemes
-        body_bytes: bytes | None = None
-        if (
+        # Apply authentication based on schemes. HMAC-SHA256 and the unsigned
+        # case both route through prepare_signed_request so there is exactly
+        # one place that decides what bytes represent this payload — never a
+        # signer computing one serialization while something else transmits
+        # another. Bearer is a header-only credential, not a body signature,
+        # so it stays outside that seam.
+        if push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
+            headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
+            secret = None
+        elif (
             push_notification_config.authentication_type == "HMAC-SHA256"
             and push_notification_config.authentication_token
         ):
-            # Sign the EXACT bytes that go on the wire. The signature is computed
-            # over compact JSON; letting the HTTP client re-serialize the dict
-            # produces different bytes (spaced separators under requests, escaped
-            # non-ASCII under others) and the receiver's verification fails — a
-            # security header that silently stops meaning anything. The SDK returns
-            # the signed bytes for exactly this reason, so we transmit those.
-            signed_headers, body_bytes = sign_legacy_webhook(
-                push_notification_config.authentication_token,
-                payload_dict,
-                timestamp=str(int(time.time())),
-                headers=headers,
-            )
-            headers = {**headers, **signed_headers}
+            secret = push_notification_config.authentication_token
+        else:
+            secret = None
 
-        elif push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
-            # Use Bearer token authentication
-            headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
+        # prepare_signed_request is called exactly once per delivery here —
+        # its returned body_bytes are the exact bytes that must reach the
+        # wire, so they are threaded through (not recomputed) all the way to
+        # the asend() call in _send_with_retry_and_logging.
+        headers, body_bytes = prepare_signed_request(payload_dict, secret, headers)
 
         # Send notification with retry logic and logging
         return await self._send_with_retry_and_logging(
@@ -310,19 +309,18 @@ class ProtocolWebhookService:
         payload: dict[str, Any],
         headers: dict,
         metadata: dict[str, Any],
+        body_bytes: bytes,
         max_attempts: int = 3,
-        body_bytes: bytes | None = None,
     ) -> bool:
         """Deliver one webhook through the egress seam, with logging and audit trail.
 
-        ``body_bytes`` are the exact bytes an HMAC signature was computed over, when
-        the destination is signed. They go on the wire unchanged — re-serializing the
-        dict here would break the signature the receiver checks.
+        ``body_bytes`` are the exact bytes ``prepare_signed_request`` produced —
+        signed over them when the destination is signed, always the sole
+        serialization of ``payload`` otherwise. They go on the wire unchanged;
+        this function does not call ``json.dumps`` on ``payload`` itself, so
+        there is no second serialization that could disagree with the first.
         """
-        # The bytes that actually go on the wire, so payload_size_bytes measures what
-        # was sent rather than a second serialization of the same dict.
-        wire_body = body_bytes if body_bytes is not None else json.dumps(payload).encode("utf-8")
-        payload_size_bytes = len(wire_body)
+        payload_size_bytes = len(body_bytes)
 
         task_type = metadata["task_type"] if "task_type" in metadata else None
         tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
@@ -374,7 +372,7 @@ class ProtocolWebhookService:
         try:
             result_out = await asend(
                 url,
-                content=wire_body,
+                content=body_bytes,
                 headers=headers,
                 timeout=10.0,
                 max_attempts=max_attempts,

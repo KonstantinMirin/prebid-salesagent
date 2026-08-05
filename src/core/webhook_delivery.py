@@ -5,7 +5,7 @@ This module provides reliable webhook delivery with:
 - Database tracking of delivery attempts
 - Retry on 5xx errors, no retry on 4xx client errors
 - SSRF protection, redirect refusal and the retry schedule: all the egress seam's
-- HMAC signing support via WebhookAuthenticator
+- HMAC signing via src.core.security.webhook_egress (spec X-ADCP-Signature)
 """
 
 import logging
@@ -19,10 +19,9 @@ from src.core.database.database_session import get_db_session
 from src.core.security.outbound_http import (
     OutboundDeliveryFailed,
     OutboundRequestBlocked,
-    send,
     terminal_client_error_status,
 )
-from src.core.webhook_authenticator import WebhookAuthenticator
+from src.core.security.webhook_egress import deliver_signed_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +92,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     # Generate delivery ID for tracking
     delivery_id = f"whd_{uuid.uuid4().hex[:12]}"
 
-    # Add HMAC signature if secret provided
     headers = delivery.headers.copy()
-    if delivery.signing_secret:
-        signature_headers = WebhookAuthenticator.sign_payload(delivery.payload, delivery.signing_secret)
-        headers.update(signature_headers)
 
     # Track delivery attempts
     attempts = 0
@@ -128,9 +123,10 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     # on already happened at ingest (src/core/webhook_validator.py, reject_unsafe_webhook_registration_url), so a block here
     # means the environment's policy changed after acceptance.
     try:
-        result = send(
+        result = deliver_signed_webhook(
             delivery.webhook_url,
-            json=delivery.payload,
+            delivery.payload,
+            secret=delivery.signing_secret,
             headers=headers,
             timeout=float(delivery.timeout),
             max_attempts=delivery.max_retries,

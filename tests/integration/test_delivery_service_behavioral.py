@@ -285,13 +285,20 @@ class TestSendWebhookEnhancedHmacSigning:
             assert len(sent_headers["X-ADCP-Signature"]) > 0
 
     def test_hmac_signature_valid_reproduces_from_payload(self, integration_db):
-        """The HMAC signature can be reproduced using the same secret and payload.
+        """The HMAC signature can be reproduced over the raw bytes that crossed the socket.
+
+        Recomputes over ``env.last_delivery.body`` — the bytes the origin
+        actually received — rather than a fresh ``json.dumps`` of the payload
+        dict. A recompute from the dict would use whatever serialization
+        formula the test happens to pick, which can silently agree with a
+        sender that signs one serialization and transmits another (the bug
+        salesagent-47n9.1 fixed); recomputing from the received bytes is the
+        only form that can catch that divergence.
 
         Covers: UC-004-EXT-G-06
         """
         import hashlib
         import hmac
-        import json
 
         from tests.factories import (
             PrincipalFactory,
@@ -322,16 +329,23 @@ class TestSendWebhookEnhancedHmacSigning:
                 delivery_payload=payload,
             )
 
-            sent_headers = env.last_delivery.headers
-            sent_signature = sent_headers["X-ADCP-Signature"]
-            sent_timestamp = sent_headers["X-ADCP-Timestamp"]
+            request = env.last_delivery
+            sent_signature = request.headers["X-ADCP-Signature"]
+            sent_timestamp = request.headers["X-ADCP-Timestamp"]
+            assert sent_signature.startswith("sha256="), sent_signature
 
-            # Reproduce the signature
-            payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            message = f"{sent_timestamp}.{payload_str}"
-            expected = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+            # Reproduce the signature over the raw bytes the origin received.
+            expected = hmac.new(
+                secret.encode("utf-8"),
+                f"{sent_timestamp}.".encode() + request.body,
+                hashlib.sha256,
+            ).hexdigest()
 
-            assert sent_signature == expected
+            assert sent_signature == f"sha256={expected}", (
+                "the buyer's endpoint could not verify this webhook: X-ADCP-Signature was "
+                f"computed over bytes other than the {len(request.body)} that crossed the "
+                f"socket ({request.body[:120]!r}...)"
+            )
 
 
 # ---------------------------------------------------------------------------

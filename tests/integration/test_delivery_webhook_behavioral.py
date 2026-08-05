@@ -84,10 +84,13 @@ class TestWebhookDeliveryHappyPath:
             assert env.delivery_attempts == 1
             assert env.last_delivery.path == "/webhook"
 
-            # Verify HMAC signature headers were added
+            # Verify HMAC signature headers were added. Spec header names
+            # (X-AdCP-Signature/X-AdCP-Timestamp, from adcp.sign_legacy_webhook
+            # via the shared deliver_signed_webhook seam) since salesagent-47n9.1 —
+            # the non-spec X-Webhook-* pair no longer exists.
             sent_headers = env.last_delivery.headers
-            assert "X-Webhook-Signature" in sent_headers
-            assert "X-Webhook-Timestamp" in sent_headers
+            assert "X-AdCP-Signature" in sent_headers
+            assert "X-AdCP-Timestamp" in sent_headers
 
             # Verify payload was sent
             sent_payload = env.last_delivery.json()
@@ -97,32 +100,16 @@ class TestWebhookDeliveryHappyPath:
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
+#
+# Formerly TestWebhookHmacSha256Signing here, unit-testing the deleted
+# WebhookAuthenticator.sign_payload directly. salesagent-47n9.1 deleted that
+# class (dead in production; its only production caller path never set
+# signing_secret) and re-homed this obligation onto a byte-verifying test:
+# tests/integration/test_webhook_sender_signed_body_integrity.py::
+# TestWebhookDeliveryServiceSignedBodyIntegrity, which proves the signature
+# verifies against the actual wire bytes rather than only asserting header
+# presence/prefix.
 # ---------------------------------------------------------------------------
-
-
-class TestWebhookHmacSha256Signing:
-    """Webhook payload signed with HMAC-SHA256.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-    """
-
-    def test_sign_payload_produces_hmac_headers(self):
-        """WebhookAuthenticator.sign_payload produces HMAC-SHA256 signature headers.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-        """
-        from src.core.webhook_authenticator import WebhookAuthenticator
-
-        payload = {"media_buy_id": "mb_001", "impressions": 5000}
-        secret = "test-signing-secret"
-
-        headers = WebhookAuthenticator.sign_payload(payload, secret)
-
-        assert "X-Webhook-Signature" in headers
-        assert headers["X-Webhook-Signature"].startswith("sha256=")
-        assert len(headers["X-Webhook-Signature"]) > len("sha256=")
-        assert "X-Webhook-Timestamp" in headers
-        assert headers["X-Webhook-Timestamp"].isdigit()
 
 
 # ---------------------------------------------------------------------------
@@ -485,10 +472,12 @@ class TestEXT_G_06_HmacAuthRejection:
                 object_id="mb_001",
             )
 
+            # Spec header names (X-AdCP-Signature/X-AdCP-Timestamp) since
+            # salesagent-47n9.1 -- the non-spec X-Webhook-* pair no longer exists.
             sent_headers = env.last_delivery.headers
-            assert "X-Webhook-Signature" in sent_headers
-            assert sent_headers["X-Webhook-Signature"].startswith("sha256=")
-            assert "X-Webhook-Timestamp" in sent_headers
+            assert "X-AdCP-Signature" in sent_headers
+            assert sent_headers["X-AdCP-Signature"].startswith("sha256=")
+            assert "X-AdCP-Timestamp" in sent_headers
 
     def test_auth_rejection_vs_server_error_retry_behavior(self, integration_db):
         """Contrast: 401 does NOT retry, but 500 DOES retry.

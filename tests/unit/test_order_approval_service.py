@@ -232,7 +232,10 @@ def test_approval_webhook_rejects_metadata_url_without_post(caplog):
 
     with (
         patch("src.services.order_approval_service.get_db_session") as mock_db,
-        patch("src.services.order_approval_service.send", wraps=real_send) as spy_send,
+        # The seam call now lives one layer down, inside deliver_signed_webhook
+        # (src.core.security.webhook_egress) -- the shared signed-delivery
+        # function every webhook sender routes through since salesagent-47n9.1.
+        patch("src.core.security.webhook_egress.send", wraps=real_send) as spy_send,
         caplog.at_level(logging.WARNING, logger="src.services.order_approval_service"),
     ):
         mock_db_instance = MagicMock()
@@ -248,5 +251,8 @@ def test_approval_webhook_rejects_metadata_url_without_post(caplog):
             message="Order approved successfully",
         )
 
-    spy_send.assert_called_once_with(metadata_url, json=ANY, headers=ANY, timeout=10.0, max_attempts=3)
+    # content=, not json=: deliver_signed_webhook serializes once and transmits
+    # those exact bytes via content=, never json= (salesagent-47n9.1's Core
+    # Invariant -- no webhook sender may reach json= on the egress seam).
+    spy_send.assert_called_once_with(metadata_url, content=ANY, headers=ANY, timeout=10.0, max_attempts=3)
     assert "was refused by egress policy" in caplog.text

@@ -113,5 +113,7 @@ class TestWebhookEnvContract:
             success, result = env.call_deliver(signing_secret="test-secret")
 
             assert success is True
-            # Verify the endpoint received signature headers
-            assert "X-Webhook-Signature" in env.last_delivery.headers
+            # Verify the endpoint received signature headers. Spec header name
+            # (X-AdCP-Signature, from adcp.sign_legacy_webhook) since
+            # salesagent-47n9.1 -- the non-spec X-Webhook-Signature no longer exists.
+            assert "X-AdCP-Signature" in env.last_delivery.headers
