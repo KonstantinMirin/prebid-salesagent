@@ -196,8 +196,9 @@ class ProtocolWebhookService:
 
         # The buyer's URL is delivered verbatim: the egress seam (asend) is the only
         # place allowed to decide anything about the destination. Test stacks that
-        # need a host-reachable callback register a reachable hostname instead
-        # (ADCP_WEBHOOK_HOST, see tests/e2e/_webhook_capture.py).
+        # need a reachable callback register a reachable hostname instead — the e2e
+        # stack runs a long-lived webhook-capture service behind the shared TLS front
+        # (see tests/e2e/webhook_capture_service.py).
         #
         # No separate send-time SSRF gate here (#1697 added one in front of the old
         # requests.Session POST): the seam's pre-connection check IS that gate and
