@@ -1,0 +1,103 @@
+"""A2A 'success' field: single derivation, not 3 duplicated inline copies (R3-10, salesagent-1zq3.10).
+
+Three sites independently stamped response_data["success"] onto the A2A wire:
+_serialize_for_a2a (the declared "single serialization point", which correctly
+derives success from the presence of `errors`), _handle_get_products_skill, and
+_get_products (the natural-language handler) -- the latter two duplicated the
+stamp inline WITHOUT the errors-derivation, unconditionally forcing
+success=True even when the response carried populated `errors`.
+
+This is a DRY violation (CLAUDE.md non-negotiable invariant) that hid a real
+behavioral divergence: a get_products response with per-item errors reported
+success=True on the A2A wire via the explicit-skill and NL paths, but
+success=False via any other path that returns a raw Pydantic model through
+_serialize_for_a2a.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from tests.factories.principal import PrincipalFactory
+
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
+    principal_id="test_principal", tenant_id="test_tenant", tenant={"tenant_id": "test_tenant"}, protocol="a2a"
+)
+
+
+def _mock_get_products_response(errors=None):
+    """A MagicMock standing in for a GetProductsResponse Pydantic model."""
+    mock_response = MagicMock()
+    mock_response.__str__.return_value = "Found 0 products"
+    dump = {"products": []}
+    if errors is not None:
+        dump["errors"] = errors
+    mock_response.model_dump.return_value = dump
+    return mock_response
+
+
+class TestSerializeForA2ADerivesSuccessFromErrors:
+    """Baseline: the declared single serialization point already gets this right."""
+
+    def test_success_true_when_no_errors(self):
+        handler = AdCPRequestHandler()
+        result = handler._serialize_for_a2a(_mock_get_products_response())
+        assert result["success"] is True
+
+    def test_success_false_when_errors_present(self):
+        handler = AdCPRequestHandler()
+        result = handler._serialize_for_a2a(_mock_get_products_response(errors=[{"code": "X", "message": "y"}]))
+        assert result["success"] is False
+
+
+class TestHandleGetProductsSkillDerivesSuccessFromErrors:
+    """_handle_get_products_skill duplicated the stamp without errors-derivation."""
+
+    @pytest.mark.asyncio
+    async def test_success_false_when_errors_present(self):
+        handler = AdCPRequestHandler()
+        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
+            mock_core_tool.return_value = _mock_get_products_response(errors=[{"code": "X", "message": "y"}])
+            result = await handler._handle_get_products_skill({"brief": "test"}, _MOCK_IDENTITY)
+
+        assert result["success"] is False, (
+            "get_products A2A response with populated errors must report success=False, "
+            "matching _serialize_for_a2a's derivation -- not unconditionally True"
+        )
+
+    @pytest.mark.asyncio
+    async def test_success_true_when_no_errors(self):
+        handler = AdCPRequestHandler()
+        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
+            mock_core_tool.return_value = _mock_get_products_response()
+            result = await handler._handle_get_products_skill({"brief": "test"}, _MOCK_IDENTITY)
+
+        assert result["success"] is True
+
+
+class TestNaturalLanguageGetProductsDerivesSuccessFromErrors:
+    """_get_products (NL handler) duplicated the stamp without errors-derivation."""
+
+    @pytest.mark.asyncio
+    async def test_success_false_when_errors_present(self):
+        handler = AdCPRequestHandler()
+        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
+            mock_core_tool.return_value = _mock_get_products_response(errors=[{"code": "X", "message": "y"}])
+            result = await handler._get_products("test query", _MOCK_IDENTITY)
+
+        assert result["success"] is False, (
+            "get_products A2A response (NL path) with populated errors must report "
+            "success=False, matching _serialize_for_a2a's derivation"
+        )
+
+    @pytest.mark.asyncio
+    async def test_success_true_when_no_errors(self):
+        handler = AdCPRequestHandler()
+        with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
+            mock_core_tool.return_value = _mock_get_products_response()
+            result = await handler._get_products("test query", _MOCK_IDENTITY)
+
+        assert result["success"] is True

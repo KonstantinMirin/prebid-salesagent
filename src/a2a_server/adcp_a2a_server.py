@@ -1421,19 +1421,57 @@ class AdCPRequestHandler(RequestHandler):
         raise UnsupportedOperationError(message="Extended agent card not supported")
 
     @staticmethod
+    def _stamp_a2a_protocol_fields(response: BaseModel) -> dict:
+        """Dump a Pydantic response and stamp the A2A protocol fields onto it.
+
+        ``message`` and ``success`` are not spec fields on any response
+        model — they are A2A transport-envelope markers (like MCP's
+        ``task_id``/``adcp_version``; see
+        ``tests/integration/test_harness_wire_response.py::ENVELOPE_MARKERS``),
+        a deliberate A2A-binding deviation (R3-10, salesagent-1zq3.10).
+        ``success`` is derived from ``errors`` so a response carrying
+        per-item errors reports ``success=False`` uniformly, regardless of
+        which caller stamped it.
+
+        Single point for this derivation — three sites used to duplicate it
+        inline, and two of the three (the get_products explicit-skill and
+        NL handlers, which need the dict pre-stamped before
+        ``apply_version_compat`` sees it) omitted the errors-derivation
+        entirely, always forcing ``success=True``.
+
+        Args:
+            response: Pydantic model from a skill handler.
+
+        Returns:
+            Dict with ``message``/``success`` stamped, ready for A2A.
+        """
+        response_data = response.model_dump(mode="json")
+        response_data["message"] = str(response)
+
+        # Derive success from errors field if present, default True otherwise
+        if "errors" in response_data:
+            response_data["success"] = not bool(response_data["errors"])
+        else:
+            response_data.setdefault("success", True)
+
+        return response_data
+
+    @staticmethod
     def _serialize_for_a2a(response: BaseModel | dict) -> dict:
         """Serialize a handler response for A2A protocol at the framework boundary.
 
         Single serialization point for all explicit-skill A2A responses.
 
         - Pydantic models: serialized via ``model_dump(mode="json")`` here,
-          and the protocol fields (``message``, ``success``) are added.
+          and the protocol fields (``message``, ``success``) are added via
+          ``_stamp_a2a_protocol_fields``.
         - Dicts: passed through. Only skill handlers that pre-apply version
           compat (e.g., ``_handle_get_products_skill`` calls
           ``apply_version_compat`` and emits a dict already populated with
-          ``message``/``success``) use this path. Error dicts that bypass
-          the envelope contract were retired in this PR — NL handlers now
-          raise typed ``AdCPError`` instead.
+          ``message``/``success`` via ``_stamp_a2a_protocol_fields``) use
+          this path. Error dicts that bypass the envelope contract were
+          retired in this PR — NL handlers now raise typed ``AdCPError``
+          instead.
 
         Args:
             response: Pydantic model OR pre-serialized dict from a skill
@@ -1445,16 +1483,7 @@ class AdCPRequestHandler(RequestHandler):
         if isinstance(response, dict):
             return response
 
-        response_data = response.model_dump(mode="json")
-        response_data["message"] = str(response)
-
-        # Derive success from errors field if present, default True otherwise
-        if "errors" in response_data:
-            response_data["success"] = not bool(response_data["errors"])
-        else:
-            response_data.setdefault("success", True)
-
-        return response_data
+        return AdCPRequestHandler._stamp_a2a_protocol_fields(response)
 
     async def _handle_explicit_skill(
         self,
@@ -1614,13 +1643,9 @@ class AdCPRequestHandler(RequestHandler):
         if isinstance(response, dict):
             response_data = response
         else:
-            # Capture human-readable message before converting to dict
-            message = str(response)
-            response_data = response.model_dump(mode="json")
-            # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
-            # since returning a dict bypasses that logic
-            response_data["message"] = message
-            response_data.setdefault("success", True)
+            # Stamp protocol fields (message, success) before apply_version_compat
+            # sees the dict, since a dict bypasses _serialize_for_a2a's own stamping.
+            response_data = self._stamp_a2a_protocol_fields(response)
         return apply_version_compat("get_products", response_data, adcp_version)
 
     async def _handle_create_media_buy_skill(
@@ -2165,9 +2190,7 @@ class AdCPRequestHandler(RequestHandler):
         # Dump the full response (not just products) so schema-required
         # envelope fields (cache_scope, status, ...) survive — matching
         # _handle_get_products_skill's explicit-skill serialization.
-        response_data = response.model_dump(mode="json")
-        response_data["message"] = str(response)  # Use __str__ method for human-readable message
-        response_data.setdefault("success", True)
+        response_data = self._stamp_a2a_protocol_fields(response)
         return apply_version_compat("get_products", response_data, None)
 
     def _extract_brand_name_from_query(self, query: str) -> str:
