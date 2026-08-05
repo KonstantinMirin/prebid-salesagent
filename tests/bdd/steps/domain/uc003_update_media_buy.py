@@ -244,6 +244,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
     _supported_fields = {
         "media_buy_id",
         "paused",
+        "canceled",
         "start_time",
         "end_time",
         "packages",
@@ -269,6 +270,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
+        elif field == "canceled":
+            kwargs["canceled"] = value.lower() == "true"
         elif field == "start_time":
             kwargs["start_time"] = _resolve_date_token(value, clock)
         elif field == "end_time":

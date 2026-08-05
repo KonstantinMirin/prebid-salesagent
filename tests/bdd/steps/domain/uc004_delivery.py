@@ -1323,6 +1323,23 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
     assert d.status == status, f"Expected status '{status}', got '{d.status}'"
 
 
+@then(parsers.parse('buyers MAY treat the legacy alias "{legacy_status}" as equivalent to "{status}"'))
+def then_legacy_status_alias(ctx: dict, legacy_status: str, status: str) -> None:
+    """Buyer-side compatibility note, not a seller behavior: confirms the
+    response actually carries the NEW v3.1 canonical status name (the
+    precondition for "buyers who used to check for the legacy name MAY treat
+    the new one as equivalent" to be meaningful at all) rather than silently
+    also emitting the retired legacy value.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    d = resp.media_buy_deliveries[0]
+    assert d.status == status, f"Expected canonical status {status!r}, got {d.status!r}"
+    assert d.status != legacy_status, (
+        f"response carries the retired legacy status {legacy_status!r} instead of canonical {status!r}"
+    )
+
+
 @then("the response should include aggregated totals across both media buys")
 def then_has_aggregated_totals(ctx: dict) -> None:
     """Assert aggregated totals equal the sum of per-delivery totals."""

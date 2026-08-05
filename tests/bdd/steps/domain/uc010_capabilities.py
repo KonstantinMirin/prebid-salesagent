@@ -455,8 +455,18 @@ def given_partial_account_config(ctx: dict) -> None:
 @given(parsers.parse("the tenant capabilities are configured as {capability_config}"))
 def given_capability_config(ctx: dict, capability_config: str) -> None:
     """Outline-row config declaration (features-partitions). Records the raw
-    row text; the row→assertion table in the satisfy-Then grades it."""
+    row text; the row→assertion table in the satisfy-Then grades it.
+
+    ``sandbox={true,false}`` is the one token in this outline with a REAL
+    tenant-config surface (Tenant.account_sandbox) rather than a pure Then-side
+    echo -- write it through configure_tenant_field so the sandbox_disabled row
+    isn't silently graded against the untouched DB default (#1721 M4; was the
+    same missing-Given-side-write class of gap as T-UC-010-main's).
+    """
     _config(ctx)["row"] = capability_config
+    match = re.search(r"\bsandbox=(true|false)\b", capability_config)
+    if match:
+        ctx["env"].configure_tenant_field("account_sandbox", match.group(1) == "true")
 
 
 # ── Givens: creative_approval_mode (real config — salesagent-y9ld R7) ─────
@@ -758,6 +768,35 @@ def then_account_sandbox_equals(ctx: dict, expected: str) -> None:
     value = wire_field(ctx, "account.sandbox")
     want = json.loads(expected)
     assert value is want, f"account.sandbox expected {want!r}, got {value!r}"
+
+
+# boundary_point -> Tenant.account_sandbox value to configure, or None to
+# deliberately leave the column at its DB default (True, models.py:82) --
+# the "absent" row's premise. Shared by @T-UC-010-v31-account-sandbox and
+# T-UC-010-main's explicit-production row (#1721 M4).
+_SANDBOX_BOUNDARY_CONFIG: dict[str, bool | None] = {
+    "sandbox: true in response (sandbox account)": True,
+    "sandbox absent in response (production account)": None,
+    "sandbox: false in response (explicit production)": False,
+}
+
+
+@given(parsers.parse("the tenant account is configured for {boundary_point}"))
+def given_tenant_account_sandbox_boundary(ctx: dict, boundary_point: str) -> None:
+    """Configure Tenant.account_sandbox per the account.sandbox boundary table."""
+    if boundary_point not in _SANDBOX_BOUNDARY_CONFIG:
+        raise ValueError(f"unknown account-sandbox boundary_point: {boundary_point!r}")
+    value = _SANDBOX_BOUNDARY_CONFIG[boundary_point]
+    if value is not None:
+        ctx["env"].configure_tenant_field("account_sandbox", value)
+
+
+@then(parsers.parse("the capabilities response should be schema-valid and account.sandbox should be {expected_value}"))
+def then_account_sandbox_boundary(ctx: dict, expected_value: str) -> None:
+    """Schema-valid is implicit in a successful dispatch (a schema violation
+    would already have failed at construction/serialization); the boundary
+    grades account.sandbox's exact value per the row."""
+    _expect_flag(ctx, "account.sandbox", expected_value.removesuffix(" (buyer-default false)"))
 
 
 def _expect_flag(ctx: dict, path: str, expected: str) -> None:

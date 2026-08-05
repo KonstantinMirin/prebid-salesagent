@@ -75,29 +75,32 @@ def _xfail_tags_reasons() -> dict[str, str]:
 
 
 class TestUC010MainReasonAccuracy:
-    """T-UC-010-main's xfail reason must name the CURRENTLY measured failing assert
-    (account.sandbox), not a stale claim about fields already re-homed elsewhere or
-    never reached."""
+    """T-UC-010-main's xfail reason must name the CURRENTLY measured failing assert.
 
-    def test_reason_names_account_sandbox_as_the_live_gap(self) -> None:
+    #1721 M4: the Given-side account.sandbox gap is fixed (given_tenant_account_sandbox_boundary
+    now writes account_sandbox via configure_tenant_field), so the scenario progresses past
+    account.*, targeting, and portfolio asserts and reaches a new, honest stopping point:
+    media_buy.reporting_delivery_methods is not declarable under the STRICT capability
+    policy without RFC 9421 signing (#1291). The reason must name THAT live gap now, not
+    the resolved account.sandbox one.
+    """
+
+    def test_reason_names_reporting_delivery_methods_as_the_live_gap(self) -> None:
         reason = _xfail_tags_reasons()["T-UC-010-main"]
-        assert "account.sandbox" in reason, (
-            "T-UC-010-main's reason must name account.sandbox as the live gap: "
-            "Tenant.account_sandbox defaults True (src/core/database/models.py:82) with "
-            "no Given-side override, and the scenario asserts it should equal false "
-            f"(BR-UC-010-discover-seller-capabilities.feature:97). Got: {reason!r}"
+        assert "reporting_delivery_methods" in reason, (
+            "T-UC-010-main's reason must name media_buy.reporting_delivery_methods as the "
+            "live gap now that account.sandbox is fixed (given_tenant_account_sandbox_boundary, "
+            f"#1721 M4). Got: {reason!r}"
         )
 
-    def test_reason_does_not_repeat_the_stale_reporting_delivery_methods_claim(self) -> None:
-        """reporting_delivery_methods has its own, separately-cited family --
-        T-UC-010-main's own reason must not still claim it as an unreached, un-owned
-        gap."""
+    def test_reason_does_not_repeat_the_resolved_account_sandbox_claim(self) -> None:
+        """account.sandbox is fixed at the Given level (#1721 M4) -- T-UC-010-main's own
+        reason must not still claim it as the blocking gap."""
         reason = _xfail_tags_reasons()["T-UC-010-main"]
-        assert "reporting_delivery_methods" not in reason, (
-            "T-UC-010-main's reason still repeats the stale reporting_delivery_methods "
-            "claim; that family is already re-cited elsewhere and the Then "
-            "order never reaches it (idempotency and account.sandbox both fail "
-            f"first). Got: {reason!r}"
+        assert "account.sandbox" not in reason, (
+            "T-UC-010-main's reason still claims account.sandbox as the live gap; "
+            "given_tenant_account_sandbox_boundary now configures it and the scenario "
+            f"progresses past it to reporting_delivery_methods. Got: {reason!r}"
         )
 
 

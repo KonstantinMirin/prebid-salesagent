@@ -88,6 +88,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has registered publisher partnerships with domains "news.com", "sports.com"
     And the adapter provides targeting capabilities including geo
     And the tenant billing policy is configured as operator, agent
+    And the tenant account is configured for sandbox: false in response (explicit production)
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should include adcp.major_versions containing 3
     And adcp.idempotency.supported should equal true

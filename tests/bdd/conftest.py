@@ -80,6 +80,66 @@ pytest_plugins = [
 # definition is missing, we convert the failure to xfail. The code is the
 # source of truth — no stale metadata needed.
 
+# nodeid -> human-readable classification of the step that actually failed,
+# populated by the pytest_bdd_step_* hooks below. Consumed (and popped) by
+# pytest_runtest_makereport's dormancy-vs-production-gap tripwire (#1721 M4):
+# a strict-xfail whose reason claims a graded "production gap" but whose real
+# failure is a missing step binding or a Given-side setup error is a
+# MISCLASSIFIED entry -- dormancy masquerading as a graded gap, exactly the
+# R1-2 pattern six independent reviewers converged on. This is a bounded
+# conftest function extending the existing tripwire, not a new guard file.
+_STEP_ERROR_CLASSIFICATION: dict[str, str] = {}
+
+
+def pytest_bdd_step_func_lookup_error(request, feature, scenario, step, exception) -> None:  # noqa: ANN001
+    """Record that this scenario's failure is a missing step BINDING (dormancy)."""
+    _STEP_ERROR_CLASSIFICATION[request.node.nodeid] = (
+        f"a missing step definition for {step.type} {step.name!r} (line {step.line_number})"
+    )
+
+
+def pytest_bdd_step_error(request, feature, scenario, step, step_func, step_func_args, exception) -> None:  # noqa: ANN001
+    """Record a Given-side setup failure -- test-wiring, not the graded behavior.
+
+    Only the FIRST failing step's classification is kept (a scenario has one
+    failure); only Given steps are flagged here -- a When/Then failure is (by
+    construction) the scenario grading the behavior it exists to grade, never
+    dormancy.
+    """
+    if step.type == "given" and request.node.nodeid not in _STEP_ERROR_CLASSIFICATION:
+        _STEP_ERROR_CLASSIFICATION[request.node.nodeid] = (
+            f"a Given-side setup error on {step.name!r} (line {step.line_number}): {exception!r}"
+        )
+
+
+def _classify_strict_xfail_dormancy(item: pytest.Item, report: pytest.TestReport) -> None:
+    """Fail loud when a strict-xfail claiming a production/spec gap is actually dormancy.
+
+    Checks BOTH an explicit ``xfail`` marker's reason AND a ``wasxfail`` string
+    this same hook may have just set (the missing-step-definition auto-convert
+    above) -- either can carry the misleading "production gap" wording R1-2
+    exhibited. Leaves alone any xfail that already reports honestly (e.g. "UC-010
+    harness wiring not extended... dormant, never graded" names itself
+    correctly) or that grades a real Then/When failure.
+    """
+    classification = _STEP_ERROR_CLASSIFICATION.pop(item.nodeid, None)
+    if classification is None:
+        return
+    reasons = [str(report.wasxfail)] if getattr(report, "wasxfail", None) else []
+    reasons += [str(m.kwargs.get("reason", "")) for m in item.iter_markers("xfail")]
+    if not any("production gap" in r.lower() or "spec-production" in r.lower() for r in reasons):
+        return
+    if report.outcome not in ("skipped", "failed"):
+        return
+    report.outcome = "failed"
+    report.wasxfail = ""
+    report.longrepr = (
+        f"MISCLASSIFIED strict-xfail: {item.nodeid} is cited as a production/spec gap "
+        f"but the underlying failure is {classification} -- this is DORMANCY (test-wiring), "
+        "not a graded production gap (R1-2 class). Fix the wiring, or correct the xfail reason "
+        "to say so honestly, before recording an xfail."
+    )
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Generator[None, None, None]:
@@ -110,6 +170,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
             # of the same scenario still run normally.
             report.outcome = "skipped"
             report.wasxfail = f"impl-only setup declared in env: {call.excinfo.value}"
+
+    if report.when == "call":
+        _classify_strict_xfail_dormancy(item, report)
 
 
 # ---------------------------------------------------------------------------
@@ -359,12 +422,16 @@ _XFAIL_TAGS: dict[str, str] = {
     # Verified against a real run 2026-07-14: every entry below fails on all
     # three wire transports (strict holds); per-row / per-transport gaps use
     # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
-    # The scenario's first failing assert is `account.sandbox should equal false` --
-    # Tenant.account_sandbox defaults True (models.py:82) with no Given-side override,
-    # so the response always reports sandbox=true. Transport-independent: all 3
-    # transports reach this same assert.
-    "T-UC-010-main": "account.sandbox should equal false but Tenant.account_sandbox defaults True with no "
-    "Given-side override (models.py:82) — #1856 account-config surface",
+    # Wired non-dormant + strengthened (#1721 M4): the missing account_sandbox=false
+    # Given (models.py:82 default True) is fixed -- the scenario now runs all the
+    # way through account.*, media_buy.execution.targeting.geo_*, and portfolio
+    # asserts (the acceptance mechanism six reviewers found masked) before
+    # reaching its new, honest stopping point: media_buy.reporting_delivery_methods
+    # is not declarable under the STRICT capability policy without RFC 9421
+    # signing (same root as T-UC-010-v31-reporting-delivery-methods). Transport-
+    # independent: all 3 transports reach this same assert.
+    "T-UC-010-main": "media_buy.reporting_delivery_methods not emitted -- not declarable under the STRICT "
+    "capability policy without RFC 9421 signing (same gap as T-UC-010-v31-reporting-delivery-methods) — #1291",
     # Graduated (salesagent-rldj): _build_adcp_block() now always emits
     # adcp.supported_versions (derived from SUPPORTED_ADCP_VERSIONS) on both
     # the no-tenant and tenant-resolved paths. T-UC-010-ext-a removed.
@@ -529,6 +596,19 @@ _XFAIL_TAGS: dict[str, str] = {
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
+    # #1721 M4: @T-UC-010-v31-account-sandbox newly wired. The true/false rows
+    # pass for real; the "absent" row expects the wire to OMIT account.sandbox
+    # (buyer applies the schema default) but _build_account_block
+    # (capabilities.py) always assigns an explicit tenant.get("account_sandbox",
+    # True) value and never conditionally omits it — same root as the other
+    # #1856 account-config-surface entries (require_operator_auth,
+    # required_for_products, authorization_endpoint).
+    (
+        "T-UC-010-v31-account-sandbox",
+        {"sandbox absent in response"},
+        "account.sandbox is always assigned an explicit boolean by _build_account_block, "
+        "never conditionally omitted — #1856 account-config surface",
+    ),
     # #1417 wiring surfaced pre-existing UC-003 targeting-overlay gaps
     # (tracked separately). The geo include/exclude overlap partitions DO reach the
     # converged update.py:444 raise and PASS (proving da07); these other partitions
@@ -631,12 +711,9 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {"oauth_supported"},
         "account.authorization_endpoint not emitted — #1856",
     ),
-    (
-        "T-UC-010-features-partitions",
-        {"sandbox_disabled"},
-        "account.sandbox Given-side gap: no step writes account_sandbox=false for this row "
-        "(the DB column defaults true, owner decision) — #1856",
-    ),
+    # Graduated (#1721 M4): given_capability_config now writes account_sandbox
+    # through configure_tenant_field when the row spells sandbox={true,false} --
+    # sandbox_disabled passes for real on all 3 transports.
     (
         "T-UC-010-degradation-account",
         {"account_degraded"},
@@ -1501,16 +1578,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # UC-004: additional xfails for features needing production enhancements
         # FIXME(salesagent-a0o): These require production changes, not BDD wiring.
         _UC004_XFAIL_ADDITIONAL: dict[str, tuple[str, bool]] = {
-            # Delivery response reports a date-derived status (media_buy_delivery.py
-            # status computation casts to a Literal that excludes the pending_* states),
-            # so a pending_start buy reports "active". The adcp MediaBuyDelivery.status
-            # enum includes pending_start/pending_creatives/pending — surfacing the
-            # persisted pre-serving status is an unimplemented production change.
-            "T-UC-004-status-pending-legacy-alias": (
-                "delivery response does not surface persisted pending_start status, though "
-                "the adcp MediaBuyDelivery.status enum includes it (production gap)",
-                True,
-            ),
+            # Graduated (#1721 M4 dormancy tripwire): T-UC-004-status-pending-legacy-alias
+            # was masked by a missing second Then step (never actually reached the
+            # assertion this xfail claimed was failing) -- production DOES correctly
+            # surface the persisted pending_start status (XPASS(strict) once the
+            # missing step was bound). Removed.
             # Graduated: T-UC-004-aggregated-roas-and-cpa (production now computes
             # conversions/conversion_value/roas/cost_per_acquisition in
             # aggregated_totals — DeliveryTotals.conversion_value + aggregation
@@ -2355,9 +2427,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #   inv-150-3 (post-flight active -> completed)
             # Graduated: T-UC-019-inv-150-5 (status filter no longer blocks by-ID queries)
             "T-UC-019-inv-151-4",
-            "T-UC-019-inv-153-3",
-            "T-UC-019-inv-153-4",
-            "T-UC-019-inv-153-5",
+            # inv-153-3/4/5 moved to _UC019_SNAPSHOT_HARNESS_GAP_TAGS (#1721 M4):
+            # they were mislabeled here as production gaps but actually fail on the
+            # Given (no adapter mock in this harness), never reaching graded behavior.
             # Sandbox mode (response echo) — not implemented
             "T-UC-019-sandbox-happy",
             # Graduated (6szx): T-UC-019-sandbox-validation — BR-RULE-209 INV-7:
@@ -2380,12 +2452,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # recovery=correctable and a top-level suggestion, on the A2A wire and via
             # the typed exception on the legacy MCP wrapper. Then steps assert wire-first.
             "T-UC-019-ext-e",
-            # Main flow snapshots — adapter not wired
-            "T-UC-019-main-snapshot",
             # Transport-agnostic main scenario
             "T-UC-019-main",
         }
-        if marker_names & _UC019_XFAIL_TAGS:
+        # Snapshot scenarios (main-snapshot, inv-153-3/4/5): given_adapter_supports_reporting /
+        # given_adapter_no_reporting assert "adapter" in env.mock, but MediaBuyListEnv
+        # (the UC-019 harness) deliberately runs get_media_buys against a real DB with
+        # NO adapter mock at all ("list is a pure read" — see the UC-019 harness comment).
+        # This is a TEST-HARNESS gap (the snapshot Given can never succeed), not a
+        # production behavior gap -- was mislabeled "spec-production gap" (#1721 M4
+        # dormancy tripwire caught it: the scenarios fail on the Given, before ever
+        # reaching the production code the reason claimed was ungraded).
+        _UC019_SNAPSHOT_HARNESS_GAP_TAGS: set[str] = {
+            "T-UC-019-main-snapshot",
+            "T-UC-019-inv-153-3",
+            "T-UC-019-inv-153-4",
+            "T-UC-019-inv-153-5",
+        }
+        if marker_names & _UC019_SNAPSHOT_HARNESS_GAP_TAGS:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="UC-019 test-harness gap: MediaBuyListEnv wires no adapter mock "
+                    "(get_media_buys list is a pure DB read), so the snapshot Given steps "
+                    "(given_adapter_supports_reporting / given_adapter_no_reporting) cannot "
+                    "configure anything and fail before reaching the graded behavior — FIXME(salesagent-cyzy)",
+                    strict=False,
+                )
+            )
+        elif marker_names & _UC019_XFAIL_TAGS:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="UC-019 spec-production gap — feature not yet implemented",
@@ -3871,6 +3965,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-010-local-unbacked-specialism",
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
+            # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
+            # (no bound Given for "the tenant account is configured for
+            # {boundary_point}"), citing #1855 (generic wiring) instead of the
+            # accurate #1856 (account-config surface) -- both fixed.
+            "T-UC-010-v31-account-sandbox",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
