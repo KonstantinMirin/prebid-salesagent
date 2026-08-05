@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from src.core.database.database_session import get_db_session
 from src.core.security.outbound_http import (
@@ -54,7 +54,26 @@ class WebhookDelivery:
     object_id: str | None = None
 
 
-def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[str, Any]]:
+class WebhookDeliveryResult(TypedDict):
+    """The result shape ``deliver_webhook_with_retry``/``_record_failure`` return.
+
+    ``status`` is one of ``"delivered"``, ``"failed"``, or ``"rejected"`` (the
+    payload-is-paused early return, which skips delivery entirely and so
+    never gets a ``delivery_id`` or ``response_code``). ``delivery_id``,
+    ``response_code``, ``error`` and ``duration`` are each present only on
+    the arms that actually have a value for them -- see the two functions'
+    docstrings for exactly which arm sets which field.
+    """
+
+    status: str
+    attempts: int
+    delivery_id: NotRequired[str]
+    response_code: NotRequired[int | None]
+    error: NotRequired[str]
+    duration: NotRequired[float]
+
+
+def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, WebhookDeliveryResult]:
     """Deliver webhook with exponential backoff retry and database tracking.
 
     Retry strategy:
@@ -72,12 +91,10 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
         delivery: WebhookDelivery configuration object
 
     Returns:
-        Tuple of (success: bool, result: dict) where result contains:
-        - delivery_id: Unique ID for this delivery attempt
-        - status: "delivered" or "failed"
-        - attempts: Number of attempts made
-        - response_code: HTTP status code (if received)
-        - error: Error message (if failed)
+        ``(success, result)`` -- see :class:`WebhookDeliveryResult` for the
+        exact field set. ``status`` is one of ``"delivered"``, ``"failed"``,
+        or ``"rejected"`` (a paused media buy, which never attempts delivery
+        and so carries no ``delivery_id``/``response_code``).
     """
     from src.core.metrics import webhook_delivery_attempts, webhook_delivery_duration, webhook_delivery_total
 
@@ -228,7 +245,7 @@ def _record_failure(
     error: str,
     start_time: float,
     observe_histograms: bool,
-) -> tuple[bool, dict[str, Any]]:
+) -> tuple[bool, WebhookDeliveryResult]:
     """Record one failed delivery: the DB row, the counter, and the caller's dict.
 
     The three failure arms differ only in which metric status they book, what they
@@ -267,7 +284,7 @@ def _record_failure(
             webhook_delivery_duration.labels(event_type=delivery.event_type).observe(total_duration)
             webhook_delivery_attempts.labels(event_type=delivery.event_type).observe(attempts)
 
-    result: dict[str, Any] = {
+    result: WebhookDeliveryResult = {
         "delivery_id": delivery_id,
         "status": "failed",
         "attempts": attempts,
