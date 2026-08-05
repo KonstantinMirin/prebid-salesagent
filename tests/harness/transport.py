@@ -29,14 +29,15 @@ def _pinned_error_metadata() -> dict[str, dict[str, str]]:
 
     Only the ``recovery`` field is actually read by this module (assert_wire_error
     below) — verified safe to source from the SDK tree: the SDK's enum is a
-    strict superset of the older vendored fixture (92 vs 66 codes, fixture-only
+    strict superset of the older vendored fixture (92 vs 64 codes, fixture-only
     set empty) and its ``recovery`` classification is IDENTICAL across every one
-    of the 66 shared codes (0 divergences). ``suggestion`` DOES diverge on 4
+    of the 64 shared codes (0 divergences). ``suggestion`` DOES diverge on 4
     codes between the two sources — but this module never reads that field
     (extract_wire_suggestion below reads the WIRE's own suggestion text, not
     this metadata), so that divergence has no effect here. Consumers that DO
     grade ``suggestion`` content (test_architecture_error_suggestion_enum_conformance.py)
-    stay on the vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources".
+    stay on the vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources"
+    (which also cites the command to reproduce the 64-code fixture count).
     """
     return pinned_schema.load("error-code.json")["enumMetadata"]
 

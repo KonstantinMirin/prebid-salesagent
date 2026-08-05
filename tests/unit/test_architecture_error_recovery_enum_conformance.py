@@ -17,11 +17,14 @@ be graded against an enum that does not contain them; they are reported by
 Reads the ``recovery`` field through ``tests.helpers.pinned_schema`` (the
 installed SDK's own error-code.json), NOT the vendored fixture the sibling
 ``suggestion``-conformance oracle still uses. Verified before this migration:
-the SDK's 92-code enum is a strict superset of the fixture's 66 (fixture-only
-set is empty), and the ``recovery`` classification is IDENTICAL across all 66
+the SDK's 92-code enum is a strict superset of the fixture's 64 (fixture-only
+set is empty), and the ``recovery`` classification is IDENTICAL across all 64
 shared codes (0 divergences; 30 AdCPError subclasses graded, unchanged before
 and after) — the ``suggestion`` field is NOT identical across those same
 codes (4 textual divergences), which is why only this reader migrated.
+Reproduce the fixture count: ``uv run python3 -c "import json;
+print(len(json.load(open('tests/fixtures/adcp_schemas_pinned/enums/error-code.json'))['enum']))"``
+-> 64 (see docs/adcp-spec-version.md "Pinned schema sources" for the full measurement).
 """
 
 from __future__ import annotations

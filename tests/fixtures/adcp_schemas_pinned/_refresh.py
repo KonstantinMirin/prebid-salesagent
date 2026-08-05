@@ -10,7 +10,7 @@ schema sources"). It exists ONLY for enums/error-code.json's ``enumMetadata``
 ``suggestion`` text, read by
 tests/unit/test_architecture_error_suggestion_enum_conformance.py. The
 installed SDK's error-code enum has grown independently (92+ codes vs. this
-fixture's 66) and its ``suggestion`` wording diverges from this fixture's on
+fixture's 64) and its ``suggestion`` wording diverges from this fixture's on
 4 codes (CREDENTIAL_IN_ARGS, MEDIA_BUY_NOT_FOUND, PACKAGE_NOT_FOUND,
 REQUOTE_REQUIRED, verified at migration time) — moving that reader onto the
 SDK tree requires first reconciling that divergence (tracked as its own
@@ -18,7 +18,7 @@ epic; see docs/adcp-spec-version.md), not a mechanical resolver swap.
 
 Every OTHER pinned-schema consumer — structural request/response shape,
 ``$ref`` resolution, AND the ``recovery`` half of this same enumMetadata
-block (verified byte-identical across all 66 shared codes, so
+block (verified byte-identical across all 64 shared codes, so
 tests/harness/transport.py and
 tests/unit/test_architecture_error_recovery_enum_conformance.py both migrated)
 — reads through tests/helpers/pinned_schema.py, which resolves from the
