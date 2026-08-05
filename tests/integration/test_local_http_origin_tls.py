@@ -101,17 +101,32 @@ class TestLocalOriginTLSFront:
     it entirely, exactly because this front existing made it unnecessary.
     """
 
-    def test_https_round_trip_succeeds_through_the_real_outbound_seam(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "cert_attr",
+        ["CA_CERT", "COMBINED_CERT"],
+        ids=["ca-alone", "combined-ca-plus-system-roots"],
+    )
+    def test_https_round_trip_succeeds_through_the_real_outbound_seam(self, monkeypatch, cert_attr):
         """A real HTTPS delivery through ``outbound_http.send()`` succeeds once
         ``SSL_CERT_FILE`` trusts the generated CA — verification ON throughout,
         never ``verify=False`` anywhere in the call chain.
+
+        Parametrized over both files ``gen_test_tls`` produces (salesagent-amht.4):
+        the CA alone (``CA_CERT``) and the COMBINED bundle (``COMBINED_CERT``) —
+        the literal file every dialing service's ``SSL_CERT_FILE`` actually points
+        at in ``docker-compose.e2e.yml``. Proving only the CA-alone variant would
+        leave the real production wiring unproven: ``SSL_CERT_FILE`` REPLACES the
+        process's entire default cafile, so a regression that shipped the CA alone
+        again would silently break every OTHER real-HTTPS call the same process
+        makes (this broke ``uv sync`` against pypi.org once already).
         """
         gen_test_tls = load_gen_test_tls()
-        ca_path = gen_test_tls.ensure_test_tls()
+        gen_test_tls.ensure_test_tls()  # also (re)writes COMBINED_CERT as a side effect
+        cert_path = getattr(gen_test_tls, cert_attr)
         server_ctx = server_ssl_context(gen_test_tls)
 
         set_flags(monkeypatch, private=True)
-        monkeypatch.setenv("SSL_CERT_FILE", str(ca_path))
+        monkeypatch.setenv("SSL_CERT_FILE", str(cert_path))
 
         with run_local_origin(listen_host="localhost", ssl_context=server_ctx) as origin:
             origin.respond_with(200, body=b'{"received": true}')
