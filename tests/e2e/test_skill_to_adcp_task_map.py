@@ -38,9 +38,37 @@ def test_map_a_is_the_shared_map_not_a_second_copy():
 
 async def _map_b_resolution(skill_name: str) -> str | None:
     """What tests/e2e/test_a2a_adcp_compliance.py's map resolves *skill_name* to."""
-    client = A2AAdCPComplianceClient(a2a_url="http://test.invalid", auth_token="test")
-    result = await client.validate_skill_response(skill_name, {})
+    async with A2AAdCPComplianceClient(a2a_url="http://test.invalid", auth_token="test") as client:
+        result = await client.validate_skill_response(skill_name, {})
     return result["schema_tested"]
+
+
+@pytest.mark.asyncio
+async def test_map_b_resolution_closes_its_http_client(monkeypatch):
+    """_map_b_resolution must not leak its A2AAdCPComplianceClient's http_client.
+
+    A2AAdCPComplianceClient.__init__ unconditionally creates a real
+    httpx.AsyncClient; __aexit__ closes it. validate_skill_response never
+    touches http_client itself -- only entering/exiting the context manager
+    closes it. Constructing the client directly (bypassing 'async with')
+    creates the client, uses it for nothing, and never closes it.
+    """
+    created_clients = []
+    original_init = A2AAdCPComplianceClient.__init__
+
+    def _tracking_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created_clients.append(self)
+
+    monkeypatch.setattr(A2AAdCPComplianceClient, "__init__", _tracking_init)
+
+    await _map_b_resolution("get_products")
+
+    assert created_clients, "test isn't exercising A2AAdCPComplianceClient construction"
+    assert created_clients[0].http_client.is_closed, (
+        "_map_b_resolution leaked its http_client -- must use "
+        "'async with A2AAdCPComplianceClient(...) as client:', not direct construction"
+    )
 
 
 @pytest.mark.asyncio
