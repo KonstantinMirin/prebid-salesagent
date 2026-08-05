@@ -6,6 +6,7 @@ targeting dimensions, creative specs, and portfolio information.
 This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 """
 
+import dataclasses
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -36,6 +37,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from src.adapters.base import TargetingCapabilities
 from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
@@ -205,11 +207,15 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "sponsored_intelligence": MediaChannel.sponsored_intelligence,
 }
 
-# TargetingCapabilities boolean field -> (native country key, native system value),
-# per core/postal-area-support.json's native country-keyed map. Single shared table
-# drives BOTH the presence guard and the PostalAreaSupport construction (DRY --
-# salesagent-y9ld R4; the old code had 9 field-by-field kwargs plus a hand-enumerated
-# `any([...])` guard, two sites that could omit a field independently).
+# TargetingCapabilities boolean field name -> (native country key, native
+# system value), per core/postal-area-support.json's native country-keyed map.
+# Single shared table drives BOTH the presence guard and the PostalAreaSupport
+# construction (DRY -- salesagent-y9ld R4; the old code had 9 field-by-field
+# kwargs plus a hand-enumerated `any([...])` guard, two sites that could omit a
+# field independently). Keyed by field-name STRING (not a getter) deliberately:
+# tests/bdd/steps/domain/uc010_capabilities.py reads this same table to invert
+# (country, system) -> field name, the harness's own single-source-of-truth
+# reuse of the production table -- a getter-keyed table would break that.
 _POSTAL_AREA_TABLE: dict[str, tuple[str, str]] = {
     "us_zip": ("US", "zip"),
     "us_zip_plus_four": ("US", "zip_plus_four"),
@@ -224,8 +230,16 @@ _POSTAL_AREA_TABLE: dict[str, tuple[str, str]] = {
     "au_postcode": ("AU", "postcode"),
 }
 
+# Fails at import time if a key drifts from a real TargetingCapabilities field
+# -- without this, the getattr(..., field, False) below would silently treat a
+# typo'd key as "unset" instead of raising (#1721 M3: the class of bug object-
+# typing + getattr let through).
+assert set(_POSTAL_AREA_TABLE) <= {f.name for f in dataclasses.fields(TargetingCapabilities)}, (
+    "_POSTAL_AREA_TABLE key(s) do not match a TargetingCapabilities field"
+)
 
-def _build_geo_postal_areas(targeting_caps: object | None) -> PostalAreaSupport | None:
+
+def _build_geo_postal_areas(targeting_caps: TargetingCapabilities | None) -> PostalAreaSupport | None:
     """Native country-keyed geo_postal_areas, built from _POSTAL_AREA_TABLE --
     never the deprecated boolean-alias shape. None when the adapter declares no
     postal targeting at all (honest absence, not an empty object)."""
@@ -233,7 +247,7 @@ def _build_geo_postal_areas(targeting_caps: object | None) -> PostalAreaSupport 
         return None
     by_country: dict[str, list[str]] = {}
     for field, (country, system) in _POSTAL_AREA_TABLE.items():
-        if getattr(targeting_caps, field, False):
+        if getattr(targeting_caps, field):
             by_country.setdefault(country, []).append(system)
     if not by_country:
         return None

@@ -17,12 +17,13 @@ import base64
 import logging
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, cast
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, PaginationRequest, PaginationResponse
+from adcp.types import BrandReference as LibraryBrandReference
+from adcp.types import ContextObject, NotificationConfig, PaginationRequest, PaginationResponse
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
 )
@@ -32,8 +33,10 @@ from adcp.types.generated_poc.account.sync_accounts_request import (
 from adcp.types.generated_poc.account.sync_accounts_request import (
     Accounts1 as SettingsUpdateAccountInput,  # the account-reference / settings-update arm
 )
-from adcp.types.generated_poc.core.account_ref import AccountReference1
+from adcp.types.generated_poc.core.account_ref import AccountReference1, AccountReference2
+from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from fastmcp.server.context import Context
+from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field
 
 from src.core.audit_logger import get_audit_logger
@@ -56,9 +59,23 @@ from src.core.schemas.account import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.services.notification_proof_service import get_notification_proof_service
+from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
+
+if TYPE_CHECKING:
+    from adcp.types import Error, Setup
 
 logger = logging.getLogger(__name__)
+
+#: Either sync_accounts entry shape: the provisioning trio (brand/operator/
+#: billing) or the account-reference settings-update arm. Typed here (not
+#: Any) so a resolver written for one arm cannot silently accept the other's
+#: entry -- exactly the class of bug _FIELD_POLICY exists to prevent.
+SyncEntry = SyncAccountInput | SettingsUpdateAccountInput
+
+#: Either account-reference shape a settings-update entry's ``account`` field
+#: carries: the seller-assigned handle (AccountReference1) or the natural key
+#: (AccountReference2).
+AccountRef = AccountReference1 | AccountReference2
 
 
 def _db_account_to_schema(db_account: DBAccount) -> Account:
@@ -127,7 +144,7 @@ def _apply_pagination(
     )
 
 
-def _matches_account_ref(db_account: Any, ref: Any) -> bool:
+def _matches_account_ref(db_account: DBAccount, ref: AccountRef) -> bool:
     """Whether *db_account* matches an AccountReference (account_id XOR natural key).
 
     AccountReference1 carries account_id; AccountReference2 carries the natural
@@ -149,7 +166,7 @@ def _matches_account_ref(db_account: Any, ref: Any) -> bool:
     return True
 
 
-def _apply_list_account_filters(db_accounts: list[Any], req: Any) -> list[Any]:
+def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsRequest) -> list[DBAccount]:
     """Apply every list_accounts predicate filter in one place (DRY --
     salesagent-tm97 disease scan; status/sandbox/account were 3 near-identical
     inline list-comprehension filters before this extraction).
@@ -233,7 +250,7 @@ async def list_accounts(
     ext: Annotated[dict | None, Field(description="AdCP extension object -- accepted, has no effect")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-) -> Any:
+) -> ToolResult:
     """List accounts accessible to the authenticated agent (MCP tool).
 
     MCP wrapper that delegates to the shared implementation.
@@ -308,12 +325,14 @@ def _generate_account_name(brand_domain: str, operator: str, brand_id: str | Non
     return f"{brand_part} c/o {operator}"
 
 
-def _enum_to_str(val: Any) -> str | None:
+def _enum_to_str(val: object) -> str | None:
     """Extract string value from an enum or return as-is. Returns None for None."""
     return enum_value(val)
 
 
-def _serialize_typed_list(items: Any, model: type[BaseModel]) -> list[dict[str, Any]] | None:
+def _serialize_typed_list(
+    items: Iterable[BaseModel | Mapping[str, object]] | None, model: type[BaseModel]
+) -> list[dict[str, object]] | None:
     """Normalize a list of typed models (or dicts) to JSON-serializable dicts.
 
     Both dict and model inputs go through ``model_dump(mode="json")`` so that
@@ -326,7 +345,7 @@ def _serialize_typed_list(items: Any, model: type[BaseModel]) -> list[dict[str, 
     """
     if items is None:
         return None
-    result: list[dict[str, Any]] = []
+    result: list[dict[str, object]] = []
     for item in items:
         if isinstance(item, dict):
             # Validate through the model to normalize types (AnyUrl -> str, etc.)
@@ -338,21 +357,25 @@ def _serialize_typed_list(items: Any, model: type[BaseModel]) -> list[dict[str, 
     return result
 
 
-def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
+def _serialize_governance_agents(
+    agents: Iterable[BaseModel | Mapping[str, object]] | None,
+) -> list[dict[str, object]] | None:
     """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
     from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
 
     return _serialize_typed_list(agents, GovernanceAgent)
 
 
-def _serialize_notification_configs(configs: Any) -> list[dict[str, Any]] | None:
+def _serialize_notification_configs(
+    configs: Iterable[BaseModel | Mapping[str, object]] | None,
+) -> list[dict[str, object]] | None:
     """Convert NotificationConfig models to JSON-serializable dicts for DB storage."""
-    from adcp.types import NotificationConfig
-
     return _serialize_typed_list(configs, NotificationConfig)
 
 
-def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
+def _scrub_notification_credentials(
+    configs: Iterable[BaseModel | Mapping[str, object]] | None,
+) -> list[NotificationConfig] | None:
     """Strip write-only ``authentication.credentials`` from an echoed subscriber set.
 
     ``credentials`` is ``minLength: 32`` and documented write-only: the seller
@@ -364,11 +387,9 @@ def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
     Returns ``None`` for ``None`` and ``[]`` for ``[]``: "never configured" and
     "explicitly cleared" are different states to the buyer.
     """
-    from adcp.types import NotificationConfig
-
     if configs is None:
         return None
-    scrubbed: list[Any] = []
+    scrubbed: list[NotificationConfig] = []
     for config in configs:
         data = config.model_dump(mode="json") if hasattr(config, "model_dump") else dict(config)
         auth = data.get("authentication")
@@ -379,7 +400,7 @@ def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
     return scrubbed
 
 
-def _serialize_business_entity(entity: Any) -> dict[str, Any] | None:
+def _serialize_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> dict[str, object] | None:
     """Normalize a ``billing_entity`` (model or dict) to a JSON-serializable dict."""
     if entity is None:
         return None
@@ -388,7 +409,7 @@ def _serialize_business_entity(entity: Any) -> dict[str, Any] | None:
     return dict(entity)
 
 
-def _scrub_business_entity(entity: Any) -> Any:
+def _scrub_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> BusinessEntity | None:
     """Strip write-only ``bank`` from an echoed ``billing_entity``.
 
     The response account item documents ``billing_entity`` as "echoed from the
@@ -408,7 +429,7 @@ def _scrub_business_entity(entity: Any) -> Any:
     return BusinessEntity.model_validate(data)
 
 
-def _persisted_value(db_account: DBAccount, field: str) -> Any:
+def _persisted_value(db_account: DBAccount, field: str) -> object:
     """The persisted value of ``field``, serialized to compare against a resolved one."""
     current = getattr(db_account, field, None)
     if field == "notification_configs":
@@ -420,11 +441,18 @@ def _persisted_value(db_account: DBAccount, field: str) -> Any:
     return current
 
 
-def _resolve_notification_configs(entry: Any, existing: Any) -> tuple[bool, list[dict[str, Any]] | None]:
+def _resolve_notification_configs(
+    entry: SyncEntry, persisted: list[dict[str, object]] | None
+) -> tuple[bool, list[dict[str, object]] | None]:
     """Apply declarative-replace semantics for ``notification_configs``.
 
+    Unlike its sibling resolvers, ``persisted`` is the field's ALREADY-SERIALIZED
+    value (the caller wires it via ``_serialize_notification_configs(getattr(
+    existing, "notification_configs", None))``), not the whole ``DBAccount`` --
+    the wiring lambda in ``_FIELD_POLICY`` does that adaptation.
+
     Returns ``(changed, value)``:
-      - field omitted (``None``) -> ``(False, existing)``: omission is NOT clearance
+      - field omitted (``None``) -> ``(False, persisted)``: omission is NOT clearance
       - ``[]``                   -> ``(True, [])``: explicit clear, persisted as an
         empty array rather than NULL so the echo can carry it
       - non-empty                -> ``(True, <full array>)``: the submitted array
@@ -436,11 +464,11 @@ def _resolve_notification_configs(entry: Any, existing: Any) -> tuple[bool, list
     """
     submitted = getattr(entry, "notification_configs", None)
     if submitted is None:
-        return False, existing
+        return False, persisted
     return True, _serialize_notification_configs(submitted) or []
 
 
-def _resolve_scalar(entry: Any, existing: Any, field: str) -> tuple[bool, Any]:
+def _resolve_scalar(entry: SyncEntry, existing: DBAccount | None, field: str) -> tuple[bool, object]:
     """Omission-preserves resolver for a scalar enum/string field.
 
     ``None`` means "not submitted", not "clear it": the request schema gives the
@@ -455,7 +483,9 @@ def _resolve_scalar(entry: Any, existing: Any, field: str) -> tuple[bool, Any]:
     return True, incoming
 
 
-def _resolve_governance_agents(entry: Any, existing: Any) -> tuple[bool, Any]:
+def _resolve_governance_agents(
+    entry: SyncEntry, existing: DBAccount | None
+) -> tuple[bool, list[dict[str, object]] | None]:
     """Omission-preserves resolver for ``governance_agents``.
 
     Deliberately the SAME semantic as ``_resolve_notification_configs`` rather
@@ -472,7 +502,7 @@ def _resolve_governance_agents(entry: Any, existing: Any) -> tuple[bool, Any]:
     return True, _serialize_governance_agents(submitted)
 
 
-def _resolve_billing_entity(entry: Any, existing: Any) -> tuple[bool, Any]:
+def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, dict[str, object] | None]:
     """Omission-preserves resolver for ``billing_entity`` (whole-object replace).
 
     "Permitted in both provisioning and settings-update modes — sellers MAY
@@ -491,7 +521,7 @@ def _resolve_billing_entity(entry: Any, existing: Any) -> tuple[bool, Any]:
     return True, _serialize_business_entity(submitted)
 
 
-def _resolve_sandbox(entry: Any, existing: Any) -> tuple[bool, Any]:
+def _resolve_sandbox(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, bool | None]:
     """``sandbox`` is applied at CREATE only — it is part of the natural key.
 
     On an existing account this resolver is inert BY COUPLING, not as a local
@@ -534,7 +564,13 @@ class _FieldPolicy:
 
     __slots__ = ("provisioning", "settings_update", "resolve")
 
-    def __init__(self, *, provisioning: _Disposition, settings_update: _Disposition, resolve: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        provisioning: _Disposition,
+        settings_update: _Disposition,
+        resolve: Callable[[SyncEntry, DBAccount | None], tuple[bool, object]] | None = None,
+    ) -> None:
         self.provisioning = provisioning
         self.settings_update = settings_update
         self.resolve = resolve
@@ -629,7 +665,7 @@ def _disposition(field: str, mode: str) -> _Disposition:
     return getattr(_FIELD_POLICY[field], mode)
 
 
-def _resolve_entry_changes(entry: Any, existing: Any, *, mode: str) -> dict[str, Any]:
+def _resolve_entry_changes(entry: SyncEntry, existing: DBAccount | None, *, mode: str) -> dict[str, object]:
     """The ONE field-application walk, shared by all three sites.
 
     ``existing=None`` IS the create case — a create is "resolve against nothing",
@@ -639,7 +675,7 @@ def _resolve_entry_changes(entry: Any, existing: Any, *, mode: str) -> dict[str,
     suitable both as ``repo.update_fields(**changes)`` and as ``DBAccount``
     kwargs.
     """
-    changes: dict[str, Any] = {}
+    changes: dict[str, object] = {}
     for field, policy in _FIELD_POLICY.items():
         if _disposition(field, mode).kind != "applied":
             continue
@@ -651,7 +687,7 @@ def _resolve_entry_changes(entry: Any, existing: Any, *, mode: str) -> dict[str,
     return changes
 
 
-def _rejected_field_errors(entry: Any, *, mode: str, index: int) -> list[Any] | None:
+def _rejected_field_errors(entry: SyncEntry, *, mode: str, index: int) -> list["Error"] | None:
     """Per-account errors for fields the table marks ``rejected`` in ``mode``.
 
     A ``rejected`` field is schema-LEGAL on this arm but cannot be honored, so
@@ -665,7 +701,7 @@ def _rejected_field_errors(entry: Any, *, mode: str, index: int) -> list[Any] | 
     """
     from adcp.types import Error
 
-    errors: list[Any] = []
+    errors: list[Error] = []
     for field, policy in _FIELD_POLICY.items():
         if getattr(policy, mode).kind != "rejected":
             continue
@@ -686,7 +722,7 @@ def _rejected_field_errors(entry: Any, *, mode: str, index: int) -> list[Any] | 
     return errors or None
 
 
-def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
+def _account_fields_changed(db_account: DBAccount, entry: SyncEntry) -> dict[str, object]:
     """Fields a PROVISIONING re-sync changes on an existing account.
 
     Thin wrapper over the shared table walk, kept as a named function because the
@@ -701,7 +737,7 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
 
 def _build_sync_result(
     *,
-    brand: Any,
+    brand: LibraryBrandReference | Mapping[str, object],
     operator: str,
     action: str,
     status: str,
@@ -710,10 +746,10 @@ def _build_sync_result(
     billing: str | None = None,
     payment_terms: str | None = None,
     sandbox: bool | None = None,
-    errors: list[Any] | None = None,
-    setup: Any | None = None,
-    notification_configs: Any | None = None,
-    billing_entity: Any | None = None,
+    errors: list["Error"] | None = None,
+    setup: "Setup | None" = None,
+    notification_configs: Iterable[BaseModel | Mapping[str, object]] | None = None,
+    billing_entity: BusinessEntity | Mapping[str, object] | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object.
 
@@ -747,11 +783,11 @@ def _build_sync_result(
 
 def _build_failed_result(
     *,
-    brand: Any,
+    brand: LibraryBrandReference | Mapping[str, object],
     operator: str,
     billing: str | None,
     sandbox: bool | None,
-    errors: list[Any],
+    errors: list["Error"],
 ) -> SyncResponseAccount:
     """Build a failed/rejected sync result -- the single source for every
     per-entry gate rejection (domain validity, billing policy, sandbox
@@ -777,7 +813,7 @@ def _build_failed_result(
     )
 
 
-def _first_gate_failure(gates: Iterable[Callable[[], list[Any] | None]]) -> list[Any] | None:
+def _first_gate_failure(gates: Iterable[Callable[[], list["Error"] | None]]) -> list["Error"] | None:
     """Run per-entry gate checks in order; return the first one's errors, or None.
 
     Both the provisioning arm (domain/billing/sandbox/notification-configs) and
@@ -799,11 +835,11 @@ def _provisioning_gates(
     billing_val: str | None,
     identity: ResolvedIdentity,
     sandbox: bool | None,
-    tenant: Any,
+    tenant: Mapping[str, object] | None,
     index: int,
-    entry: Any,
-    proof_failures: dict[int, list[Any]],
-) -> list[Callable[[], list[Any] | None]]:
+    entry: SyncEntry,
+    proof_failures: dict[int, list["Error"]],
+) -> list[Callable[[], list["Error"] | None]]:
     """The provisioning arm's gate list, in order: domain validity (reserved
     TLDs) -> billing policy (BR-RULE-059) -> sandbox capability (BR-RULE-209
     INV-6) -> notification_configs. The first failure short-circuits the rest.
@@ -821,7 +857,7 @@ def _provisioning_gates(
     ]
 
 
-def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
+def _build_setup_for_approval(mode: str, tenant_id: str) -> "Setup | None":
     """Build a Setup object based on the approval mode.
 
     Returns Setup for pending_approval modes, None for auto-approve.
@@ -843,7 +879,7 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
     return None
 
 
-def _check_domain_validity(brand_domain: str) -> list[Any] | None:
+def _check_domain_validity(brand_domain: str) -> list["Error"] | None:
     """Check if the brand domain is valid for account provisioning.
 
     Returns a list of Error objects if invalid, None if valid.
@@ -871,7 +907,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
 def _check_billing_policy(
     billing_val: str | None,
     identity: ResolvedIdentity,
-) -> list[Any] | None:
+) -> list["Error"] | None:
     """Check if the billing model is supported by the seller.
 
     Returns a list of Error objects if rejected, None if accepted.
@@ -895,7 +931,7 @@ def _check_billing_policy(
         # billing-not-supported.json: supported_billing minItems 1, "Sellers MAY
         # omit this field" -- an empty resolved policy must omit the key entirely,
         # never emit a schema-invalid empty array (salesagent-hh1f review MEDIUM #1).
-        details: dict[str, Any] = {"scope": "capability"}
+        details: dict[str, object] = {"scope": "capability"}
         supported_suffix = ""
         if supported:
             details["supported_billing"] = supported
@@ -914,7 +950,7 @@ def _check_billing_policy(
     return None
 
 
-def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]:
+def _extract_natural_key(entry: SyncEntry) -> tuple[str, str | None, str, bool | None]:
     """Extract natural key components from a PROVISIONING-mode sync request entry.
 
     Returns (brand_domain, brand_id, operator, sandbox).
@@ -929,22 +965,29 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     implemented — it no longer does).
 
     Raises:
-        AdCPValidationError: if the entry omits ``brand``.
+        AdCPValidationError: if the entry omits ``brand`` or ``operator`` --
+            both REQUIRED for provisioning mode per the pinned spec. Only
+            ``brand`` was checked before typing this function surfaced that
+            ``operator`` is ``str | None`` on the ``SyncEntry`` union (it is
+            optional on the settings-update arm) with no matching runtime
+            guard here.
     """
     brand = entry.brand
-    if brand is None:
+    operator = entry.operator
+    if brand is None or operator is None:
         raise AdCPValidationError(
             "Each provisioning account entry must include 'brand', 'operator', and 'billing' "
             "(or 'account' for a settings-update entry).",
             recovery="correctable",
         )
     brand_domain, brand_id = brand_key_parts(brand)
-    operator = entry.operator
     sandbox = entry.sandbox
     return brand_domain, brand_id, operator, sandbox
 
 
-def _check_sandbox_capability(entry_sandbox: bool | None, tenant: Any, index: int) -> list[Any] | None:
+def _check_sandbox_capability(
+    entry_sandbox: bool | None, tenant: Mapping[str, object] | None, index: int
+) -> list["Error"] | None:
     """Reject sandbox provisioning when the seller has not declared account.sandbox support.
 
     Mirrors the ``_check_domain_validity``/``_check_billing_policy`` per-entry
@@ -977,7 +1020,7 @@ def _check_sandbox_capability(entry_sandbox: bool | None, tenant: Any, index: in
 _MEDIA_BUY_ANCHORED_EVENT_TYPES = frozenset({"scheduled", "final", "delayed", "adjusted", "impairment"})
 
 
-def _check_notification_configs(configs: Any) -> list[Any] | None:
+def _check_notification_configs(configs: Iterable[NotificationConfig] | None) -> list["Error"] | None:
     """Validate a submitted notification_configs array; None when it is acceptable.
 
     Same per-entry gate shape as ``_check_domain_validity`` / ``_check_billing_policy``
@@ -1050,7 +1093,7 @@ def _check_notification_configs(configs: Any) -> list[Any] | None:
     return None
 
 
-def _notification_configs_gate(entry: Any, proof_errors: list[Any] | None) -> list[Any] | None:
+def _notification_configs_gate(entry: SyncEntry, proof_errors: list["Error"] | None) -> list["Error"] | None:
     """The notification_configs gate, shared verbatim by both sync-accounts arms.
 
     Runs BEFORE any write so a rejected entry leaves the persisted array
@@ -1065,7 +1108,9 @@ def _notification_configs_gate(entry: Any, proof_errors: list[Any] | None) -> li
 
 
 def _settings_update_preview_state(
-    existing: DBAccount | None, ref: Any, previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount]
+    existing: DBAccount | None,
+    ref: AccountRef,
+    previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount],
 ) -> DBAccount | None:
     """The request-local stand-in a dry_run settings-update reads and writes.
 
@@ -1103,7 +1148,7 @@ def _settings_update_preview_state(
     return previewed_by_key.get((brand_domain, brand_id, ref.operator or "", bool(ref.sandbox)))
 
 
-def _resolve_settings_update_target(ref: Any, repo: Any) -> DBAccount | None:
+def _resolve_settings_update_target(ref: AccountRef, repo: AccountRepository) -> DBAccount | None:
     """Resolve a settings-update AccountReference to its persisted row, if any."""
     if isinstance(ref, AccountReference1):
         return repo.get_by_id(ref.account_id)
@@ -1116,7 +1161,7 @@ def _resolve_settings_update_target(ref: Any, repo: Any) -> DBAccount | None:
     )
 
 
-def _unmatched_settings_update_result(ref: Any) -> SyncResponseAccount:
+def _unmatched_settings_update_result(ref: AccountRef) -> SyncResponseAccount:
     """The UNSUPPORTED_PROVISIONING failure for an unmatched account reference.
 
     brand/operator are REQUIRED on SyncResponseAccount. A natural-key reference
@@ -1128,7 +1173,7 @@ def _unmatched_settings_update_result(ref: Any) -> SyncResponseAccount:
     from adcp.types import Error
 
     if isinstance(ref, AccountReference1):
-        fail_brand: Any = {"domain": "unknown"}
+        fail_brand: LibraryBrandReference | Mapping[str, object] = {"domain": "unknown"}
         fail_operator = "unknown"
     else:
         fail_brand = ref.brand if ref.brand else {"domain": "unknown"}
@@ -1151,9 +1196,9 @@ def _unmatched_settings_update_result(ref: Any) -> SyncResponseAccount:
 
 
 def _process_settings_update_entry(
-    entry: Any,
-    repo: Any,
-    proof_errors: list[Any] | None = None,
+    entry: SyncEntry,
+    repo: AccountRepository,
+    proof_errors: list["Error"] | None = None,
     index: int = 0,
     *,
     dry_run: bool = False,
@@ -1175,6 +1220,7 @@ def _process_settings_update_entry(
     ``repo.update_fields`` (sync-accounts-request.json#/properties/dry_run:
     "preview what would change without applying").
     """
+    assert entry.account is not None, "caller dispatches here only when entry.account is set"
     ref = entry.account.root
     existing = _resolve_settings_update_target(ref, repo)
 
@@ -1192,6 +1238,11 @@ def _process_settings_update_entry(
 
     echo_brand = persisted.brand if persisted is not None else existing.brand
     echo_operator = persisted.operator if persisted is not None else existing.operator
+    # Account.brand/.operator are DB-nullable (defensive column typing) but
+    # AccountRepository.build_row always sets both at creation -- an EXISTING,
+    # matched account (which is what this arm always operates on) cannot
+    # actually have either unset.
+    assert echo_brand is not None, "persisted account has no brand -- should be unreachable"
 
     # notification_configs (shared with the provisioning arm) -> rejected-field
     # check (BR-RULE-209-family fields the table marks `rejected` on this arm --
@@ -1239,9 +1290,13 @@ def _process_settings_update_entry(
         payment_terms=existing.payment_terms,
         sandbox=existing.sandbox,
         # Post-write state: the applied value when this entry changed it, the
-        # persisted one otherwise.
-        notification_configs=changes.get("notification_configs", existing.notification_configs),
-        billing_entity=changes.get("billing_entity", existing.billing_entity),
+        # persisted one otherwise. changes is dict[str, object] (see
+        # _resolve_entry_changes); cast back to each field's own type.
+        notification_configs=cast(
+            "list[dict[str, object]] | None",
+            changes.get("notification_configs", existing.notification_configs),
+        ),
+        billing_entity=cast("dict[str, object] | None", changes.get("billing_entity", existing.billing_entity)),
     )
 
 
@@ -1267,9 +1322,9 @@ def _proof_tuple(config: object) -> tuple:
     )
 
 
-def _collect_activating_entries(entries: list[Any]) -> list[tuple[int, Any, Any]]:
+def _collect_activating_entries(entries: list[SyncEntry]) -> list[tuple[int, SyncEntry, NotificationConfig]]:
     """(entry index, entry, config) for every config declaring ``active: true``."""
-    activating: list[tuple[int, Any, Any]] = []
+    activating: list[tuple[int, SyncEntry, NotificationConfig]] = []
     for index, entry in enumerate(entries):
         for config in getattr(entry, "notification_configs", None) or []:
             if getattr(config, "active", False):
@@ -1277,7 +1332,7 @@ def _collect_activating_entries(entries: list[Any]) -> list[tuple[int, Any, Any]
     return activating
 
 
-def _proof_error(entry: Any, config: Any, message: str, suggestion: str) -> Any:
+def _proof_error(entry: SyncEntry, config: NotificationConfig, message: str, suggestion: str) -> "Error":
     """The per-account error a failed/skipped activation produces.
 
     One builder for both the dry_run and challenge-failure paths -- they carry the
@@ -1294,7 +1349,9 @@ def _proof_error(entry: Any, config: Any, message: str, suggestion: str) -> Any:
     )
 
 
-def _already_proven_tuples(activating: list[tuple[int, Any, Any]], tenant_id: str) -> dict[int, set[tuple]]:
+def _already_proven_tuples(
+    activating: list[tuple[int, SyncEntry, NotificationConfig]], tenant_id: str
+) -> dict[int, set[tuple]]:
     """Proof tuples already persisted as active, per entry index.
 
     Its own SHORT read-only transaction, closed before any socket is opened -- the
@@ -1313,7 +1370,9 @@ def _already_proven_tuples(activating: list[tuple[int, Any, Any]], tenant_id: st
     return already_proven
 
 
-async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_run: bool) -> dict[int, list[Any]]:
+async def _resolve_activation_proofs(
+    entries: list[SyncEntry], tenant_id: str, *, dry_run: bool
+) -> dict[int, list["Error"]]:
     """Run proof-of-control for every entry activating a subscriber. Index -> errors.
 
     Runs BEFORE the write transaction opens: an outbound call inside an open
@@ -1345,7 +1404,7 @@ async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_
 
     already_proven = _already_proven_tuples(activating, tenant_id)
     prover = get_notification_proof_service()
-    failures: dict[int, list[Any]] = {}
+    failures: dict[int, list[Error]] = {}
     budget = _PROOF_BUDGET_SECONDS
 
     for index, entry, config in activating:
@@ -1368,7 +1427,9 @@ async def _resolve_activation_proofs(entries: list[Any], tenant_id: str, *, dry_
     return failures
 
 
-async def _prove_within_budget(prover: Any, entry: Any, config: Any, budget: float) -> tuple[bool, float]:
+async def _prove_within_budget(
+    prover: NotificationProofService, entry: SyncEntry, config: NotificationConfig, budget: float
+) -> tuple[bool, float]:
     """Run one challenge if the request-level budget allows. Returns (proven, budget left).
 
     An exhausted budget is "not proven" rather than an unbounded wait: the caller is
@@ -1381,7 +1442,7 @@ async def _prove_within_budget(prover: Any, entry: Any, config: Any, budget: flo
     return proven, budget - (time.monotonic() - started)
 
 
-def _config_index(entry: Any, config: Any) -> int:
+def _config_index(entry: SyncEntry, config: NotificationConfig) -> int:
     """Position of *config* in *entry*'s submitted array (for error.field)."""
     for index, candidate in enumerate(getattr(entry, "notification_configs", None) or []):
         if candidate is config:
@@ -1389,7 +1450,7 @@ def _config_index(entry: Any, config: Any) -> int:
     return 0
 
 
-def _entry_account_hint(entry: Any) -> str:
+def _entry_account_hint(entry: SyncEntry) -> str:
     """A human-meaningful account identifier for proof logging."""
     ref = getattr(entry, "account", None)
     if ref is not None and isinstance(getattr(ref, "root", None), AccountReference1):
@@ -1451,7 +1512,9 @@ def _preview_state_from(
     )
 
 
-def _build_update_result(*, entry: Any, operator: str, state: Any, changes: dict[str, Any]) -> SyncResponseAccount:
+def _build_update_result(
+    *, entry: SyncEntry, operator: str, state: DBAccount, changes: dict[str, object]
+) -> SyncResponseAccount:
     """The ONE place a provisioning ``updated``/``unchanged`` result is built.
 
     ``state`` MUST be the POST-WRITE row — the row as the write would leave it,
@@ -1467,6 +1530,7 @@ def _build_update_result(*, entry: Any, operator: str, state: Any, changes: dict
     (tests/unit/test_guards_sync_accounts_update_result_builder.py), so a future
     edit cannot quietly reintroduce a pre-write read next to a post-write one.
     """
+    assert entry.brand is not None, "only called for provisioning-mode entries"
     return _build_sync_result(
         brand=entry.brand,
         operator=operator,
@@ -1481,7 +1545,9 @@ def _build_update_result(*, entry: Any, operator: str, state: Any, changes: dict
     )
 
 
-def _apply_to_existing_account(entry: Any, existing: Any, repo: Any, operator: str) -> SyncResponseAccount:
+def _apply_to_existing_account(
+    entry: SyncEntry, existing: DBAccount, repo: AccountRepository, operator: str
+) -> SyncResponseAccount:
     """Apply a provisioning entry to the account that already holds its natural key.
 
     Shared by the two ways an entry can turn out to be an update rather than a
@@ -1500,7 +1566,7 @@ def _apply_to_existing_account(entry: Any, existing: Any, repo: Any, operator: s
     return _build_update_result(entry=entry, operator=operator, state=existing, changes=changes)
 
 
-def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
+def _lookup_existing_for_entry(entry: SyncEntry, repo: AccountRepository) -> DBAccount | None:
     """Resolve the persisted account an entry targets, in either entry mode."""
     ref = getattr(entry, "account", None)
     if ref is not None:
@@ -1512,11 +1578,15 @@ def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
             operator=inner.operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=inner.sandbox
         )
     brand = getattr(entry, "brand", None)
-    if brand is None:
+    operator = getattr(entry, "operator", None)
+    if brand is None or operator is None:
+        # A malformed provisioning entry (missing brand/operator) matches no
+        # existing account here; _extract_natural_key rejects it explicitly
+        # later in the main loop.
         return None
     brand_domain, brand_id = brand_key_parts(brand)
     return repo.get_by_natural_key(
-        operator=entry.operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=entry.sandbox
+        operator=operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=entry.sandbox
     )
 
 
@@ -1703,9 +1773,15 @@ async def _sync_accounts_impl(
                 # aperture bug that hid billing_entity). An omitted field simply
                 # produces no kwarg and the column keeps its default.
                 created_fields = _resolve_entry_changes(entry, None, mode="provisioning")
-                billing_val = created_fields.get("billing")
-                notification_configs_val = created_fields.get("notification_configs")
-                billing_entity_val = created_fields.get("billing_entity")
+                # created_fields is dict[str, object] (a generic field-application
+                # bag shared by all three _FIELD_POLICY call sites) -- cast() back
+                # to each field's own resolver-return type (_resolve_scalar /
+                # _resolve_notification_configs / _resolve_billing_entity), never Any.
+                billing_val = cast("str | None", created_fields.get("billing"))
+                notification_configs_val = cast(
+                    "list[dict[str, object]] | None", created_fields.get("notification_configs")
+                )
+                billing_entity_val = cast("dict[str, object] | None", created_fields.get("billing_entity"))
 
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)
@@ -1824,6 +1900,7 @@ async def _sync_accounts_impl(
                 if db_acct.account_id not in seen_account_ids:
                     if not dry_run:
                         repo.update_status(db_acct.account_id, "closed")
+                    assert db_acct.brand is not None, "persisted account has no brand -- should be unreachable"
                     results.append(
                         _build_sync_result(
                             brand=db_acct.brand,
@@ -1865,7 +1942,7 @@ async def sync_accounts(
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-) -> Any:
+) -> ToolResult:
     """Sync accounts by natural key (MCP tool).
 
     MCP wrapper that accepts individual parameters per AdCP spec and
