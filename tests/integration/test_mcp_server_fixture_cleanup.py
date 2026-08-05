@@ -21,6 +21,7 @@ from __future__ import annotations
 import itertools
 import shutil
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -71,6 +72,33 @@ class _MkdtempSpy:
         return str(path)
 
 
+def _assert_setup_failure_leaves_no_leak(integration_db, *, popen_side_effect, match, extra_patches=()):
+    """A setup failure in the mcp_server fixture must not leak its temp dir.
+
+    Drives the fixture's generator directly up to its pre-yield RuntimeError,
+    then asserts every path tempfile.mkdtemp() handed out during that run no
+    longer exists on disk.
+    """
+    gen = conftest.mcp_server.__wrapped__(integration_db)
+    spy = _MkdtempSpy()
+    try:
+        with ExitStack() as stack:
+            stack.enter_context(patch("subprocess.Popen", side_effect=popen_side_effect))
+            stack.enter_context(patch("tempfile.mkdtemp", side_effect=spy))
+            for extra_patch in extra_patches:
+                stack.enter_context(extra_patch)
+
+            with pytest.raises(RuntimeError, match=match):
+                next(gen)
+
+        assert spy.paths, "fixture never called tempfile.mkdtemp -- test isn't exercising the leak path"
+        leaked = [p for p in spy.paths if p.exists()]
+        assert not leaked, f"mcp_server fixture leaked temp dir(s): {leaked}"
+    finally:
+        for p in spy.paths:
+            shutil.rmtree(p, ignore_errors=True)
+
+
 class TestMcpServerFixtureCleanup:
     """Neither setup-failure path may leave a mcp-server-* temp dir behind."""
 
@@ -78,41 +106,19 @@ class TestMcpServerFixtureCleanup:
         """Process-died path: subprocess.Popen.poll() reports a dead process
         on the very first readiness check, so the fixture raises before
         yield without any 60s wait."""
-        gen = conftest.mcp_server.__wrapped__(integration_db)
-        spy = _MkdtempSpy()
-        try:
-            with (
-                patch("subprocess.Popen", side_effect=_dead_process_popen),
-                patch("tempfile.mkdtemp", side_effect=spy),
-            ):
-                with pytest.raises(RuntimeError, match="MCP server process died unexpectedly"):
-                    next(gen)
-
-            assert spy.paths, "fixture never called tempfile.mkdtemp -- test isn't exercising the leak path"
-            leaked = [p for p in spy.paths if p.exists()]
-            assert not leaked, f"mcp_server fixture leaked temp dir(s) on the process-died path: {leaked}"
-        finally:
-            for p in spy.paths:
-                shutil.rmtree(p, ignore_errors=True)
+        _assert_setup_failure_leaves_no_leak(
+            integration_db,
+            popen_side_effect=_dead_process_popen,
+            match="MCP server process died unexpectedly",
+        )
 
     def test_no_leak_when_server_never_becomes_ready(self, integration_db):
         """Timeout path: the process stays "alive" (poll() -> None) but never
         opens its port, and time.time() is patched to jump straight past
         max_wait so the test doesn't actually sleep 60s."""
-        gen = conftest.mcp_server.__wrapped__(integration_db)
-        spy = _MkdtempSpy()
-        try:
-            with (
-                patch("subprocess.Popen", side_effect=_alive_process_popen),
-                patch("time.time", side_effect=itertools.chain([0], itertools.repeat(999_999))),
-                patch("tempfile.mkdtemp", side_effect=spy),
-            ):
-                with pytest.raises(RuntimeError, match="MCP server failed to start"):
-                    next(gen)
-
-            assert spy.paths, "fixture never called tempfile.mkdtemp -- test isn't exercising the leak path"
-            leaked = [p for p in spy.paths if p.exists()]
-            assert not leaked, f"mcp_server fixture leaked temp dir(s) on the startup-timeout path: {leaked}"
-        finally:
-            for p in spy.paths:
-                shutil.rmtree(p, ignore_errors=True)
+        _assert_setup_failure_leaves_no_leak(
+            integration_db,
+            popen_side_effect=_alive_process_popen,
+            match="MCP server failed to start",
+            extra_patches=(patch("time.time", side_effect=itertools.chain([0], itertools.repeat(999_999))),),
+        )
