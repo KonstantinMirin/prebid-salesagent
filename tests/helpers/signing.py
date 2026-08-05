@@ -19,6 +19,7 @@ Anything that decides or asserts belongs in the test, not here.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -305,6 +306,96 @@ def _restore_declarations(tenant_id: str, previous: dict[str, Any] | None) -> No
             tenant.capability_declarations = previous
 
 
+class _AlwaysAuthorizedBrandResolver:
+    """A Tier-3 double that authorizes any agent unconditionally (#1291 hksr).
+
+    For suites that repoint a counterparty's ``brand_json_url`` at a host chosen
+    for an UNRELATED reason — e.g. A5 revocation-issuer testing, which reuses the
+    field to steer where the revocation list is fetched from, sometimes to a
+    deliberately SSRF-blocked or unresolvable host that is not a real registrable
+    domain. The real :func:`brand_authz_resolver` would refuse those via the SDK's
+    own ``registrable_domain`` validation regardless of mocking the fetch, which
+    is not what those suites grade. Reserved for suites that are not themselves
+    testing Tier-3 binding logic; use :func:`brand_authz_resolver` for those.
+    """
+
+    async def check(
+        self,
+        *,
+        agent_url: str,
+        brand_domain: str,
+        agent_type: Any = None,
+        brand_id: str | None = None,
+    ) -> Any:
+        from adcp.signing.brand_authz import BrandAuthorizationResult
+
+        return BrandAuthorizationResult(True, reason="etld1_match", matched_agent_url=agent_url)
+
+
+def always_authorized_brand_resolver() -> Any:
+    """Build a Tier-3 double that authorizes unconditionally. See :class:`_AlwaysAuthorizedBrandResolver`."""
+    return _AlwaysAuthorizedBrandResolver()
+
+
+def brand_authz_resolver(brand_json_url: str, brand_json: dict[str, Any]) -> Any:
+    """The SDK's REAL ``BrandJsonAuthorizationResolver`` over an in-process fetch.
+
+    Real in every way that decides the outcome (#1291 hksr, Tier 3): the resolver
+    does its own fetch, body cap, parse, ``agents[]`` walk, byte-equal URL match,
+    eTLD+1 binding and ``authorized_operators[]`` delegation. Only the socket is
+    replaced, by the SDK's OWN documented ``_client_factory`` seam — the same seam
+    ``tests/e2e/_signing_e2e.py``'s ``seeded_capabilities_factory`` uses for hop 1.
+    Substituting the resolver itself would make an assertion against it a mock
+    asserting on itself; substituting the transport leaves every line of the
+    binding logic under test.
+    """
+    import httpx
+    from adcp.signing.brand_authz import BrandJsonAuthorizationResolver
+
+    def factory(_url: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=brand_json)))
+
+    return BrandJsonAuthorizationResolver(brand_json_url, _client_factory=factory)
+
+
+def authorizing_brand_json(agent_url: str) -> dict[str, Any]:
+    """A minimal brand.json listing *agent_url* as a buying agent — the ordinary case.
+
+    What :func:`counterparty_key` seeds by default: a legitimate counterparty whose
+    brand actually lists it, so every signing suite that predates Tier 3 (#1291
+    hksr) and does not care about brand authorization keeps passing without
+    learning about it. Tests that DO grade Tier 3 override the same cache entry
+    (see ``tests/integration/test_request_signature_discovery.py``'s
+    ``_brand_authorization``).
+    """
+    return {
+        "$schema": "https://adcontextprotocol.org/schemas/v1/brand.json",
+        "name": "Test Brand",
+        "agents": [{"type": "buying", "url": agent_url}],
+    }
+
+
+@contextmanager
+def seeded_cache_entry(cache: dict[str, Any], key: str, value: Any) -> Iterator[None]:
+    """Set ``cache[key] = value``, restoring whatever was there before on exit.
+
+    The one shape behind every Tier-3 (#1291 hksr) resolver-cache seed across the
+    signing suites — save what was there, overwrite, restore-or-pop on the way
+    out — used by :func:`counterparty_key` here, ``_counterparty_at``
+    (``tests/integration/test_request_signature_revocation.py``) and
+    ``_brand_authorization`` (``tests/integration/test_request_signature_discovery.py``).
+    """
+    previous = cache.get(key)
+    cache[key] = value
+    try:
+        yield
+    finally:
+        if previous is None:
+            cache.pop(key, None)
+        else:
+            cache[key] = previous
+
+
 @contextmanager
 def counterparty_key(
     jwks: dict[str, Any],
@@ -332,6 +423,14 @@ def counterparty_key(
     constructor the configured counterparty registry uses — rather than a
     second inline ``AgentResolution(...)`` here, so this fixture and the
     registry fallback can never drift into two different resolution shapes.
+
+    A resolution seeded here lands in the SAME ``AGENT_RESOLUTION_CACHE`` a real
+    brand.json walk populates, so ``_resolution_for`` tags it ``source="walk"``
+    and Tier 3 (#1291 hksr) runs against it exactly as it would in production.
+    This also seeds a Tier-3 resolver that authorizes *agent_url* by default —
+    the ordinary case, a counterparty its own brand actually lists — so every
+    caller of this fixture that is not itself grading Tier 3 keeps passing
+    without knowing it exists.
     """
     from src.core.signing import request_verifier_middleware as mw
 
@@ -339,8 +438,14 @@ def counterparty_key(
         {"agent_url": agent_url, "jwks_uri": jwks_uri, "key_origin": key_origin, "jwks": jwks}
     )
     mw.AGENT_RESOLUTION_CACHE[agent_url] = resolution
+    brand_json_url = resolution.brand_json_url
     try:
-        yield
+        with seeded_cache_entry(
+            mw._BRAND_AUTHZ_RESOLVER_CACHE,
+            brand_json_url,
+            brand_authz_resolver(brand_json_url, authorizing_brand_json(agent_url)),
+        ):
+            yield
     finally:
         mw.AGENT_RESOLUTION_CACHE.pop(agent_url, None)
 
@@ -522,6 +627,19 @@ def seed_principal(env: Any, *, agent_url: str | None = COUNTERPARTY_AGENT_URL) 
     return principal.access_token
 
 
+#: Both signature headers present, neither parseable — the malformed-signature
+#: shape. security.mdx :1226/:1271 make this the case that blocks the bearer
+#: fallback regardless of bucket, and it is checklist STEP 1, which is what makes
+#: it the right probe for any test asserting that an EARLIER step outranks a later
+#: one. ``_strict_header_precheck`` deliberately does not pre-empt an unparseable
+#: ``Signature-Input`` (``negative/011``/``024`` are the SDK's to code), so this
+#: shape reaches the SDK and is refused there.
+MALFORMED_SIGNATURE_HEADERS = {
+    "Signature-Input": "sig1=this-is-not-an-rfc8941-inner-list",
+    "Signature": "sig1=:AAAA:",
+}
+
+
 def request_headers(token: str | None, extra: dict[str, str] | None = None) -> dict[str, str]:
     """Wire headers: tenant hint + optional bearer + whatever the test adds."""
     headers = {"x-adcp-tenant": SIGNING_TENANT_ID}
@@ -592,6 +710,34 @@ def signed_headers(
             key_id=key_id,
         ),
     }
+
+
+def signed_probe(private_key: Any, token: str) -> tuple[dict[str, str], bytes]:
+    """A well-formed signed POST to the bodyless AdCP surface, and its wire bytes.
+
+    Real Ed25519 over the real wire bytes under :data:`COUNTERPARTY_KID`, so every
+    checklist step up to key resolution passes on its merits. That is what makes the
+    outcome attributable to WHICH resolution path supplied the key — or to which
+    discovery failure was mapped — rather than to anything about the signature itself.
+
+    Promoted out of ``tests/integration/test_request_signature_middleware.py`` when
+    the discovery-code suite needed the identical probe: a name whose home is a
+    ``test_*.py`` module has no importable home at all
+    (``tests/unit/test_architecture_no_cross_test_module_imports.py``), and a second
+    inline copy is the duplication class the DRY invariant exists to stop. Both
+    suites must send the SAME bytes, or "the signature verified on its merits" means
+    something different in each of them.
+    """
+    body = json.dumps({"context": {"request_id": "registry-probe"}}).encode()
+    headers = signed_headers(
+        private_key,
+        token,
+        method="POST",
+        path=BODYLESS_ADCP_PATH,
+        body=body,
+        extra={"Content-Type": "application/json"},
+    )
+    return headers, body
 
 
 def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any]) -> Any:

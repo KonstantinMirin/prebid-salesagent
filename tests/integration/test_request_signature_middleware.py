@@ -106,10 +106,9 @@ from typing import Any
 import pytest
 from adcp.signing import (
     REQUEST_SIGNATURE_HEADER_MALFORMED,
-    REQUEST_SIGNATURE_KEY_UNKNOWN,
     REQUEST_SIGNATURE_REQUIRED,
 )
-from adcp.signing.errors import REQUEST_SIGNATURE_DIGEST_MISMATCH
+from adcp.signing.errors import REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE, REQUEST_SIGNATURE_DIGEST_MISMATCH
 from pydantic import ValidationError
 
 from src.core.config import SigningConfig
@@ -127,6 +126,7 @@ from tests.helpers.signing import (
     COUNTERPARTY_KID,
     FAILED_METRIC,
     LADDER_OPERATIONS,
+    MALFORMED_SIGNATURE_HEADERS,
     REGISTRY_AGENT_URL,
     REGISTRY_JWKS_URI,
     REGISTRY_KEY_ORIGIN,
@@ -142,6 +142,7 @@ from tests.helpers.signing import (
     request_headers,
     seed_principal,
     signed_headers,
+    signed_probe,
 )
 from tests.helpers.signing import (
     counter_samples as _counter_samples,
@@ -252,12 +253,6 @@ def counterparty_keypair() -> tuple[Any, dict[str, Any]]:
 # Request construction
 # --------------------------------------------------------------------------
 
-#: Both headers present, neither parseable — the malformed-signature shape.
-_MALFORMED_SIGNATURE_HEADERS = {
-    "Signature-Input": "sig1=this-is-not-an-rfc8941-inner-list",
-    "Signature": "sig1=:AAAA:",
-}
-
 
 # --------------------------------------------------------------------------
 # R-H1 — the composition rule
@@ -331,7 +326,7 @@ class TestCompositionWithFallbackAuthenticators:
             with _declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
                 response = client.get(
                     BODYLESS_ADCP_PATH,
-                    headers=request_headers(token, _MALFORMED_SIGNATURE_HEADERS),
+                    headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
 
             assert response.status_code == 401, (
@@ -371,7 +366,7 @@ class TestHeaderPresencePrecheck:
             with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)):
                 response = client.get(
                     BODYLESS_ADCP_PATH,
-                    headers=request_headers(token, {present: _MALFORMED_SIGNATURE_HEADERS[present]}),
+                    headers=request_headers(token, {present: MALFORMED_SIGNATURE_HEADERS[present]}),
                 )
 
             assert _rejection_code(response) == REQUEST_SIGNATURE_HEADER_MALFORMED, (
@@ -389,7 +384,7 @@ class TestHeaderPresencePrecheck:
             with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)), _verifier_spy() as calls:
                 client.get(
                     BODYLESS_ADCP_PATH,
-                    headers=request_headers(token, _MALFORMED_SIGNATURE_HEADERS),
+                    headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
 
             assert len(calls) == 1, (
@@ -426,7 +421,7 @@ class TestNoneBucketCostsNothing:
                 response = client.post(
                     BODYLESS_ADCP_PATH,
                     json=body,
-                    headers=request_headers(token, _MALFORMED_SIGNATURE_HEADERS),
+                    headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
 
             assert calls == [], (
@@ -454,7 +449,7 @@ class TestNoneBucketCostsNothing:
                 response = client.post(
                     BODYLESS_ADCP_PATH,
                     json={"context": {"request_id": "supported-bucket"}},
-                    headers=request_headers(token, _MALFORMED_SIGNATURE_HEADERS),
+                    headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
 
             assert len(calls) == 1, (
@@ -760,26 +755,6 @@ _TEST_KIT_RELAXATIONS = {
 }
 
 
-def _signed_probe(private_key: Any, token: str) -> tuple[dict[str, str], bytes]:
-    """A well-formed signed POST to the bodyless AdCP surface, and its wire bytes.
-
-    Real Ed25519 over the real wire bytes under :data:`COUNTERPARTY_KID`, so every
-    checklist step up to key resolution passes on its merits. That is what makes the
-    outcome attributable to WHICH resolution path supplied the key, rather than to
-    anything about the signature itself.
-    """
-    body = json.dumps({"context": {"request_id": "registry-probe"}}).encode()
-    headers = signed_headers(
-        private_key,
-        token,
-        method="POST",
-        path=BODYLESS_ADCP_PATH,
-        body=body,
-        extra={"Content-Type": "application/json"},
-    )
-    return headers, body
-
-
 @pytest.mark.requires_db
 class TestRegistryResolvesACounterpartyWithNoAgentUrl:
     """With no ``agent_url`` to walk, the registry is what makes the keyid resolve."""
@@ -807,7 +782,7 @@ class TestRegistryResolvesACounterpartyWithNoAgentUrl:
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
             token = seed_principal(env, agent_url=None)
             client = env.get_rest_client()
-            headers, body = _signed_probe(private_key, token)
+            headers, body = signed_probe(private_key, token)
 
             with (
                 _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
@@ -870,14 +845,17 @@ class TestRegistryIsAFallbackNeverAnOverride:
         thing, WHY the resolution is empty, which is precisely the distinction the
         implementation must make.
 
-        Correct behavior is a 401 ``request_signature_key_unknown``: an unreachable
+        Correct behavior is a 401 rejection carrying the counterparty walk's OWN
+        discovery-family code (#1291 hksr assigns ``capabilities_unreachable`` its own
+        ``request_signature_capabilities_unreachable`` wire code instead of collapsing
+        every walk failure onto the generic ``key_unknown``) — an unreachable
         counterparty is a failure to resolve, not a licence to trust a different key.
         """
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
             token = seed_principal(env, agent_url=UNRESOLVABLE_AGENT_URL)
             client = env.get_rest_client()
-            headers, body = _signed_probe(private_key, token)
+            headers, body = signed_probe(private_key, token)
 
             with (
                 _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
@@ -899,9 +877,10 @@ class TestRegistryIsAFallbackNeverAnOverride:
                 "consulted, the verifier must be handed no resolution at all; got "
                 f"{calls[0]['options'].agent_url!r}"
             )
-            assert _rejection_code(response) == REQUEST_SIGNATURE_KEY_UNKNOWN, (
+            assert _rejection_code(response) == REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE, (
                 "an unresolvable counterparty must reach step 7 on its merits and be "
-                f"rejected as key_unknown; got status {response.status_code} with "
+                "rejected with the walk failure's own discovery code, not the generic "
+                f"key_unknown; got status {response.status_code} with "
                 f"WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
             )
 

@@ -186,10 +186,12 @@ from tests.helpers.signing import (
     LADDER_OPERATIONS,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
+    always_authorized_brand_resolver,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
     seed_principal,
+    seeded_cache_entry,
     signed_headers,
 )
 from tests.helpers.signing import (
@@ -252,13 +254,27 @@ def _counterparty_at(origin: str, jwks: dict[str, Any]) -> Iterator[None]:
     vary: ``brand_json_url`` is where the revocation issuer origin comes from
     (F5, security.mdx :1328 — the combined list is served at the brand.json
     origin, so the issuer is per-counterparty and not one per process).
+
+    Rebinding ``brand_json_url`` also repoints Tier 3 (#1291 hksr): ``_run_verifier``
+    succeeding hands this resolution to ``_check_brand_authorization``, which builds
+    its resolver from the (now-rebound) ``brand_json_url`` — a DIFFERENT cache key
+    than the one ``counterparty_key`` seeded an authorizing resolver under. None of
+    this suite grades Tier 3, and some of *origin*'s values (an SSRF-blocked IP, an
+    unresolvable ``.invalid`` host) are not real registrable domains at all, so the
+    real ``BrandJsonAuthorizationResolver`` would refuse them via its own
+    ``registrable_domain`` validation regardless of mocking the fetch. An
+    unconditional double is seeded here instead, under the SAME rebound key.
     """
     with counterparty_key(jwks):
         cached = mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL]
+        rebound_brand_json_url = f"{origin}/.well-known/brand.json"
         mw.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL] = cached.model_copy(
-            update={"brand_json_url": f"{origin}/.well-known/brand.json"}
+            update={"brand_json_url": rebound_brand_json_url}
         )
-        yield
+        with seeded_cache_entry(
+            mw._BRAND_AUTHZ_RESOLVER_CACHE, rebound_brand_json_url, always_authorized_brand_resolver()
+        ):
+            yield
 
 
 @contextmanager

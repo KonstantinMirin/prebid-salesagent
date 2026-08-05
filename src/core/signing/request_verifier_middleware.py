@@ -132,15 +132,26 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
-from typing import Any, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast
 
 from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, BrandAgentType, async_resolve_agent
+from adcp.signing.brand_authz import BrandAuthorizationResult, BrandJsonAuthorizationResolver
 from adcp.signing.canonical import split_structured_field
 from adcp.signing.errors import (
+    REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON,
+    REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS,
+    REQUEST_SIGNATURE_BRAND_JSON_MALFORMED,
+    REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE,
+    REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING,
+    REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH,
+    REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE,
     REQUEST_SIGNATURE_HEADER_MALFORMED,
+    REQUEST_SIGNATURE_JWKS_UNAVAILABLE,
+    REQUEST_SIGNATURE_JWKS_UNTRUSTED,
     REQUEST_SIGNATURE_REQUIRED,
     SignatureVerificationError,
 )
+from adcp.signing.etld import host_from
 from adcp.signing.jwks import StaticJwksResolver
 from adcp.signing.middleware import unauthorized_response_headers
 from adcp.signing.verifier import (
@@ -202,12 +213,56 @@ ADCP_SURFACE_PREFIXES: tuple[str, ...] = ("/mcp", "/a2a", "/api/v1")
 #: ``SigningConfig.agent_resolution_ttl_seconds`` against ``AgentResolution.fetched_at``.
 AGENT_RESOLUTION_CACHE: dict[str, AgentResolution] = {}
 
-#: ``{agent_url: last failure time}``. Without it, every signed request from a
+#: Process-level ``{brand_json_url: BrandJsonAuthorizationResolver}`` (#1291 hksr,
+#: Tier 3). Keyed by ``brand_json_url`` rather than ``agent_url`` because multiple
+#: agents can share one brand.json; built once per document and reused, mirroring
+#: :data:`AGENT_RESOLUTION_CACHE`'s reuse pattern. The resolver's own internal
+#: ``_BrandJsonFetcher`` handles staleness/refresh on subsequent ``.check()`` calls.
+_BRAND_AUTHZ_RESOLVER_CACHE: dict[str, BrandJsonAuthorizationResolver] = {}
+
+
+@dataclass(frozen=True)
+class _ResolutionFailure:
+    """When a counterparty's walk last failed, and which spec code it mapped to.
+
+    The code travels WITH the failure (rather than being recomputed) so a
+    request arriving inside the refetch cooldown answers the SAME discovery
+    code as the request that triggered it, instead of silently degrading to
+    the generic ``key_unknown`` once the failure is no longer fresh.
+    """
+
+    at: float
+    code: str
+
+
+#: ``{agent_url: last failure}``. Without it, every signed request from a
 #: counterparty with a broken brand.json starts a fresh 3-hop outbound walk.
-_RESOLUTION_FAILURES: dict[str, float] = {}
+_RESOLUTION_FAILURES: dict[str, _ResolutionFailure] = {}
 
 #: The purpose key under the counterparty's ``identity.key_origins`` map.
 _SIGNING_PURPOSE = "request_signing"
+
+
+@dataclass(frozen=True)
+class _CounterpartyResolution:
+    """A resolved (or unresolved) counterparty, tagged with WHERE it came from.
+
+    The tag is load-bearing, not descriptive (#1291 hksr / B4 interaction):
+    Tier 3 (brand authorization, below) is scoped to brand-json-WALKED
+    counterparties only — there is no brand.json to authorize a
+    registry-sourced counterparty (B4, salesagent-z6nr.15) against, since its
+    resolution never came from a real, fetchable document.
+
+    "Was this built by ``build_registry_resolution``?" is NOT a safe proxy for
+    this distinction: ``tests/helpers/signing.counterparty_key`` deliberately
+    seeds a WALKED counterparty's cache entry through that same constructor
+    (its own docstring explains why — one production shape, not two), so a
+    constructor-based check would silently exempt every counterparty the
+    signing test suites seed, not just B4's registry fallback.
+    """
+
+    resolution: AgentResolution | None
+    source: Literal["walk", "registry"]
 
 
 class _BrandJsonJwksResolver(StaticJwksResolver):
@@ -451,7 +506,7 @@ class RequestSignatureMiddleware:
             # this gate is defense-in-depth, not a hot path.
             url = _verify_url(scope, headers)
             reject_malformed_target(url)
-            resolution = await _resolution_for(context.agent_url, config, keyid=_parse_keyid(headers))
+            counterparty = await _resolution_for(context.agent_url, config, keyid=_parse_keyid(headers))
             signer = await asyncio.to_thread(
                 _run_verifier,
                 method=scope.get("method", "GET"),
@@ -461,9 +516,16 @@ class RequestSignatureMiddleware:
                 capability=context.posture.to_verifier_capability(),
                 operation=operation,
                 bucket=context.bucket,
-                resolution=resolution,
+                resolution=counterparty.resolution,
+                agent_url=context.agent_url,
                 config=config,
             )
+            # Tier 3 (#1291 hksr): a valid signature proves WHO signed, never that the
+            # signer may act for the brand. Only for brand-json-WALKED counterparties —
+            # B4's registry fallback (source == "registry") has no real brand.json to
+            # check against and must never reach this call.
+            if counterparty.source == "walk" and counterparty.resolution is not None:
+                await _check_brand_authorization(counterparty.resolution, config)
         except SignatureVerificationError as exc:
             await self._handle_rejection(exc, context, operation, scope, buffered.receive, send)
             return
@@ -779,8 +841,8 @@ def _parse_keyid(headers: Mapping[str, str]) -> str | None:
 
 async def _resolution_for(
     agent_url: str | None, config: SigningConfig, *, keyid: str | None = None
-) -> AgentResolution | None:
-    """The counterparty's cached :class:`AgentResolution`, resolving on a cold entry.
+) -> _CounterpartyResolution:
+    """The counterparty's cached resolution, resolving on a cold entry, tagged by source.
 
     ``agent_url -> capabilities -> identity.brand_json_url -> brand.json agents[] ->
     jwks_uri -> JWKS`` is a three-hop outbound walk, so it is done once per counterparty
@@ -788,9 +850,12 @@ async def _resolution_for(
     the walk is async, the checklist is not.
 
     A failure is not a rejection — it returns whatever is cached (possibly nothing) and
-    lets the checklist decide. Mapping a resolver failure straight to a 401 would make
-    an unreachable counterparty outrank a malformed signature, which is the wrong error
-    and the wrong step.
+    lets the checklist decide, carrying the MAPPED discovery code alongside it in
+    ``_RESOLUTION_FAILURES`` (#1291 hksr) so :func:`_jwks_resolver` can raise the
+    spec-assigned code at step 7 instead of the generic ``key_unknown``. Mapping a
+    resolver failure straight to a 401 HERE would make an unreachable counterparty
+    outrank a malformed signature, which is the wrong error and the wrong step — the
+    deferral into the resolver callable is what keeps that ordering correct.
 
     The SSRF pin stays at the SDK default: the walk follows a URL that ultimately came
     from a counterparty document, and ``allow_private_destinations`` is a test argument
@@ -808,17 +873,19 @@ async def _resolution_for(
     briefly unreachable brand.json would be silently re-identified from config.
     """
     if not agent_url:
-        if keyid is None:
-            return None
-        entry = config.counterparty_registry.get(keyid)
-        return build_registry_resolution(entry) if entry is not None else None
+        if keyid is not None:
+            entry = config.counterparty_registry.get(keyid)
+            if entry is not None:
+                return _CounterpartyResolution(build_registry_resolution(entry), source="registry")
+        return _CounterpartyResolution(None, source="registry")
 
     now = time.time()
     cached = AGENT_RESOLUTION_CACHE.get(agent_url)
     if cached is not None and now - cached.fetched_at <= config.agent_resolution_ttl_seconds:
-        return cached
-    if now - _RESOLUTION_FAILURES.get(agent_url, 0.0) < config.agent_resolution_refetch_cooldown_seconds:
-        return cached
+        return _CounterpartyResolution(cached, source="walk")
+    failure = _RESOLUTION_FAILURES.get(agent_url)
+    if failure is not None and now - failure.at < config.agent_resolution_refetch_cooldown_seconds:
+        return _CounterpartyResolution(cached, source="walk")
 
     try:
         resolution = await async_resolve_agent(
@@ -828,27 +895,201 @@ async def _resolution_for(
             agent_type=cast(BrandAgentType, config.counterparty_agent_type),
         )
     except AgentResolverError as exc:
-        _RESOLUTION_FAILURES[agent_url] = now
+        mapped = _map_agent_resolver_error(exc)
+        _RESOLUTION_FAILURES[agent_url] = _ResolutionFailure(at=now, code=mapped)
         logger.warning("Could not resolve signing keys for counterparty %r (%s): %s", agent_url, exc.code, exc)
-        return cached
+        return _CounterpartyResolution(cached, source="walk")
 
     AGENT_RESOLUTION_CACHE[agent_url] = resolution
     _RESOLUTION_FAILURES.pop(agent_url, None)
-    return resolution
+    return _CounterpartyResolution(resolution, source="walk")
 
 
-def _jwks_resolver(resolution: AgentResolution | None) -> StaticJwksResolver:
+def _map_agent_resolver_error(exc: AgentResolverError) -> str:
+    """``AgentResolverError.code`` -> the ``request_signature_*`` code security.mdx assigns it.
+
+    #1291 hksr. ``adcp/signing/errors.py``'s "brand.json discovery chain" block gives
+    each hop of the 3-hop walk its own code precisely so a caller can tell a retryable
+    transport failure (``*_unreachable``) apart from a misconfiguration
+    (``*_missing`` / ``*_malformed`` / ``*_mismatch``) — collapsing all of them onto
+    ``request_signature_key_unknown`` (the pre-hksr behavior) erases that distinction
+    and gives a counterparty with a briefly unreachable capabilities endpoint the wrong
+    diagnosis AND the wrong retry advice.
+    """
+    if exc.code == "invalid_agent_url":
+        # Trust-boundary rejection (URL wouldn't canonicalize / SSRF-banned host) —
+        # matches the SDK's own reference verify_from_agent_url choice for this ONE
+        # code, even though that function's blanket JWKS_UNAVAILABLE treatment of
+        # everything else is exactly the disease this ticket fixes.
+        return REQUEST_SIGNATURE_JWKS_UNTRUSTED
+    if exc.code == "capabilities_unreachable":
+        return REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE
+    if exc.code == "capabilities_invalid":
+        # Step 2 reads identity.brand_json_url off the capabilities body; a body we
+        # cannot parse at all means that field was never obtainable either.
+        return REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING
+    if exc.code == "brand_json_url_missing":
+        return REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING
+    if exc.code == "jwks_fetch_failed":
+        return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+    if exc.code == "brand_json_resolution_failed":
+        return _map_brand_json_resolver_error(exc.__cause__)
+    logger.warning("Unmapped AgentResolverError code %r; defaulting to JWKS_UNAVAILABLE", exc.code)
+    return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+
+
+def _map_brand_json_resolver_error(cause: BaseException | None) -> str:
+    """``BrandJsonResolverError.code`` -> the ``request_signature_*`` code security.mdx assigns it.
+
+    Shared by :func:`_map_agent_resolver_error` (reading ``exc.__cause__`` off a
+    ``brand_json_resolution_failed`` AgentResolverError) and
+    :func:`_map_brand_authorization_reason` (reading ``result.fetch_error`` off a
+    ``brand_json_unavailable`` BrandAuthorizationResult) — one mapping, not two copies
+    of the same fetch/parse-failure branches.
+    """
+    code = getattr(cause, "code", None)
+    if code in ("fetch_failed", "redirect_loop", "redirect_depth_exceeded"):
+        return REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE
+    if code in ("invalid_body", "schema_invalid", "invalid_house", "invalid_url"):
+        return REQUEST_SIGNATURE_BRAND_JSON_MALFORMED
+    if code == "agent_ambiguous":
+        return REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS
+    if code == "agent_not_found":
+        return REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON
+    if code == "jwks_origin_mismatch":
+        # Fires when agent.url's origin != brand.json's origin and the agents[] entry
+        # declares no explicit jwks_uri — close to origin-mismatch semantics, but is
+        # genuinely "no valid jwks_uri could be derived" rather than a key-origin
+        # consistency failure on an already-resolved key (that check is separate,
+        # step 7, and runs on a resolution this failure never produces).
+        return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+    logger.warning("Unmapped BrandJsonResolverError code %r; defaulting to JWKS_UNAVAILABLE", code)
+    return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+
+
+class _FailedDiscoveryJwksResolver:
+    """Raises the discovery failure's MAPPED code from ``__call__``, not the generic ``key_unknown``.
+
+    Constructed by :func:`_jwks_resolver` ONLY when a walk was attempted for this
+    ``agent_url`` and failed (a recorded :class:`_ResolutionFailure` exists) — never
+    for "no agent_url at all" (B4's registry path with no match), which stays the
+    generic ``key_unknown`` via a plain empty :class:`StaticJwksResolver`.
+
+    Raising happens INSIDE ``__call__``, which the SDK's checklist invokes at step 7
+    (``verifier.py:255``, ``options.jwks_resolver(keyid)``) — AFTER steps 1-6 already
+    ran on their own merits. Raising at VerifyOptions CONSTRUCTION time instead (the
+    original, incorrect design) would let a discovery failure outrank an earlier
+    checklist step, reordering a graded artifact; the conformance suite fixes which
+    step each negative vector fails at, and step 1 is not negotiable against a step-7
+    concern. ``tests/integration/test_request_signature_discovery.py``'s
+    ``TestDiscoveryFailureDefersToTheChecklist`` is the canary for this.
+    """
+
+    def __init__(self, code: str) -> None:
+        self._code = code
+
+    def __call__(self, keyid: str) -> dict[str, Any] | None:
+        raise SignatureVerificationError(self._code, step=7, message=f"counterparty discovery failed: {self._code}")
+
+
+def _jwks_resolver(resolution: AgentResolution | None, *, agent_url: str | None = None) -> Any:
     """The resolver handed to the checklist.
 
     With a resolution: a brand-json-marked resolver, which is what engages the step-7
-    key-origin check. Without one: a plain empty resolver, so the checklist answers
-    ``request_signature_key_unknown`` at step 7 on its own. Marking THAT one
-    ``brand_json`` would instead make the SDK warn about a missing
+    key-origin check. Without one: if a walk was attempted for *agent_url* and failed,
+    a resolver that raises the mapped discovery code from its own ``__call__``
+    (#1291 hksr); otherwise a plain empty resolver, so the checklist answers
+    ``request_signature_key_unknown`` at step 7 on its own — unchanged behavior for
+    "no agent_url to walk at all" (B4's registry-miss case). Marking the empty
+    resolver ``brand_json`` would instead make the SDK warn about a missing
     ``expected_key_origins`` map that by definition cannot exist.
     """
-    if resolution is None:
-        return StaticJwksResolver({})
-    return _BrandJsonJwksResolver(resolution.jwks, jwks_uri=resolution.jwks_uri)
+    if resolution is not None:
+        return _BrandJsonJwksResolver(resolution.jwks, jwks_uri=resolution.jwks_uri)
+    if agent_url is not None:
+        failure = _RESOLUTION_FAILURES.get(agent_url)
+        if failure is not None:
+            return _FailedDiscoveryJwksResolver(failure.code)
+    return StaticJwksResolver({})
+
+
+def _brand_authz_resolver_for(brand_json_url: str) -> BrandJsonAuthorizationResolver:
+    """Build-or-reuse the cached Tier-3 resolver for *brand_json_url* (#1291 hksr)."""
+    cached = _BRAND_AUTHZ_RESOLVER_CACHE.get(brand_json_url)
+    if cached is not None:
+        return cached
+    resolver = BrandJsonAuthorizationResolver(brand_json_url)
+    _BRAND_AUTHZ_RESOLVER_CACHE[brand_json_url] = resolver
+    return resolver
+
+
+def _map_brand_authorization_reason(result: BrandAuthorizationResult) -> str:
+    """``BrandAuthorizationReason`` -> the ``request_signature_*`` code security.mdx assigns it.
+
+    Only called on a REFUSED result (``result.authorized`` is False) — the two success
+    reasons (``etld1_match``, ``operator_delegation``) never reach here.
+    """
+    if result.reason in ("agent_not_listed", "agent_type_mismatch"):
+        # BrandJsonAuthorizationResolver.check's own docstring: "Spec folds both into
+        # request_signature_agent_not_in_brand_json."
+        return REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON
+    if result.reason == "agent_ambiguous":
+        return REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS
+    if result.reason == "binding_failed":
+        # THE trust-pivot case: the agent IS listed in agents[], but fails BOTH
+        # eTLD+1 binding AND authorized_operators[] delegation — right key-type,
+        # wrong URL.
+        return REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH
+    if result.reason == "brand_json_unavailable":
+        return _map_brand_json_resolver_error(result.fetch_error)
+    # "brand_domain_invalid" should not occur under correct wiring: brand_domain is
+    # derived FROM resolution.brand_json_url (async_resolve_agent already validated it
+    # as a URL), not supplied independently. If it ever fires, that is a wiring bug,
+    # not a counterparty fault.
+    logger.error(
+        "brand_domain_invalid for a self-derived brand_domain -- this indicates a wiring bug, not a counterparty fault"
+    )
+    return REQUEST_SIGNATURE_BRAND_JSON_MALFORMED
+
+
+async def _check_brand_authorization(resolution: AgentResolution, config: SigningConfig) -> None:
+    """Tier 3: is this cryptographically-verified agent authorized to act for its brand?
+
+    #1291 hksr. Runs AFTER ``_run_verifier`` succeeds (Tiers 1+2 already passed) — a
+    valid signature proves WHO signed, never that the signer may act for the brand
+    listed at its own brand.json. Only called for brand-json-WALKED counterparties
+    (see :class:`_CounterpartyResolution`); B4's registry fallback has no real
+    brand.json to check against and must never reach this function.
+
+    ``brand_domain`` is derived from ``resolution.brand_json_url``'s own host — the
+    natural, spec-consistent choice, since eTLD+1 binding checks whether the agent's
+    host shares that SAME registrable domain.
+    """
+    resolver = _brand_authz_resolver_for(resolution.brand_json_url)
+    try:
+        result = await resolver.check(
+            agent_url=resolution.agent_url,
+            brand_domain=host_from(resolution.brand_json_url),
+            agent_type=cast(BrandAgentType, config.counterparty_agent_type),
+            brand_id=None,
+        )
+    except Exception as exc:
+        # BrandJsonAuthorizationResolver.check() normalizes fetch/parse failures into
+        # a "brand_json_unavailable" result (handled below via result.fetch_error),
+        # but transport-layer failures below that normalization boundary -- e.g. SSRF
+        # host-validation rejecting a non-routable/unresolvable host -- escape as raw
+        # exceptions instead. Treat any such failure the same as a fetch failure
+        # (unreachable), not an uncaught 500.
+        logger.warning("Tier 3 brand authorization check raised %s: %s", type(exc).__name__, exc)
+        raise SignatureVerificationError(
+            REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE,
+            step=7,
+            message=f"brand authorization check failed: {exc}",
+        ) from exc
+    if result.authorized:
+        return
+    code = _map_brand_authorization_reason(result)
+    raise SignatureVerificationError(code, step=7, message=f"brand authorization refused: {result.reason}")
 
 
 # ---------------------------------------------------------------------------
@@ -866,6 +1107,7 @@ def _run_verifier(
     operation: str,
     bucket: PostureBucket,
     resolution: AgentResolution | None,
+    agent_url: str | None,
     config: SigningConfig,
 ) -> VerifiedSigner:
     """Run the SDK checklist over one database session.
@@ -879,7 +1121,17 @@ def _run_verifier(
 
     All four key-origin fields are passed (R-M2): ``expected_key_origins``,
     ``agent_url``, ``signing_purpose`` and ``posture``. Omitting the first turns a
-    mandatory check into a ``UserWarning``.
+    mandatory check into a ``UserWarning``. ``expected_key_origins`` is ``resolution.
+    key_origins or {}`` (#1291 hksr) rather than the map itself: passing ``None``
+    (what a counterparty advertising no ``identity.key_origins`` map produces) tells
+    the SDK the ADOPTER never threaded the map through and makes it silently SKIP the
+    check with a warning — the shared-tenancy defense the check exists for then ships
+    silently off. An empty dict is what makes the SDK run the check and correctly
+    refuse with ``request_signature_key_origin_missing``.
+
+    *agent_url* is the ORIGINAL value (independent of whether *resolution* resolved),
+    threaded through to :func:`_jwks_resolver` so a failed walk can still be mapped to
+    its discovery code even though *resolution* itself is ``None``.
 
     Revocation (step 9) is wired through ``revocation_checker`` and ONLY that hook.
     ``revocation_list`` is the staleness-only branch — ``verifier.py:283-292`` calls
@@ -895,12 +1147,12 @@ def _run_verifier(
             now=time.time(),
             capability=capability,
             operation=operation,
-            jwks_resolver=_jwks_resolver(resolution),
+            jwks_resolver=_jwks_resolver(resolution, agent_url=agent_url),
             replay_store=PostgresReplayStore(ReplayNonceRepository(session), config),
             max_skew_seconds=config.max_skew_seconds,
             max_window_seconds=config.max_window_seconds,
             agent_url=resolution.agent_url if resolution is not None else None,
-            expected_key_origins=resolution.key_origins if resolution is not None else None,
+            expected_key_origins=(resolution.key_origins or {}) if resolution is not None else None,
             signing_purpose=_SIGNING_PURPOSE,
             posture=bucket,
             revocation_checker=checker_for(resolution, config),
