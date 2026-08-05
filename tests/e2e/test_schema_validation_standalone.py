@@ -35,6 +35,20 @@ async def test_schema_validator_initialization():
 # pinned adcp library version. Removed rather than skipped to satisfy the smoke-test
 # TestNoSkippedTests guard.
 
+# tests/e2e/debug_validation.py removed (salesagent-05se.5):
+# A manual, non-pytest-collected debug script (run via `uv run python
+# tests/e2e/debug_validation.py`) that hand-rolled an if/elif dispatch on
+# get-products required-field names to build a synthetic minimal product --
+# the same hand-maintained-second-copy disease PR #1868 exists to remove.
+# Its debugging purpose (what does the pinned schema require, does a given
+# payload validate) is already covered here (test_invalid_get_products_response,
+# test_get_products_request_validation below) and by
+# tests/unit/test_pydantic_schema_alignment.py's generate_minimal_valid_request /
+# generate_example_value (the schema-derived generator the script should have
+# reused instead of hand-rolling) and tests/unit/test_adcp_contract.py (the
+# production-model contract check). Had zero external references (no CI job,
+# Makefile target, or doc link) — deleted rather than repaired.
+
 
 @pytest.mark.asyncio
 async def test_invalid_get_products_response():
