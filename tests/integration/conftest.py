@@ -607,23 +607,30 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     start_time = time.time()
     server_ready = False
 
-    while time.time() - start_time < max_wait:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
-                s.connect(("localhost", port))
-                server_ready = True
-                break
-        except (ConnectionRefusedError, OSError):
-            # Check if process has died
-            if process.poll() is not None:
-                raise RuntimeError(f"MCP server process died unexpectedly.\n{_server_output()}")
-            time.sleep(0.3)
+    try:
+        while time.time() - start_time < max_wait:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(1)
+                    s.connect(("localhost", port))
+                    server_ready = True
+                    break
+            except (ConnectionRefusedError, OSError):
+                # Check if process has died
+                if process.poll() is not None:
+                    raise RuntimeError(f"MCP server process died unexpectedly.\n{_server_output()}")
+                time.sleep(0.3)
 
-    if not server_ready:
-        process.kill()
-        process.wait(timeout=5)
-        raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\n{_server_output()}")
+        if not server_ready:
+            process.kill()
+            process.wait(timeout=5)
+            raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\n{_server_output()}")
+    except BaseException:
+        # Both raise points above happen before yield, so pytest's generator-fixture
+        # teardown (the code after yield, including shutil.rmtree(output_dir) below)
+        # never runs for them -- clean up here instead, on every setup-failure path.
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
 
     # Return server info
     class ServerInfo:
