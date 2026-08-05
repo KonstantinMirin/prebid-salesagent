@@ -11,7 +11,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
 )
 from src.core.schemas import *
-from src.core.security.outbound_http import OutboundError, OutboundResult, send
+from src.core.security.outbound_http import OutboundError
 
 
 class Kevel(AdServerAdapter):
@@ -67,32 +67,6 @@ class Kevel(AdServerAdapter):
 
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"display", "native"}
-
-    def _api(self, method: str, path: str, *, json: Any = None, params: Any = None) -> OutboundResult:
-        """One vendor call through the egress seam. Returns the OutboundResult.
-
-        Deliberately does NOT parse and does NOT map errors. Eight of this
-        adapter's calls never read a body — ``OutboundResult.json()`` raises
-        ``json.JSONDecodeError``, which the seam places outside its ``OutboundError``
-        contract, so parsing here would turn a 204 from a vendor PUT into an
-        exception no caller catches. And the call sites have three different error
-        policies (raise, degrade to a failed AssetStatus, degrade to unknown), so
-        mapping here would flatten them.
-
-        ``max_attempts=1`` preserves measured behaviour: every Kevel call is a
-        single request today, and campaign/flight/creative creation is not
-        idempotent — silently turning one failed create into three is exactly what
-        this migration must not do.
-        """
-        return send(
-            f"{self.base_url}{path}",
-            method=method,
-            headers=self.headers,
-            json=json,
-            params=params,
-            timeout=30.0,
-            max_attempts=1,
-        )
 
     def _validate_targeting(self, targeting_overlay):
         """Validate targeting and return unsupported features."""

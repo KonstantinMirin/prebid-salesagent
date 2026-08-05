@@ -28,6 +28,7 @@ from src.core.schemas import (
     ReportingPeriod,
     UpdateMediaBuyResponse,
 )
+from src.core.security.outbound_http import OutboundResult, send
 
 # Return type of AdServerAdapter._require_config — preserves the caller's value type.
 _ConfigT = TypeVar("_ConfigT")
@@ -195,6 +196,12 @@ class AdServerAdapter(ABC):
     # Product config schema - override in subclasses (optional)
     product_config_class: type[BaseProductConfig] | None = None
 
+    # Set by subclass __init__ for vendors reachable through _api(). Declared
+    # here (not assigned) so _api can reference them under mypy without every
+    # subclass restating the type.
+    base_url: str
+    headers: dict[str, str]
+
     def __init__(
         self,
         config: dict[str, Any],
@@ -247,6 +254,31 @@ class AdServerAdapter(ABC):
         if value:
             return value
         raise AdCPConfigurationError(message or f"Adapter config is missing required field '{field}'", field=field)
+
+    def _api(self, method: str, path: str, *, json: Any = None, params: Any = None) -> OutboundResult:
+        """One vendor call through the egress seam. Returns the OutboundResult.
+
+        Deliberately does NOT parse and does NOT map errors. Callers whose vendor
+        response never carries a body would otherwise trip ``OutboundResult.json()``'s
+        ``json.JSONDecodeError``, which the seam places outside its ``OutboundError``
+        contract; and call sites vary in error policy (raise, degrade to a failed
+        status, degrade to unknown), so mapping here would flatten them.
+
+        ``max_attempts=1``: a single request, not a retry policy this method
+        decides — vendor mutations (campaign/flight/creative creation) are not
+        idempotent, so silently turning one failed create into three is exactly
+        what routing through here must not do. Uses ``self.base_url`` and
+        ``self.headers``, set by the subclass ``__init__``.
+        """
+        return send(
+            f"{self.base_url}{path}",
+            method=method,
+            headers=self.headers,
+            json=json,
+            params=params,
+            timeout=30.0,
+            max_attempts=1,
+        )
 
     def log(self, message: str, dry_run_prefix: bool = True):
         """Log a message, with optional dry-run prefix."""

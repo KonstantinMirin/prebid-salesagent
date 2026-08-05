@@ -10,7 +10,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
 )
 from src.core.schemas import *
-from src.core.security.outbound_http import OutboundError, OutboundResult, send
+from src.core.security.outbound_http import OutboundError, send
 
 
 class TritonDigital(AdServerAdapter):
@@ -60,26 +60,6 @@ class TritonDigital(AdServerAdapter):
 
     # Only audio media type supported
     SUPPORTED_MEDIA_TYPES = {"audio"}
-
-    def _api(self, method: str, path: str, *, json: Any = None, params: Any = None) -> OutboundResult:
-        """One Triton call through the egress seam. Returns the OutboundResult.
-
-        Does not parse and does not map, for the same reasons as Kevel's twin:
-        four of this adapter's calls never read a body, and its call sites have
-        two different error policies (raise, and degrade to status "unknown").
-
-        max_attempts=1 preserves measured behaviour — every Triton call is a
-        single request today, and campaign/flight creation is not idempotent.
-        """
-        return send(
-            f"{self.base_url}{path}",
-            method=method,
-            headers=self.headers,
-            json=json,
-            params=params,
-            timeout=30.0,
-            max_attempts=1,
-        )
 
     def _validate_targeting(self, targeting_overlay):
         """Validate targeting and return unsupported features."""
