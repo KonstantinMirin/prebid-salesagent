@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import itertools
 import shutil
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,6 +29,11 @@ import pytest
 from tests.integration import conftest
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+# Captured before any patching -- the spy below calls THIS, not tempfile.mkdtemp
+# (which patch() replaces with the spy itself; calling the patched name from
+# inside the spy would recurse into itself).
+_real_mkdtemp = tempfile.mkdtemp
 
 
 def _dead_process_popen(*args, **kwargs):
@@ -44,43 +50,69 @@ def _alive_process_popen(*args, **kwargs):
     return fake_process
 
 
+class _MkdtempSpy:
+    """Wraps tempfile.mkdtemp, recording the exact path it returns.
+
+    A broad ``Path("/tmp").glob("mcp-server-*")`` is racy under the full
+    suite's parallel xdist workers (-n auto --dist loadfile): another worker
+    running a different file, or another concurrent process on a shared CI
+    box, can legitimately create its own mcp-server-* dir at the same
+    moment, and the glob can't tell it apart from a real leak by THIS test's
+    own fixture invocation. Recording the exact path scopes the assertion to
+    only what this test itself created.
+    """
+
+    def __init__(self):
+        self.paths: list[Path] = []
+
+    def __call__(self, *args, **kwargs):
+        path = Path(_real_mkdtemp(*args, **kwargs))
+        self.paths.append(path)
+        return str(path)
+
+
 class TestMcpServerFixtureCleanup:
     """Neither setup-failure path may leave a mcp-server-* temp dir behind."""
-
-    def _leaked_dirs(self) -> list[Path]:
-        return list(Path("/tmp").glob("mcp-server-*"))
 
     def test_no_leak_when_process_dies_before_yield(self, integration_db):
         """Process-died path: subprocess.Popen.poll() reports a dead process
         on the very first readiness check, so the fixture raises before
         yield without any 60s wait."""
         gen = conftest.mcp_server.__wrapped__(integration_db)
+        spy = _MkdtempSpy()
         try:
-            with patch("subprocess.Popen", side_effect=_dead_process_popen):
+            with (
+                patch("subprocess.Popen", side_effect=_dead_process_popen),
+                patch("tempfile.mkdtemp", side_effect=spy),
+            ):
                 with pytest.raises(RuntimeError, match="MCP server process died unexpectedly"):
                     next(gen)
 
-            leaked = self._leaked_dirs()
+            assert spy.paths, "fixture never called tempfile.mkdtemp -- test isn't exercising the leak path"
+            leaked = [p for p in spy.paths if p.exists()]
             assert not leaked, f"mcp_server fixture leaked temp dir(s) on the process-died path: {leaked}"
         finally:
-            for d in self._leaked_dirs():
-                shutil.rmtree(d, ignore_errors=True)
+            for p in spy.paths:
+                shutil.rmtree(p, ignore_errors=True)
 
     def test_no_leak_when_server_never_becomes_ready(self, integration_db):
         """Timeout path: the process stays "alive" (poll() -> None) but never
         opens its port, and time.time() is patched to jump straight past
         max_wait so the test doesn't actually sleep 60s."""
         gen = conftest.mcp_server.__wrapped__(integration_db)
+        spy = _MkdtempSpy()
         try:
             with (
                 patch("subprocess.Popen", side_effect=_alive_process_popen),
                 patch("time.time", side_effect=itertools.chain([0], itertools.repeat(999_999))),
+                patch("tempfile.mkdtemp", side_effect=spy),
             ):
                 with pytest.raises(RuntimeError, match="MCP server failed to start"):
                     next(gen)
 
-            leaked = self._leaked_dirs()
+            assert spy.paths, "fixture never called tempfile.mkdtemp -- test isn't exercising the leak path"
+            leaked = [p for p in spy.paths if p.exists()]
             assert not leaked, f"mcp_server fixture leaked temp dir(s) on the startup-timeout path: {leaked}"
         finally:
-            for d in self._leaked_dirs():
-                shutil.rmtree(d, ignore_errors=True)
+            for p in spy.paths:
+                shutil.rmtree(p, ignore_errors=True)
