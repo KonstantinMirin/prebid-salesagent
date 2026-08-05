@@ -67,6 +67,32 @@ COUNTERPARTY_JWKS_URI = "https://buyer.example.com/.well-known/jwks.json"
 #: The ``keyid`` the counterparty signs under.
 COUNTERPARTY_KID = "buyer-request-signing-1"
 
+#: The counterparty as a REGISTERED entry of
+#: :attr:`~src.core.config.SigningConfig.counterparty_registry` carries it (#1291 B4).
+#: Deliberately different from :data:`COUNTERPARTY_AGENT_URL` and its origin: the two
+#: resolution paths must be distinguishable at the assertion, so a test can say WHICH
+#: one supplied the key rather than only that some key was found.
+REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
+REGISTRY_KEY_ORIGIN = "https://test-kit.example.com"
+REGISTRY_JWKS_URI = "https://test-kit.example.com/.well-known/jwks.json"
+
+#: An ``agent_url`` whose brand.json walk FAILS, deterministically and with no network.
+#:
+#: The SDK resolves and validates the host SYNCHRONOUSLY before any socket is opened
+#: (``adcp/signing/ip_pinned_transport.py`` ``resolve_and_validate_host`` via
+#: ``build_async_ip_pinned_transport``), so a loopback authority is refused as a
+#: reserved range and ``async_resolve_agent`` raises ``AgentResolverError
+#: ("capabilities_unreachable")`` in microseconds. That is a REAL failure of the real
+#: walk — not a patched resolver — which is what a test grading "the walk failed" needs
+#: if it is not to be a mock asserting on itself. A public-looking hostname would
+#: instead put a DNS lookup in the test's critical path.
+UNRESOLVABLE_AGENT_URL = "http://127.0.0.1:1/a2a"
+
+#: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
+#: ``http://testserver``, and the signature covers ``@target-uri``, so a request signed
+#: against any other origin fails on its merits before the behavior under test is reached.
+WIRE_ORIGIN = "http://testserver"
+
 #: The seller tenant and the buyer's principal within it. Shared so the three
 #: in-process suites address the same rows and one ``seed_principal`` serves all.
 SIGNING_TENANT_ID = "sig_tenant"
@@ -301,25 +327,59 @@ def counterparty_key(
     ``VerifyOptions`` and the step-7 key-origin check stays ON. Seeding the
     resolution is what lets these tests run the REAL verifier against real keys
     without a live counterparty — nothing about the outcome is faked.
-    """
-    from adcp.signing.agent_resolver import AgentResolution
 
+    Built via ``build_registry_resolution`` (#1291 B4) — the SAME production
+    constructor the configured counterparty registry uses — rather than a
+    second inline ``AgentResolution(...)`` here, so this fixture and the
+    registry fallback can never drift into two different resolution shapes.
+    """
     from src.core.signing import request_verifier_middleware as mw
 
-    resolution = AgentResolution(
-        agent_url=agent_url,
-        brand_json_url=f"{key_origin}/.well-known/brand.json",
-        agent_entry={"type": "sales", "url": agent_url, "jwks_uri": jwks_uri},
-        jwks_uri=jwks_uri,
-        jwks=jwks,
-        fetched_at=time.time(),
-        key_origins={"request_signing": key_origin},
+    resolution = mw.build_registry_resolution(
+        {"agent_url": agent_url, "jwks_uri": jwks_uri, "key_origin": key_origin, "jwks": jwks}
     )
     mw.AGENT_RESOLUTION_CACHE[agent_url] = resolution
     try:
         yield
     finally:
         mw.AGENT_RESOLUTION_CACHE.pop(agent_url, None)
+
+
+def registry_entry(
+    jwks: dict[str, Any],
+    *,
+    agent_url: str = REGISTRY_AGENT_URL,
+    jwks_uri: str = REGISTRY_JWKS_URI,
+    key_origin: str = REGISTRY_KEY_ORIGIN,
+) -> dict[str, Any]:
+    """One entry of the configured counterparty registry (#1291 B4).
+
+    The same four values :func:`counterparty_key` seeds into the cache, because the
+    registry's whole job is to produce the SAME ``AgentResolution`` shape from config
+    instead of from the brand.json walk. Keeping one vocabulary for both is what lets
+    a test swap the resolution SOURCE while changing nothing else — and what makes it
+    visible if the two shapes ever drift apart.
+    """
+    return {"agent_url": agent_url, "jwks_uri": jwks_uri, "key_origin": key_origin, "jwks": jwks}
+
+
+@contextmanager
+def signing_config(**overrides: Any) -> Iterator[Any]:
+    """Substitute the agent-level ``SigningConfig``, keeping every other field.
+
+    The middleware reads ``get_config().signing`` per request
+    (``request_verifier_middleware.py``) off the process-global singleton, so
+    replacing that attribute is what reaches ``_run_verifier``. Built by
+    CONSTRUCTION rather than ``model_copy``, so an override naming a field that
+    does not exist fails loudly instead of attaching a stray attribute — which is
+    also what makes a red test for a not-yet-existing field fail for its own reason.
+    """
+    from src.core.config import SigningConfig, get_config
+
+    config = get_config()
+    replaced = SigningConfig(**{**config.signing.model_dump(), **overrides})
+    with patch.object(config, "signing", replaced):
+        yield replaced
 
 
 #: Reserved key under which :func:`verifier_spy` records what the real verifier
@@ -495,6 +555,43 @@ def sign_wire_request(
         cover_content_digest=True,
     )
     return signed.as_dict()
+
+
+def signed_headers(
+    private_key: Any,
+    token: str | None,
+    *,
+    method: str,
+    path: str,
+    body: bytes = b"",
+    extra: dict[str, str] | None = None,
+    key_id: str = COUNTERPARTY_KID,
+) -> dict[str, str]:
+    """The full header set for one signed in-process request to *path*.
+
+    Merges the wire headers a signed request carries anyway (tenant hint, bearer,
+    whatever the case needs) with the signature over exactly those headers and *body*
+    — the ordering the signature depends on, since the base covers ``content-digest``
+    and the headers the signer chose to sign. Every signing suite built this merge by
+    hand, and a copy that signs a URL or a header set slightly different from the one
+    it then sends fails as ``request_signature_invalid``, i.e. looks like a verifier
+    bug. One construction, so that cannot happen in only one of them.
+
+    Signed FRESH per call: ``sign_request`` mints a new nonce each time, so two
+    requests in one test do not collide in A4's replay store.
+    """
+    base = request_headers(token, extra)
+    return {
+        **base,
+        **sign_wire_request(
+            private_key,
+            method=method,
+            url=f"{WIRE_ORIGIN}{path}",
+            headers=base,
+            body=body,
+            key_id=key_id,
+        ),
+    }
 
 
 def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any]) -> Any:

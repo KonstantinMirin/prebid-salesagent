@@ -148,7 +148,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from adcp.signing import (
@@ -163,7 +162,7 @@ from adcp.signing.revocation_fetcher import (
     RevocationListFetchError,
 )
 
-from src.core.config import SigningConfig, get_config
+from src.core.config import SigningConfig
 from src.core.signing import request_verifier_middleware as mw
 from src.core.signing.revocation import (
     REVOCATION_CHECKER_CACHE,
@@ -190,9 +189,8 @@ from tests.helpers.signing import (
     bucketed_declaration,
     counterparty_key,
     keypair_for,
-    request_headers,
     seed_principal,
-    sign_wire_request,
+    signed_headers,
 )
 from tests.helpers.signing import (
     counter_total as _counter_total,
@@ -202,6 +200,9 @@ from tests.helpers.signing import (
 )
 from tests.helpers.signing import (
     rejection_code as _rejection_code,
+)
+from tests.helpers.signing import (
+    signing_config as _signing_config,
 )
 
 #: Metric for the R1 fail-open path (plan step 4). Family total only — see the
@@ -240,22 +241,6 @@ def _clean_registry() -> Iterator[None]:
     REVOCATION_CHECKER_CACHE.clear()
     yield
     REVOCATION_CHECKER_CACHE.clear()
-
-
-@contextmanager
-def _signing_config(**overrides: Any) -> Iterator[SigningConfig]:
-    """Substitute the agent-level ``SigningConfig``, keeping every other field.
-
-    The middleware reads ``get_config().signing`` per request
-    (``request_verifier_middleware.py:235``) off the process-global singleton,
-    so replacing that attribute is what reaches ``_run_verifier``. Built by
-    CONSTRUCTION rather than ``model_copy``, so an override naming a field that
-    does not exist fails loudly instead of attaching a stray attribute.
-    """
-    config = get_config()
-    replaced = SigningConfig(**{**config.signing.model_dump(), **overrides})
-    with patch.object(config, "signing", replaced):
-        yield replaced
 
 
 @contextmanager
@@ -345,17 +330,14 @@ class _SignedCaller:
         store.
         """
         body = json.dumps({"context": {"request_id": "revocation-probe"}}).encode()
-        base = request_headers(self._token, {"Content-Type": "application/json"})
-        headers = {
-            **base,
-            **sign_wire_request(
-                self.private_key,
-                method="POST",
-                url=f"http://testserver{BODYLESS_ADCP_PATH}",
-                headers=base,
-                body=body,
-            ),
-        }
+        headers = signed_headers(
+            self.private_key,
+            self._token,
+            method="POST",
+            path=BODYLESS_ADCP_PATH,
+            body=body,
+            extra={"Content-Type": "application/json"},
+        )
         if corrupt_signature:
             headers = _with_corrupt_signature(headers)
         return self._client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)

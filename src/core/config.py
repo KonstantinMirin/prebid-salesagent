@@ -5,9 +5,9 @@ management using environment variables.
 """
 
 import os
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, ValidationInfo, field_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.core.signing import CACHE_MAX_AGE_SECONDS
@@ -18,6 +18,48 @@ _PRODUCTION_MIN_PER_KEYID_CAP = 1_000_000
 
 # Characters that make an override key a PATTERN rather than one counterparty's keyid.
 _KEYID_PATTERN_CHARS = "*?%[]"
+
+
+def _validate_explicit_keyid(key: str, field_name: str) -> None:
+    """Refuse an empty or pattern-shaped key on a per-keyid config map.
+
+    Shared by every per-keyid map on SigningConfig (override maps AND the
+    counterparty registry) so "explicit keyids only" is one rule, not one
+    reimplementation per field — a pattern key on ANY of them would lower a
+    protection globally, which is refused everywhere identically.
+    """
+    if not key.strip():
+        raise ValueError(f"{field_name}: a key must be an explicit keyid, not empty")
+    if any(char in key for char in _KEYID_PATTERN_CHARS):
+        raise ValueError(
+            f"{field_name}: key {key!r} looks like a pattern. Keys name explicit "
+            "keyids only — a pattern would lower the protection globally, which is refused."
+        )
+
+
+def _test_kit_relaxation_forbidden_signal() -> str | None:
+    """Which production signal (if any) forbids test-kit signing relaxations.
+
+    Deliberately the UNION of every production signal an entrypoint in this
+    codebase checks today: ``ENVIRONMENT=production`` (``is_production()``),
+    ``PRODUCTION=true`` (``is_admin_production()``), and ``FLY_APP_NAME`` set
+    (``scripts/run_server.py``). NOT a reuse of ``is_production()`` or
+    ``is_admin_production()`` — those are narrower checks scoped to their own
+    subsystems (schema validation strictness, admin auth), and widening either
+    to include ``FLY_APP_NAME`` would change behavior for callers this ticket
+    has not tested. The blast radius a test-kit relaxation opens — a keyid
+    alone becoming sufficient to be trusted as a counterparty — warrants the
+    widest, most paranoid union rather than reusing a narrower predicate.
+    Any non-empty value of ``PRODUCTION``/``FLY_APP_NAME`` counts (matching
+    ``run_server.py``'s looser reading), not only ``"true"``.
+    """
+    if os.getenv("ENVIRONMENT", "").strip().lower() == "production":
+        return "ENVIRONMENT"
+    if os.getenv("PRODUCTION", "").strip():
+        return "PRODUCTION"
+    if os.getenv("FLY_APP_NAME", "").strip():
+        return "FLY_APP_NAME"
+    return None
 
 
 class GAMOAuthConfig(BaseSettings):
@@ -155,6 +197,22 @@ class SigningConfig(BaseSettings):
     replay_claim_ttl_seconds: float = Field(
         default=60.0,
         description="Lifetime written by the atomic claim before remember() raises it to the signature's own TTL",
+    )
+
+    # -- Configured counterparty registry (#1291 B4) -----------------------
+    counterparty_registry: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-keyid registered counterparty entries ({agent_url, jwks_uri, key_origin, jwks}), "
+            "keyed by explicit keyid. Consulted by request_verifier_middleware._resolution_for as "
+            "a FALLBACK when a signed request's principal carries no agent_url to walk (the "
+            "signed_requests_runner conformance suite sends no bearer at all). NEVER consulted "
+            "when a principal-derived walk exists but FAILS -- that path returns whatever is "
+            "cached (possibly nothing) on its own, so a config-seeded keyid can never silently "
+            "replace a real, briefly-unreachable counterparty's onboarded identity. Refused "
+            "entirely in production (see the model validator below) -- this is a conformance-"
+            "grading key-trust source, never a substitute for real onboarding."
+        ),
     )
 
     # -- Inbound verifier (#1291 B1) ---------------------------------------
@@ -369,16 +427,56 @@ class SigningConfig(BaseSettings):
         both fields.
         """
         for key, value in v.items():
-            if not key.strip():
-                raise ValueError(f"{info.field_name}: an override key must be an explicit keyid, not empty")
-            if any(char in key for char in _KEYID_PATTERN_CHARS):
-                raise ValueError(
-                    f"{info.field_name}: override key {key!r} looks like a pattern. Overrides name explicit "
-                    "keyids only — a pattern would lower the protection globally, which is refused."
-                )
+            _validate_explicit_keyid(key, info.field_name or "")
             if value <= 0:
                 raise ValueError(f"{info.field_name}: override for keyid {key!r} must be positive, got {value}")
         return v
+
+    @field_validator("counterparty_registry")
+    @classmethod
+    def validate_counterparty_registry_keys(
+        cls, v: dict[str, dict[str, Any]], info: ValidationInfo
+    ) -> dict[str, dict[str, Any]]:
+        """Registry entries are keyed by explicit keyid too — same rule as the override maps.
+
+        No value-shape check here: the four required keys (agent_url, jwks_uri,
+        key_origin, jwks) are asserted by
+        request_verifier_middleware.build_registry_resolution at the point a
+        registry entry is actually used, which is a KeyError at construction from
+        production config, not a schema the operator round-trips.
+        """
+        for key in v:
+            _validate_explicit_keyid(key, info.field_name or "")
+        return v
+
+    @model_validator(mode="after")
+    def validate_test_kit_relaxations_forbidden_in_production(self) -> "SigningConfig":
+        """Refuse any non-empty test-kit relaxation under a production signal.
+
+        Placement is deliberate: a ``@model_validator`` fires on EVERY
+        ``SigningConfig()``/``AppConfig()`` construction, so every process that
+        can reach ``get_config()`` is covered — unlike
+        ``validate_configuration()``, which is reachable only through
+        ``initialize_application()`` (``scripts/run_server.py``,
+        ``src/admin/server.py``); ``src/app.py``'s ASGI lifespan never calls it,
+        so a deployment pointing gunicorn/uvicorn at ``src.app:app`` directly
+        (the default shape on most platforms) would boot the verifier and the
+        registry with that guard never executing. This one cannot be bypassed
+        by entrypoint choice.
+
+        Refuses the RELAXATIONS, not construction itself: a production
+        deployment with none of these three fields set must still boot.
+        """
+        signal = _test_kit_relaxation_forbidden_signal()
+        if signal is None:
+            return self
+        for field_name in ("counterparty_registry", "per_keyid_cap_overrides", "replay_ttl_overrides"):
+            if getattr(self, field_name):
+                raise ValueError(
+                    f"{field_name} is a conformance-grading relaxation and must not be set "
+                    f"when {signal} signals a production deployment"
+                )
+        return self
 
     @field_validator("grace_seconds")
     @classmethod

@@ -143,7 +143,13 @@ from adcp.signing.errors import (
 )
 from adcp.signing.jwks import StaticJwksResolver
 from adcp.signing.middleware import unauthorized_response_headers
-from adcp.signing.verifier import VerifiedSigner, VerifierCapability, VerifyOptions, verify_request_signature
+from adcp.signing.verifier import (
+    VerifiedSigner,
+    VerifierCapability,
+    VerifyOptions,
+    parse_signature_input_header,
+    verify_request_signature,
+)
 from starlette.responses import Response
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
@@ -445,7 +451,7 @@ class RequestSignatureMiddleware:
             # this gate is defense-in-depth, not a hot path.
             url = _verify_url(scope, headers)
             reject_malformed_target(url)
-            resolution = await _resolution_for(context.agent_url, config)
+            resolution = await _resolution_for(context.agent_url, config, keyid=_parse_keyid(headers))
             signer = await asyncio.to_thread(
                 _run_verifier,
                 method=scope.get("method", "GET"),
@@ -722,7 +728,58 @@ async def _buffer_body(receive: Receive, max_bytes: int) -> _BufferedBody:
 # ---------------------------------------------------------------------------
 
 
-async def _resolution_for(agent_url: str | None, config: SigningConfig) -> AgentResolution | None:
+def build_registry_resolution(entry: Mapping[str, Any]) -> AgentResolution:
+    """The :class:`AgentResolution` a configured counterparty registry entry projects to.
+
+    #1291 B4. Same shape the brand.json walk produces below — ``jwks_uri`` and
+    ``key_origins`` consistent with each other — so :func:`_jwks_resolver` marks
+    it ``brand_json`` and the spec's step-7 key-origin consistency check stays
+    engaged for a registry-resolved counterparty exactly as it is for a walked
+    one. A registry entry missing one of the four required keys raises
+    ``KeyError`` here, at the point it is actually used, rather than at config
+    parse time (:meth:`SigningConfig.validate_counterparty_registry_keys`
+    checks only the KEY shape, not the entry shape).
+    """
+    agent_url = entry["agent_url"]
+    jwks_uri = entry["jwks_uri"]
+    key_origin = entry["key_origin"]
+    return AgentResolution(
+        agent_url=agent_url,
+        brand_json_url=f"{key_origin}/.well-known/brand.json",
+        agent_entry={"type": "sales", "url": agent_url, "jwks_uri": jwks_uri},
+        jwks_uri=jwks_uri,
+        jwks=entry["jwks"],
+        fetched_at=time.time(),
+        key_origins={_SIGNING_PURPOSE: key_origin},
+    )
+
+
+def _parse_keyid(headers: Mapping[str, str]) -> str | None:
+    """The keyid named in the (unverified) Signature-Input header, or None.
+
+    Used ONLY to look up the counterparty registry fallback below — the
+    signature must still cryptographically verify against whatever key this
+    resolves to, so reading an unverified header here is not a bypass; it is
+    exactly as safe as any other keyid-based key lookup (the SDK's own
+    checklist resolves a JWKS entry off the same unverified field).
+    """
+    raw = headers.get("signature-input")
+    if not raw:
+        return None
+    try:
+        labels = parse_signature_input_header(raw)
+    except ValueError:
+        return None
+    for label in labels.values():
+        keyid = label.params.get("keyid")
+        if isinstance(keyid, str):
+            return keyid
+    return None
+
+
+async def _resolution_for(
+    agent_url: str | None, config: SigningConfig, *, keyid: str | None = None
+) -> AgentResolution | None:
     """The counterparty's cached :class:`AgentResolution`, resolving on a cold entry.
 
     ``agent_url -> capabilities -> identity.brand_json_url -> brand.json agents[] ->
@@ -739,9 +796,22 @@ async def _resolution_for(agent_url: str | None, config: SigningConfig) -> Agent
     from a counterparty document, and ``allow_private_destinations`` is a test argument
     (``tests/unit/test_architecture_no_private_destinations.py`` fails the build on any
     src/ call site that passes it).
+
+    #1291 B4 — the registry fallback: when *agent_url* is falsy (no bearer resolved a
+    principal, or an onboarded principal recorded none — exactly what a bearer-less
+    conformance runner produces), *keyid* is looked up in
+    ``config.counterparty_registry`` as a FALLBACK key-trust source. This branch is
+    the ONLY place the registry is consulted. A principal that DOES carry an
+    ``agent_url`` never reaches it, even when that walk fails below and returns
+    ``cached`` (possibly ``None``) — the registry is a fallback for a walk with no
+    INPUT, never an override for a walk that FAILED, or a counterparty with a
+    briefly unreachable brand.json would be silently re-identified from config.
     """
     if not agent_url:
-        return None
+        if keyid is None:
+            return None
+        entry = config.counterparty_registry.get(keyid)
+        return build_registry_resolution(entry) if entry is not None else None
 
     now = time.time()
     cached = AGENT_RESOLUTION_CACHE.get(agent_url)

@@ -62,6 +62,17 @@ differ on the WIRE (200 vs 401), not merely in a counter — status AND counter
 are asserted. (The refinement retires the research note's "invisible failure
 mode" framing for warn precisely because the difference IS on the wire.)
 
+**B4 — the configured counterparty registry (``salesagent-z6nr.15``).** The
+second, config-sourced way a keyid resolves to key material, added because the
+conformance runner sends no bearer and therefore produces no principal-derived
+``agent_url`` to walk. It is a key-trust bypass unless two things hold, and the
+last three classes in this module hold them: the registry is consulted ONLY when
+that walk has no INPUT — never when the walk merely FAILED, which would let a
+counterparty with a briefly unreachable brand.json be silently re-identified from
+config — and the configuration is refused at ``SigningConfig`` construction under
+every production signal this codebase deploys under. See the block comment above
+:data:`_PRODUCTION_SIGNALS` for the spec grounding and the full argument.
+
 Why these tests are not vacuous
 -------------------------------
 
@@ -83,7 +94,8 @@ these declarations bucketed was the empty string. B2
 invokes — which is what makes every assertion below non-vacuous.
 
 Covers: salesagent-z6nr.12 (Core Invariant + Refinement R-H1, R-H2, R-H3,
-R-L, and the shadow-mode ladder).
+R-L, and the shadow-mode ladder); salesagent-z6nr.15 (Core Invariant —
+registry-as-fallback precedence and the production refusal).
 """
 
 from __future__ import annotations
@@ -94,10 +106,13 @@ from typing import Any
 import pytest
 from adcp.signing import (
     REQUEST_SIGNATURE_HEADER_MALFORMED,
+    REQUEST_SIGNATURE_KEY_UNKNOWN,
     REQUEST_SIGNATURE_REQUIRED,
 )
 from adcp.signing.errors import REQUEST_SIGNATURE_DIGEST_MISMATCH
+from pydantic import ValidationError
 
+from src.core.config import SigningConfig
 from tests.harness._base import BareIntegrationEnv
 
 # The B1 seams, the counter readers, the shared counterparty/tenant/surface
@@ -112,16 +127,21 @@ from tests.helpers.signing import (
     COUNTERPARTY_KID,
     FAILED_METRIC,
     LADDER_OPERATIONS,
+    REGISTRY_AGENT_URL,
+    REGISTRY_JWKS_URI,
+    REGISTRY_KEY_ORIGIN,
     REWRITTEN_ADCP_PATH,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
+    UNRESOLVABLE_AGENT_URL,
     VERIFIED_METRIC,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
+    registry_entry,
     request_headers,
     seed_principal,
-    sign_wire_request,
+    signed_headers,
 )
 from tests.helpers.signing import (
     counter_samples as _counter_samples,
@@ -137,6 +157,9 @@ from tests.helpers.signing import (
 )
 from tests.helpers.signing import (
     samples_with as _samples_with,
+)
+from tests.helpers.signing import (
+    signing_config as _signing_config,
 )
 from tests.helpers.signing import (
     verifier_spy as _verifier_spy,
@@ -165,6 +188,44 @@ from tests.helpers.signing import (
 #                                      so all four VerifyOptions fields can be
 #                                      passed and the key-origin check does not
 #                                      ship silently OFF)
+#
+# And for salesagent-z6nr.15 (B4), the names the last three classes require:
+#
+#   src.core.config.SigningConfig
+#     .counterparty_registry           {keyid: entry} where an entry carries
+#                                      agent_url, jwks_uri, key_origin and the
+#                                      JWK set — the four values
+#                                      tests.helpers.signing.registry_entry
+#                                      builds and counterparty_key already seeds
+#                                      into the cache. Explicit keyids only, the
+#                                      same KEY-shape rule the override maps
+#                                      enforce (share the helper; do NOT add
+#                                      this field to
+#                                      validate_overrides_name_explicit_keyids,
+#                                      whose value check is numeric)
+#     model_validator(mode="after")    refuses counterparty_registry,
+#                                      per_keyid_cap_overrides and
+#                                      replay_ttl_overrides under ANY of
+#                                      _PRODUCTION_SIGNALS below. NOT
+#                                      validate_configuration(), which
+#                                      src/app.py's ASGI lifespan never calls
+#
+#   src.core.signing.request_verifier_middleware
+#     _resolution_for                  takes the keyid PASSED IN by _handle_signed
+#                                      (which has the headers; the resolver keeps
+#                                      its one-input/one-cache contract) and
+#                                      consults the registry only when agent_url
+#                                      is falsy. Registry results are NOT written
+#                                      to AGENT_RESOLUTION_CACHE — it is keyed by
+#                                      agent_url, and a keyid would share that
+#                                      namespace
+#     the AgentResolution constructor  ONE shared builder in the signing layer,
+#                                      which tests.helpers.signing.counterparty_key
+#                                      is then repointed at. Its invariant:
+#                                      key_origins stays consistent with jwks_uri,
+#                                      so _jwks_resolver marks the resolver
+#                                      brand_json and step-7 origin checking stays
+#                                      engaged rather than vacuous
 
 # --------------------------------------------------------------------------
 # Declaration seam
@@ -436,15 +497,15 @@ class TestShadowModeLadder:
         """Headers signed over one body, plus the DIFFERENT body actually sent."""
         signed_body = json.dumps({"context": {"request_id": "as-signed"}}).encode()
         sent_body = json.dumps({"context": {"request_id": "as-sent-DIFFERENT"}}).encode()
-        base = request_headers(token, {"Content-Type": "application/json"})
-        signature_headers = sign_wire_request(
+        headers = signed_headers(
             private_key,
+            token,
             method="POST",
-            url=f"http://testserver{BODYLESS_ADCP_PATH}",
-            headers=base,
+            path=BODYLESS_ADCP_PATH,
             body=signed_body,
+            extra={"Content-Type": "application/json"},
         )
-        return {**base, **signature_headers}, sent_body
+        return headers, sent_body
 
     @pytest.mark.parametrize(
         ("bucket", "expected_status"),
@@ -544,15 +605,15 @@ class TestVerifierSitsOutsideBodyRewriter:
                 "end_time": "2026-08-31T00:00:00Z",
             }
         ).encode()
-        base = request_headers(token, {"Content-Type": "application/json"})
-        signature_headers = sign_wire_request(
+        headers = signed_headers(
             private_key,
+            token,
             method="POST",
-            url=f"http://testserver{REWRITTEN_ADCP_PATH}",
-            headers=base,
+            path=REWRITTEN_ADCP_PATH,
             body=wire_body,
+            extra={"Content-Type": "application/json"},
         )
-        return {**base, **signature_headers}, wire_body
+        return headers, wire_body
 
     def test_signature_over_wire_bytes_verifies_on_a_body_rewritten_route(self, integration_db, counterparty_keypair):
         """R-M5(b) — the whole point of the ordering change, graded directly.
@@ -649,3 +710,273 @@ class TestVerifierSitsOutsideBodyRewriter:
                 "RestCompatMiddleware must still translate account_id -> account before "
                 f"the route model validates; the response still names it: {response.text[:400]}"
             )
+
+
+# --------------------------------------------------------------------------
+# B4 — the configured counterparty registry (salesagent-z6nr.15)
+# --------------------------------------------------------------------------
+#
+# TDD-red for salesagent-z6nr.15. None of what these three classes address exists
+# yet: ``SigningConfig`` has no ``counterparty_registry`` field, ``_resolution_for``
+# has no fallback branch, and no production signal refuses a test-kit configuration.
+#
+# WHY the registry exists at all: the @adcp/sdk conformance runner sends NO bearer
+# (verified across the vendored vector set — only negative/027 carries an
+# Authorization header, and that one is deliberately unsigned). Our verifier derives
+# the counterparty from the AUTHENTICATED principal, so with no bearer there is no
+# ``Principal.agent_url``, no brand.json to walk, and every positive vector reaches
+# ``request_signature_key_unknown`` at step 7. AdCP 3.1.1 ``security.mdx`` :1090
+# gives the fallback its cover — "Discovery MAY come from prior onboarding, MAY come
+# from a registry cache" — and :1236 requires only that the keyid resolve to a
+# specific ``agents[]`` entry, which a config-seeded resolution does.
+#
+# WHY it is dangerous, and what these tests hold in place: a keyid -> counterparty
+# map is a key-trust bypass the moment it can either (1) outrank a real
+# counterparty's onboarding record, or (2) be configured in production. So the
+# invariant has two halves and both are graded here — the registry is a FALLBACK
+# consulted solely when the principal-derived walk has no INPUT (never when that
+# walk merely FAILED), and the configuration is refused at ``SigningConfig``
+# construction under every production signal this codebase deploys under.
+
+#: The signals this codebase already treats as "this is production", each read at a
+#: different site: ``ENVIRONMENT`` by ``src.core.config.is_production``, ``PRODUCTION``
+#: and ``ENVIRONMENT`` together by ``src.admin.utils.helpers.is_admin_production``, and
+#: ``FLY_APP_NAME`` (or ``PRODUCTION``) by ``scripts/run_server.py``. Named here rather
+#: than imported from the production predicate on purpose: a test that asks the guard
+#: which signals it honors cannot notice a signal the guard forgot.
+_PRODUCTION_SIGNALS = {
+    "ENVIRONMENT": "production",
+    "PRODUCTION": "true",
+    "FLY_APP_NAME": "salesagent-prod",
+}
+
+#: Every relaxation this ticket's configuration introduces. Each is refused under each
+#: signal INDEPENDENTLY — one field slipping past the guard is a full bypass, since the
+#: registry alone is enough to make a keyid sufficient for trust.
+_TEST_KIT_RELAXATIONS = {
+    "counterparty_registry": lambda jwks: {COUNTERPARTY_KID: registry_entry(jwks)},
+    "per_keyid_cap_overrides": lambda jwks: {COUNTERPARTY_KID: 100},
+    "replay_ttl_overrides": lambda jwks: {COUNTERPARTY_KID: 70.0},
+}
+
+
+def _signed_probe(private_key: Any, token: str) -> tuple[dict[str, str], bytes]:
+    """A well-formed signed POST to the bodyless AdCP surface, and its wire bytes.
+
+    Real Ed25519 over the real wire bytes under :data:`COUNTERPARTY_KID`, so every
+    checklist step up to key resolution passes on its merits. That is what makes the
+    outcome attributable to WHICH resolution path supplied the key, rather than to
+    anything about the signature itself.
+    """
+    body = json.dumps({"context": {"request_id": "registry-probe"}}).encode()
+    headers = signed_headers(
+        private_key,
+        token,
+        method="POST",
+        path=BODYLESS_ADCP_PATH,
+        body=body,
+        extra={"Content-Type": "application/json"},
+    )
+    return headers, body
+
+
+@pytest.mark.requires_db
+class TestRegistryResolvesACounterpartyWithNoAgentUrl:
+    """With no ``agent_url`` to walk, the registry is what makes the keyid resolve."""
+
+    def test_a_registered_keyid_verifies_when_the_principal_has_no_agent_url(
+        self, integration_db, counterparty_keypair
+    ):
+        """The grading case, end to end: a signed request whose principal carries no
+        ``agent_url`` (exactly what a bearer-less conformance runner produces once its
+        token maps to a principal, and what ``_resolve_request_context`` already logs a
+        warning for) must verify against the JWKS configured for its keyid.
+
+        Three assertions, three different failures:
+        1. the request is not rejected — the registry produced a usable key at all;
+        2. the resolution handed to the verifier is the REGISTRY's, named by its own
+           ``agent_url``. Without this the test would also pass on a stray
+           ``AGENT_RESOLUTION_CACHE`` entry left by another suite;
+        3. ``expected_key_origins`` is populated and the resolver declares
+           ``brand_json``. The SDK engages the spec's step-7 key-origin consistency
+           check ONLY for a resolver that declares its source, so a registry entry that
+           dropped ``key_origin`` would ship the check silently OFF — trusting a key
+           served from anywhere — while every other assertion here stayed green.
+        """
+        private_key, jwks = counterparty_keypair
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env, agent_url=None)
+            client = env.get_rest_client()
+            headers, body = _signed_probe(private_key, token)
+
+            with (
+                _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
+                _signing_config(counterparty_registry={COUNTERPARTY_KID: registry_entry(jwks)}),
+                _verifier_spy() as calls,
+            ):
+                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+
+            assert _rejection_code(response) is None, (
+                "a signed request from a REGISTERED keyid must verify even though its "
+                "principal carries no agent_url — that is the whole reason the registry "
+                f"exists; the verifier rejected with {_rejection_code(response)!r}"
+            )
+            assert response.status_code == 200, (
+                f"expected the verified request to reach the route, got {response.status_code}: {response.text[:300]}"
+            )
+            assert len(calls) == 1, f"the signed POST must reach the SDK verifier exactly once; it ran {len(calls)}x"
+            options = calls[0]["options"]
+            assert options.agent_url == REGISTRY_AGENT_URL, (
+                "the resolution passed to the verifier must be the one built from the "
+                f"registry entry, named by its own agent_url; got {options.agent_url!r}"
+            )
+            assert options.expected_key_origins == {"request_signing": REGISTRY_KEY_ORIGIN}, (
+                "a registry-built resolution must carry key_origins consistent with its "
+                "jwks_uri, or step-7 key-origin checking is vacuous for every registered "
+                f"counterparty; got {options.expected_key_origins!r}"
+            )
+            assert getattr(options.jwks_resolver, "jwks_source", None) == "brand_json", (
+                "the resolver must declare brand_json, which is what turns the step-7 "
+                "origin check ON; a plain StaticJwksResolver is treated as a "
+                "publisher-pinned tuple and skips it with a warning"
+            )
+            assert getattr(options.jwks_resolver, "jwks_uri", None) == REGISTRY_JWKS_URI, (
+                f"the declared jwks_uri must be the registered one; got {getattr(options.jwks_resolver, 'jwks_uri', None)!r}"
+            )
+
+
+@pytest.mark.requires_db
+class TestRegistryIsAFallbackNeverAnOverride:
+    """A principal-derived ``agent_url`` wins, including when its walk FAILS.
+
+    The Core Invariant's load-bearing half. "Consult the registry when the resolution
+    is empty" and "consult the registry when there is no agent_url to walk" are the
+    same sentence on the happy path and opposite behaviors the moment a real
+    counterparty's brand.json is briefly unreachable — at which point the first
+    reading silently swaps a real counterparty's onboarded identity for whatever the
+    config says about its keyid. A counterparty that could get a keyid into the
+    registry could then impersonate any onboarded principal signing under it.
+    """
+
+    def test_a_failed_brand_json_walk_does_not_fall_back_to_the_registry(self, integration_db, counterparty_keypair):
+        """Same registry entry that verifies the request in the class above; the only
+        change is that the principal HAS an ``agent_url`` and its walk fails.
+
+        The walk fails for real, not by substitution: the SDK resolves and validates
+        the authority synchronously before opening a socket, so a loopback
+        ``agent_url`` raises ``AgentResolverError`` inside the real
+        ``_resolution_for``, which returns ``None`` — the identical input the fallback
+        branch sees in the passing case. The two tests therefore differ in exactly one
+        thing, WHY the resolution is empty, which is precisely the distinction the
+        implementation must make.
+
+        Correct behavior is a 401 ``request_signature_key_unknown``: an unreachable
+        counterparty is a failure to resolve, not a licence to trust a different key.
+        """
+        private_key, jwks = counterparty_keypair
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env, agent_url=UNRESOLVABLE_AGENT_URL)
+            client = env.get_rest_client()
+            headers, body = _signed_probe(private_key, token)
+
+            with (
+                _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
+                _signing_config(counterparty_registry={COUNTERPARTY_KID: registry_entry(jwks)}),
+                _verifier_spy() as calls,
+            ):
+                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+
+            assert len(calls) == 1, f"the signed POST must reach the SDK verifier exactly once; it ran {len(calls)}x"
+            assert calls[0]["options"].agent_url != REGISTRY_AGENT_URL, (
+                "the registry resolved a counterparty whose principal DOES carry an "
+                "agent_url. The registry is a fallback for a walk with no INPUT, never "
+                "an override for a walk that FAILED — a counterparty with a briefly "
+                "unreachable brand.json would otherwise be silently re-identified from "
+                "config, which is a key-trust bypass"
+            )
+            assert calls[0]["options"].agent_url is None, (
+                "with the principal's walk failed and the registry correctly not "
+                "consulted, the verifier must be handed no resolution at all; got "
+                f"{calls[0]['options'].agent_url!r}"
+            )
+            assert _rejection_code(response) == REQUEST_SIGNATURE_KEY_UNKNOWN, (
+                "an unresolvable counterparty must reach step 7 on its merits and be "
+                f"rejected as key_unknown; got status {response.status_code} with "
+                f"WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
+            )
+
+
+class TestTestKitConfigurationIsRefusedInProduction:
+    """Every test-kit relaxation is refused at ``SigningConfig`` construction.
+
+    Placement is deliberate and has two halves. It is on ``SigningConfig`` rather than
+    in ``validate_configuration()`` because that function is reachable only through
+    ``initialize_application()`` (``scripts/run_server.py``, ``src/admin/server.py``);
+    ``src/app.py``'s ASGI lifespan never calls it, so any deployment pointing gunicorn
+    or uvicorn at ``src.app:app`` — the default shape on most platforms — would boot
+    the verifier and the registry with the guard never executing. A
+    ``model_validator(mode="after")`` fires on every ``AppConfig()`` construction, so
+    every process that can reach ``get_config()`` is covered.
+
+    And it lives in this module, though it needs no database, because the thing it
+    guards is the fallback resolution path the two classes above grade. Splitting them
+    would hide that the refusal is the ONLY thing standing between "a keyid alone is
+    sufficient to be trusted as a counterparty" and production.
+    """
+
+    @staticmethod
+    def _clear_production_signals(monkeypatch: Any) -> None:
+        for name in _PRODUCTION_SIGNALS:
+            monkeypatch.delenv(name, raising=False)
+
+    @pytest.mark.parametrize("relaxation", sorted(_TEST_KIT_RELAXATIONS))
+    @pytest.mark.parametrize("signal", sorted(_PRODUCTION_SIGNALS))
+    def test_each_relaxation_is_refused_under_each_production_signal(
+        self, monkeypatch, counterparty_keypair, signal, relaxation
+    ):
+        """One construction, run twice: permitted with no signal set, refused with one.
+
+        Pairing the two halves in a single test is what makes the refusal non-vacuous.
+        A bare ``pytest.raises(ValidationError)`` would be satisfied by a config that
+        rejects the value for ANY reason — an unknown field, a bad shape — and would
+        therefore go green before the guard exists at all. Here the same value is
+        proven acceptable microseconds earlier, so the only difference the assertion
+        can be reading is the environment.
+
+        Each signal is set alone, with the other two cleared: a guard that ANDs them,
+        or that reads only ``ENVIRONMENT`` (``is_production()``'s bug — bypassable by
+        the ``PRODUCTION=true`` deployment style), passes a test that sets all three.
+        """
+        _, jwks = counterparty_keypair
+        value = _TEST_KIT_RELAXATIONS[relaxation](jwks)
+
+        self._clear_production_signals(monkeypatch)
+        permitted = SigningConfig(**{relaxation: value})
+        assert getattr(permitted, relaxation) != {}, (
+            f"{relaxation} must be settable outside production — it is how the "
+            "conformance-grading deployment is configured at all"
+        )
+
+        monkeypatch.setenv(signal, _PRODUCTION_SIGNALS[signal])
+        with pytest.raises(ValidationError):
+            SigningConfig(**{relaxation: value})
+
+    @pytest.mark.parametrize("signal", sorted(_PRODUCTION_SIGNALS))
+    def test_a_production_deployment_without_test_kit_configuration_still_boots(self, monkeypatch, signal):
+        """The control on the guard's blast radius: it refuses the RELAXATIONS, not
+        production itself. A predicate that refused any signing config under a
+        production signal would take every production deployment down, and the
+        parametrized test above cannot tell the two apart.
+        """
+        self._clear_production_signals(monkeypatch)
+        monkeypatch.setenv(signal, _PRODUCTION_SIGNALS[signal])
+
+        config = SigningConfig()
+
+        assert config.counterparty_registry == {}, (
+            "a production deployment must construct with an EMPTY registry, not refuse "
+            f"to construct; got {config.counterparty_registry!r}"
+        )
+        assert config.per_keyid_cap == 1_000_000, (
+            "the spec floor stays the production default; the guard must not disturb it"
+        )
