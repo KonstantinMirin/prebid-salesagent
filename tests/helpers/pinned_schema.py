@@ -127,6 +127,12 @@ def _load_with_synthetic_id(path: Path) -> dict[str, Any]:
     return {**schema, "$id": _uri_for_path(path)}
 
 
+def _resolve_and_load(ref: str) -> tuple[Path, dict[str, Any]]:
+    """Resolve ref to its path and load it (with a synthetic $id) in one call."""
+    path = _resolve_filename(ref)
+    return path, _load_with_synthetic_id(path)
+
+
 def load(ref: str) -> dict[str, Any]:
     """Load one schema's raw dict (bare or category-qualified filename).
 
@@ -134,7 +140,8 @@ def load(ref: str) -> dict[str, Any]:
     ``"../core/duration.json"``) — this is for callers that walk the schema
     tree themselves. Use ``resolve_ref`` to follow a $ref found this way.
     """
-    return _load_with_synthetic_id(_resolve_filename(ref))
+    _, schema = _resolve_and_load(ref)
+    return schema
 
 
 def resolve_ref(ref: str, *, from_path: Path) -> dict[str, Any]:
@@ -180,8 +187,7 @@ def load_canonicalized(ref: str) -> dict[str, Any]:
     contained it was nested, without threading a "current file" context
     through the walk.
     """
-    path = _resolve_filename(ref)
-    schema = _load_with_synthetic_id(path)
+    path, schema = _resolve_and_load(ref)
     return _canonicalize_refs(schema, file_dir=path.parent, root=_schema_root())
 
 
@@ -191,8 +197,7 @@ def _retrieve(uri: str) -> referencing.Resource:
 
 def validator_for(ref: str) -> Draft7Validator:
     """A Draft7Validator for *ref* with full (relative) $ref resolution wired."""
-    path = _resolve_filename(ref)
-    schema = _load_with_synthetic_id(path)
+    _, schema = _resolve_and_load(ref)
     registry: referencing.Registry = referencing.Registry(retrieve=_retrieve)
     registry = registry.with_resource(schema["$id"], DRAFT7.create_resource(schema))
     return Draft7Validator(schema, registry=registry)

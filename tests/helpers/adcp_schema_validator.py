@@ -114,12 +114,18 @@ class AdCPSchemaValidator:
             self._index_cache = self._load_json(self.schema_root / "index.json")
         return self._index_cache
 
+    def _cached(self, cache: dict[str, _T], schema_ref: str, resolver: Callable[[str], _T]) -> _T:
+        """Normalize schema_ref, then resolve (and cache) via resolver — shared by
+        every schema/validator lookup that only differs by which cache dict and
+        which ``pinned_schema`` resolver function it uses."""
+        normalized = self._normalize_ref(schema_ref)
+        if normalized not in cache:
+            cache[normalized] = self._resolve_pinned(normalized, resolver)
+        return cache[normalized]
+
     async def get_schema(self, schema_ref: str) -> dict[str, Any]:
         """Get a schema by reference, using cache when possible."""
-        normalized = self._normalize_ref(schema_ref)
-        if normalized not in self._schema_registry:
-            self._schema_registry[normalized] = self._resolve_pinned(normalized, pinned_schema.load)
-        return self._schema_registry[normalized]
+        return self._cached(self._schema_registry, schema_ref, pinned_schema.load)
 
     def _get_compiled_validator(self, schema_ref: str) -> Draft7Validator:
         """Get a compiled validator for a schema ref, with caching.
@@ -128,10 +134,7 @@ class AdCPSchemaValidator:
         owns both loading and $ref-registry wiring together, so there is no
         loaded-schema-only entry point to cache on independently.
         """
-        normalized = self._normalize_ref(schema_ref)
-        if normalized not in self._compiled_validators:
-            self._compiled_validators[normalized] = self._resolve_pinned(normalized, pinned_schema.validator_for)
-        return self._compiled_validators[normalized]
+        return self._cached(self._compiled_validators, schema_ref, pinned_schema.validator_for)
 
     @staticmethod
     def _resolve_pinned(normalized_ref: str, resolver: Callable[[str], _T]) -> _T:

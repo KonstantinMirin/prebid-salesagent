@@ -919,6 +919,21 @@ def _standard_branch_required_fields(schema: dict[str, Any]) -> set[str]:
     return set(node.get("required", [])) if walked else set()
 
 
+def _merge_composed_required(node: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """Merge required fields from schema's top-level allOf arms and its
+    if/then/else standard branch into node's own required[], rebuilding node
+    only if that adds anything.
+
+    schema is usually node itself, but a resolved oneOf variant passes the
+    top-level schema separately: allOf/if-then-else compose at the schema
+    root, not on the individual arm.
+    """
+    merged = set(node.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
+    if merged == set(node.get("required", [])):
+        return node
+    return {**node, "required": sorted(merged)}
+
+
 def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
     """Return the success (sub-)schema: the oneOf arm whose required[] names
     neither ``errors`` nor ``task_id`` (error / submitted arms), or the schema
@@ -926,12 +941,7 @@ def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
     ``if``/``then``/``else`` standard branch — when it is a flat single-shape
     response (no oneOf)."""
     if "oneOf" not in schema:
-        merged = (
-            set(schema.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
-        )
-        if merged == set(schema.get("required", [])):
-            return schema
-        return {**schema, "required": sorted(merged)}
+        return _merge_composed_required(schema, schema)
     for arm in schema["oneOf"]:
         required = set(arm.get("required", []))
         if "errors" not in required and "task_id" not in required:
@@ -1068,21 +1078,9 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
         # short-circuit every field/required check below to nothing.
         if "$ref" in item_schema:
             item_schema = pinned_schema.load(item_schema["$ref"])
-        item_required = (
-            set(item_schema.get("required", []))
-            | _allof_required_fields(item_schema)
-            | _standard_branch_required_fields(item_schema)
-        )
-        if item_required != set(item_schema.get("required", [])):
-            item_schema = {**item_schema, "required": sorted(item_required)}
-        return item_schema
+        return _merge_composed_required(item_schema, item_schema)
 
-    merged_required = (
-        set(variant.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
-    )
-    if merged_required != set(variant.get("required", [])):
-        variant = {**variant, "required": sorted(merged_required)}
-    return variant
+    return _merge_composed_required(variant, schema)
 
 
 class TestResponseModelAlignment:
