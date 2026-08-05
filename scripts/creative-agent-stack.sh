@@ -164,9 +164,16 @@ cmd_build() {
     _ensure_image
 }
 
+_emit_url_output() {
+    if [ -n "${GITHUB_OUTPUT:-}" ]; then
+        echo "url=${CREATIVE_AGENT_URL}" >> "$GITHUB_OUTPUT"
+    fi
+}
+
 cmd_up() {
     if _healthy && _tls_healthy; then
         echo "[creative-agent] already healthy on :9999 and https (reuse)"
+        _emit_url_output
         return 0
     fi
 
@@ -226,7 +233,11 @@ cmd_up() {
 
     echo "[creative-agent] waiting for TLS handshake..."
     for _ in $(seq 1 60); do
-        if _tls_healthy; then echo "[creative-agent] https ready on agent.localhost:${TLS_PORT}"; return 0; fi
+        if _tls_healthy; then
+            echo "[creative-agent] https ready on agent.localhost:${TLS_PORT}"
+            _emit_url_output
+            return 0
+        fi
         sleep 2
     done
     echo "[creative-agent] TLS front FAILED to complete a verified handshake at $HEALTH_TLS" >&2

@@ -10,10 +10,12 @@ or to the compose/host-script/tox.ini config would silently reintroduce the
 plaintext-http escape hatch this ticket closed — this guard catches that at
 ``make quality`` time.
 
-The one deliberate, allowlisted exception: ``.github/workflows/ci.yml``'s
-"creative" integration matrix group, tracked separately as salesagent-amht.1
-(a different mechanism — ``scripts/creative-agent-stack.sh``'s pinned
-localhost:9999 agent — not yet migrated, out of scope for e6h0).
+``.github/workflows/ci.yml``'s "creative" integration matrix group was the
+last holdout (salesagent-amht.1): it now consumes
+``scripts/creative-agent-stack.sh``'s own https TLS front (salesagent-40qh)
+via ``steps.creative_agent.outputs.url`` instead of a plaintext
+``localhost:9999`` URL, so the flag has no remaining legitimate use anywhere
+in the repo.
 """
 
 from __future__ import annotations
@@ -32,12 +34,8 @@ _MUST_NOT_CONTAIN = (
     "docker-compose.e2e.yml",
     "tox.ini",
     "run_all_tests_host.sh",
+    ".github/workflows/ci.yml",
 )
-
-# The one allowlisted exception, with the follow-up ticket that owns it.
-_ALLOWLISTED = {
-    ".github/workflows/ci.yml": "salesagent-amht.1",
-}
 
 
 def find_flag_reintroductions(repo_root: Path, must_not_contain: tuple[str, ...]) -> list[str]:
@@ -70,17 +68,6 @@ def test_flag_does_not_reappear_in_production_or_infra_files() -> None:
         "escape hatch; re-adding it anywhere in these files silently reopens a plaintext-http "
         "bypass. If a file genuinely needs it again, that is a scope decision, not a silent revert."
     )
-
-
-def test_the_one_allowlisted_exception_is_still_where_it_should_be() -> None:
-    """ci.yml's own separate usage (salesagent-amht.1) is present and still tracked as deferred."""
-    for relpath in _ALLOWLISTED:
-        path = _REPO_ROOT / relpath
-        assert path.is_file(), f"{relpath} is missing entirely — update this test if it moved"
-        assert _FLAG in path.read_text(), (
-            f"{relpath} no longer references {_FLAG} — if salesagent-amht.1 was completed, "
-            "shrink _ALLOWLISTED in this guard (allowlists only shrink, never grow silently)."
-        )
 
 
 def test_detector_catches_a_reintroduced_flag() -> None:
