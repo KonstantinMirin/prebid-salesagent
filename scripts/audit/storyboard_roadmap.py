@@ -188,7 +188,7 @@ def _render_issue_cell(entry: dict[str, Any] | None) -> str:
     issues = entry.get("issues") or []
     coverage = entry.get("coverage", "none")
     if not issues:
-        return "**NO TICKET**"
+        return "**TO FILE**"
     refs = ", ".join(f"#{n}" for n in issues)
     return f"{refs} ({coverage})" if coverage != "full" else refs
 
@@ -375,36 +375,36 @@ def render(result: dict[str, Any]) -> str:
         "",
         "**What AdCP 3.1.1 grades this agent on, what we test, and what is tracked.**",
         "",
-        "One row per on-path storyboard: the 3.1.1 clause, which BDD scenario(s) claim it, "
-        "the static check-type inventory, real measured status where the SB-1d runner "
-        "executed it, and whether an open GitHub issue tracks the gap. Generated — do not "
-        "hand-edit; regenerate with `scripts/audit/storyboard_roadmap.py`. Every column but "
-        "**Tracking** is derived from the pinned compliance tree and this repo's `.feature` "
-        "files; **Tracking** comes from the curated `storyboard-issue-map.yaml`.",
+        "One row per on-path storyboard: the 3.1.1 clause, the BDD scenario that claims it (or "
+        "**TO WRITE**), the static check-type inventory, the MEASURED status from the "
+        "in-network Storyboard Conformance CI job, and the ticket to reuse (or **TO FILE**). "
+        "Generated — do not hand-edit; regenerate with `scripts/audit/storyboard_roadmap.py`. "
+        "Every column but **Ticket** derives from the pinned compliance tree, this repo's "
+        "`.feature` files, and `tests/storyboard/known_failures.txt`; **Ticket** comes from "
+        "the curated `storyboard-issue-map.yaml`, the one hand-maintained input.",
         "",
         f"- on-path storyboards: **{result['totals']['on_path']}**",
         f"- **measured FAILING: {result['totals']['failing']} storyboards, "
         f"{result['totals']['ledgered_checks']} ledgered checks**",
-        f"- **no BDD scenario: {result['totals']['no_scenario']}**",
-        f"- **no tracking issue: {result['totals']['no_ticket']}**",
+        f"- **scenarios TO WRITE: {result['totals']['no_scenario']}**",
+        f"- **tickets TO FILE: {result['totals']['no_ticket']}**",
         f"- **neither scenario nor ticket: {result['totals']['no_scenario_no_ticket']}**",
-        f"- existing issues that track part of the gap: **{result['totals']['distinct_issues']}**",
-        f"- joined to real runner measurement: **{result['totals']['measured_join']}** "
-        f"(runner reports {result['totals']['runner_reported']} executed/missing-tools)",
+        f"- existing tickets to REUSE: **{result['totals']['distinct_issues']}**",
         "",
         "This table deliberately files **no new issues**. The uncovered storyboards are a "
         "conformance gap, not a work plan — decomposing them into tickets is a decision for "
-        "the project's roadmap, not for the PR that measured them. `NO TICKET` is the "
+        "the project's roadmap, not for the PR that measured them. **TO FILE** is the "
         "finding, stated plainly, with the spec clause and check inventory attached so the "
         "triage conversation can start from evidence.",
         "",
         "Reading the cells:",
         "",
-        "- **Scenario(s)** — `— NOT COVERED —` means no `@storyboard-v3.1` scenario claims it. "
-        "A scenario being listed does *not* mean its checks all pass; compare against Checks.",
-        "- **Tracking** — `#N (partial)` means the issue covers some of this storyboard's "
-        "checks; the map's `note:` says what it leaves out. `NO TICKET` means nothing in the "
-        "tracker covers it.",
+        "- **Scenario** — an id means a `@storyboard-v3.1` scenario claims this storyboard; "
+        "**TO WRITE** means none does. A listed scenario does *not* mean its checks all pass — "
+        "compare against Status.",
+        "- **Ticket** — `#N (partial)` is an EXISTING issue to reuse, covering some of this "
+        "storyboard's checks; the map's `note:` says what it leaves out. **TO FILE** means "
+        "nothing in the tracker covers it.",
         "- **Divergence** — `DETERMINISTIC INJECTION` marks storyboards requiring "
         "`comply_test_controller`, which will not be implemented (it is a production "
         "test-control backdoor). Those checks are permanently ungradable here by design.",
@@ -413,11 +413,11 @@ def render(result: dict[str, Any]) -> str:
         "see `storyboard-reconciliation.md`; its rows key by proposal-file slug, not by "
         "scenario id, so it is not joined into this table.",
         "",
-        "| Storyboard | Citation | Scenario(s) | Required tools | Checks | Status | Divergence | Tracking |",
+        "| Storyboard | Citation | Scenario | Required tools | Checks | Status | Divergence | Ticket |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in result["rows"]:
-        scenarios = ", ".join(f"`{s}`" for s in r["scenarios"]) or "**— NOT COVERED —**"
+        scenarios = ", ".join(f"`{s}`" for s in r["scenarios"]) or "**TO WRITE**"
         tools = ", ".join(f"`{t}`" for t in r["required_tools"]) or "—"
         checks = ", ".join(f"{k}×{v}" for k, v in r["checks"].items()) or "—"
         divergence = r["divergence"] or "—"
