@@ -141,7 +141,6 @@ R-M3, R-L, and F7's ordering canary).
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import threading
@@ -392,31 +391,44 @@ def _step_nine(*, origin: str, jwks: dict[str, Any], **config: Any) -> Iterator[
 
 
 def _revocation_jws(private_key: Any, *, issuer: str, updated: datetime, next_update: datetime) -> str:
-    """A compact JWS the SDK will accept as a revocation list.
+    """A COMPACT JWS the SDK will accept as a COUNTERPARTY's revocation list.
 
-    ``verify_jws_document(expected_typ="adcp-gov-revocation+jws")`` requires
-    ``alg`` in ``{EdDSA, ES256}``, that exact ``typ``, and a ``kid`` resolvable
-    through the checker's JWKS resolver; ``_build_list_from_payload`` then
-    requires a positive int ``version``, a matching ``issuer`` origin, and a
-    declared cadence at or above the 60s spec floor.
+    Deliberately NOT repointed at ``src.core.signing.sign_revocation_list``
+    (#1291 A5 follow-up, salesagent-z6nr.27's production producer): that
+    function signs OUR OWN document (payload derived from a real ``Tenant``
+    row) and emits GENERAL-JSON serialization, matching
+    ``parse_general_json_jws``. This fixture signs as an ARBITRARY
+    COUNTERPARTY with an arbitrary issuer and must stay on the COMPACT path
+    — the one thing ``CachingRevocationChecker``'s ``fetcher=`` seam here
+    returns as an HTTP response BODY (a string), and the one shape this A5
+    suite exercises so repointing the producer elsewhere doesn't silently
+    move every consumer test off compact JWS (architect review,
+    salesagent-js3z.28). What IS shared with production: the SDK's own
+    ``b64url_encode``/``REVOCATION_LIST_TYP`` primitives and the RFC3339
+    formatter, instead of hand-rolled base64/strftime — the actual dedup
+    target the codebase-scan atom flagged.
     """
+    from adcp.signing.crypto import b64url_encode
+    from adcp.signing.revocation_fetcher import REVOCATION_LIST_TYP
+
+    from src.core.signing._rfc3339 import rfc3339
 
     def _segment(obj: dict[str, Any]) -> str:
-        return base64.urlsafe_b64encode(json.dumps(obj).encode()).decode().rstrip("=")
+        return b64url_encode(json.dumps(obj).encode())
 
-    header = _segment({"alg": "EdDSA", "typ": "adcp-gov-revocation+jws", "kid": COUNTERPARTY_KID})
+    header = _segment({"alg": "EdDSA", "typ": REVOCATION_LIST_TYP, "kid": COUNTERPARTY_KID})
     payload = _segment(
         {
-            "version": 1,
+            "version": int(updated.timestamp()),
             "issuer": issuer,
-            "updated": updated.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "next_update": next_update.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "updated": rfc3339(updated),
+            "next_update": rfc3339(next_update),
             "revoked_kids": [],
             "revoked_jtis": [],
         }
     )
-    signature = private_key.sign(f"{header}.{payload}".encode())
-    return f"{header}.{payload}.{base64.urlsafe_b64encode(signature).decode().rstrip('=')}"
+    signature = private_key.sign(f"{header}.{payload}".encode("ascii"))
+    return f"{header}.{payload}.{b64url_encode(signature)}"
 
 
 def _install_checker(origin: str, checker: CachingRevocationChecker) -> None:

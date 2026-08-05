@@ -160,8 +160,8 @@ def deployment_kek(monkeypatch: Any, name: str = "SALESAGENT_TEST_SIGNING_KEK") 
     yield
 
 
-def get_trust_root_document(client: Any, path: str, tenant: Any) -> dict[str, Any]:
-    """GET a trust-root document for *tenant*'s host, failing loudly on non-200.
+def get_trust_root_document(client: Any, path: str, tenant: Any, *, expect_status: int = 200) -> dict[str, Any]:
+    """GET a trust-root document for *tenant*'s host, failing loudly on the wrong status.
 
     One home for the Host-scoped fetch so a missing route reports itself as a
     missing route rather than as a ``KeyError`` or a schema violation three
@@ -169,10 +169,18 @@ def get_trust_root_document(client: Any, path: str, tenant: Any) -> dict[str, An
     suite cannot drift into two fetches. It lives here rather than in either
     module because a module whose job is to BE a test must not also be a helper
     library (``tests/unit/test_architecture_no_cross_test_module_imports.py``).
+
+    *expect_status* exists for the one document whose ABSENCE is a graded
+    invariant: the revocation list is unpublishable while the tenant holds no
+    active request-signing key, and that 404 is the fail-closed behavior a test
+    must assert (``salesagent-z6nr.27`` step 8). It is a parameter rather than a
+    second ad hoc fetch beside this one precisely because the whole reason this
+    helper exists is that the suites must not drift into two fetches. The body is
+    still returned decoded when there is one; a 404 body is ``{"detail": ...}``.
     """
     response = client.get(path, headers={"Host": tenant.virtual_host})
-    assert response.status_code == 200, (
-        f"GET {path} with Host {tenant.virtual_host!r} must return 200; got "
+    assert response.status_code == expect_status, (
+        f"GET {path} with Host {tenant.virtual_host!r} must return {expect_status}; got "
         f"{response.status_code} {response.text[:200]!r}"
     )
     return response.json()

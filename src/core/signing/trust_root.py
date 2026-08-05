@@ -39,10 +39,10 @@ would be a second opinion about our own key.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonical_agent_url, jwks_uri
+from src.core.signing._rfc3339 import rfc3339
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.database.models import AuthorizedProperty, SigningKey, Tenant
@@ -61,11 +61,6 @@ _SCHEMA_BASE = "https://adcontextprotocol.org/schemas/3.1.1"
 _SALES_AGENT_TYPE = "sales"
 
 
-def _rfc3339(moment: datetime) -> str:
-    """RFC 3339 with an explicit offset, as ``format: date-time`` requires."""
-    return moment.isoformat()
-
-
 def _published_jwk(key: SigningKey) -> dict[str, Any]:
     """One published JWK: the stored public JWK, plus its revocation marker.
 
@@ -74,7 +69,7 @@ def _published_jwk(key: SigningKey) -> dict[str, Any]:
     """
     jwk = dict(key.public_jwk)
     if key.revoked_at is not None:
-        jwk["revoked_at"] = _rfc3339(key.revoked_at)
+        jwk["revoked_at"] = rfc3339(key.revoked_at)
     return jwk
 
 
@@ -86,7 +81,7 @@ def _last_updated(keys: Sequence[SigningKey]) -> str | None:
     every request would defeat the caching the ``Cache-Control`` header asks for.
     """
     moments = [moment for key in keys for moment in (key.created_at, key.revoked_at) if moment is not None]
-    return _rfc3339(max(moments)) if moments else None
+    return rfc3339(max(moments)) if moments else None
 
 
 def build_jwks(keys: Sequence[SigningKey]) -> dict[str, Any]:

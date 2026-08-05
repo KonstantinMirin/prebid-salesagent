@@ -63,6 +63,7 @@ from src.core.signing.posture import (
     unsupported_webhook_signing_posture,
     webhook_signing_posture,
 )
+from src.core.signing.revocation_list import build_revocation_list, sign_revocation_list
 from src.core.signing.trust_root import (
     CACHE_MAX_AGE_SECONDS,
     build_adagents_json,
@@ -128,6 +129,7 @@ __all__ = [
     "build_adagents_json",
     "build_brand_json",
     "build_jwks",
+    "build_revocation_list",
     "canonical_authority",
     "canonical_target_uri",
     "clear_signing_provider_cache",
@@ -148,6 +150,7 @@ __all__ = [
     "requires_trust_root",
     "resolve_signing_material",
     "send_signed_challenge",
+    "sign_revocation_list",
     "sign_scoped_mcp_call",
     "signing_config_from_material",
     "signing_key_backed",

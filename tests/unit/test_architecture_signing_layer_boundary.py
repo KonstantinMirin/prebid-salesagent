@@ -14,11 +14,16 @@ RULE A — no ``adcp.signing`` import in ``src/`` or ``scripts/`` outside the la
     exists to reject — and ``src/core/metrics.py`` imported ``REQUEST_TO_WEBHOOK_CODE``
     the same way. ~73 structural guards existed; none forbade either.
 
-RULE B — no ``src.core.signing.<submodule>`` import in ``src/`` outside the layer.
-    Callers import from ``src.core.signing`` (the facade) only. Without this rule the
-    facade is decorative: at measurement time 19 import sites in ``src/`` reached
+RULE B — no ``src.core.signing.<submodule>`` import in ``src/`` OR ``scripts/`` outside
+    the layer. Callers import from ``src.core.signing`` (the facade) only. Without this
+    rule the facade is decorative: at measurement time 19 import sites in ``src/`` reached
     through to submodules and ZERO imported the facade, so "everything else under
-    ``src/core/signing/`` is private to the layer" was unenforced prose.
+    ``src/core/signing/`` is private to the layer" was unenforced prose. Widened to also
+    scan ``scripts/`` (#1291 A5 follow-up, salesagent-z6nr.27): rule A already scanned
+    ``scripts/`` and rule B did not, an asymmetry nothing in this docstring ever argued for,
+    and it let ``scripts/ops/provision_signing_key.py`` reach into two private submodules
+    while its sibling transport (``src/admin/blueprints/signing_keys.py``) imported the
+    same names from the facade.
 
 Scope decisions (deliberate, from the salesagent-z6nr.33 design):
 
@@ -26,6 +31,15 @@ Scope decisions (deliberate, from the salesagent-z6nr.33 design):
   to cross-check the layer AGAINST the SDK (parity tests are the point of them) and to
   build signed fixtures from SDK primitives. The guard's subject is production
   reach-through, not test cross-checks — so the scan covers ``src/`` and ``scripts/``.
+  Rule B is exempt from ``tests/`` for the same reason its allowlist stays empty:
+  submodule reach-through in test code couples a test to the layer's internal layout,
+  which is real debt (tracked as salesagent-z6nr.36) but not production reach-through,
+  which is this guard's subject.
+* ``alembic/`` is scanned by NEITHER rule's roots (``src/``, ``scripts/``). Migrations
+  are committed and this repo forbids editing one after commit
+  (``alembic/versions/e7a2c40b91d5_add_signing_keys_table.py`` imports
+  ``src.core.signing.algorithms`` directly) — a documented scope decision, not an
+  allowlist entry. Both allowlists below stay ``frozenset()``.
 * ``adcp.webhooks`` / ``adcp.webhook_auth`` are different subpackages and outside this
   guard per the ticket's wording; the webhook sending boundary has its own guard
   (``test_architecture_webhook_sender_boundary.py``).
@@ -170,13 +184,16 @@ class TestSigningLayerBoundary:
         )
 
     def test_no_submodule_reach_through_outside_the_layer(self):
-        """RULE B: src/ imports the facade, never src.core.signing.<submodule>.
+        """RULE B: src/ and scripts/ import the facade, never src.core.signing.<submodule>.
 
         Reach-through pins callers to the layer's internal layout, so vendoring or
         deleting a unit inside the layer (the whole point of the design: SDK bumps are
-        a non-event) would ripple into caller imports.
+        a non-event) would ripple into caller imports. Scans scripts/ alongside src/
+        (widened #1291 A5 follow-up, salesagent-z6nr.27) so an ops script cannot reach
+        through where an admin blueprint transporting the same function is required to
+        use the facade.
         """
-        files = _scan_files([ROOT / "src"], relative_to=ROOT)
+        files = _scan_files([ROOT / "src", ROOT / "scripts"], relative_to=ROOT)
         assert_violations_match_allowlist(
             _submodule_reach_through_violations(files, _layer_submodules()),
             set(SUBMODULE_REACH_THROUGH_ALLOWLIST),

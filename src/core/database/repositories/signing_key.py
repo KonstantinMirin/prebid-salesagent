@@ -137,7 +137,12 @@ class SigningKeyRepository:
         *purpose* is filtered because ``security.mdx``:1079 forbids co-tenanting
         purposes in one JWKS ("governance signing keys MUST be served from a
         separate origin"). Latent today — ``MINTABLE_PURPOSES`` holds one value
-        — and a latent violation of a MUST is still one.
+        — and a latent violation of a MUST is still one. The SAME :1079
+        divergence is knowingly repeated by
+        :mod:`src.core.signing.revocation_list` — the combined revocation list
+        is signed with this tenant's request-signing key rather than a
+        separate governance key, for the same reason (none is mintable yet).
+        Follow-up: ``salesagent-z6nr.37``.
         """
         cutoff = now - timedelta(seconds=grace_seconds)
         stmt = (
@@ -148,6 +153,37 @@ class SigningKeyRepository:
                 or_(SigningKey.revoked_at.is_(None), SigningKey.revoked_at > cutoff),
             )
             .order_by(SigningKey.created_at.desc(), SigningKey.kid.asc())
+        )
+        return list(self._session.scalars(stmt).all())
+
+    def all_revoked(self, *, purpose: str = REQUEST_SIGNING) -> list[SigningKey]:
+        """Return every revoked key for *purpose* — the PERMANENT revocation record.
+
+        A third selector, deliberately unlike the two above:
+
+        * :meth:`active_at` picks a SIGNER (one row, window-bound).
+        * :meth:`publishable_at` picks an expiring PUBLICATION SET (many rows,
+          window-blind, but time-bound by ``grace_seconds``).
+        * This one picks the PERMANENT RECORD the combined revocation list is
+          (``security.mdx``:1328): every row ever revoked, with NO grace cutoff
+          — a kid dropped from this list is a kid UN-REVOKED, which the schema
+          never permits. Unlike :meth:`publishable_at`, an elapsed grace window
+          changes nothing here; that is the entire reason this method exists
+          rather than reusing ``publishable_at`` with ``grace_seconds=0``.
+
+        *purpose* filters (unlike the combined list's own scope, which per
+        :1328 covers "governance, request-signing, and any other agent signing
+        keys") because this deployment mints exactly one purpose today
+        (``MINTABLE_PURPOSES``) — the asymmetry with :meth:`publishable_at`'s
+        *purpose* filter is therefore coincidental, not a contradiction: both
+        filter on the one purpose that exists. Widening to "every purpose"
+        needs no code change here when a second purpose is minted, only the
+        caller passing it (or omitting the filter entirely at that point).
+        """
+        stmt = (
+            select(SigningKey)
+            .where(*self._scope_prefix(), SigningKey.purpose == purpose, SigningKey.revoked_at.is_not(None))
+            .order_by(SigningKey.revoked_at.desc(), SigningKey.kid.asc())
         )
         return list(self._session.scalars(stmt).all())
 

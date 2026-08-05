@@ -28,8 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from src.core.database.repositories.uow import SigningKeyUoW  # noqa: E402
 from src.core.exceptions import AdCPConfigurationError  # noqa: E402
-from src.core.signing.algorithms import SIGNING_ALG_VALUES  # noqa: E402
-from src.core.signing.keys import MINTABLE_REF_SCHEMES, provision_signing_key  # noqa: E402
+from src.core.signing import MINTABLE_REF_SCHEMES, SIGNING_ALG_VALUES, provision_signing_key  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -58,6 +58,13 @@ AGENT_ENDPOINT_PATHS: dict[str, str] = {"mcp": "/mcp/", "a2a": "/a2a"}
 BRAND_JSON_PATH = "/.well-known/brand.json"
 ADAGENTS_JSON_PATH = "/.well-known/adagents.json"
 JWKS_PATH = "/.well-known/jwks.json"
+#: The combined revocation list we PUBLISH as a SIGNER (#1291 A5 follow-up,
+#: security.mdx :1543). The literal matches the URI
+#: ``CachingRevocationChecker.from_issuer_origin`` derives
+#: (``adcp/signing/revocation_fetcher.py``) — a parity test pins this against
+#: that private derivation, since (unlike the three paths above) the SDK
+#: exposes no path CONSTANT to import.
+GOVERNANCE_REVOCATIONS_PATH = "/.well-known/governance-revocations.json"
 
 # ``brand_agent_entry.id`` is ``^[a-z0-9_]+$``, maxLength 100. Tenant ids and
 # subdomains routinely carry hyphens, which are ILLEGAL there.

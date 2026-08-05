@@ -260,6 +260,26 @@ class SigningConfig(BaseSettings):
         ),
     )
 
+    # -- Combined revocation-list publication (#1291 A5 follow-up) ---------
+    revocation_interval_seconds: int = Field(
+        default=CACHE_MAX_AGE_SECONDS,
+        ge=CACHE_MAX_AGE_SECONDS,
+        le=1800,
+        description=(
+            "Declared cadence for the published /.well-known/governance-revocations.json list's "
+            "next_update. security.mdx :717 states a 60s floor and a 1800s (30 min) ceiling; the "
+            "floor ENFORCED here is CACHE_MAX_AGE_SECONDS (300s), not the spec's bare 60s, because "
+            ":1103 bounds our published brand.json cache TTL BY this interval and "
+            "CACHE_MAX_AGE_SECONDS is a fixed module constant that cannot itself shrink below "
+            "300s — any interval under 300s would violate that relation against our own "
+            "unmodified brand.json unconditionally. Note the pinned SDK's own consumer "
+            "(CachingRevocationChecker) clamps its effective polling interval at "
+            "MAX_POLLING_INTERVAL_SECONDS (900s, adcp.signing.revocation_fetcher) regardless of "
+            "what we declare above that — a value in (900, 1800] is spec-legal to PUBLISH but "
+            "shrinks only OUR OWN consumer's polling, never rejected outright."
+        ),
+    )
+
     model_config = SettingsConfigDict(env_prefix="ADCP_SIGNING_", case_sensitive=False)
 
     @property
