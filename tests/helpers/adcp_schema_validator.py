@@ -1,4 +1,4 @@
-"""AdCP JSON Schema Validator for E2E Tests — pinned to the installed SDK's schemas.
+"""AdCP JSON Schema Validator — pinned to the installed SDK's schemas.
 
 Validates requests and responses against the AdCP schemas shipped with the
 pinned ``adcp`` SDK (see docs/adcp-spec-version.md for the current pin and
@@ -10,6 +10,12 @@ with zero contract change, and before that #1308 tracked payload-vs-latest
 drift. Validating against the pin makes CI deterministic and grades the same
 contract production is built against. The SDK↔spec mapping is enforced by
 tests/unit/test_adcp_spec_version.py.
+
+Lives in tests/helpers/ (not tests/e2e/) because it's a cross-tier consumer:
+tests/unit, tests/integration, and tests/e2e all import it, and importing an
+e2e-tier module from unit/integration is backwards layering (see
+tests/helpers/sdk_schema_root.py for the same rationale applied earlier to
+this module's own schema-root lookup).
 
 Schema loading and $ref resolution delegate to ``tests.helpers.pinned_schema``
 — the single source of truth every pinned-schema consumer in this repo reads

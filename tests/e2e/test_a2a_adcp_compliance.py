@@ -23,9 +23,9 @@ import pytest
 
 from tests.e2e._compliance_report import ComplianceReportBase
 from tests.e2e.adcp_request_builder import build_a2a_message_send
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 
-from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 from .conftest import e2e_host
 
 DEFAULT_AUTH_TOKEN = os.getenv("ADCP_TEST_TOKEN", "ci-test-token")

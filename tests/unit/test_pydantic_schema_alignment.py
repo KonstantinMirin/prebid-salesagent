@@ -34,6 +34,7 @@ from src.core.schemas import (
     ListAccountsResponse,
     ListCreativesRequest,
     ListCreativesResponse,
+    Product,
     SyncAccountsResponse,
     SyncCreativesRequest,
     SyncCreativesResponse,
@@ -44,6 +45,7 @@ from src.core.schemas import (
 from src.core.schemas.creative import ListCreativeFormatsResponse
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.helpers import pinned_schema
+from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_publisher_properties_by_tag
 
 # AdCP schemas are read from the installed adcp SDK's own pinned tree
 # (tests/helpers/pinned_schema.py) — the SDK's own version IS the pin (moves
@@ -92,7 +94,7 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 # but they are populated by the PROTOCOL LAYER (_serialize_for_a2a et al) at the
 # transport boundary, not carried on the domain response model itself (same
 # distinction already established for message/context_id — see
-# test_a2a_response_compliance.py and tests/e2e/adcp_schema_validator.py). The
+# test_a2a_response_compliance.py and tests/helpers/adcp_schema_validator.py). The
 # Pydantic response model is not the right layer to enforce them as required;
 # exclude from requiredness checks the same way _VERSION_FIELDS is excluded.
 _PROTOCOL_ENVELOPE_FIELDS: frozenset[str] = frozenset(
@@ -750,6 +752,17 @@ class ResponseAlignment:
     model: type
     declared_fields: frozenset[str] = frozenset()  # fields that MUST be declared on the model
     sample: dict[str, Any] = dataclass_field(default_factory=dict)  # valid kwargs for required-enforcement
+    # Schema-required fields the model deliberately does NOT enforce at
+    # construction time — a documented builder-pattern override (e.g.
+    # Product.reporting_capabilities: "our product builder sets it when
+    # available from the adapter", product.py) where an upstream caller,
+    # not the Pydantic constructor, guarantees the value before the primary
+    # emission path. test_required_fields_enforced skips the
+    # omission/model-default check for these; test_declared_fields_present_in_schema_and_model
+    # still grades them via the model_dump() presence check, so a
+    # regression that drops the field from SERIALIZATION output (rather
+    # than construction) is still caught.
+    constructor_optional_fields: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -984,6 +997,44 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
         model=SyncResponseAccount,
         sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
     ),
+    ResponseAlignment(
+        schema_ref="/schemas/media-buy/get-products-response.json",
+        selector="products",
+        item_key="products",
+        model=Product,
+        # core/product.json's own required[] — reporting_capabilities included,
+        # even though Product overrides it Optional (builder backfills it before
+        # the primary emission path; see product.py's model_dump() docstring).
+        # Present here so test_declared_fields_present_in_schema_and_model grades
+        # it as a real, present-in-model_dump() field (R3-8, salesagent-1zq3.8) —
+        # not so test_required_fields_enforced treats an omission as a violation.
+        declared_fields=frozenset(
+            {
+                "product_id",
+                "name",
+                "description",
+                "publisher_properties",
+                "delivery_type",
+                "pricing_options",
+                "reporting_capabilities",
+            }
+        ),
+        # reporting_capabilities has no non-None model default (the field's
+        # own None default IS the value left when omitted) — the model
+        # intentionally does not self-guarantee it at construction time
+        # (see the class-level comment above). Still graded for real by the
+        # model_dump() presence check above.
+        constructor_optional_fields=frozenset({"reporting_capabilities"}),
+        sample={
+            "product_id": "align_test_product",
+            "name": "Alignment Test Product",
+            "description": "Product used to verify the pinned schema descends into products[].",
+            "publisher_properties": [create_test_publisher_properties_by_tag()],
+            "delivery_type": "guaranteed",
+            "pricing_options": [create_test_cpm_pricing_option()],
+            "reporting_capabilities": {"metrics": ["impressions", "clicks"]},
+        },
+    ),
 ]
 
 
@@ -1008,7 +1059,23 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
     else:
         variant = schema
     if alignment.item_key:
-        return variant["properties"][alignment.item_key]["items"]
+        item_schema = variant["properties"][alignment.item_key]["items"]
+        # Some item schemas are inlined (SyncResponseAccount); others are a
+        # $ref to a standalone schema (get-products-response.json's
+        # products[] -> core/product.json) — load_canonicalized already
+        # rewrote the ref to the root-relative form pinned_schema.load()
+        # expects, so a raw, unresolved $ref dict would otherwise silently
+        # short-circuit every field/required check below to nothing.
+        if "$ref" in item_schema:
+            item_schema = pinned_schema.load(item_schema["$ref"])
+        item_required = (
+            set(item_schema.get("required", []))
+            | _allof_required_fields(item_schema)
+            | _standard_branch_required_fields(item_schema)
+        )
+        if item_required != set(item_schema.get("required", [])):
+            item_schema = {**item_schema, "required": sorted(item_required)}
+        return item_schema
 
     merged_required = (
         set(variant.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
@@ -1039,6 +1106,24 @@ class TestResponseModelAlignment:
                 f"{fname!r} is defined by the pinned schema but NOT declared on "
                 f"{alignment.model.__name__} (only surviving via extra='allow')"
             )
+
+        # A field can be declared on the model (above) yet still be silently
+        # dropped by a custom model_dump() override (e.g. an over-broad
+        # exclude set, or a "strip None" pass that also strips populated
+        # values) — the exact bug class this suite exists to catch (R3-8,
+        # salesagent-1zq3.8). Construct with a real, populated value for
+        # every declared field and confirm each survives serialization.
+        if alignment.sample:
+            instance = alignment.model(**alignment.sample)
+            dumped = instance.model_dump(mode="json")
+            for fname in alignment.declared_fields:
+                if fname not in alignment.sample:
+                    continue
+                assert fname in dumped, (
+                    f"{fname!r} is declared on {alignment.model.__name__} and populated in the "
+                    f"constructor sample, but missing from model_dump() output — silently dropped "
+                    f"from the wire a buyer actually receives."
+                )
 
     @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
     def test_required_fields_enforced(self, alignment: ResponseAlignment):
@@ -1079,7 +1164,7 @@ class TestResponseModelAlignment:
         )
         # The complete required set constructs cleanly.
         assert alignment.model(**alignment.sample) is not None
-        for fname in required:
+        for fname in required - alignment.constructor_optional_fields:
             partial = {k: v for k, v in alignment.sample.items() if k != fname}
             if fname in model_defaulted:
                 # Model-defaulted: omission must NOT raise, and the default must

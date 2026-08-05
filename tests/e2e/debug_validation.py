@@ -13,7 +13,7 @@ from pathlib import Path
 # imports `tests.helpers` at module scope (R2-2, salesagent-1zq3.42), which needs it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError  # noqa: E402
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError  # noqa: E402
 
 
 async def debug_validation():

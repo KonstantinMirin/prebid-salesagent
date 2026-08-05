@@ -17,7 +17,7 @@ stripped.
 
 from __future__ import annotations
 
-from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 
 
 class TestExtractAdCPPayload:

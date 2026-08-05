@@ -387,7 +387,7 @@ class TestA2AResponseRegressionPrevention:
 
         # These fields should NOT be on the Pydantic response MODEL. 'message'
         # is a genuine spec-defined field on the WIRE envelope's Protocol
-        # Envelope arm (see tests/e2e/adcp_schema_validator.py), but it's
+        # Envelope arm (see tests/helpers/adcp_schema_validator.py), but it's
         # populated by the protocol layer (_serialize_for_a2a et al) at the
         # transport boundary, not carried on the domain response model itself.
         forbidden_fields = {"success", "message", "total_count", "specification_version"}
@@ -406,10 +406,67 @@ class TestA2AResponseRegressionPrevention:
 
         # These are protocol-envelope fields (spec-defined on the WIRE
         # envelope's Protocol Envelope arm — see
-        # tests/e2e/adcp_schema_validator.py — and populated by the protocol
+        # tests/helpers/adcp_schema_validator.py — and populated by the protocol
         # layer at the transport boundary), correctly absent from the
         # Pydantic response MODEL itself.
         protocol_fields = {"task_id", "context_id"}  # status is actually in some AdCP responses
 
         violations = protocol_fields & set(response_dict.keys())
         assert violations == set(), f"Response data contains protocol fields: {violations}"
+
+
+@pytest.mark.integration
+class TestA2ASuccessDerivedFromErrorsOnRealWire:
+    """``_stamp_a2a_protocol_fields`` derives ``success`` from ``errors`` so a
+    response carrying per-item errors reports ``success=False`` uniformly
+    (single derivation point after three call sites used to duplicate it
+    inline — PR #1868, one of the three previously omitted the derivation
+    entirely and always forced ``success=True``).
+
+    Dispatched through the real ``AdCPRequestHandler`` (not by calling
+    ``_stamp_a2a_protocol_fields`` directly) so a regression in the
+    derivation — or in any call site that stopped routing through it — shows
+    up on the real A2A wire, the same bytes a buyer actually receives.
+    Deleting the derivation in ``_stamp_a2a_protocol_fields`` must make this
+    test fail.
+    """
+
+    def test_get_products_populated_errors_derive_wire_success_false(self, integration_db):
+        """Sync on purpose: ``call_a2a``/``call_via`` bridge to ``asyncio.run()``
+        internally (see ``ProductEnv.call_impl``'s docstring on the same bridge) —
+        an ``async def`` test would nest event loops and silently swallow the
+        resulting RuntimeError.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from src.core.schemas import Error, GetProductsResponse
+        from tests.bdd.steps._outcome_helpers import wire_field
+        from tests.bdd.steps.generic._dispatch import dispatch_request
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness.product import ProductEnv
+        from tests.harness.transport import Transport
+
+        with ProductEnv(tenant_id="a2a-success-errors-test", principal_id="test_principal") as env:
+            tenant = TenantFactory(tenant_id="a2a-success-errors-test")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # get_products has no production code path that populates
+            # non-fatal errors[] today (unlike CreateMediaBuySuccess's
+            # property_list_filtering advisory) — stub the tool boundary
+            # _handle_get_products_skill calls, the same seam the transport
+            # wrapper is contractually bound to (Pattern #5), to grade the
+            # stamping/derivation logic the wrapper owns independent of
+            # whether any business path currently exercises it.
+            errored_response = GetProductsResponse(
+                products=[],
+                errors=[Error(code="UNSUPPORTED_FEATURE", message="property_list_filtering unavailable")],
+            )
+
+            with patch(
+                "src.a2a_server.adcp_a2a_server.core_get_products_tool",
+                new=AsyncMock(return_value=errored_response),
+            ):
+                ctx: dict = {"env": env, "transport": Transport.A2A}
+                dispatch_request(ctx, brief="display ads")
+
+            assert wire_field(ctx, "success") is False

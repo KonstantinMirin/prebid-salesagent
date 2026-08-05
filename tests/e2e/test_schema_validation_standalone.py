@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from .adcp_schema_validator import AdCPSchemaValidator, SchemaError, SchemaValidationError
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaError, SchemaValidationError
 
 
 @pytest.mark.asyncio

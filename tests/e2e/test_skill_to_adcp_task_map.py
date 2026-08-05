@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
 from tests.e2e.test_a2a_adcp_compliance import A2AAdCPComplianceClient
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 from tests.integration.test_a2a_skill_invocation import A2AAdCPValidator
 

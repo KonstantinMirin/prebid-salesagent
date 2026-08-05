@@ -678,7 +678,7 @@ def performance_monitor():
 @pytest.fixture
 async def adcp_validator():
     """Provide the AdCP schema validator (pinned to the installed SDK's schemas)."""
-    from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
+    from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 
     async with AdCPSchemaValidator() as validator:
         yield validator

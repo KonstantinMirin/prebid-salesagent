@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # Import schema validation components
 try:
-    from tests.e2e.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
+    from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
     SCHEMA_VALIDATION_AVAILABLE = True
 except ImportError:

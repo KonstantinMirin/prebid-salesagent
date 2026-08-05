@@ -19,7 +19,7 @@ our control.
 
 import pytest
 
-from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 
 
@@ -60,9 +60,7 @@ class TestA2AProtocolCompliance:
     # Shrink-only: when the spec adds a schema for one of these, remove it
     # here — do not add new entries (add the skill to SKILL_TO_ADCP_TASK
     # with its real task name instead).
-    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset(
-        skill for skill, task in SKILL_TO_ADCP_TASK.items() if task is None
-    )
+    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset(skill for skill, task in SKILL_TO_ADCP_TASK.items() if task is None)
 
     @pytest.mark.asyncio
     async def test_all_adcp_skills_have_schemas(self):

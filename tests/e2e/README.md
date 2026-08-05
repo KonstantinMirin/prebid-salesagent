@@ -20,8 +20,12 @@ tests/e2e/
 ├── test_adcp_schema_compliance.py     # Schema validation compliance tests
 ├── test_schema_validation_standalone.py  # Standalone schema validation tests
 ├── test_testing_hooks.py              # Testing hooks implementation (PR #34)
-├── adcp_schema_validator.py            # AdCP schema validation (pinned to the adcp SDK's schemas)
 └── README.md                          # This file
+
+AdCP schema validation (pinned to the adcp SDK's schemas) lives in
+tests/helpers/adcp_schema_validator.py — shared across tests/unit,
+tests/integration, and tests/e2e, so it can't live under tests/e2e/ without
+backward layering.
 ```
 
 ## Running Tests
