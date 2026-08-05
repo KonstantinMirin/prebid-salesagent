@@ -1592,7 +1592,10 @@ async def update_media_buy(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
+    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
+    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 def update_media_buy_raw(

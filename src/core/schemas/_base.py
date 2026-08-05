@@ -683,10 +683,10 @@ class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc
     ``"completed"`` and would falsely assert the update was applied.
 
     The update transport wrappers serialize the returned model straight onto the
-    wire (``ToolResult(structured_content=response)`` / A2A / REST), so returning
-    this type from the manual-approval branch yields the spec-correct submitted
-    envelope on every transport. ``status`` defaults to ``"submitted"`` on the
-    library base; ``task_id`` is required.
+    wire (``ToolResult(structured_content=response.model_dump(mode="json"))`` /
+    A2A / REST), so returning this type from the manual-approval branch yields the
+    spec-correct submitted envelope on every transport. ``status`` defaults to
+    ``"submitted"`` on the library base; ``task_id`` is required.
     """
 
     def __str__(self) -> str:

@@ -66,45 +66,19 @@ def test_mcp_wire_changes_and_warnings_are_never_null(integration_db):
                 )
 
 
-def _nulls_as_absent(obj):
-    """Recursively drop null-valued keys (the model_dump exclude_none wire equivalence)."""
-    if isinstance(obj, dict):
-        return {k: _nulls_as_absent(v) for k, v in obj.items() if v is not None}
-    if isinstance(obj, list):
-        return [_nulls_as_absent(v) for v in obj]
-    return obj
-
-
 def test_mcp_wire_validates_against_pinned_response_schema(integration_db):
     """The MCP structured_content validates against the pinned 3.1.1 response schema.
 
-    Nulls are treated as ABSENT before validation: the PRE-EXISTING MCP
-    None-serialization question (inherited spec ``status``/version-envelope
-    fields serialize as null via the same structured_content bypass) was
-    explicitly out-of-scoped from PR #1567 round-2 blocker 3 by the reviewer and is
-    tracked separately. Null-stripping hides only that known issue — a
-    wrong-TYPE value (e.g. ``changes`` as a string or object) still fails the
-    schema, and present-as-null for the array-typed fields is pinned by
-    ``test_mcp_wire_changes_and_warnings_are_never_null`` above.
-
-    Every AdCP response schema's Protocol Envelope arm (core/protocol-envelope.json)
-    REQUIRES ``status`` — so stripping it to absent (rather than injecting the
-    value production SHOULD emit) would make this test unable to fail once
-    the SDK's real, current schema is used to grade it. Since sync_creatives
-    here is a synchronous call that succeeded, production's correct value
-    would be "completed" (per the spec's protocol-envelope.json:
-    "Synchronous tasks... MUST emit status: 'completed'") — inject that
-    known-correct value in place of the known gap so this test still
-    exercises everything ELSE that could regress. Remove this injection once
-    MCP's structured_content is fixed to genuinely carry status — same root
-    cause (structured_content bypasses model_dump) as
-    [#1710](https://github.com/prebid/salesagent/issues/1710) and the general
-    sweep tracked in
-    [#1623](https://github.com/prebid/salesagent/issues/1623); this file's own
-    null-serialization gap above is the pre-existing, separately-scoped
-    PR #1567 item.
+    Validates the REAL wire bytes with no null-stripping. Fixed (GH #1710):
+    ``sync_creatives`` MCP wrapper used to hand the raw pydantic
+    ``SyncCreativesResponse`` to ``ToolResult(structured_content=...)``, which FastMCP
+    serializes via ``pydantic_core.to_jsonable_python`` — bypassing both
+    ``model_dump()`` overrides (Pattern #4 nested serialization) and
+    ``AdCPBaseModel``'s ``exclude_none=True`` default, so spec-optional fields left
+    unset (e.g. per-creative ``status``, ``adcp_version``) serialized as invalid
+    ``null`` instead of being omitted. The wrapper now passes
+    ``response.model_dump(mode="json")`` (a plain dict) so the same exclude-none/
+    nested-serialization behavior A2A/REST already had applies on MCP too.
     """
     wire = _sync_one_creative_via_mcp()
-    payload = _nulls_as_absent(wire)
-    payload.setdefault("status", "completed")  # known MCP structured_content gap — see docstring
-    validate_against_pinned_schema("sync-creatives-response.json", payload)
+    validate_against_pinned_schema("sync-creatives-response.json", wire)

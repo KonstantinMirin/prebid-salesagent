@@ -203,7 +203,10 @@ async def list_accounts(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_accounts_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
+    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
+    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +725,10 @@ async def sync_accounts(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
+    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
+    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 # ---------------------------------------------------------------------------

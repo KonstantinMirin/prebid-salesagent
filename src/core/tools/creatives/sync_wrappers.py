@@ -70,7 +70,13 @@ async def sync_creatives(
         context=context,
         identity=identity,
     )
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict serialized via model_dump(), not the raw
+    # model: FastMCP's ToolResult passes non-dict structured_content through
+    # pydantic_core.to_jsonable_python(), which bypasses our model_dump() overrides
+    # (Pattern #4 nested serialization) and AdCPBaseModel's exclude_none=True default —
+    # so protocol/spec-optional fields the model leaves unset (e.g. per-creative
+    # `status`) would otherwise serialize as invalid `null` instead of being omitted.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 def sync_creatives_raw(

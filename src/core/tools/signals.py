@@ -215,7 +215,10 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     """
     identity = resolve_identity_from_context(context, require_valid_token=False)
     response = await _get_signals_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
+    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
+    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 def _build_activate_signal_request(
@@ -338,7 +341,10 @@ async def activate_signal(
     identity = resolve_identity_from_context(ctx)
     req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
     response = await _activate_signal_impl(req=req, identity=identity)
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
+    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
+    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 async def get_signals_raw(

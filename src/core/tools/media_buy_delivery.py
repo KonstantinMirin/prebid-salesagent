@@ -805,7 +805,10 @@ async def get_media_buy_delivery(
         context=context,
     )
     response = _get_media_buy_delivery_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
+    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
+    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 def get_media_buy_delivery_raw(

@@ -145,7 +145,10 @@ async def update_performance_index(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     req = _build_update_performance_index_request(media_buy_id, performance_data, context)
     response = _update_performance_index_impl(req=req, identity=identity)
-    return ToolResult(content=str(response), structured_content=response)
+    # structured_content must be a plain dict via model_dump(): FastMCP's ToolResult
+    # serializes non-dict structured_content via pydantic_core.to_jsonable_python(),
+    # which bypasses model_dump() overrides and AdCPBaseModel's exclude_none default.
+    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
 
 
 def update_performance_index_raw(
