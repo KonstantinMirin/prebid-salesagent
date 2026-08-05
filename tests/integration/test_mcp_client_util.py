@@ -151,13 +151,13 @@ class TestCreateMCPClient:
     async def test_respects_max_retries(self, monkeypatch):
         """Connection failures respect max_retries parameter."""
         monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true")
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
         # A loopback port with nothing listening: resolves, fails fast, and the retry
-        # budget is what is graded. It needs the hatches now only because policy refuses
-        # loopback plain-http by default. NOT a live origin — create_mcp_client never
+        # budget is what is graded. It needs the private-range hatch because policy
+        # refuses loopback addresses by default (https is required unconditionally now
+        # regardless of any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT a live origin — create_mcp_client never
         # passes its timeout to the transport, so an origin that answers without speaking
         # MCP hangs instead of failing (a bug adjacent to this ticket, not fixed here).
-        agent_url = "http://localhost:9999/mcp"
+        agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError) as exc_info:
             async with create_mcp_client(agent_url=agent_url, timeout=1, max_retries=1):
@@ -218,14 +218,14 @@ class TestErrorHandling:
         """Connection timeout is respected."""
         # Use a URL that will timeout (assuming nothing on port 9999)
         monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true")
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
         # Unchanged target: a loopback port with nothing listening, which fails fast.
-        # It needs the hatches now only because policy refuses loopback plain-http by
-        # default. NOT repointed at a live origin: create_mcp_client accepts a timeout
+        # It needs the private-range hatch because policy refuses loopback
+        # addresses by default (https is required unconditionally now regardless of
+        # any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT repointed at a live origin: create_mcp_client accepts a timeout
         # and never passes it to the transport (mcp_client.py:101-107 vs the transport
         # construction), so an origin that ANSWERS but does not speak MCP hangs forever
         # rather than timing out. That bug is adjacent to this ticket and not fixed here.
-        agent_url = "http://localhost:9999/mcp"
+        agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError):
             async with create_mcp_client(agent_url=agent_url, timeout=1, max_retries=1):
@@ -287,15 +287,15 @@ def recorded_retry_sleeps(monkeypatch):
 
 @pytest.fixture
 def egress_hatches_closed(monkeypatch):
-    """Close both escape hatches explicitly, as the literal ``"false"``.
+    """Close the private-range escape hatch explicitly, as the literal ``"false"``.
 
     Not optional and not a default: ``run_all_tests_host.sh`` and the e2e compose
-    files export ``ADCP_OUTBOUND_ALLOW_PRIVATE`` / ``ADCP_OUTBOUND_ALLOW_INSECURE``
-    for the creative-agent stack, so a test that merely assumed them unset would
-    grade nothing on exactly the machines this suite runs on.
+    files export ``ADCP_OUTBOUND_ALLOW_PRIVATE`` for the creative-agent stack,
+    so a test that merely assumed it unset would grade nothing on exactly the
+    machines this suite runs on. There is no scheme hatch to close anymore
+    (salesagent-e6h0 deleted it) — https is required unconditionally.
     """
     monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "false")
-    monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "false")
 
 
 @pytest.mark.asyncio
@@ -381,14 +381,16 @@ class TestConnectionRetryBackoffSchedule:
         bare bases. The base knob is ``delenv``'d so an ambient test-speed
         value cannot turn this into an assertion about something else.
         """
-        set_flags(monkeypatch, private=True, insecure=True)
+        set_flags(monkeypatch, private=True)
         monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
         pin_jitter(monkeypatch, 0.25)
         # A loopback port with nothing listening: resolves, fails fast, and the
-        # sleeps between attempts are what is graded (hatches open because
-        # policy refuses loopback plain-http by default). Ends in /mcp so no
+        # sleeps between attempts are what is graded (the private-range hatch is open
+        # because policy refuses loopback addresses by default; https is required
+        # unconditionally now regardless of any hatch, salesagent-e6h0 -- hence the
+        # scheme flip above). Ends in /mcp so no
         # fallback candidate is synthesised — one URL, 3 attempts, 2 sleeps.
-        agent_url = "http://localhost:9999/mcp"
+        agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError):
             async with create_mcp_client(agent_url=agent_url, timeout=1, max_retries=3):
@@ -410,8 +412,8 @@ class TestConnectionRetryBackoffSchedule:
         the default exceeds the rule. Three attempts leave exactly two sleeps
         and say so in the failure message.
         """
-        set_flags(monkeypatch, private=True, insecure=True)
-        agent_url = "http://localhost:9999/mcp"
+        set_flags(monkeypatch, private=True)
+        agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError) as exc_info:
             async with create_mcp_client(agent_url=agent_url, timeout=1):

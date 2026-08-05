@@ -96,10 +96,9 @@ def _ssl_verification_cause(exc: BaseException) -> ssl.SSLCertVerificationError 
 class TestLocalOriginTLSFront:
     """The primitive design steps 1, 3 and 4 create: a TLS-terminated ``LocalOrigin``.
 
-    Every case opens the private-range hatch (loopback is a reserved address)
-    but keeps the SCHEME hatch OFF (``insecure=False``) throughout — this front
-    existing is exactly what is supposed to make that hatch unnecessary for
-    this origin, which is the property salesagent-e6h0 depends on.
+    Every case opens the private-range hatch (loopback is a reserved address).
+    There is no scheme hatch to open or close anymore — salesagent-e6h0 deleted
+    it entirely, exactly because this front existing made it unnecessary.
     """
 
     def test_https_round_trip_succeeds_through_the_real_outbound_seam(self, monkeypatch):
@@ -111,7 +110,7 @@ class TestLocalOriginTLSFront:
         ca_path = gen_test_tls.ensure_test_tls()
         server_ctx = server_ssl_context(gen_test_tls)
 
-        set_flags(monkeypatch, private=True, insecure=False)
+        set_flags(monkeypatch, private=True)
         monkeypatch.setenv("SSL_CERT_FILE", str(ca_path))
 
         with run_local_origin(listen_host="localhost", ssl_context=server_ctx) as origin:
@@ -172,7 +171,7 @@ class TestLocalOriginTLSFront:
         empty_ca = tmp_path / "empty_ca.pem"
         empty_ca.write_text("")
         monkeypatch.setenv("SSL_CERT_FILE", str(empty_ca))
-        set_flags(monkeypatch, private=True, insecure=False)
+        set_flags(monkeypatch, private=True)
 
         with run_local_origin(listen_host="localhost", ssl_context=server_ctx) as origin:
             origin.respond_with(200)

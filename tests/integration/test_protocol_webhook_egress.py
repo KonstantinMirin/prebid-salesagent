@@ -86,6 +86,7 @@ from adcp.webhook_receiver import LegacyWebhookHmacError, LegacyWebhookHmacOptio
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.harness.protocol_webhook import AUDIT_LOGGER_NAME, ProtocolWebhookEnv
 from tests.helpers.local_http_origin import run_local_origin
+from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -416,10 +417,12 @@ class TestTwoDestinationsOneService:
     and the pin compares the host: a shared pinned client would serve both and
     this test would pass against the exact mutation it exists to catch. The
     second origin therefore binds ``127.0.0.2`` — still loopback, still covered
-    by the escape hatch ``LocalOriginMixin`` opens, and a different pin.
-    (``localhost`` would also work now that URLs are delivered verbatim, but
-    ``127.0.0.2`` keeps the two pins unambiguously distinct without depending
-    on resolver family ordering.)
+    by the private-range escape hatch ``LocalOriginMixin`` opens, and now also
+    served over real TLS (the generated CA's SAN covers 127.0.0.2 specifically
+    for this test — salesagent-e6h0, since the seam requires https
+    unconditionally now), and a different pin. (``localhost`` would also work
+    now that URLs are delivered verbatim, but ``127.0.0.2`` keeps the two pins
+    unambiguously distinct without depending on resolver family ordering.)
     """
 
     async def test_one_service_delivers_to_two_hostnames(self, integration_db):
@@ -427,7 +430,11 @@ class TestTwoDestinationsOneService:
             buy = env.make_media_buy()
             env.set_http_status(200)
 
-            with run_local_origin(listen_host="127.0.0.2") as second_origin:
+            gen_test_tls = load_gen_test_tls()
+            gen_test_tls.ensure_test_tls()
+            with run_local_origin(
+                listen_host="127.0.0.2", ssl_context=server_ssl_context(gen_test_tls)
+            ) as second_origin:
                 second_origin.respond_with(200)
                 first = env.make_config(url=env.webhook_url)
                 second = env.make_config(url=f"{second_origin.base_url}/webhook")
@@ -478,7 +485,9 @@ class TestBuyerUrlIsDeliveredVerbatim:
     async def test_a_localhost_url_is_delivered_to_localhost_verbatim(self, integration_db):
         with ProtocolWebhookEnv() as env:
             buy = env.make_media_buy()
-            with run_local_origin(listen_host="localhost") as origin:
+            gen_test_tls = load_gen_test_tls()
+            gen_test_tls.ensure_test_tls()
+            with run_local_origin(listen_host="localhost", ssl_context=server_ssl_context(gen_test_tls)) as origin:
                 origin.respond_with(200)
                 config = env.make_config(url=f"{origin.base_url}/webhook")
                 assert urlparse(config.url).hostname == "localhost", (

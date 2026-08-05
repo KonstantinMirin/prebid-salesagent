@@ -20,6 +20,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
+from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 from tests.integration.migration_helpers import parse_postgres_url
 
 # ---------------------------------------------------------------------------
@@ -83,6 +84,27 @@ def local_origin():
     port 0 because the integration suite runs under xdist.
     """
     with run_local_origin() as origin:
+        yield origin
+
+
+@pytest.fixture
+def local_origin_tls(monkeypatch):
+    """An https sibling of :func:`local_origin` (salesagent-e6h0).
+
+    Serves real TLS off the same generated CA/leaf every other front in the
+    repo reuses (never a second mechanism) — verification is ON, exactly like
+    a production dial. ``SSL_CERT_FILE`` is set to the COMBINED bundle (system
+    CA + our private CA), not the private CA alone: the bare-CA trap already
+    broke `uv sync` against real pypi.org once (see docker-compose.e2e.yml's
+    own comment on this), and this fixture's monkeypatch is function-scoped so
+    the risk is contained regardless, but there is no reason to reintroduce it.
+    Callers that need a plain-http origin (refusal tests, e.g. verifying a
+    URL is never dialled) keep using :func:`local_origin` unchanged.
+    """
+    gen_test_tls = load_gen_test_tls()
+    gen_test_tls.ensure_test_tls()
+    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
+    with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
         yield origin
 
 

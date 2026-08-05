@@ -28,14 +28,19 @@
 # Validation" + § "Recovery Classification"; INVALID_REQUEST is in the pinned
 # static/schemas/source/enums/error-code.json.
 #
-# Why THESE causes: with both escape hatches open — which is the posture of
-# docker-compose.e2e.yml and of run_all_tests_host.sh — a cloud-metadata
-# address and an unresolvable host are still refused (the SDK checks
-# BLOCKED_METADATA_IPS and raises on getaddrinfo failure upstream of the
-# allow_private gate). They are the only two refusal causes that grade the same
-# production on every transport, so both envelope scenarios pin the hatches ON
-# deliberately. The plaintext-http scenario needs them OFF, which the e2e stack
-# cannot do — it declares that at the env, not in a nodeid ledger.
+# Why THESE causes: with the private-range escape hatch open — which is the
+# posture of docker-compose.e2e.yml and of run_all_tests_host.sh, and the ONLY
+# hatch left (salesagent-e6h0 deleted the scheme hatch: the seam now requires
+# https unconditionally, no operator override) — a cloud-metadata address and
+# an unresolvable host are still refused (the SDK checks BLOCKED_METADATA_IPS
+# and raises on getaddrinfo failure upstream of the allow_private gate). They
+# are the only two refusal causes that grade the same production on every
+# transport, so both envelope scenarios pin the hatch ON deliberately. The
+# plaintext-http scenario needs the PRIVATE hatch OFF — irrelevant to its own
+# outcome (its host is public, so scheme is what refuses it either way), kept
+# off anyway to keep that one scenario deliberately unrealizable over e2e_rest
+# rather than silently xpassing there — it declares that at the env, not in a
+# nodeid ledger.
 #
 # NOT here, on purpose: the redirect-not-followed obligation (proved by a
 # second live origin's hit count in
@@ -71,7 +76,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   @T-EGRESS-SSRF-refused-url-is-a-correctable-buyer-error @egress @invariant
   Scenario Outline: a refused agent_url is a correctable buyer error naming the field
     Given a tenant is configured for product discovery
-    And both outbound egress escape hatches are open
+    And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "<agent_url>"
     Then the request is rejected with INVALID_REQUEST naming field "property_list.agent_url"
 
@@ -83,7 +88,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   @T-EGRESS-SSRF-refusal-discloses-nothing @egress @invariant
   Scenario Outline: the refusal discloses nothing and does not distinguish the cause
     Given a tenant is configured for product discovery
-    And both outbound egress escape hatches are open
+    And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "<agent_url>"
     Then the refusal message on both envelope layers is exactly "Outbound request to the supplied URL was refused by egress policy."
     And the error envelope names neither the supplied host nor any IP address
@@ -103,7 +108,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   @T-EGRESS-SSRF-plaintext-http-refused @egress
   Scenario: a plaintext http agent_url is refused
     Given a tenant is configured for product discovery
-    And both outbound egress escape hatches are closed
+    And the outbound private-range egress hatch is closed
     When the buyer requests products with a property list agent at "http://example.com"
     Then the request is rejected with INVALID_REQUEST naming field "property_list.agent_url"
 
@@ -128,7 +133,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # so an unindexed path would leave the buyer unable to tell WHICH creative.
   @T-EGRESS-SSRF-sync-creatives-agent-url @egress_sync @invariant
   Scenario: a refused creative-agent agent_url is a correctable buyer error at sync ingest
-    Given both outbound egress escape hatches are open
+    Given the outbound private-range egress hatch is open
     When the buyer syncs a creative whose format agent is at "https://169.254.169.254"
     Then the creative is rejected with INVALID_REQUEST naming field "creatives[0].format_id.agent_url"
 
@@ -165,7 +170,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # holds that line independently of the exact-message Then above.
   @T-EGRESS-SSRF-ingest-refused-webhook-url @egress_create @invariant
   Scenario Outline: a refused push_notification_config.url is a correctable buyer error at ingest
-    Given both outbound egress escape hatches are open
+    Given the outbound private-range egress hatch is open
     When the buyer creates a media buy with push notification url "<webhook_url>"
     Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.url"
     And the refusal message on both envelope layers is exactly "<message>"

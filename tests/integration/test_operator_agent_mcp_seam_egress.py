@@ -46,10 +46,10 @@ class TestOperatorCreativeAgentRedirectIsRefused:
     """The guarded MCP seam refuses a redirect the OPERATOR creative-agent path is served."""
 
     @pytest.mark.timeout(30)
-    async def test_operator_creative_agent_redirect_to_metadata_is_not_followed(self, local_origin, monkeypatch):
+    async def test_operator_creative_agent_redirect_to_metadata_is_not_followed(self, local_origin_tls, monkeypatch):
         """An operator ``CreativeAgent`` answering ``302 -> metadata stand-in`` never reaches it.
 
-        ``local_origin`` stands in for a tenant-configured creative agent (an
+        ``local_origin_tls`` stands in for a tenant-configured creative agent (an
         operator agent, not a buyer-supplied URL). ``_fetch_formats_operator``
         dials through ``create_mcp_client``, which pins the connection and sets
         ``follow_redirects=False`` — the redirect is never followed
@@ -61,15 +61,15 @@ class TestOperatorCreativeAgentRedirectIsRefused:
 
         with run_local_origin() as metadata_standin:
             metadata_standin.close_without_responding()
-            local_origin.redirect_to(metadata_standin.base_url, status=302)
+            local_origin_tls.redirect_to(metadata_standin.base_url, status=302)
 
-            agent = CreativeAgent(agent_url=local_origin.base_url, name="operator-creative-agent")
+            agent = CreativeAgent(agent_url=local_origin_tls.base_url, name="operator-creative-agent")
             registry = CreativeAgentRegistry()
 
             with pytest.raises(Exception):  # noqa: B017 - a 302 is not a valid MCP handshake either way
                 await registry._fetch_formats_operator(agent)
 
-            assert local_origin.hits >= 1, "the operator agent_url was never dialed — the test graded nothing"
+            assert local_origin_tls.hits >= 1, "the operator agent_url was never dialed — the test graded nothing"
             assert metadata_standin.hits == 0, (
                 f"the redirect to the metadata stand-in was followed unguarded: {metadata_standin.requests}"
             )
@@ -79,22 +79,22 @@ class TestOperatorSignalsAgentRedirectIsRefused:
     """The guarded MCP seam refuses a redirect the OPERATOR signals-agent path is served."""
 
     @pytest.mark.timeout(30)
-    async def test_operator_signals_agent_redirect_to_metadata_is_not_followed(self, local_origin, monkeypatch):
+    async def test_operator_signals_agent_redirect_to_metadata_is_not_followed(self, local_origin_tls, monkeypatch):
         """A tenant-configured ``SignalsAgent`` answering ``302 -> metadata stand-in`` never reaches it."""
         allow_local_origin(monkeypatch)
         fast_backoff(monkeypatch)
 
         with run_local_origin() as metadata_standin:
             metadata_standin.close_without_responding()
-            local_origin.redirect_to(metadata_standin.base_url, status=302)
+            local_origin_tls.redirect_to(metadata_standin.base_url, status=302)
 
-            agent = SignalsAgent(agent_url=local_origin.base_url, name="operator-signals-agent")
+            agent = SignalsAgent(agent_url=local_origin_tls.base_url, name="operator-signals-agent")
             registry = SignalsAgentRegistry()
 
             with pytest.raises(Exception):  # noqa: B017 - a 302 is not a valid MCP handshake either way
                 await registry._fetch_signals_operator(agent, brief="test brief")
 
-            assert local_origin.hits >= 1, "the operator agent_url was never dialed — the test graded nothing"
+            assert local_origin_tls.hits >= 1, "the operator agent_url was never dialed — the test graded nothing"
             assert metadata_standin.hits == 0, (
                 f"the redirect to the metadata stand-in was followed unguarded: {metadata_standin.requests}"
             )

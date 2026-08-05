@@ -52,10 +52,10 @@ class TestRedirectIsNotFollowed:
     """The redirect a counterparty uses to reach an internal address is refused."""
 
     @pytest.mark.timeout(30)
-    async def test_a_302_to_a_metadata_address_is_not_followed(self, local_origin, monkeypatch):
+    async def test_a_302_to_a_metadata_address_is_not_followed(self, local_origin_tls, monkeypatch):
         """The buyer's ``agent_url`` answers ``302 -> <metadata stand-in>``; the target is never reached.
 
-        ``local_origin`` is the buyer-supplied ``agent_url``. It answers every
+        ``local_origin_tls`` is the buyer-supplied ``agent_url``. It answers every
         request with a redirect to a SECOND local origin standing in for
         ``http://169.254.169.254/`` — an address we can hit-count, which the real
         metadata endpoint is not. Both hatches are open so the loopback origin is
@@ -74,16 +74,16 @@ class TestRedirectIsNotFollowed:
             # If reached, record the hit then drop the socket — a followed
             # redirect fails fast instead of stalling fastmcp's SSE read.
             metadata_standin.close_without_responding()
-            local_origin.redirect_to(metadata_standin.base_url, status=302)
+            local_origin_tls.redirect_to(metadata_standin.base_url, status=302)
 
             with pytest.raises(Exception):  # noqa: B017 - the outcome is shared by both postures; the attempt is the grade
-                async with create_mcp_client(agent_url=local_origin.base_url):
+                async with create_mcp_client(agent_url=local_origin_tls.base_url):
                     pass
 
             assert metadata_standin.hits == 0, (
                 f"the redirect to the metadata stand-in was followed: {metadata_standin.requests}"
             )
-            assert local_origin.hits >= 1, "the buyer's agent_url was never dialed — the test graded nothing"
+            assert local_origin_tls.hits >= 1, "the buyer's agent_url was never dialed — the test graded nothing"
 
 
 class TestMetadataAddressIsRefusedWithoutDialing:

@@ -22,11 +22,13 @@ count of requests the server actually received. A transport mock's
 ``call_count`` cannot make that claim: it counts calls the test itself
 arranged, on a code path the client never walked.
 
-Both egress escape hatches are opened explicitly (``allow_local_origin``)
-because a local origin is loopback plain HTTP, which the seam refuses by
-default and rightly so. They are no-ops before the migration (``requests`` has
-no address policy) and load-bearing after it, so the cases read identically on
-both sides of the change.
+The private-range egress escape hatch is opened explicitly (``allow_local_origin``)
+because a local origin is loopback, which the seam refuses by default and
+rightly so; it is a no-op before the migration (``requests`` has no address
+policy) and load-bearing after it, so the cases read identically on both sides
+of the change. The origin itself is served over real TLS (``local_origin_tls``,
+salesagent-e6h0) since the seam requires https unconditionally now — there is
+no scheme hatch left to open.
 
 Two of the ten sites have no origin-driven case here, and that is a finding
 rather than a gap. They are stated as failing assertions rather than skip
@@ -196,7 +198,7 @@ def _broadstreet(origin: LocalOrigin):
 # ---------------------------------------------------------------------------
 
 
-def test_xandr_authenticate_does_not_retry_a_failing_origin(local_origin, monkeypatch):
+def test_xandr_authenticate_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """``XandrAdapter._authenticate`` must hit a 500 origin once, not three times.
 
     This is the headline case. ``_authenticate`` is wrapped in ``@api_retry``
@@ -207,17 +209,17 @@ def test_xandr_authenticate_does_not_retry_a_failing_origin(local_origin, monkey
     """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b'{"error": "boom"}')
+    local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    adapter = _xandr(local_origin)
+    adapter = _xandr(local_origin_tls)
 
     with pytest.raises(_VENDOR_FAILURE):
         adapter._authenticate()
 
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_xandr_make_request_does_not_retry_a_failing_origin(local_origin, monkeypatch):
+def test_xandr_make_request_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """``XandrAdapter._make_request`` must hit a 500 origin once.
 
     The token is pre-seeded so ``_authenticate`` returns early and every hit
@@ -226,19 +228,19 @@ def test_xandr_make_request_does_not_retry_a_failing_origin(local_origin, monkey
     """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b'{"error": "boom"}')
+    local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    adapter = _xandr(local_origin)
+    adapter = _xandr(local_origin_tls)
     adapter.token = "seeded-token"
     adapter.token_expiry = datetime.now(UTC) + timedelta(hours=1)
 
     with pytest.raises(_VENDOR_FAILURE):
         adapter._make_request("POST", "/campaign", {"name": "x"})
 
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_xandr_make_request_compounds_its_retries_with_authenticate(local_origin, monkeypatch):
+def test_xandr_make_request_compounds_its_retries_with_authenticate(local_origin_tls, monkeypatch):
     """A Xandr call on an expired token must still cost the origin ONE hit.
 
     ``_make_request`` calls ``_authenticate`` and both carry ``@api_retry``, so
@@ -249,17 +251,17 @@ def test_xandr_make_request_compounds_its_retries_with_authenticate(local_origin
     """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b'{"error": "boom"}')
+    local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    adapter = _xandr(local_origin)
+    adapter = _xandr(local_origin_tls)
 
     with pytest.raises(_VENDOR_FAILURE):
         adapter._make_request("POST", "/campaign", {"name": "x"})
 
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_kevel_update_does_not_retry_a_failing_origin(local_origin, monkeypatch):
+def test_kevel_update_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """A failed Kevel campaign pause costs one hit and surfaces as a transient service failure.
 
     Asserts the WIRE contract (SERVICE_UNAVAILABLE / transient), not the Python
@@ -274,9 +276,9 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin, monkeypatch)
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b'{"error": "boom"}')
+    local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    adapter = _kevel(local_origin)
+    adapter = _kevel(local_origin_tls)
 
     with pytest.raises(AdCPError) as exc_info:
         adapter.update_media_buy(
@@ -289,10 +291,10 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin, monkeypatch)
 
     assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
     assert exc_info.value.recovery == "transient"
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_triton_status_check_does_not_retry_a_failing_origin(local_origin, monkeypatch):
+def test_triton_status_check_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """A failed Triton status check costs one hit and degrades to ``unknown``.
 
     The degradation is asserted alongside the count because it is the arm the
@@ -302,45 +304,45 @@ def test_triton_status_check_does_not_retry_a_failing_origin(local_origin, monke
     """
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b'{"error": "boom"}')
+    local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    adapter = _triton(local_origin)
+    adapter = _triton(local_origin_tls)
     response = adapter.check_media_buy_status(media_buy_id="triton_999", today=_TODAY)
 
     assert response.status == "unknown"
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_broadstreet_request_does_not_retry_a_failing_origin(local_origin, monkeypatch):
+def test_broadstreet_request_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """A 500 from Broadstreet costs one hit and raises ``BroadstreetAPIError``."""
     from src.adapters.broadstreet.client import BroadstreetAPIError
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b'{"error": "boom"}')
+    local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    client = _broadstreet(local_origin)
+    client = _broadstreet(local_origin_tls)
 
     with pytest.raises(BroadstreetAPIError) as exc_info:
         client.get("/networks")
 
     assert exc_info.value.status_code == 500
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_mock_ad_server_webhook_does_not_retry_a_failing_origin(local_origin, monkeypatch):
+def test_mock_ad_server_webhook_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """The HITL completion webhook costs one hit and never raises."""
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b'{"error": "boom"}')
+    local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    adapter = _mock_ad_server(local_origin)
+    adapter = _mock_ad_server(local_origin_tls)
     adapter._send_completion_webhook("step_1", approved=True)
 
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_gam_report_download_does_not_retry_a_failing_origin(local_origin, monkeypatch):
+def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, monkeypatch):
     """A failed GAM report download costs one hit.
 
     The GAM SOAP client is a plain fake, not a transport mock: it stands in for
@@ -356,9 +358,9 @@ def test_gam_report_download_does_not_retry_a_failing_origin(local_origin, monke
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     monkeypatch.setattr(grs.ReportingConfig, "ALLOWED_DOMAINS", ["127.0.0.1"])
-    local_origin.respond_with(500, body=b"boom")
+    local_origin_tls.respond_with(500, body=b"boom")
 
-    service = _gam_reporting_service(local_origin)
+    service = _gam_reporting_service(local_origin_tls)
 
     # ``_run_report`` wraps every failure in a bare ``Exception`` of its own, so
     # the message is the only thing there is to assert on. It is written in
@@ -366,10 +368,10 @@ def test_gam_report_download_does_not_retry_a_failing_origin(local_origin, monke
     with pytest.raises(Exception, match="Error running GAM report"):
         service._run_report({"reportQuery": {}})
 
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_base_workflow_slack_notification_reaches_the_origin_once(local_origin, monkeypatch, integration_db):
+def test_base_workflow_slack_notification_reaches_the_origin_once(local_origin_tls, monkeypatch, integration_db):
     """The workflow Slack notification must reach its webhook exactly once.
 
     Exactly once, not zero: the count grades both halves of the obligation, and
@@ -381,7 +383,7 @@ def test_base_workflow_slack_notification_reaches_the_origin_once(local_origin, 
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(200, body=b"ok")
+    local_origin_tls.respond_with(200, body=b"ok")
 
     # The tenant context is a ContextVar, so it is reset explicitly rather than
     # left behind for whichever test this worker runs next.
@@ -389,8 +391,8 @@ def test_base_workflow_slack_notification_reaches_the_origin_once(local_origin, 
         {
             "tenant_id": "test_tenant",
             "name": "Test Tenant",
-            "slack_webhook_url": local_origin.base_url,
-            "slack": {"webhook_url": local_origin.base_url},
+            "slack_webhook_url": local_origin_tls.base_url,
+            "slack": {"webhook_url": local_origin_tls.base_url},
         }
     )
     try:
@@ -399,26 +401,26 @@ def test_base_workflow_slack_notification_reaches_the_origin_once(local_origin, 
     finally:
         current_tenant.reset(token)
 
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
 def test_admin_slack_test_message_does_not_retry_a_failing_origin(
-    local_origin, monkeypatch, authenticated_admin_session, integration_db
+    local_origin_tls, monkeypatch, authenticated_admin_session, integration_db
 ):
     """``POST /tenant/<id>/test_slack`` costs the webhook one hit on a 500."""
     from tests.factories import TenantFactory
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(500, body=b"boom")
+    local_origin_tls.respond_with(500, body=b"boom")
 
     with _BareEnv():
-        TenantFactory(tenant_id="slack_test_tenant", slack_webhook_url=local_origin.base_url)
+        TenantFactory(tenant_id="slack_test_tenant", slack_webhook_url=local_origin_tls.base_url)
 
     response = authenticated_admin_session.post("/tenant/slack_test_tenant/test_slack")
 
     assert response.get_json()["success"] is False
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
 # ---------------------------------------------------------------------------
@@ -426,32 +428,32 @@ def test_admin_slack_test_message_does_not_retry_a_failing_origin(
 # ---------------------------------------------------------------------------
 
 
-def test_broadstreet_get_returns_the_parsed_body(local_origin, monkeypatch):
+def test_broadstreet_get_returns_the_parsed_body(local_origin_tls, monkeypatch):
     allow_local_origin(monkeypatch)
-    local_origin.respond_with(200, body=b'{"networks": [{"id": 456}]}')
+    local_origin_tls.respond_with(200, body=b'{"networks": [{"id": 456}]}')
 
-    client = _broadstreet(local_origin)
+    client = _broadstreet(local_origin_tls)
 
     assert client.get("/networks") == {"networks": [{"id": 456}]}
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_triton_status_check_reads_an_active_campaign(local_origin, monkeypatch):
+def test_triton_status_check_reads_an_active_campaign(local_origin_tls, monkeypatch):
     allow_local_origin(monkeypatch)
-    local_origin.respond_with(200, body=b'{"active": true, "endDate": "2030-01-01T00:00:00+00:00"}')
+    local_origin_tls.respond_with(200, body=b'{"active": true, "endDate": "2030-01-01T00:00:00+00:00"}')
 
-    adapter = _triton(local_origin)
+    adapter = _triton(local_origin_tls)
     response = adapter.check_media_buy_status(media_buy_id="triton_999", today=_TODAY)
 
     assert response.status == "active"
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_kevel_pause_succeeds_against_a_local_origin(local_origin, monkeypatch):
+def test_kevel_pause_succeeds_against_a_local_origin(local_origin_tls, monkeypatch):
     allow_local_origin(monkeypatch)
-    local_origin.respond_with(200, body=b'{"Id": 999, "IsActive": false}')
+    local_origin_tls.respond_with(200, body=b'{"Id": 999, "IsActive": false}')
 
-    adapter = _kevel(local_origin)
+    adapter = _kevel(local_origin_tls)
     response = adapter.update_media_buy(
         media_buy_id="kevel_999",
         action="pause_media_buy",
@@ -461,36 +463,36 @@ def test_kevel_pause_succeeds_against_a_local_origin(local_origin, monkeypatch):
     )
 
     assert response.media_buy_id == "kevel_999"
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_xandr_make_request_returns_the_parsed_body(local_origin, monkeypatch):
+def test_xandr_make_request_returns_the_parsed_body(local_origin_tls, monkeypatch):
     allow_local_origin(monkeypatch)
-    local_origin.respond_with(200, body=b'{"response": {"status": "OK", "id": 42}}')
+    local_origin_tls.respond_with(200, body=b'{"response": {"status": "OK", "id": 42}}')
 
-    adapter = _xandr(local_origin)
+    adapter = _xandr(local_origin_tls)
     adapter.token = "seeded-token"
     adapter.token_expiry = datetime.now(UTC) + timedelta(hours=1)
 
     assert adapter._make_request("GET", "/campaign") == {"response": {"status": "OK", "id": 42}}
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_mock_ad_server_webhook_posts_the_completion_payload(local_origin, monkeypatch):
+def test_mock_ad_server_webhook_posts_the_completion_payload(local_origin_tls, monkeypatch):
     allow_local_origin(monkeypatch)
-    local_origin.respond_with(200, body=b"ok")
+    local_origin_tls.respond_with(200, body=b"ok")
 
-    adapter = _mock_ad_server(local_origin)
+    adapter = _mock_ad_server(local_origin_tls)
     adapter._send_completion_webhook("step_1", approved=True)
 
-    payload = local_origin.last_request.json()
+    payload = local_origin_tls.last_request.json()
     assert payload["event"] == "task_completed"
     assert payload["step_id"] == "step_1"
     assert payload["status"] == "completed"
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
-def test_gam_report_download_parses_the_gzipped_csv(local_origin, monkeypatch):
+def test_gam_report_download_parses_the_gzipped_csv(local_origin_tls, monkeypatch):
     from src.adapters import gam_reporting_service as grs
 
     allow_local_origin(monkeypatch)
@@ -499,13 +501,13 @@ def test_gam_report_download_parses_the_gzipped_csv(local_origin, monkeypatch):
     buffer = io.BytesIO()
     with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
         gz.write(b"Dimension.DATE,Column.AD_SERVER_IMPRESSIONS\n2026-07-29,100\n")
-    local_origin.respond_with(200, body=buffer.getvalue(), content_type="application/octet-stream")
+    local_origin_tls.respond_with(200, body=buffer.getvalue(), content_type="application/octet-stream")
 
-    service = _gam_reporting_service(local_origin)
+    service = _gam_reporting_service(local_origin_tls)
     rows = service._run_report({"reportQuery": {}})
 
     assert rows == [{"Dimension.DATE": "2026-07-29", "Column.AD_SERVER_IMPRESSIONS": "100"}]
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
 # ---------------------------------------------------------------------------

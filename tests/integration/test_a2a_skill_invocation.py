@@ -421,7 +421,7 @@ class TestA2ASkillInvocation:
 
         from tests.helpers.egress_hatches import egress_hatch_env
 
-        for k, v in egress_hatch_env(private=True, insecure=True).items():
+        for k, v in egress_hatch_env(private=True).items():
             monkeypatch.setenv(k, v)
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -454,7 +454,7 @@ class TestA2ASkillInvocation:
             jf.ParseDict(
                 {
                     "taskPushNotificationConfig": {
-                        "url": "http://127.0.0.1:9/webhook",
+                        "url": "https://127.0.0.1:9/webhook",
                         "authentication": {"scheme": "Bearer", "credentials": "test-webhook-token"},
                     }
                 },

@@ -86,10 +86,11 @@ from src.core.exceptions import AdCPInvalidRequestError, AdCPServiceUnavailableE
 
 logger = logging.getLogger(__name__)
 
-# Escape hatches. Both default OFF — a guarded posture is the default, and an
-# operator has to say so out loud to leave it.
+# Escape hatch. Defaults OFF — a guarded posture is the default, and an
+# operator has to say so out loud to leave it. The scheme requirement
+# (https-only) has NO escape hatch (salesagent-e6h0): the outbound origins
+# that used to need one are all TLS-fronted now (salesagent-40qh).
 _ALLOW_PRIVATE_ENV = "ADCP_OUTBOUND_ALLOW_PRIVATE"
-_ALLOW_INSECURE_ENV = "ADCP_OUTBOUND_ALLOW_INSECURE"
 
 # Response bodies are accumulated, so an unbounded counterparty response is a
 # memory-exhaustion vector. httpx applies no default limit (spec point 5).
@@ -305,15 +306,13 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _require_tls(url: str, field: str | None = None) -> None:
-    """Reject anything but https:// unless the insecure hatch is open.
+    """Reject anything but https:// — unconditionally, no escape hatch (salesagent-e6h0).
 
     The one address-adjacent rule the seam owns: the SDK validator deliberately
     permits plain http, because it is a transport validator, not a transport
     policy.
     """
     if url.lower().startswith("https://"):
-        return
-    if _env_flag(_ALLOW_INSECURE_ENV):
         return
     logger.warning("Outbound request refused: scheme is not https")
     raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)

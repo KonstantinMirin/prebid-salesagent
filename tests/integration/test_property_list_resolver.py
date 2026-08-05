@@ -137,23 +137,23 @@ class TestFetch:
     """What the resolver asks the agent service for, and what it does with the answer."""
 
     @pytest.mark.asyncio
-    async def test_fetches_the_list_path_and_returns_identifier_values(self, local_origin, monkeypatch):
+    async def test_fetches_the_list_path_and_returns_identifier_values(self, local_origin_tls, monkeypatch):
         """The GET lands on ``{agent_url}/lists/{list_id}`` and the values come back."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(200, body=property_list_body(domain_identifiers("example.com", "test.org")))
+        local_origin_tls.respond_with(200, body=property_list_body(domain_identifiers("example.com", "test.org")))
 
-        result = await resolve_property_list(origin_ref(local_origin, list_id="my-list-42"))
+        result = await resolve_property_list(origin_ref(local_origin_tls, list_id="my-list-42"))
 
         assert result == ["example.com", "test.org"]
-        assert local_origin.paths == ["/lists/my-list-42"]
+        assert local_origin_tls.paths == ["/lists/my-list-42"]
 
     @pytest.mark.asyncio
-    async def test_omitted_identifiers_resolve_to_an_empty_list(self, local_origin, monkeypatch):
+    async def test_omitted_identifiers_resolve_to_an_empty_list(self, local_origin_tls, monkeypatch):
         """A response with no ``identifiers`` key resolves to ``[]``, not an error."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(200, body=property_list_body(None))
+        local_origin_tls.respond_with(200, body=property_list_body(None))
 
-        assert await resolve_property_list(origin_ref(local_origin)) == []
+        assert await resolve_property_list(origin_ref(local_origin_tls)) == []
 
 
 class TestCaching:
@@ -165,71 +165,71 @@ class TestCaching:
     """
 
     @pytest.mark.asyncio
-    async def test_cached_result_avoids_a_second_fetch(self, local_origin, monkeypatch):
+    async def test_cached_result_avoids_a_second_fetch(self, local_origin_tls, monkeypatch):
         """A second call inside the TTL is served from cache — the origin sees one request."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(
+        local_origin_tls.respond_with(
             200,
             body=property_list_body(domain_identifiers("cached.com"), cache_valid_until=_future()),
         )
-        ref = origin_ref(local_origin)
+        ref = origin_ref(local_origin_tls)
 
         first = await resolve_property_list(ref)
         second = await resolve_property_list(ref)
 
         assert first == ["cached.com"]
         assert second == ["cached.com"]
-        assert local_origin.hits == 1
+        assert local_origin_tls.hits == 1
 
     @pytest.mark.asyncio
-    async def test_expired_cache_causes_a_refetch(self, local_origin, monkeypatch):
+    async def test_expired_cache_causes_a_refetch(self, local_origin_tls, monkeypatch):
         """``cache_valid_until`` already in the past means the next call re-fetches."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(
+        local_origin_tls.respond_with(
             200,
             body=property_list_body(domain_identifiers("fresh.com"), cache_valid_until=_past()),
         )
-        ref = origin_ref(local_origin)
+        ref = origin_ref(local_origin_tls)
 
         await resolve_property_list(ref)
         await resolve_property_list(ref)
 
-        assert local_origin.hits == 2
+        assert local_origin_tls.hits == 2
 
     @pytest.mark.asyncio
-    async def test_missing_cache_valid_until_still_caches_for_the_default_ttl(self, local_origin, monkeypatch):
+    async def test_missing_cache_valid_until_still_caches_for_the_default_ttl(self, local_origin_tls, monkeypatch):
         """No ``cache_valid_until`` means the default TTL applies, not "do not cache"."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(200, body=property_list_body(domain_identifiers("default-ttl.com")))
-        ref = origin_ref(local_origin)
+        local_origin_tls.respond_with(200, body=property_list_body(domain_identifiers("default-ttl.com")))
+        ref = origin_ref(local_origin_tls)
 
         first = await resolve_property_list(ref)
         second = await resolve_property_list(ref)
 
         assert first == ["default-ttl.com"]
         assert second == ["default-ttl.com"]
-        assert local_origin.hits == 1
+        assert local_origin_tls.hits == 1
 
     @pytest.mark.asyncio
-    async def test_different_list_ids_are_cached_separately(self, local_origin, monkeypatch):
+    async def test_different_list_ids_are_cached_separately(self, local_origin_tls, monkeypatch):
         """The cache is keyed per list_id — one list's entry never answers for another."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_in_sequence(
+        local_origin_tls.respond_in_sequence(
             [
                 (200, property_list_body(domain_identifiers("a.com"), cache_valid_until=_future())),
                 (200, property_list_body(domain_identifiers("b.com"), cache_valid_until=_future())),
             ]
         )
 
-        result_a = await resolve_property_list(origin_ref(local_origin, list_id="list-a"))
-        result_b = await resolve_property_list(origin_ref(local_origin, list_id="list-b"))
+        result_a = await resolve_property_list(origin_ref(local_origin_tls, list_id="list-a"))
+        result_b = await resolve_property_list(origin_ref(local_origin_tls, list_id="list-b"))
 
         assert result_a == ["a.com"]
         assert result_b == ["b.com"]
-        assert local_origin.paths == ["/lists/list-a", "/lists/list-b"]
+        assert local_origin_tls.paths == ["/lists/list-a", "/lists/list-b"]
 
     @pytest.mark.asyncio
-    async def test_a_failed_fetch_is_not_cached(self, local_origin, monkeypatch):
+    async def test_a_failed_fetch_is_not_cached(self, local_origin_tls, monkeypatch):
         """A failure leaves no cache entry, so the next call really re-fetches.
 
         404 rather than 503: a 404 is terminal at the seam, so it costs exactly
@@ -239,20 +239,20 @@ class TestCaching:
         from src.core.security.outbound_http import OutboundDeliveryFailed
 
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(404, body=b"nope")
-        ref = origin_ref(local_origin)
+        local_origin_tls.respond_with(404, body=b"nope")
+        ref = origin_ref(local_origin_tls)
 
         with pytest.raises(OutboundDeliveryFailed):
             await resolve_property_list(ref)
-        assert local_origin.hits == 1
+        assert local_origin_tls.hits == 1
 
-        local_origin.respond_with(
+        local_origin_tls.respond_with(
             200,
             body=property_list_body(domain_identifiers("success.com"), cache_valid_until=_future()),
         )
 
         assert await resolve_property_list(ref) == ["success.com"]
-        assert local_origin.hits == 2
+        assert local_origin_tls.hits == 2
 
 
 @contextmanager

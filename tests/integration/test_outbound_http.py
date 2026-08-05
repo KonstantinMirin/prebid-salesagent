@@ -90,16 +90,21 @@ def call_seam(seam_call: str, url: str, **kwargs: Any):
     return asyncio.run(seam.asend(url, **kwargs))
 
 
-def set_flags(monkeypatch, *, private: bool = False, insecure: bool = False) -> None:
-    """Set both escape hatches explicitly.
+def set_flags(monkeypatch, *, private: bool = False) -> None:
+    """Set the private-range escape hatch explicitly.
 
-    Always writing both — including the off case, as the literal ``"false"`` the
+    Always writing it — including the off case, as the literal ``"false"`` the
     repo's ``== "true"`` convention treats as off — pins the test against
-    ambient environment rather than assuming the variables are unset. The names
-    and literals come from :func:`tests.helpers.egress_hatches.egress_hatch_env`,
-    which is the only place in the test tree that spells them.
+    ambient environment rather than assuming the variable is unset. The name
+    and literal come from :func:`tests.helpers.egress_hatches.egress_hatch_env`,
+    which is the only place in the test tree that spells it.
+
+    There is no ``insecure`` parameter anymore (salesagent-e6h0): the scheme
+    gate is unconditional in production, so there is nothing left to relax —
+    a caller that used to pass ``insecure=True`` needed a real https origin
+    (see the ``local_origin_tls`` fixture) instead.
     """
-    for name, value in egress_hatch_env(private=private, insecure=insecure).items():
+    for name, value in egress_hatch_env(private=private).items():
         monkeypatch.setenv(name, value)
 
 
@@ -249,7 +254,7 @@ def was_refused_before_connecting(call) -> bool:
     ],
 )
 def test_non_https_scheme_is_refused_by_default(seam_call, url, monkeypatch):
-    """Anything that is not https:// is refused when ADCP_OUTBOUND_ALLOW_INSECURE is off.
+    """Anything that is not https:// is refused — unconditionally (salesagent-e6h0).
 
     ``example.com`` is a public address, so nothing but the scheme rule can be
     refusing these — that is what makes this a scheme test rather than a
@@ -287,22 +292,16 @@ def test_cloud_metadata_address_is_refused(seam_call, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 3. Escape hatches, graded one at a time
+# 3. The private-range escape hatch (salesagent-e6h0: the SCHEME hatch is gone
+#    entirely — https is required unconditionally, no flag relaxes it)
 #
 # Under default flags http://127.0.0.1:<port>/ is refused by BOTH the scheme
-# rule and the address rule, so a bare `raises` cannot say which one fired and a
-# both-flags-on success grades neither alone. One flag at a time fixes that.
+# rule (unconditionally) and the address rule, so a bare `raises` cannot say
+# which one fired. test_allow_private_alone_does_not_open_plain_http below
+# isolates the address rule alone, against a plain-http origin, and confirms
+# the scheme rule STILL refuses it — there is no flag combination left that
+# would make that assertion false.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_allow_insecure_alone_does_not_open_private_addresses(seam_call, monkeypatch, local_origin):
-    """ALLOW_INSECURE relaxes the scheme rule only — the address rule still refuses loopback."""
-    set_flags(monkeypatch, insecure=True)
-
-    assert_blocked(seam_call, f"{local_origin.base_url}/webhook")
-
-    assert local_origin.hits == 0
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
@@ -316,31 +315,9 @@ def test_allow_private_alone_does_not_open_plain_http(seam_call, monkeypatch, lo
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_both_flags_allow_plain_http_to_the_local_origin(seam_call, monkeypatch, local_origin):
-    """With both hatches open the request is delivered, and the result carries the response."""
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.respond_with(200, body=b'{"ok": true}')
-
-    result = call_seam(seam_call, f"{local_origin.base_url}/webhook", json={"hello": "world"})
-
-    assert result.status_code == 200
-    assert result.json() == {"ok": True}
-    assert result.attempts == 1
-    assert result.duration_seconds >= 0
-    assert local_origin.hits == 1
-    assert local_origin.paths == ["/webhook"]
-    # The body has to be streamed so the size cap can be enforced while
-    # accumulating, and an exhausted stream makes `.content`/`.text` raise
-    # ResponseNotRead. Every migrating call site logs one of those, so the
-    # handed-back response must be readable like any other.
-    assert result.response.text == '{"ok": true}'
-    assert result.response.json() == {"ok": True}
-
-
-@pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_cloud_metadata_stays_refused_with_both_flags_on(seam_call, monkeypatch):
-    """Metadata blocking is unconditional — no flag combination reaches it."""
-    set_flags(monkeypatch, private=True, insecure=True)
+def test_cloud_metadata_stays_refused_with_the_private_hatch_open(seam_call, monkeypatch):
+    """Metadata blocking is unconditional — no flag reaches it, private-range hatch included."""
+    set_flags(monkeypatch, private=True)
 
     assert_blocked(seam_call, METADATA_URL)
 
@@ -351,7 +328,7 @@ def test_cloud_metadata_stays_refused_with_both_flags_on(seam_call, monkeypatch)
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_redirect_to_metadata_address_is_not_followed(seam_call, monkeypatch, local_origin):
+def test_redirect_to_metadata_address_is_not_followed(seam_call, monkeypatch, local_origin_tls):
     """A 302 towards the metadata address is returned, never chased.
 
     ``requests.Session.request`` defaults ``allow_redirects=True``, so the code
@@ -359,13 +336,13 @@ def test_redirect_to_metadata_address_is_not_followed(seam_call, monkeypatch, lo
     address unchecked. The exact hit count is the proof: one hit means the
     seam stopped at the redirect.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.redirect_to(METADATA_URL, status=302)
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.redirect_to(METADATA_URL, status=302)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.last_status == 302
-    assert local_origin.hits == 1, f"seam followed the redirect: {local_origin.requests}"
+    assert local_origin_tls.hits == 1, f"seam followed the redirect: {local_origin_tls.requests}"
 
 
 # ---------------------------------------------------------------------------
@@ -374,46 +351,46 @@ def test_redirect_to_metadata_address_is_not_followed(seam_call, monkeypatch, lo
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_server_error_is_retried_to_max_attempts(seam_call, monkeypatch, local_origin):
+def test_server_error_is_retried_to_max_attempts(seam_call, monkeypatch, local_origin_tls):
     """A 5xx is retried up to max_attempts, then reported as a delivery failure."""
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     fast_backoff(monkeypatch)
-    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.attempts == 3
     assert error.last_status == 503
-    assert local_origin.hits == 3
+    assert local_origin_tls.hits == 3
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_client_error_is_terminal_and_not_retried(seam_call, monkeypatch, local_origin):
+def test_client_error_is_terminal_and_not_retried(seam_call, monkeypatch, local_origin_tls):
     """A 4xx fails on the first attempt — retrying a rejected request only doubles the damage."""
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.respond_with(404, body=b'{"error": "no such hook"}')
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(404, body=b'{"error": "no such hook"}')
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.attempts == 1
     assert error.last_status == 404
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_max_attempts_one_sends_exactly_once(seam_call, monkeypatch, local_origin):
+def test_max_attempts_one_sends_exactly_once(seam_call, monkeypatch, local_origin_tls):
     """max_attempts counts TOTAL attempts, not retries after the first."""
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.respond_with(503)
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(503)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=1)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=1)
 
     assert error.attempts == 1
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_retry_recovers_when_the_origin_recovers(seam_call, monkeypatch, local_origin):
+def test_retry_recovers_when_the_origin_recovers(seam_call, monkeypatch, local_origin_tls):
     """503, 503, 200 succeeds on the third attempt — a retry that actually recovers.
 
     Every other retry case here programs a failure that never clears, so all of
@@ -423,9 +400,9 @@ def test_retry_recovers_when_the_origin_recovers(seam_call, monkeypatch, local_o
     The origin serves the sequence itself, so the recovery is observed on the
     wire rather than staged by a mock's ``side_effect`` list.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     fast_backoff(monkeypatch)
-    local_origin.respond_in_sequence(
+    local_origin_tls.respond_in_sequence(
         [
             (503, b'{"error": "unavailable"}'),
             (503, b'{"error": "still unavailable"}'),
@@ -433,16 +410,16 @@ def test_retry_recovers_when_the_origin_recovers(seam_call, monkeypatch, local_o
         ]
     )
 
-    result = call_seam(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    result = call_seam(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert result.status_code == 200
     assert result.json() == {"ok": True}
     assert result.attempts == 3
-    assert local_origin.hits == 3
+    assert local_origin_tls.hits == 3
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkeypatch, local_origin):
+def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkeypatch, local_origin_tls):
     """A queue shorter than the attempt count keeps answering with its final entry.
 
     This pins the origin's own contract, which the recovery case above depends
@@ -451,15 +428,15 @@ def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkey
     report the SECOND entry's status, not the first and not a queue-exhausted
     error.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     fast_backoff(monkeypatch)
-    local_origin.respond_in_sequence([(429, b'{"error": "slow down"}'), (503, b'{"error": "unavailable"}')])
+    local_origin_tls.respond_in_sequence([(429, b'{"error": "slow down"}'), (503, b'{"error": "unavailable"}')])
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert error.attempts == 4
     assert error.last_status == 503
-    assert local_origin.hits == 4
+    assert local_origin_tls.hits == 4
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +463,7 @@ def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkey
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_backoff_schedule_is_br_rule_029_by_default(seam_call, monkeypatch, local_origin):
+def test_backoff_schedule_is_br_rule_029_by_default(seam_call, monkeypatch, local_origin_tls):
     """With no knob set, the seam waits BR-RULE-029's 1s, 2s, 4s — each randomised.
 
     ``jitter=None`` is the grader's live-jitter mode: every delay must land in
@@ -499,18 +476,18 @@ def test_backoff_schedule_is_br_rule_029_by_default(seam_call, monkeypatch, loca
     host ``pytest`` inherits the whole environ, and an ambient value here would
     turn a passing default into a silently unrelated assertion.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
-    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
     durations = record_sleeps(monkeypatch, seam_call)
 
-    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert_backoff_schedule(durations, jitter=None)
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_backoff_draws_one_uniform_0_1_jitter_per_sleep(seam_call, monkeypatch, local_origin):
+def test_backoff_draws_one_uniform_0_1_jitter_per_sleep(seam_call, monkeypatch, local_origin_tls):
     """Each delay is its base PLUS one ``uniform(0, 1)`` draw — additive, once per sleep.
 
     Pinning the draw turns the window check above into an exact one, so a
@@ -527,13 +504,13 @@ def test_backoff_draws_one_uniform_0_1_jitter_per_sleep(seam_call, monkeypatch, 
     * additive, not multiplicative — ``base + pinned``, which is what the UC-004
       step's ``_pinned_jitter`` grading requires of production.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
-    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
     durations = record_sleeps(monkeypatch, seam_call)
     draws = pin_jitter(monkeypatch, 0.25)
 
-    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert_backoff_schedule(durations, jitter=0.25)
     assert draws == [(0, 1), (0, 1), (0, 1)], (
@@ -542,7 +519,7 @@ def test_backoff_draws_one_uniform_0_1_jitter_per_sleep(seam_call, monkeypatch, 
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_backoff_base_env_knob_moves_the_base_and_nothing_else(seam_call, monkeypatch, local_origin):
+def test_backoff_base_env_knob_moves_the_base_and_nothing_else(seam_call, monkeypatch, local_origin_tls):
     """The knob scales the base; the doubling and the jitter term are untouched.
 
     This case grades the KNOB, not the rule — the rule is graded two cases above,
@@ -554,13 +531,13 @@ def test_backoff_base_env_knob_moves_the_base_and_nothing_else(seam_call, monkey
     unpinned ``uniform(0, 1)`` dwarfs a 10ms base, and asserting on the sum would
     then be an assertion about the draw, not about the knob.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.01")
-    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.005)
 
-    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert durations == pytest.approx([0.015, 0.025, 0.045]), (
         f"expected base 0.01 doubled per attempt plus a pinned 0.005 jitter, got {durations}"
@@ -570,7 +547,7 @@ def test_backoff_base_env_knob_moves_the_base_and_nothing_else(seam_call, monkey
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
 @pytest.mark.parametrize("bad_value", ["abc", "-1", "0"])
 def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
-    seam_call, bad_value, monkeypatch, local_origin, caplog
+    seam_call, bad_value, monkeypatch, local_origin_tls, caplog
 ):
     """A knob value that is not a strictly positive number is ignored, loudly.
 
@@ -587,14 +564,14 @@ def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
     The warning must name the variable — an operator who cannot see which knob
     was ignored cannot fix it.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, bad_value)
-    local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.25)
 
     with caplog.at_level(logging.WARNING, logger=SEAM_LOGGER):
-        assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+        assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert_backoff_schedule(durations, jitter=0.25)
 
@@ -616,7 +593,7 @@ def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypatch, local_origin):
+def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypatch, local_origin_tls):
     """A stalled origin trips the per-request timeout, is retried, then fails typed.
 
     ``last_status`` is None because there was never a response to read a status
@@ -624,24 +601,24 @@ def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypa
     call site would have to keep its own ``except httpx...`` — which is the
     duplication the seam exists to delete.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     fast_backoff(monkeypatch)
-    local_origin.delay(2.0)
+    local_origin_tls.delay(2.0)
 
     error = assert_delivery_failed(
         seam_call,
-        f"{local_origin.base_url}/webhook",
+        f"{local_origin_tls.base_url}/webhook",
         timeout=0.5,
         max_attempts=2,
     )
 
     assert error.attempts == 2
     assert error.last_status is None
-    assert local_origin.hits == 2
+    assert local_origin_tls.hits == 2
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call, monkeypatch, local_origin):
+def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call, monkeypatch, local_origin_tls):
     """An origin that hangs up mid-exchange is a retryable transport failure, not a leak.
 
     The origin accepts the request, records the hit, and closes the socket
@@ -655,15 +632,15 @@ def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call
     response to read a status from — and the raw httpx error must not escape,
     or every migrated call site keeps its own ``except httpx...``.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     fast_backoff(monkeypatch)
-    local_origin.close_without_responding()
+    local_origin_tls.close_without_responding()
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
     assert error.attempts == 2
     assert error.last_status is None
-    assert local_origin.hits == 2
+    assert local_origin_tls.hits == 2
 
 
 # ---------------------------------------------------------------------------
@@ -672,7 +649,7 @@ def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_oversized_response_body_is_refused_and_not_retried(seam_call, monkeypatch, local_origin):
+def test_oversized_response_body_is_refused_and_not_retried(seam_call, monkeypatch, local_origin_tls):
     """A chunked body past the cap aborts the read; retrying it would only re-read it.
 
     httpx applies no default body limit, so an unbounded counterparty response
@@ -680,14 +657,14 @@ def test_oversized_response_body_is_refused_and_not_retried(seam_call, monkeypat
     so the cap has to be enforced while accumulating rather than by reading a
     declared length.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     cap = _seam()._MAX_RESPONSE_BYTES
-    local_origin.respond_chunked(cap + 1, chunk_size=64 * 1024)
+    local_origin_tls.respond_chunked(cap + 1, chunk_size=64 * 1024)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.attempts == 1
-    assert local_origin.hits == 1
+    assert local_origin_tls.hits == 1
 
 
 # ---------------------------------------------------------------------------
@@ -836,12 +813,12 @@ def test_a_jsonpath_lite_field_is_carried(seam_call, monkeypatch):
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_delivery_failure_envelope_hides_the_origin_response(seam_call, monkeypatch, local_origin):
+def test_delivery_failure_envelope_hides_the_origin_response(seam_call, monkeypatch, local_origin_tls):
     """A failed fetch reports attempts and status — never the origin's body or address."""
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
     envelope = build_two_layer_error_envelope(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
@@ -849,19 +826,19 @@ def test_delivery_failure_envelope_hides_the_origin_response(seam_call, monkeypa
 
     serialized = json.dumps(envelope)
     assert "LEAKED-ORIGIN-BODY-MARKER" not in serialized
-    assert local_origin.host not in serialized
-    assert str(local_origin.port) not in serialized
+    assert local_origin_tls.host not in serialized
+    assert str(local_origin_tls.port) not in serialized
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_transport_failure_envelope_hides_the_httpx_error(seam_call, monkeypatch, local_origin):
+def test_transport_failure_envelope_hides_the_httpx_error(seam_call, monkeypatch, local_origin_tls):
     """A timeout reports last_status=None — never the httpx error string, which names the address."""
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.delay(2.0)
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.delay(2.0)
 
     error = assert_delivery_failed(
         seam_call,
-        f"{local_origin.base_url}/webhook",
+        f"{local_origin_tls.base_url}/webhook",
         timeout=0.5,
         max_attempts=1,
     )
@@ -871,14 +848,14 @@ def test_transport_failure_envelope_hides_the_httpx_error(seam_call, monkeypatch
     assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
 
     serialized = json.dumps(envelope)
-    assert local_origin.host not in serialized
-    assert str(local_origin.port) not in serialized
+    assert local_origin_tls.host not in serialized
+    assert str(local_origin_tls.port) not in serialized
     for term in ("timeout", "timed out", "readtimeout", "connecterror"):
         assert term not in serialized.lower(), f"httpx internals {term!r} leaked into {envelope}"
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_call, monkeypatch, local_origin):
+def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_call, monkeypatch, local_origin_tls):
     """A hang-up and a timeout produce the same envelope — which failure mode it was stays inside.
 
     Both are ``last_status: None`` after the same attempt count. Telling the two
@@ -888,18 +865,18 @@ def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_c
     "Server disconnected without sending a response", which names the failure
     mode outright and must not reach the wire.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.close_without_responding()
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.close_without_responding()
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=1)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=1)
     envelope = build_two_layer_error_envelope(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
 
     serialized = json.dumps(envelope)
-    assert local_origin.host not in serialized
-    assert str(local_origin.port) not in serialized
+    assert local_origin_tls.host not in serialized
+    assert str(local_origin_tls.port) not in serialized
     for term in ("disconnect", "remoteprotocolerror", "protocol", "without sending"):
         assert term not in serialized.lower(), f"httpx internals {term!r} leaked into {envelope}"
 
@@ -927,13 +904,12 @@ PRE_CONNECTION_CASES = {
     "https-unresolvable-host": (lambda origin: "https://no-such-host.invalid/webhook", {}),
     "https-loopback": (lambda origin: f"https://127.0.0.1:{origin.port}/", {}),
     "cloud-metadata": (lambda origin: METADATA_URL, {}),
-    "cloud-metadata-both-hatches": (lambda origin: METADATA_URL, {"private": True, "insecure": True}),
-    "http-loopback-insecure-hatch-only": (lambda origin: f"{origin.base_url}/webhook", {"insecure": True}),
+    "cloud-metadata-private-hatch-open": (lambda origin: METADATA_URL, {"private": True}),
     "http-loopback-private-hatch-only": (lambda origin: f"{origin.base_url}/webhook", {"private": True}),
-    "http-loopback-both-hatches": (
-        lambda origin: f"{origin.base_url}/webhook",
-        {"private": True, "insecure": True},
-    ),
+    # "http-loopback-insecure-hatch-only" and "http-loopback-both-hatches" were
+    # deleted (salesagent-e6h0): there is no insecure hatch left to construct
+    # either combination with, and the latter collapsed into an exact duplicate
+    # of "http-loopback-private-hatch-only" the moment it did.
 }
 
 
@@ -973,7 +949,7 @@ def test_validate_url_reaches_the_same_verdict_as_the_send_path(seam_call, case_
     )
 
 
-def test_validate_url_accepts_a_reachable_destination_without_reaching_it(monkeypatch, local_origin):
+def test_validate_url_accepts_a_reachable_destination_without_reaching_it(monkeypatch, local_origin_tls):
     """An acceptable URL passes validation, returns nothing, and the origin never hears about it.
 
     Returning None rather than the resolved address is deliberate. Handing a
@@ -982,11 +958,11 @@ def test_validate_url_accepts_a_reachable_destination_without_reaching_it(monkey
     DNS-rebinding window the SDK's resolve-once-then-pin closes *within* one
     request. The later fetch has to resolve again through its own send call.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
 
-    assert _seam().validate_url(f"{local_origin.base_url}/webhook") is None
+    assert _seam().validate_url(f"{local_origin_tls.base_url}/webhook") is None
 
-    assert local_origin.hits == 0, f"validate_url opened a connection: {local_origin.requests}"
+    assert local_origin_tls.hits == 0, f"validate_url opened a connection: {local_origin_tls.requests}"
 
 
 def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason(monkeypatch):
@@ -1055,7 +1031,7 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_retry_after_zero_does_not_shorten_the_br_rule_029_floor(seam_call, monkeypatch, local_origin):
+def test_retry_after_zero_does_not_shorten_the_br_rule_029_floor(seam_call, monkeypatch, local_origin_tls):
     """An origin asking for no wait at all still gets BR-RULE-029's 1s/2s/4s.
 
     This is the floor half of the asymmetry, and it is the half an origin can
@@ -1067,19 +1043,19 @@ def test_retry_after_zero_does_not_shorten_the_br_rule_029_floor(seam_call, monk
     UC-004 steps use. Re-encoding 1/2/4 here would be the drift that grader
     exists to prevent.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
-    rate_limited(local_origin, retry_after="0")
+    rate_limited(local_origin_tls, retry_after="0")
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.25)
 
-    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=4)
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert_backoff_schedule(durations, jitter=0.25)
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_retry_after_lengthens_a_wait_the_geometric_base_would_have_cut_short(seam_call, monkeypatch, local_origin):
+def test_retry_after_lengthens_a_wait_the_geometric_base_would_have_cut_short(seam_call, monkeypatch, local_origin_tls):
     """A Retry-After above the geometric wait is what the seam actually waits.
 
     The other half of the asymmetry: when the origin asks for longer than the
@@ -1090,13 +1066,13 @@ def test_retry_after_lengthens_a_wait_the_geometric_base_would_have_cut_short(se
     produces the observed delays: at a 0.001s base every wait below is three
     orders of magnitude above anything the schedule would have chosen.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    rate_limited(local_origin, retry_after="5")
+    rate_limited(local_origin_tls, retry_after="5")
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert durations == pytest.approx([5.0, 5.0]), (
         f"expected both waits to be the origin's 5s Retry-After, got {durations} "
@@ -1105,7 +1081,7 @@ def test_retry_after_lengthens_a_wait_the_geometric_base_would_have_cut_short(se
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_an_enormous_retry_after_cannot_pin_the_caller(seam_call, monkeypatch, local_origin):
+def test_an_enormous_retry_after_cannot_pin_the_caller(seam_call, monkeypatch, local_origin_tls):
     """``Retry-After: 3600`` is honoured only up to the seam's ceiling.
 
     Honouring a counterparty's number without a cap hands it a lever to hold a
@@ -1114,13 +1090,13 @@ def test_an_enormous_retry_after_cannot_pin_the_caller(seam_call, monkeypatch, l
     seller may SEND, and 3600 seconds of a held task is exactly the outcome this
     refuses.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    rate_limited(local_origin, retry_after=str(_SPEC_RETRY_AFTER_MAX))
+    rate_limited(local_origin_tls, retry_after=str(_SPEC_RETRY_AFTER_MAX))
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
     assert durations == pytest.approx([honoured_ceiling()]), (
         f"expected the wait to stop at the seam's honoured ceiling {honoured_ceiling()}s, got {durations}"
@@ -1128,7 +1104,7 @@ def test_an_enormous_retry_after_cannot_pin_the_caller(seam_call, monkeypatch, l
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_the_retry_after_ceiling_never_cuts_the_geometric_wait(seam_call, monkeypatch, local_origin):
+def test_the_retry_after_ceiling_never_cuts_the_geometric_wait(seam_call, monkeypatch, local_origin_tls):
     """At ``max_attempts=5`` every geometric wait survives the ceiling intact.
 
     This is the case that grades the FORM of the wait computation rather than
@@ -1147,14 +1123,14 @@ def test_the_retry_after_ceiling_never_cuts_the_geometric_wait(seam_call, monkey
     anyone lowers the ceiling or raises the attempts. The form has to be right;
     the arithmetic at today's numbers is not the invariant.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     base = honoured_ceiling() * 2
     monkeypatch.setenv(BACKOFF_BASE_ENV, str(base))
-    rate_limited(local_origin, retry_after=str(int(honoured_ceiling()) + 1))
+    rate_limited(local_origin_tls, retry_after=str(int(honoured_ceiling()) + 1))
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=5)
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=5)
 
     expected = [base * (2**step) for step in range(4)]
     assert durations == pytest.approx(expected), (
@@ -1176,7 +1152,7 @@ def test_the_retry_after_ceiling_never_cuts_the_geometric_wait(seam_call, monkey
         ("99999", _SPEC_RETRY_AFTER_MAX),
     ],
 )
-def test_the_carried_retry_after_is_clamped_to_the_spec_bound(seam_call, sent, carried, monkeypatch, local_origin):
+def test_the_carried_retry_after_is_clamped_to_the_spec_bound(seam_call, sent, carried, monkeypatch, local_origin_tls):
     """What the buyer receives is clamped to [1, 3600]; what the seam waits is not.
 
     ``core/error.json`` @3.1.1: ``retry_after`` is ``"type": "number"``,
@@ -1188,13 +1164,13 @@ def test_the_carried_retry_after_is_clamped_to_the_spec_bound(seam_call, sent, c
     could not answer "come straight back" and every case in this section would
     burn a second of real time it cannot get back.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    rate_limited(local_origin, retry_after=sent)
+    rate_limited(local_origin_tls, retry_after=sent)
     record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
     assert error.retry_after == carried, (
         f"origin sent Retry-After: {sent}, buyer should receive {carried} "
@@ -1203,7 +1179,7 @@ def test_the_carried_retry_after_is_clamped_to_the_spec_bound(seam_call, sent, c
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeypatch, local_origin):
+def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeypatch, local_origin_tls):
     """The value reaches the buyer in the spec's own slot, on both envelope layers.
 
     ``core/error.json`` @3.1.1 puts ``retry_after`` at the TOP LEVEL of the error
@@ -1214,13 +1190,13 @@ def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeyp
     ``assert_envelope_shape`` checks ``field`` on both: pinned storyboards read
     each of them in the wild.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    rate_limited(local_origin, retry_after="30")
+    rate_limited(local_origin_tls, retry_after="30")
     record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
     envelope = build_two_layer_error_envelope(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
@@ -1232,7 +1208,7 @@ def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeyp
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch, local_origin):
+def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch, local_origin_tls):
     """``_DETAIL_KEYS`` is a promise about the buyer-visible payload — asserted, not commented.
 
     ``details`` rides to the buyer through ``build_two_layer_error_envelope``, so
@@ -1245,13 +1221,13 @@ def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch
     Graded on a 429 WITH a Retry-After, which is the answer most likely to leak a
     fourth key.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    rate_limited(local_origin, retry_after="30")
+    rate_limited(local_origin_tls, retry_after="30")
     record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
     envelope = build_two_layer_error_envelope(error)
 
     declared = _seam().OutboundDeliveryFailed._DETAIL_KEYS
@@ -1266,7 +1242,7 @@ def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after(seam_call, monkeypatch, local_origin):
+def test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after(seam_call, monkeypatch, local_origin_tls):
     """A hang-up on the last attempt reports no retry_after, not the previous answer's.
 
     ``last_status`` is already reset to None when an attempt dies at the
@@ -1275,9 +1251,9 @@ def test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after(sea
     the previous attempt's value would tell the buyer to wait 30 seconds because
     of a 429 that is no longer the failure being reported.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    local_origin.respond_in_sequence(
+    local_origin_tls.respond_in_sequence(
         [
             responds(429, body=_RATE_LIMITED_BODY, headers={"Retry-After": "30"}),
             hangs_up(),
@@ -1286,30 +1262,30 @@ def test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after(sea
     record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
     assert error.last_status is None
     assert error.retry_after is None, (
         f"the 429's Retry-After survived into a transport-level failure: {error.retry_after!r}"
     )
-    assert local_origin.hits == 2
+    assert local_origin_tls.hits == 2
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_a_rate_limit_without_the_header_carries_no_retry_after(seam_call, monkeypatch, local_origin):
+def test_a_rate_limit_without_the_header_carries_no_retry_after(seam_call, monkeypatch, local_origin_tls):
     """No header means no value — the seam does not invent one from its own schedule.
 
     The code this ticket deletes fell back to ``2 ** attempt`` when the header
     was absent, which handed the buyer a number the origin never said. An absent
     ``retry_after`` is honest: ``core/error.json`` makes it optional.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    rate_limited(local_origin)
+    rate_limited(local_origin_tls)
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
     envelope = build_two_layer_error_envelope(error)
 
     assert error.retry_after is None, f"a retry_after appeared with no Retry-After header: {error.retry_after!r}"
@@ -1321,7 +1297,7 @@ def test_a_rate_limit_without_the_header_carries_no_retry_after(seam_call, monke
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
 @pytest.mark.parametrize("header", ["Wed, 21 Oct 2026 07:28:00 GMT", "soon", ""])
-def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monkeypatch, local_origin):
+def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monkeypatch, local_origin_tls):
     """A date form, or junk, leaves the schedule alone instead of crashing the fetch.
 
     RFC 9110 allows delta-seconds OR an HTTP-date. The seam parses delta-seconds
@@ -1331,13 +1307,13 @@ def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monk
     date form raised ``ValueError`` out of an ``except httpx`` arm and crashed the
     fetch: this is a latent bug fix, not only a migration.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     monkeypatch.setenv(BACKOFF_BASE_ENV, "0.001")
-    rate_limited(local_origin, retry_after=header)
+    rate_limited(local_origin_tls, retry_after=header)
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.0)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
     assert error.retry_after is None, f"{header!r} was parsed into a retry_after: {error.retry_after!r}"
     assert durations == pytest.approx([0.001]), f"expected the plain geometric wait for {header!r}, got {durations}"
@@ -1367,24 +1343,24 @@ def _terminal_client_error_status():
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_a_4xx_the_seam_did_not_retry_reports_its_status(seam_call, monkeypatch, local_origin):
+def test_a_4xx_the_seam_did_not_retry_reports_its_status(seam_call, monkeypatch, local_origin_tls):
     """A 404 the seam gave up on after one attempt IS a terminal client error.
 
     ``attempts == 1`` is asserted alongside the predicate on purpose: it is what
     makes "will not retry" a true sentence about this failure rather than a
     guess, and it is the half a status-range test cannot see.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
-    local_origin.respond_with(404, body=b'{"error": "no such hook"}')
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(404, body=b'{"error": "no such hook"}')
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.attempts == 1, f"the seam retried a 404 {error.attempts} times"
     assert _terminal_client_error_status()(error) == 404
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_a_rate_limited_4xx_is_never_reported_as_terminal(seam_call, monkeypatch, local_origin):
+def test_a_rate_limited_4xx_is_never_reported_as_terminal(seam_call, monkeypatch, local_origin_tls):
     """A 429 is a 4xx the seam RETRIES, so it is not a terminal client error.
 
     This is the case a hand-written ``400 <= status < 500`` at a call site gets
@@ -1393,15 +1369,15 @@ def test_a_rate_limited_4xx_is_never_reported_as_terminal(seam_call, monkeypatch
     just attempted three times. The origin really answers 429 and the hit count
     really is 3, so the contradiction is observed, not assumed.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     fast_backoff(monkeypatch)
-    rate_limited(local_origin)
+    rate_limited(local_origin_tls)
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=3)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.last_status == 429
     assert error.attempts == 3
-    assert local_origin.hits == 3, "the seam did not actually retry the 429"
+    assert local_origin_tls.hits == 3, "the seam did not actually retry the 429"
     assert _terminal_client_error_status()(error) is None, (
         "a 429 the seam retried three times was reported as a terminal client error"
     )
@@ -1426,7 +1402,7 @@ def test_every_status_the_seam_retries_is_reported_as_not_terminal():
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
 def test_a_refusal_is_not_a_client_error(seam_call, monkeypatch):
     """A URL refused before connecting has no status to be terminal about."""
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
 
     error = assert_blocked(seam_call, METADATA_URL)
 
@@ -1434,17 +1410,17 @@ def test_a_refusal_is_not_a_client_error(seam_call, monkeypatch):
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
-def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypatch, local_origin):
+def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypatch, local_origin_tls):
     """A failure with no response at all reports no client error, rather than crashing.
 
     ``last_status`` is ``None`` here, which is the input a predicate written as
     a bare comparison raises ``TypeError`` on.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     fast_backoff(monkeypatch)
-    local_origin.close_without_responding()
+    local_origin_tls.close_without_responding()
 
-    error = assert_delivery_failed(seam_call, f"{local_origin.base_url}/webhook", max_attempts=2)
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
     assert error.last_status is None
     assert _terminal_client_error_status()(error) is None

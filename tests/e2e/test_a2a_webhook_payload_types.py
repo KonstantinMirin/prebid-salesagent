@@ -626,19 +626,29 @@ class TestProtocolWebhookWireFormat:
 
     @pytest.fixture(autouse=True)
     def _open_egress_hatches(self):
-        """Open both seam hatches: the callback is plain-http on loopback.
+        """Open the private-range hatch and trust the generated CA: the callback
+        is a real https://127.0.0.1 capture server now (salesagent-e6h0 widened
+        the webhook capture's TLS coverage to loopback addresses, matching the
+        generated CA's IP SAN).
 
-        These tests grade the WIRE FORMAT, not egress policy — the http://127.0.0.1
-        capture URL is incidental transport. Without the hatches the seam refuses
-        the scheme and the address before any payload reaches the wire, in exactly
-        the host-run posture (no compose env) this hermetic class runs in.
+        These tests grade the WIRE FORMAT, not egress policy — the loopback
+        capture URL is incidental transport. Without the private-range hatch
+        the seam refuses the address before any payload reaches the wire, in
+        exactly the host-run posture (no compose env) this hermetic class runs
+        in. There is no scheme hatch left to open — the capture genuinely
+        serves https now, so there is nothing to relax.
         """
         import os
         from unittest.mock import patch as mock_patch
 
         from tests.helpers.egress_hatches import egress_hatch_env
+        from tests.helpers.test_tls_material import load_gen_test_tls
 
-        with mock_patch.dict(os.environ, egress_hatch_env(private=True, insecure=True)):
+        gen_test_tls = load_gen_test_tls()
+        gen_test_tls.ensure_test_tls()
+        env = egress_hatch_env(private=True)
+        env["SSL_CERT_FILE"] = str(gen_test_tls.COMBINED_CERT)
+        with mock_patch.dict(os.environ, env):
             yield
 
     def _send_and_capture(self, payload) -> dict[str, Any]:

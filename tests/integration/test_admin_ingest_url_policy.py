@@ -137,7 +137,7 @@ def post_signals_agent(client, url: str):
     )
 
 
-ADMITTED_URL = "http://127.0.0.1:9999/agent"
+ADMITTED_URL = "https://127.0.0.1:9999/agent"
 
 
 def create_agent_through_the_add_form(client, env, monkeypatch) -> SignalsAgent:
@@ -148,7 +148,7 @@ def create_agent_through_the_add_form(client, env, monkeypatch) -> SignalsAgent:
     the seed only — every case that follows re-sets them for what it is
     actually grading.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     response = post_signals_agent(client, ADMITTED_URL)
     assert response.status_code == 302, "seeding the agent through the add form failed"
     agents = signals_agents_for(env)
@@ -191,7 +191,7 @@ def test_signals_agent_add_accepts_a_url_egress_policy_admits(authenticated_admi
     use a loopback address and stay entirely off the network: ``validate_url``
     connects to nothing, so no origin has to be listening on this port.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
 
     response = post_signals_agent(authenticated_admin_client, ADMITTED_URL)
 
@@ -373,12 +373,12 @@ def test_update_tenant_refuses_blocked_webhook_url_and_stores_nothing(
 
 def test_update_tenant_accepts_a_url_egress_policy_admits(management_api_client, seeded_tenant, monkeypatch):
     """A URL the policy admits is written through — the JSON path's positive control."""
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
 
     response = management_api_client.put(
         f"/api/v1/tenant-management/tenants/{TENANT_ID}",
         headers={"X-Tenant-Management-API-Key": API_KEY},
-        json={"slack_webhook_url": "http://127.0.0.1:9999/hook"},
+        json={"slack_webhook_url": ADMITTED_URL},
     )
 
     assert response.status_code == 200
@@ -386,7 +386,7 @@ def test_update_tenant_accepts_a_url_egress_policy_admits(management_api_client,
     session = seeded_tenant.get_session()
     session.rollback()
     tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).one()
-    assert tenant.slack_webhook_url == "http://127.0.0.1:9999/hook"
+    assert tenant.slack_webhook_url == ADMITTED_URL
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +460,7 @@ def create_creative_agent_through_the_add_form(client, env, monkeypatch) -> Crea
     row this application never wrote — same rationale as the signals-agent seed
     helper above.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
     response = post_creative_agent_add(client, ADMITTED_URL)
     assert response.status_code == 302, "seeding the creative agent through the add form failed"
     agents = creative_agents_for(env)
@@ -483,7 +483,7 @@ def test_creative_agent_add_refuses_and_stores_nothing(url, authenticated_admin_
 
 def test_creative_agent_add_accepts_a_url_egress_policy_admits(authenticated_admin_client, seeded_tenant, monkeypatch):
     """A URL the policy admits is stored — the add form's positive control."""
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
 
     response = post_creative_agent_add(authenticated_admin_client, ADMITTED_URL)
 
@@ -555,7 +555,7 @@ def test_update_slack_refuses_blocked_webhook_url_and_stores_nothing(
 
 def test_update_slack_accepts_a_url_egress_policy_admits(authenticated_admin_client, seeded_tenant, monkeypatch):
     """A URL the policy admits is stored — the Slack form's positive control."""
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
 
     response = authenticated_admin_client.post(
         f"/tenant/{TENANT_ID}/settings/slack",

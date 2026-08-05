@@ -96,10 +96,12 @@ class TestSaveConfig:
     def test_saves_config_encrypts_secret(self, client, factory_session, monkeypatch):
         from tests.integration.test_outbound_http import set_flags
 
-        # A loopback URL, hatches open: this exercises the ingest-time egress
-        # check added for discovery_url without depending on real DNS to an
-        # actual internet host (the check now resolves the hostname).
-        set_flags(monkeypatch, private=True, insecure=True)
+        # A loopback URL, private-range hatch open: this exercises the
+        # ingest-time egress check added for discovery_url without depending
+        # on real DNS to an actual internet host (the check now resolves the
+        # hostname). https, not http — the seam requires it unconditionally
+        # now (salesagent-e6h0); no network dial happens here regardless.
+        set_flags(monkeypatch, private=True)
         tenant = TenantFactory()
         _auth_session(client, tenant.tenant_id)
 
@@ -109,7 +111,7 @@ class TestSaveConfig:
                 "provider": "google",
                 "client_id": "new-client-id.apps.googleusercontent.com",
                 "client_secret": "brand-new-secret-value",
-                "discovery_url": "http://127.0.0.1:9999/.well-known/openid-configuration",
+                "discovery_url": "https://127.0.0.1:9999/.well-known/openid-configuration",
                 "scopes": "openid email profile",
             },
         )

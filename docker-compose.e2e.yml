@@ -58,49 +58,44 @@ services:
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
-      # ─── Outbound egress escape hatches — TEST STACK ONLY ──────────────────
+      # ─── Outbound egress escape hatch — TEST STACK ONLY ─────────────────────
       # The seam (src/core/security/outbound_http.py) refuses non-https schemes
-      # and reserved/private addresses. ADCP_OUTBOUND_ALLOW_PRIVATE stays open
-      # regardless: every origin on a compose network resolves to a private
-      # bridge address. ADCP_OUTBOUND_ALLOW_INSECURE, as of salesagent-40qh, is
-      # no longer load-bearing for the two origins that used to need it — the
-      # webhook capture (tests/e2e/_webhook_capture.py, now https in-process on
-      # the tests.adcp.test alias) and creative-agent (now https via
-      # tls-proxy-creative below) both verify over real TLS. It stays open here
-      # because the LocalOrigin-backed integration suites (test_mcp_client_egress.py
-      # and siblings) still dial plain http through this same seam with no
-      # per-test hatch of their own; salesagent-e6h0 tracks closing it.
+      # (unconditionally, no hatch — salesagent-e6h0) and reserved/private
+      # addresses (ADCP_OUTBOUND_ALLOW_PRIVATE, which stays open: every origin
+      # on a compose network resolves to a private bridge address). What used
+      # to also live here, ADCP_OUTBOUND_ALLOW_INSECURE, is DELETED — every
+      # outbound origin this server dials is TLS-fronted now: the webhook
+      # capture (tests/e2e/_webhook_capture.py, https in-process on the
+      # tests.adcp.test alias, salesagent-40qh) and creative-agent (https via
+      # tls-proxy-creative below, salesagent-40qh), and the LocalOrigin-backed
+      # integration suites migrated to the https local_origin_tls fixture
+      # (salesagent-e6h0). Nothing in this stack needs plaintext http anymore.
       #
       # Deliberately NOT set in docker-compose.yml: that is the developer stack
       # (CLAUDE.md: `docker compose up -d` -> localhost:8000) and is what gets
-      # copied into deployment templates. Opening the hatches there would disable
-      # egress policy for every developer and leak it into production configs.
+      # copied into deployment templates. Opening it there would disable egress
+      # policy for every developer and leak it into production configs.
       #
-      # CONSTRAINT this places on refusal testing: with both hatches open, NO
-      # e2e or bdd_e2e scenario running in this stack can grade a refusal — the
-      # seam will accept exactly the URLs it is supposed to reject. Refusal
-      # grading stays in-process (integration + BDD), where set_flags() in
-      # tests/integration/test_outbound_http.py monkeypatches both variables to
-      # the literal "false" per case and is therefore immune to this ambient env.
+      # CONSTRAINT this places on refusal testing: with the hatch open, NO e2e
+      # or bdd_e2e scenario running in this stack can grade a PRIVATE-RANGE
+      # refusal — the seam will accept exactly the addresses it is supposed to
+      # reject. That grading stays in-process (integration + BDD), where
+      # set_flags() in tests/integration/test_outbound_http.py monkeypatches the
+      # variable to the literal "false" per case and is therefore immune to
+      # this ambient env. SCHEME refusal, by contrast, is now gradeable in THIS
+      # stack too (there is no hatch left to disarm it) — see
+      # local-egress-ssrf-refusal.feature's plaintext-http scenario, still
+      # deliberately held to private=False / E2EUnsupportedSetup so its green
+      # mark stays meaningful (the private-range gate is a separate, still
+      # untestable-in-network claim).
       #
-      # That constraint is a property of BOTH hatches being open, not of the
-      # in-network stack, and it is narrower than it looks. Two refusal classes
-      # are or could be gradeable here (verified by probe, not inferred):
-      #   * CLOUD METADATA is refused UNCONDITIONALLY — the SDK's metadata check
-      #     runs before the allow_private gate, so 169.254.169.254 is rejected
-      #     even with ADCP_OUTBOUND_ALLOW_PRIVATE=true. Gradeable in this stack
-      #     TODAY; we simply do not yet have a scenario that does it.
-      #   * SCHEME becomes gradeable the moment ALLOW_INSECURE can be closed,
-      #     which needs a real https origin on the compose network. PR #1757
-      #     adds exactly that (an ADDITIVE second nginx listener on :8443 at the
-      #     dotted name proxy.adcp.test, with a generated private CA). Once it
-      #     merges, this stack can drop ALLOW_INSECURE and grade http refusal
-      #     end to end through nginx.
-      # What can NEVER be graded in-network is the general private-range refusal:
-      # every origin on a compose network resolves to a bridge address, so
-      # ALLOW_PRIVATE has to stay open regardless.
+      # CLOUD METADATA is refused UNCONDITIONALLY regardless of any hatch — the
+      # SDK's metadata check runs before the allow_private gate, so
+      # 169.254.169.254 is rejected even with ADCP_OUTBOUND_ALLOW_PRIVATE=true.
+      # What can NEVER be graded in-network is the general private-range
+      # refusal: every origin on a compose network resolves to a bridge
+      # address, so ALLOW_PRIVATE has to stay open regardless.
       ADCP_OUTBOUND_ALLOW_PRIVATE: "true"
-      ADCP_OUTBOUND_ALLOW_INSECURE: "true"
       # Trust anchor for the generated private CA (scripts/dev/gen_test_tls.py,
       # salesagent-tgzb). The seam's TLS client (adcp.signing's
       # ip_pinned_transport) builds a bare ssl.create_default_context(), which
@@ -118,8 +113,7 @@ services:
       # alias has nothing to route to and the server calls the LIVE public host,
       # which rate-limits under CI load (salesagent-9qe2). The runner service
       # already sets the same value for the direct integration tests.
-      # https, via the tls-proxy-creative front below (salesagent-40qh) — no
-      # longer needs ADCP_OUTBOUND_ALLOW_INSECURE open for this origin.
+      # https, via the tls-proxy-creative front below (salesagent-40qh).
       CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
       CREATE_DEMO_TENANT: "true"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
@@ -285,8 +279,7 @@ services:
       # 'host.docker.internal' in tests/e2e/_webhook_capture.py; the server
       # delivers the registered hostname verbatim. Dotted (not bare `tests`)
       # so it falls under the generated CA's `*.adcp.test` wildcard SAN — the
-      # webhook capture serves TLS in-process on this name (salesagent-40qh),
-      # no longer needing ADCP_OUTBOUND_ALLOW_INSECURE for this origin.
+      # webhook capture serves TLS in-process on this name (salesagent-40qh).
       ADCP_WEBHOOK_HOST: tests.adcp.test
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
@@ -328,22 +321,22 @@ services:
       PYTEST_XDIST_AUTO_NUM_WORKERS: "${PYTEST_XDIST_AUTO_NUM_WORKERS:-1}"
       ADCP_TESTING: "true"
       ADCP_AUTH_TEST_MODE: "true"
-      # ─── Outbound egress escape hatches — TEST STACK ONLY ──────────────────
+      # ─── Outbound egress escape hatch — TEST STACK ONLY ─────────────────────
       # Same reason as the adcp-server entry above, for the calls the RUNNER
-      # makes itself: http://proxy:8000 (E2E_BASE_URL, the e2e_rest transport —
-      # dialed with a raw httpx client, tests/harness/dispatchers.py, NOT through
-      # this seam, so ALLOW_INSECURE is not actually what makes that one work;
-      # it stays open here for the LocalOrigin-backed integration suites that DO
-      # dial through the seam without their own per-test hatch). The
-      # creative-agent origin (CREATIVE_AGENT_URL, the live-agent integration
-      # tests) no longer needs this: it is https via tls-proxy-creative
-      # (salesagent-40qh). tox only forwards these to pytest because they are
-      # listed in tox.ini pass_env. See the adcp-server entry for why
-      # docker-compose.yml is left alone, and for the constraint this places on
-      # refusal grading (it cannot happen in this stack; it stays in-process via
-      # the set_flags monkeypatch).
+      # makes itself: http://proxy:8000 (E2E_BASE_URL, the e2e_rest transport)
+      # is dialed with a raw httpx client (tests/harness/dispatchers.py), NOT
+      # through this seam — this hatch is not what makes that one work. It
+      # stays open here for the LocalOrigin-backed integration suites that DO
+      # dial through the seam (now against the https local_origin_tls fixture,
+      # salesagent-e6h0, so it is the ADDRESS gate this opens, not scheme —
+      # there is no scheme hatch left anywhere). The creative-agent origin
+      # (CREATIVE_AGENT_URL) needs no hatch at all: it is https via
+      # tls-proxy-creative (salesagent-40qh). tox only forwards this to pytest
+      # because it is listed in tox.ini pass_env. See the adcp-server entry for
+      # why docker-compose.yml is left alone, and for the constraint this
+      # places on refusal grading (private-range refusal cannot happen in this
+      # stack; it stays in-process via the set_flags monkeypatch).
       ADCP_OUTBOUND_ALLOW_PRIVATE: "true"
-      ADCP_OUTBOUND_ALLOW_INSECURE: "true"
       # Same trust anchor as the adcp-server entry (combined-ca.pem, not ca.pem
       # alone — see that entry's comment) — this service also dials the
       # creative-agent https front directly (test_creative_agent_live.py), AND

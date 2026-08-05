@@ -69,19 +69,27 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
 def _tls_context_for(webhook_host: str):
     """A server-side TLS context for ``webhook_host``, or ``None`` if it can't verify.
 
-    Only a dotted ``*.adcp.test`` name is covered by the generated CA's wildcard
-    SAN (``scripts/dev/gen_test_tls.py``) — the default ``host.docker.internal``
-    host-run case is not, and gets no cert, so it keeps serving plain http exactly
-    as before. The in-network runner registers its callback host as
-    ``tests.adcp.test`` (docker-compose.e2e.yml), which is what turns this on:
-    the SAME generated leaf every other TLS front in this stack reuses, wrapped
-    around this receiver's own ephemeral socket in-process — no separate nginx
-    sidecar, because the port is only known once this server has already bound it
-    (salesagent-40qh).
+    Trusts exactly the names the generated CA's SAN actually covers
+    (``scripts/dev/gen_test_tls.py`` is the single source of that list — never
+    duplicated here): the ``*.adcp.test``/``*.localhost`` wildcards, the exact
+    DNS names (``localhost``, ``agent.localhost``, and — since salesagent-e6h0 —
+    ``host.docker.internal``, the host-run callback name), and the loopback IP
+    SANs. Any other host gets no cert and keeps serving plain http, unchanged.
+    The in-network runner registers its callback host as ``tests.adcp.test``
+    (docker-compose.e2e.yml); the host-run path (run_all_tests_host.sh) and the
+    loopback-explicit e2e callers (host='127.0.0.1') are now covered too. Every
+    covered host reuses the SAME generated leaf every other TLS front in this
+    stack reuses, wrapped around this receiver's own ephemeral socket in-process
+    — no separate nginx sidecar, because the port is only known once this
+    server has already bound it (salesagent-40qh).
     """
-    if not webhook_host.endswith(".adcp.test"):
-        return None
     gen_test_tls = load_gen_test_tls()
+    covered_exact = set(gen_test_tls.SAN_DNS_NAMES) | set(gen_test_tls.SAN_IP_ADDRESSES)
+    is_covered = webhook_host in covered_exact or any(
+        name.startswith("*.") and webhook_host.endswith(name[1:]) for name in gen_test_tls.SAN_DNS_NAMES
+    )
+    if not is_covered:
+        return None
     gen_test_tls.ensure_test_tls()
     return server_ssl_context(gen_test_tls)
 
@@ -104,9 +112,10 @@ def run_webhook_capture_server(
     the registered hostname verbatim. Pass an explicit host (e.g. '127.0.0.1')
     when the receiver is only reachable on loopback.
 
-    Serves https (real TLS, verification ON) when ``webhook_host`` is a dotted
-    ``*.adcp.test`` name the generated CA actually covers; plain http otherwise,
-    unchanged from before (salesagent-40qh).
+    Serves https (real TLS, verification ON) for every host the generated CA
+    covers — the ``*.adcp.test`` in-network alias, the loopback names/IPs, and
+    (since salesagent-e6h0) ``host.docker.internal`` itself; plain http only
+    for a genuinely uncovered host (salesagent-40qh, salesagent-e6h0).
 
     Yields ``{"url", "server", "received"}``. ``received`` is cleared on entry
     and exit so each test sees only its own captures.

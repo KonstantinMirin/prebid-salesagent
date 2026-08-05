@@ -41,17 +41,14 @@ from src.core.security import outbound_http
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from src.core.webhook_validator import (
-    WEBHOOK_SSRF_SUGGESTION,
-    WEBHOOK_SSRF_SUGGESTION_DEV,
-    reject_unsafe_webhook_registration_url,
-)
+from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION, reject_unsafe_webhook_registration_url
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
 from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import run_local_origin
+from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 
 _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
 
@@ -79,16 +76,16 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
 
 
 @contextlib.contextmanager
-def _egress_hatches(*, private: bool, insecure: bool) -> Iterator[None]:
-    """Pin BOTH outbound escape hatches for the block.
+def _egress_hatches(*, private: bool) -> Iterator[None]:
+    """Pin the private-range outbound escape hatch for the block.
 
-    A refusal case that leaves them ambient is graded by whichever gate the
-    surrounding shell happened to arm — ``run_all_tests_host.sh`` exports both
-    as true — so a test meaning "production posture" would silently grade
-    nothing. Same pair, same spelling, as ``LocalOriginMixin`` and the seam's
-    own suite.
+    A refusal case that leaves it ambient is graded by whichever gate the
+    surrounding shell happened to arm, so a test meaning "production posture"
+    would silently grade nothing. Same spelling as ``LocalOriginMixin`` and the
+    seam's own suite. There is no ``insecure`` hatch anymore (salesagent-e6h0):
+    the scheme gate is unconditional in production.
     """
-    with patch.dict(os.environ, egress_hatch_env(private=private, insecure=insecure)):
+    with patch.dict(os.environ, egress_hatch_env(private=private)):
         yield
 
 
@@ -156,17 +153,18 @@ def _minimal_create_request(**overrides):
 async def test_send_notification_rejects_metadata_url_without_post() -> None:
     """A cloud-metadata destination fails closed, with nothing put on the wire.
 
-    Graded with BOTH escape hatches OPEN, which is what makes the case about the
-    metadata blocklist and nothing else: with the hatches shut, a plain ``http://``
-    link-local URL is already refused by the seam's TLS rule and a green mark
-    would say nothing about the address. ``adcp.signing`` refuses
-    ``169.254.169.254`` unconditionally, hatches or not — the property
-    ``tests/integration/test_outbound_http.py::test_cloud_metadata_stays_refused_with_both_flags_on``
+    Graded with the private-range hatch OPEN, which is what makes the case
+    about the metadata blocklist and nothing else — a plain ``http://``
+    link-local URL is refused by the seam's scheme rule unconditionally now
+    (salesagent-e6h0), so this case would say nothing about the address if the
+    hatch were closed instead. ``adcp.signing`` refuses ``169.254.169.254``
+    unconditionally, hatch or not — the property
+    ``tests/integration/test_outbound_http.py::test_cloud_metadata_stays_refused_with_the_private_hatch_open``
     grades directly.
     """
     service = ProtocolWebhookService()
 
-    with _egress_hatches(private=True, insecure=True), _dispatched_hops() as hops:
+    with _egress_hatches(private=True), _dispatched_hops() as hops:
         sent = await service.send_notification(_config(_METADATA_URL), payload=_PAYLOAD, metadata=_METADATA)
 
     assert sent is False
@@ -189,7 +187,7 @@ async def test_send_notification_rejects_localhost_without_post() -> None:
     with run_local_origin(listen_host="localhost") as origin:
         origin.respond_with(200)
 
-        with _egress_hatches(private=False, insecure=False), _dispatched_hops() as hops:
+        with _egress_hatches(private=False), _dispatched_hops() as hops:
             sent = await service.send_notification(
                 _config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, metadata=_METADATA
             )
@@ -200,22 +198,27 @@ async def test_send_notification_rejects_localhost_without_post() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_notification_posts_when_url_is_public() -> None:
+async def test_send_notification_posts_when_url_is_public(monkeypatch) -> None:
     """A destination the seam permits is really POSTed to — body and headers included.
 
     Asserted against the bytes the origin received rather than against the
     arguments a transport mock was handed: the latter reads back the object the
-    caller passed and proves nothing crossed a socket. The escape hatches stand
-    in for "public" here because the only origin a unit test can really run
-    listens on loopback over plain HTTP; what the case grades is that a
-    destination the gate ALLOWS is dialled and served.
+    caller passed and proves nothing crossed a socket. The origin is served
+    over real TLS (salesagent-e6h0's ``local_origin_tls`` equivalent, inline
+    here since this file is tests/unit/) standing in for "public": the seam
+    requires https unconditionally now, so the only origin a unit test can
+    really run has to earn that scheme, not merely be waved through by a hatch.
+    What the case grades is that a destination the gate ALLOWS is dialled and served.
     """
     service = ProtocolWebhookService()
+    gen_test_tls = load_gen_test_tls()
+    gen_test_tls.ensure_test_tls()
+    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
 
-    with run_local_origin() as origin:
+    with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
         origin.respond_with(200)
 
-        with _egress_hatches(private=True, insecure=True):
+        with _egress_hatches(private=True):
             sent = await service.send_notification(
                 _config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, metadata=_METADATA
             )
@@ -231,7 +234,7 @@ async def test_send_notification_posts_when_url_is_public() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_notification_does_not_follow_redirect_to_metadata() -> None:
+async def test_send_notification_does_not_follow_redirect_to_metadata(monkeypatch) -> None:
     """A 302 towards link-local metadata is returned, never chased.
 
     The dispatch log is the proof, not the return value: were the redirect
@@ -242,15 +245,19 @@ async def test_send_notification_does_not_follow_redirect_to_metadata() -> None:
     naming ``169.254.169.254``.
 
     The hit count carries the other half: a 302 is terminal to the seam, so the
-    buyer's endpoint is asked exactly once.
+    buyer's endpoint is asked exactly once. The origin is served over real TLS
+    (salesagent-e6h0) since the seam requires https unconditionally now.
     """
     service = ProtocolWebhookService()
+    gen_test_tls = load_gen_test_tls()
+    gen_test_tls.ensure_test_tls()
+    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
 
-    with run_local_origin() as origin:
+    with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
         origin.redirect_to(_METADATA_URL, status=302)
         webhook_url = f"{origin.base_url}/webhook"
 
-        with _egress_hatches(private=True, insecure=True), _dispatched_hops() as hops:
+        with _egress_hatches(private=True), _dispatched_hops() as hops:
             sent = await service.send_notification(_config(webhook_url), payload=_PAYLOAD, metadata=_METADATA)
 
         assert sent is False
@@ -259,19 +266,14 @@ async def test_send_notification_does_not_follow_redirect_to_metadata() -> None:
 
 
 def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> None:
-    """The suggestion must match the scheme verdict — never the ambient posture.
+    """The suggestion is always the strict https wording — no ambient posture left to pick a different one.
 
-    Graded under BOTH hatch postures, set explicitly via ``_egress_hatches``:
-    an ambient ``ADCP_OUTBOUND_ALLOW_INSECURE`` would otherwise silently pick
-    one arm for us (salesagent-ql1f — the suggestion used to key on a separate
-    production/ADCP_TESTING check while the scheme decision had already moved
-    onto this hatch, so a hatch-closed non-production process rejected plain
-    http while still advising "http(s)"). ``https://`` on the URL itself keeps
-    the scheme fine under either posture, so both arms grade the same
-    hostname-blocklist refusal rather than one of them grading the scheme rule
-    instead.
+    salesagent-e6h0 deleted the scheme hatch entirely, so ``webhook_ssrf_suggestion()``
+    no longer has a second (dev) wording to select between — ``_require_https()``
+    is unconditionally ``True`` now. ``https://`` on the URL itself keeps the
+    scheme fine, so this grades the hostname-blocklist refusal, not the scheme rule.
     """
-    with _egress_hatches(private=False, insecure=False):
+    with _egress_hatches(private=False):
         with pytest.raises(AdCPValidationError) as exc_info:
             reject_unsafe_webhook_registration_url(
                 "https://metadata.google.internal/computeMetadata/v1/",
@@ -280,17 +282,6 @@ def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> Non
         assert exc_info.value.field == "reporting_webhook.url"
         assert "Invalid reporting_webhook.url" in exc_info.value.message
         assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION, "https is required, so the strict wording"
-        assert exc_info.value.recovery == "correctable"
-
-    with _egress_hatches(private=False, insecure=True):
-        with pytest.raises(AdCPValidationError) as exc_info:
-            reject_unsafe_webhook_registration_url(
-                "https://metadata.google.internal/computeMetadata/v1/",
-                field="reporting_webhook.url",
-            )
-        assert exc_info.value.field == "reporting_webhook.url"
-        assert "Invalid reporting_webhook.url" in exc_info.value.message
-        assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION_DEV, "the hatch is open, so the dev wording"
         assert exc_info.value.recovery == "correctable"
 
 

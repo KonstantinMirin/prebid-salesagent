@@ -24,11 +24,12 @@ intercepting nothing, so it was deleted. Any new outbound send goes through the
 seam — never a second copy of address policy here.
 
 The one thing this gate MUST NOT decide for itself is the scheme. That decision
-belongs to the seam (``_require_tls``), and this module reads the seam's own flag
-to make it — see :meth:`WebhookURLValidator._require_https`. An ingest gate that
-admitted a scheme the seam refuses would accept a buyer's webhook URL with a
-success envelope and then never deliver to it, which is the one failure mode the
-buyer cannot see or correct.
+belongs to the seam (``_require_tls``), which requires https unconditionally
+(salesagent-e6h0 deleted its escape hatch) — see
+:meth:`WebhookURLValidator._require_https`, which does the same. An ingest gate
+that admitted a scheme the seam refuses would accept a buyer's webhook URL with
+a success envelope and then never deliver to it, which is the one failure mode
+the buyer cannot see or correct.
 
 ``validate_webhook_task_type`` below is an unrelated concern (SDK payload enum
 coercion) that happens to live in this file.
@@ -45,16 +46,9 @@ from adcp.types import ContextObject, TaskType
 
 from src.core.exceptions import AdCPValidationError
 
-# The scheme decision is the SEAM's, not ours: importing its env-var name and
-# its truthiness helper (rather than restating either) is what makes ingest and
-# send unable to drift. Private names on purpose — this module is the seam's
-# ingest-side twin, not a third party reaching into it. There is no import
-# cycle: outbound_http imports only httpx, adcp.signing and src.core.exceptions.
-from src.core.security.outbound_http import _ALLOW_INSECURE_ENV, _env_flag
-
-# ``_scheme_error`` is imported (not restated) for the same reason as the two
-# names above: ``_maybe_allow_localhost`` must recognise a scheme refusal
-# without re-implementing the scheme rule, or the two copies can drift.
+# ``_scheme_error`` is imported (not restated): ``_maybe_allow_localhost`` must
+# recognise a scheme refusal without re-implementing the scheme rule, or the
+# two copies can drift.
 from src.core.security.url_validator import _scheme_error, check_url_ssrf
 
 # Fallback used when an action label is not a member of the SDK's closed
@@ -64,10 +58,6 @@ WEBHOOK_TASK_TYPE_FALLBACK = "update_media_buy"
 
 WEBHOOK_SSRF_SUGGESTION = (
     "Provide a public https webhook URL that does not target private, loopback, "
-    "link-local, CGNAT, multicast, or cloud-metadata hosts."
-)
-WEBHOOK_SSRF_SUGGESTION_DEV = (
-    "Provide a public http(s) webhook URL that does not target private, loopback, "
     "link-local, CGNAT, multicast, or cloud-metadata hosts."
 )
 
@@ -112,17 +102,14 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
 def webhook_ssrf_suggestion() -> str:
     """Buyer-facing suggestion for registration/outbound SSRF rejections.
 
-    Keyed on exactly the scheme verdict the registration gate itself uses
-    (:meth:`WebhookURLValidator._require_https`) — never on production/testing
-    posture directly — so the advice can never contradict the refusal it
-    accompanies. It used to key on a separate production/ADCP_TESTING check
-    (the deleted ``_strict_mode``) while the scheme decision had already moved
-    onto the seam's hatch, which let a hatch-closed non-production process
-    reject plain http while still advising "http(s)".
+    Always the strict https wording (salesagent-e6h0): there is no posture
+    left in which a plain-http webhook URL is ever admissible, so there is no
+    second wording to select between. It used to key on
+    :meth:`WebhookURLValidator._require_https`, which selected between this and
+    a now-deleted "http(s)" wording depending on the (now also deleted)
+    outbound scheme hatch.
     """
-    if WebhookURLValidator._require_https():
-        return WEBHOOK_SSRF_SUGGESTION
-    return WEBHOOK_SSRF_SUGGESTION_DEV
+    return WEBHOOK_SSRF_SUGGESTION
 
 
 def sanitize_webhook_url_for_log(url: str | None) -> str | None:
@@ -180,8 +167,9 @@ class WebhookURLValidator:
         Must NOT rescue a SCHEME refusal — ``_scheme_error`` is checked first
         and unconditionally blocks the rescue when it fires, which is what
         ``test_adcp_testing_localhost_allowance_does_not_reopen_plain_http``
-        pins: a loopback capture server still needs the insecure hatch open to
-        be reached over plain http, exactly as the seam requires.
+        pins: a loopback capture server must be reached over a REAL https URL
+        now (salesagent-e6h0 deleted the scheme hatch entirely — there is no
+        posture in which plain http is ever rescued).
         """
         if is_valid or not allow_localhost:
             return is_valid, error
@@ -201,26 +189,28 @@ class WebhookURLValidator:
 
     @staticmethod
     def _require_https() -> bool:
-        """HTTPS is required unless the outbound INSECURE hatch is open.
+        """HTTPS is required, unconditionally — no escape hatch (salesagent-e6h0).
 
-        Keyed on exactly the condition the send seam uses
-        (``src/core/security/outbound_http.py`` ``_require_tls``: https, or the
-        ``ADCP_OUTBOUND_ALLOW_INSECURE`` hatch), so the two gates cannot drift.
-        They used to: ingest required https only in production, so every
-        non-production and ADCP_TESTING process ACCEPTED a buyer's ``http://``
-        webhook URL at registration and the seam then refused it at every send —
-        a silent, permanent non-delivery the buyer was never told about, at the
-        one moment they could still fix the URL.
+        Kept as a method (not inlined at the 3 call sites — this one,
+        ``_maybe_allow_localhost``, and ``webhook_ssrf_suggestion``) so a
+        future second ingest gate has one place to ask, matching the send
+        seam's own unconditional rule
+        (``src/core/security/outbound_http.py`` ``_require_tls``). Ingest used
+        to require https only in production, so every non-production and
+        ADCP_TESTING process ACCEPTED a buyer's ``http://`` webhook URL at
+        registration and the seam then refused it at every send — a silent,
+        permanent non-delivery the buyer was never told about, at the one
+        moment they could still fix the URL.
 
-        This is the SCHEME decision only. The localhost/loopback allowance under
-        ``ADCP_TESTING`` is a separate concern and still keys off
-        :func:`_adcp_testing` (see ``_maybe_allow_localhost``): a capture server
-        on loopback still needs the hatch open to be reachable over plain http,
-        exactly as the seam requires.
+        This is the SCHEME decision only. The localhost/loopback allowance
+        under ``ADCP_TESTING`` is a separate concern and still keys off
+        :func:`_adcp_testing` (see ``_maybe_allow_localhost``): a capture
+        server on loopback must be reached over a real https URL now, exactly
+        as the seam requires.
 
         Must stay in sync with ``outbound_http._require_tls``.
         """
-        return not _env_flag(_ALLOW_INSECURE_ENV)
+        return True
 
     @classmethod
     def validate_webhook_url_registration(cls, url: str) -> tuple[bool, str]:

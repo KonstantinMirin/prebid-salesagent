@@ -135,17 +135,14 @@ class TestWebhookURLValidator:
         assert not is_valid
         assert "blocked" in error.lower()
 
-    @pytest.mark.parametrize("hatch_open", [True, False], ids=["hatch_open", "hatch_closed"])
-    def test_requires_http_or_https(self, monkeypatch, hatch_open):
-        """Should reject non-HTTP protocols — under either scheme posture.
+    def test_requires_http_or_https(self):
+        """Should reject non-HTTP protocols.
 
-        The hatch is set explicitly (both ways) because it selects the message:
-        open it and the validator is in "http or https" mode, close it and it is
-        in "HTTPS only" mode. A non-HTTP scheme is refused in both, which is what
-        this grades; leaving the flag ambient would grade whichever one the shell
-        happened to provide.
+        No hatch to parametrize over anymore (salesagent-e6h0 deleted the
+        scheme hatch entirely) — there is only one posture, https-required,
+        and ftp:// is refused under it exactly like every other posture that
+        used to exist.
         """
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true" if hatch_open else "false")
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("ftp://example.com/webhook")
         assert not is_valid
         assert "http" in error.lower()
@@ -199,20 +196,21 @@ class TestLocalhostAllowanceUnderTestingMode:
     fixture happened to leave behind, which is exactly how a gate control goes
     inert without anyone noticing.
 
-    The scheme hatch is opened because a loopback capture server is reached over
-    plain http; that is the same pairing the e2e stack runs
-    (``ADCP_OUTBOUND_ALLOW_INSECURE=true`` beside ``ADCP_TESTING=true``), and it
-    keeps this class grading the ADDRESS allowance rather than colliding with the
-    scheme gate graded below.
+    ``LOOPBACK_URLS`` are https (salesagent-e6h0): the scheme hatch this class
+    used to open no longer exists — ``_maybe_allow_localhost`` checks the
+    SCHEME first and refuses to rescue a scheme failure, so an e2e capture
+    server on loopback must register a REAL https URL now (matching
+    ``tests/e2e/_webhook_capture.py``'s own loopback-covered TLS front). This
+    class grades the ADDRESS allowance specifically, decoupled from scheme —
+    which colliding with the scheme gate would otherwise obscure.
     """
 
-    LOOPBACK_URLS = ["http://localhost:3001/webhook", "http://127.0.0.1:8080/webhook"]
+    LOOPBACK_URLS = ["https://localhost:3001/webhook", "https://127.0.0.1:8080/webhook"]
 
     @pytest.mark.parametrize("url", LOOPBACK_URLS)
     def test_loopback_refused_without_testing_mode(self, monkeypatch, url):
         """Without ADCP_TESTING a loopback URL is refused, allowance or not."""
         monkeypatch.delenv("ADCP_TESTING", raising=False)
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
 
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration(url)
 
@@ -228,7 +226,6 @@ class TestLocalhostAllowanceUnderTestingMode:
         branch would break only the e2e stack, far from the change that caused it.
         """
         monkeypatch.setenv("ADCP_TESTING", "true")
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
 
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration(url)
 
@@ -242,12 +239,12 @@ class TestLocalhostAllowanceUnderTestingMode:
         rescue re-derives loopback-ness structurally from the URL (see
         ``_maybe_allow_localhost``), so a 192.168/16 address — not loopback —
         must survive it. Without this, widening the rescue predicate would go
-        unnoticed.
+        unnoticed. https so the assertion below grades the ADDRESS message
+        specifically, not the (now unconditional) scheme refusal.
         """
         monkeypatch.setenv("ADCP_TESTING", "true")
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true")
 
-        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("http://192.168.1.1/webhook")
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://192.168.1.1/webhook")
 
         assert not is_valid, "the loopback allowance must not rescue a private-range address"
         assert error == "URL resolves to a restricted range."
@@ -257,17 +254,19 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
     """Ingest requires https on exactly the condition the SEND seam does.
 
     ``src/core/security/outbound_http.py`` ``_require_tls`` refuses anything but
-    ``https://`` unless ``ADCP_OUTBOUND_ALLOW_INSECURE`` is open. Ingest used to
-    require https only when ``is_production() and not ADCP_TESTING``, so in every
+    ``https://`` — unconditionally now (salesagent-e6h0 deleted the
+    ``ADCP_OUTBOUND_ALLOW_INSECURE`` hatch entirely). Ingest used to require
+    https only when ``is_production() and not ADCP_TESTING``, so in every
     non-production or ADCP_TESTING process a buyer's ``http://`` webhook URL was
     ACCEPTED at registration and then refused at every single send — a permanent,
     silent non-delivery, with no error at the one moment the buyer could have fixed
-    the URL. These cases pin the two gates to one condition.
+    the URL. These cases pin the two gates to one condition: always require https.
 
-    Every case sets the hatch EXPLICITLY, never relying on it being unset:
-    ``run_all_tests_host.sh`` exports ``ADCP_OUTBOUND_ALLOW_INSECURE=true`` and
-    ``tox.ini`` forwards it, so an ambient value would otherwise disarm the
-    rejection arms into a vacuous pass.
+    ``test_plain_http_accepted_when_hatch_open`` — the case whose entire premise
+    was "opening the hatch admits plain http" — is DELETED: that behaviour no
+    longer exists anywhere, in any posture. The remaining cases keep their real
+    assertions (http always rejected, https always accepted, ingest/seam still
+    agree) with the now-nonexistent hatch axis dropped from each parametrize grid.
     """
 
     HTTP_URL = "http://buyer.example.com/hook"
@@ -283,27 +282,22 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
         WebhookURLValidator.validate_webhook_url_registration,
     ]
 
-    @staticmethod
-    def _hatch(monkeypatch, *, open_: bool) -> None:
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_INSECURE", "true" if open_ else "false")
-
     @pytest.mark.parametrize("gate", _GATES, ids=lambda g: g.__name__)
     @pytest.mark.parametrize("environment", ["production", "development"])
     @pytest.mark.parametrize("adcp_testing", ["true", None], ids=["adcp_testing", "no_adcp_testing"])
-    def test_plain_http_rejected_when_hatch_closed(self, monkeypatch, gate, environment, adcp_testing):
-        """Plain http is refused in EVERY posture while the hatch is closed.
+    def test_plain_http_rejected_in_every_posture(self, monkeypatch, gate, environment, adcp_testing):
+        """Plain http is refused in EVERY posture — there is no hatch left to open it.
 
         Parametrised across ENVIRONMENT and ADCP_TESTING precisely because the
-        scheme verdict must no longer depend on either of them — that dependency
-        was the drift. ADCP_TESTING still buys a localhost/loopback allowance, but
-        it does not buy plaintext: the two concerns stay separate.
+        scheme verdict must not depend on either of them — that dependency was
+        the original drift. ADCP_TESTING still buys a localhost/loopback
+        allowance, but it does not buy plaintext: the two concerns stay separate.
         """
         monkeypatch.setenv("ENVIRONMENT", environment)
         if adcp_testing is None:
             monkeypatch.delenv("ADCP_TESTING", raising=False)
         else:
             monkeypatch.setenv("ADCP_TESTING", adcp_testing)
-        self._hatch(monkeypatch, open_=False)
 
         is_valid, error = gate(self.HTTP_URL)
 
@@ -316,11 +310,10 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
         ``ADCP_TESTING=true`` rescues a localhost/loopback ADDRESS verdict
         (``_maybe_allow_localhost``). It must not rescue the SCHEME verdict —
         collapsing the two would put http back in exactly the processes where
-        the old bug lived. A capture server on loopback needs the hatch open,
-        which is what the e2e stack sets.
+        the old bug lived. A capture server on loopback needs a real https URL
+        now (see ``tests.e2e._webhook_capture``'s loopback-covered TLS front).
         """
         monkeypatch.setenv("ADCP_TESTING", "true")
-        self._hatch(monkeypatch, open_=False)
 
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration("http://localhost:3001/hook")
 
@@ -328,29 +321,10 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
         assert "https" in error.lower()
 
     @pytest.mark.parametrize("environment", ["production", "development"])
-    def test_plain_http_accepted_when_hatch_open(self, monkeypatch, environment):
-        """The hatch — and only the hatch — admits plain http, production included.
-
-        The seam has no production carve-out either (``_require_tls`` reads the
-        flag and nothing else), so neither does this. The hatch is what the e2e
-        stack and ``run_all_tests_host.sh`` open for loopback capture servers.
-        """
+    def test_https_registration_accepted_in_every_posture(self, monkeypatch, environment):
+        """https is always admissible, in every posture — there is no hatch to relax or tighten it."""
         monkeypatch.setenv("ENVIRONMENT", environment)
         monkeypatch.delenv("ADCP_TESTING", raising=False)
-        self._hatch(monkeypatch, open_=True)
-
-        is_valid, error = WebhookURLValidator.validate_webhook_url_registration(self.HTTP_URL)
-
-        assert is_valid, f"hatch-open registration refused plain http: {error}"
-        assert error == ""
-
-    @pytest.mark.parametrize("hatch_open", [True, False], ids=["hatch_open", "hatch_closed"])
-    @pytest.mark.parametrize("environment", ["production", "development"])
-    def test_https_registration_accepted_in_every_posture(self, monkeypatch, environment, hatch_open):
-        """https is always admissible — the hatch relaxes, it never tightens."""
-        monkeypatch.setenv("ENVIRONMENT", environment)
-        monkeypatch.delenv("ADCP_TESTING", raising=False)
-        self._hatch(monkeypatch, open_=hatch_open)
 
         is_valid, error = WebhookURLValidator.validate_webhook_url_registration(self.HTTPS_URL)
 
@@ -360,10 +334,11 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
     def test_ingest_and_seam_agree_on_the_scheme_verdict(self, monkeypatch):
         """The two gates are graded against each other, not against a copy of the rule.
 
-        A restated env read in webhook_validator would satisfy every case above
-        and still drift the day the seam's rule changes. This one asks BOTH
+        A restated rule in webhook_validator would satisfy every case above and
+        still drift the day the seam's rule changes. This one asks BOTH
         implementations the same question and requires the same answer, so the
-        shared condition is a property under test rather than a comment.
+        shared condition is a property under test rather than a comment. No
+        hatch to loop over anymore — one posture, asked once.
         """
         from src.core.security.outbound_http import OutboundRequestBlocked, _require_tls
 
@@ -374,14 +349,11 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
                 return False
             return True
 
-        for hatch_open in (False, True):
-            self._hatch(monkeypatch, open_=hatch_open)
-            for url in (self.HTTP_URL, self.HTTPS_URL):
-                ingest_admits = WebhookURLValidator.validate_webhook_url_registration(url)[0]
-                assert ingest_admits == seam_admits(url), (
-                    f"ingest and seam disagree on {url} with hatch open={hatch_open}: "
-                    f"ingest={ingest_admits}, seam={seam_admits(url)}"
-                )
+        for url in (self.HTTP_URL, self.HTTPS_URL):
+            ingest_admits = WebhookURLValidator.validate_webhook_url_registration(url)[0]
+            assert ingest_admits == seam_admits(url), (
+                f"ingest and seam disagree on {url}: ingest={ingest_admits}, seam={seam_admits(url)}"
+            )
 
 
 class TestWebhookAuthenticator:

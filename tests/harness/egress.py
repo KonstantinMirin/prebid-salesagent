@@ -18,30 +18,31 @@ from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
 from tests.helpers.egress_hatches import egress_hatch_env
 
 
-def _egress_hatches_on_the_live_stack(self: EgressHatchMixin, *, private: bool, insecure: bool) -> None:
+def _egress_hatches_on_the_live_stack(self: EgressHatchMixin, *, private: bool) -> None:
     """Realize a hatch posture on the live e2e stack — whose posture is fixed, and open.
 
-    ``docker-compose.e2e.yml`` exports ``ADCP_OUTBOUND_ALLOW_PRIVATE=true`` and
-    ``ADCP_OUTBOUND_ALLOW_INSECURE=true`` on both the adcp-server (:81-82) and
-    the runner (:227-228), and the process making the outbound request is not
-    the process this test controls — so over e2e_rest the posture cannot be set
-    from here. "Both hatches open" is therefore ALREADY realized and asking for
-    it is a no-op; anything else has no surface at all and is declared
-    unrealizable rather than silently graded against the stack's own posture.
+    ``docker-compose.e2e.yml`` exports ``ADCP_OUTBOUND_ALLOW_PRIVATE=true`` on
+    both the adcp-server and the runner, and the process making the outbound
+    request is not the process this test controls — so over e2e_rest the
+    posture cannot be set from here. ``private=True`` is therefore ALREADY
+    realized and asking for it is a no-op; ``private=False`` has no surface at
+    all and is declared unrealizable rather than silently graded against the
+    stack's own posture.
 
-    That asymmetry is deliberate and is what makes the two refusal causes the
-    egress scenarios grade (a cloud-metadata address, an unresolvable host)
-    meaningful over e2e_rest: both are refused with the hatches WIDE OPEN, so
-    they are the only causes whose green mark over e2e_rest means the same
-    thing as in-process.
+    ``ADCP_OUTBOUND_ALLOW_INSECURE`` no longer exists anywhere in this stack
+    (salesagent-e6h0 deleted it — the outbound origins the server dials are all
+    https now). That asymmetry (private always open, scheme never relaxable) is
+    what makes the refusal causes the egress scenarios grade (a cloud-metadata
+    address, an unresolvable host) meaningful over e2e_rest: both are refused
+    with the private hatch WIDE OPEN, so they are the only causes whose green
+    mark over e2e_rest means the same thing as in-process.
     """
-    if private and insecure:
+    if private:
         return
     raise E2EUnsupportedSetup(
-        "docker-compose.e2e.yml opens both egress hatches for the test stack "
-        "(adcp-server :81-82, runner :227-228), and the server's environment is "
-        f"not settable from the test process: private={private}, insecure={insecure} "
-        "cannot be realized over e2e_rest."
+        "docker-compose.e2e.yml opens the private-range egress hatch for the "
+        "test stack, and the server's environment is not settable from the "
+        f"test process: private={private} cannot be realized over e2e_rest."
     )
 
 
@@ -55,19 +56,17 @@ class EgressHatchMixin:
     _patchers: list
 
     @realize_e2e(_egress_hatches_on_the_live_stack)
-    def set_egress_hatches(self, *, private: bool, insecure: bool) -> None:
-        """Pin BOTH outbound escape hatches for the lifetime of this env.
+    def set_egress_hatches(self, *, private: bool) -> None:
+        """Pin the private-range outbound escape hatch for the lifetime of this env.
 
         A refusal scenario that does not say which posture it runs under is
-        graded by a different gate in each environment — the reserved-range gate
-        under ``saci`` (hatches off), the metadata blocklist under
-        ``run_all_tests_host.sh`` (:110-111 exports both on) — for one green
-        mark. Saying it out loud makes the scenario name the gate it grades.
+        graded by a different gate in each environment. Saying it out loud
+        makes the scenario name the gate it grades.
 
         The patcher joins ``self._patchers``, so ``IntegrationEnv.__exit__``
         stops it with everything else and no scenario leaks a posture into the
         next one.
         """
-        patcher = patch.dict(os.environ, egress_hatch_env(private=private, insecure=insecure))
+        patcher = patch.dict(os.environ, egress_hatch_env(private=private))
         patcher.start()
         self._patchers.append(patcher)

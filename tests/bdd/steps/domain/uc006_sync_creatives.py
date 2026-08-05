@@ -35,8 +35,13 @@ from tests.factories.principal import PrincipalFactory
 # E2E format helpers — real creative agent data for Docker transport
 # ═══════════════════════════════════════════════════════════════════════
 
-# Docker's creative agent URL (internal to Docker network, used by the app container)
-_E2E_AGENT_URL = "http://creative-agent:8080/api/creative-agent"
+# Docker's creative agent URL (internal to Docker network, used by the app
+# container) — https via tls-proxy-creative (salesagent-40qh); the seam
+# requires https unconditionally now (salesagent-e6h0), so this stopped being
+# reachable at all once ADCP_OUTBOUND_ALLOW_INSECURE was deleted, and this
+# literal was the one thing in this file that was never caught by that
+# disease scan (it hardcodes a URL, not the flag itself).
+_E2E_AGENT_URL = "https://creative-agent.adcp.test:8443/api/creative-agent"
 # Real format that exists in Docker's creative agent catalog
 _E2E_FORMAT_ID = "display_300x250_image"
 

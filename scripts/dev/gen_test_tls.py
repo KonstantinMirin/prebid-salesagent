@@ -33,8 +33,12 @@ interpreter that has ``cryptography``, a direct dependency of this project).
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import fcntl
 import ipaddress
+import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +53,7 @@ CA_CERT = TLS_DIR / "ca.pem"
 CA_KEY = TLS_DIR / "ca.key"
 SERVER_CERT = TLS_DIR / "server.pem"
 SERVER_KEY = TLS_DIR / "server.key"
+_LOCK_FILE = TLS_DIR / ".gen-lock"
 # CA_CERT alone (private CA only) is deliberately what `--cacert` flags and
 # E2E_CA_BUNDLE use — a caller checking one of the new TLS fronts should trust
 # ONLY this stack's own leaf, not the whole public web. COMBINED_CERT below is
@@ -58,10 +63,14 @@ SERVER_KEY = TLS_DIR / "server.key"
 # suite run before this file learned to produce it) needs the public roots
 # too. One file serving both trust anchors.
 COMBINED_CERT = TLS_DIR / "combined-ca.pem"
-# Debian/Ubuntu's system bundle (confirmed present in python:3.12-slim-bookworm,
-# this project's base image) — the same file `ssl.get_default_verify_paths()`
-# resolves to via /usr/lib/ssl/cert.pem when SSL_CERT_FILE is unset.
-_SYSTEM_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
+# Debian/Ubuntu's system bundle is first (confirmed present in
+# python:3.12-slim-bookworm, this project's base image — the same file
+# `ssl.get_default_verify_paths()` resolves to via /usr/lib/ssl/cert.pem when
+# SSL_CERT_FILE is unset). macOS (a developer's laptop, not a container) has no
+# such path — `certifi` (already in the tree transitively, via httpx) ships the
+# same public-root bundle cross-platform, so a local `make quality` run gets
+# real combined trust too, not just the CI box.
+_SYSTEM_CA_BUNDLE_CANDIDATES = ("/etc/ssl/certs/ca-certificates.crt",)
 
 VALIDITY = dt.timedelta(days=30)
 RENEW_WITHIN = dt.timedelta(days=7)
@@ -80,8 +89,16 @@ SAN_DNS_NAMES = (
     "localhost",
     "agent.localhost",
     "*.localhost",
+    # The host-run webhook capture's callback name when the server runs in
+    # Docker and the test runner (this receiver) runs on the host — Docker's
+    # own DNS name for "the host machine", not ours to choose (salesagent-e6h0).
+    "host.docker.internal",
 )
-SAN_IP_ADDRESSES = ("127.0.0.1", "::1")
+# 127.0.0.2 (salesagent-e6h0): a SECOND loopback address, distinct from
+# 127.0.0.1, that tests/integration/test_protocol_webhook_egress.py needs to
+# prove a per-host IP pin actually pins per host — two origins that differed
+# only by port would share the same pinned address and grade nothing.
+SAN_IP_ADDRESSES = ("127.0.0.1", "127.0.0.2", "::1")
 
 _CA_SUBJECT = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "AdCP test stack CA")])
 _LEAF_SUBJECT = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "adcp.test")])
@@ -141,8 +158,23 @@ def _key_usage(**enabled: bool) -> x509.KeyUsage:
 
 
 def _write(path: Path, data: bytes, *, private: bool) -> None:
-    path.write_bytes(data)
-    path.chmod(0o600 if private else 0o644)
+    """Write *data* to *path* atomically.
+
+    ``_refresh_combined_cert()`` rewrites ``COMBINED_CERT`` on every
+    ``ensure_test_tls()`` call, including the already-current fast path — under
+    a parallel xdist run, many workers call it concurrently. A direct
+    ``write_bytes`` lets a concurrent reader (an httpx client building its TLS
+    trust store from ``SSL_CERT_FILE`` at the OS level) observe a torn,
+    partially-written file mid-overwrite, which reads as a genuine but
+    nondeterministic ``CERTIFICATE_VERIFY_FAILED``. Writing to a sibling
+    temp file and ``os.replace``-ing it over the target is atomic on POSIX: a
+    concurrent open() always sees either the complete old file or the complete
+    new one, never a partial one.
+    """
+    tmp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp_path.write_bytes(data)
+    tmp_path.chmod(0o600 if private else 0o644)
+    os.replace(tmp_path, path)
 
 
 def _pem_cert(cert: x509.Certificate) -> bytes:
@@ -178,6 +210,20 @@ def _is_current() -> bool:
     return min(ca.not_valid_after_utc, leaf.not_valid_after_utc) > _now() + RENEW_WITHIN
 
 
+def _system_ca_bundle() -> Path | None:
+    """The public-root bundle to combine with our private CA, or ``None`` if none found."""
+    for candidate in _SYSTEM_CA_BUNDLE_CANDIDATES:
+        path = Path(candidate)
+        if path.is_file():
+            return path
+    try:
+        import certifi
+
+        return Path(certifi.where())
+    except ImportError:
+        return None
+
+
 def _refresh_combined_cert() -> None:
     """Rebuild ``COMBINED_CERT`` = the system CA bundle + our private CA.
 
@@ -185,26 +231,64 @@ def _refresh_combined_cert() -> None:
     regardless of whether the CA/leaf themselves needed regenerating — it
     must stay in sync with CA_CERT even on the "already current" fast path
     (e.g. upgrading a ``.test-tls/`` directory written before this existed).
-    Silently skipped if the system bundle isn't at the expected path: SSL_CERT_FILE
+    Silently skipped if no public-root bundle is found at all: SSL_CERT_FILE
     callers still get private-CA trust, just not combined with public roots.
     """
-    if not _SYSTEM_CA_BUNDLE.is_file():
+    bundle = _system_ca_bundle()
+    if bundle is None:
         return
-    _write(COMBINED_CERT, _SYSTEM_CA_BUNDLE.read_bytes() + CA_CERT.read_bytes(), private=False)
+    _write(COMBINED_CERT, bundle.read_bytes() + CA_CERT.read_bytes(), private=False)
+
+
+@contextlib.contextmanager
+def _regeneration_lock():
+    """Serialize ``ensure_test_tls()`` across CONCURRENT PROCESSES (xdist workers).
+
+    An in-process ``threading.Lock`` cannot help here — pytest-xdist workers
+    are separate OS processes, each importing this module fresh. Without a
+    real file lock, two workers racing the "not current" branch below could
+    interleave: e.g. worker A's fresh ``ca_key`` signs worker A's leaf, but
+    worker B's atomic write of ``CA_CERT`` (from a DIFFERENT, concurrently
+    generated CA key) lands last — the leaf on disk no longer chains to the
+    CA on disk, and every TLS handshake against it fails with a genuine but
+    maddeningly intermittent certificate error. ``fcntl.flock`` blocks the
+    whole regenerate-and-write sequence to one worker at a time; the others
+    proceed only once the lock holder's now-current material is on disk, at
+    which point their own ``_is_current()`` check (called again after
+    acquiring the lock, not just before) finds it and short-circuits.
+    """
+    TLS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_LOCK_FILE, "w") as lock_fp:
+        fcntl.flock(lock_fp, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_fp, fcntl.LOCK_UN)
 
 
 def ensure_test_tls(*, force: bool = False) -> Path:
     """Make sure ``.test-tls/`` holds a usable CA + leaf; return the CA bundle path.
 
     Idempotent: a run that finds current material writes nothing, so concurrent
-    stacks serving the existing leaf are never disturbed.
+    stacks serving the existing leaf are never disturbed. The whole check +
+    (re)generate sequence runs under a process-wide file lock (see
+    :func:`_regeneration_lock`) so concurrent xdist workers can never interleave
+    a regeneration into a CA/leaf pair that no longer chain to each other.
     """
     if not force and _is_current():
         _refresh_combined_cert()
         return CA_CERT
 
-    TLS_DIR.mkdir(parents=True, exist_ok=True)
+    with _regeneration_lock():
+        if not force and _is_current():
+            # Another worker regenerated while we waited for the lock.
+            _refresh_combined_cert()
+            return CA_CERT
+        return _regenerate()
 
+
+def _regenerate() -> Path:
+    """Generate a fresh CA + leaf and write them, plus the combined bundle. Caller holds the lock."""
     ca_key = ec.generate_private_key(ec.SECP256R1())
     ca_cert = _sign(
         subject=_CA_SUBJECT,

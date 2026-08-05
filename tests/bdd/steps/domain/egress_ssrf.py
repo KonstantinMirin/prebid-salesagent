@@ -83,30 +83,36 @@ def _ip_addresses_in(text: str) -> list[str]:
 # ── Given steps ─────────────────────────────────────────────────────
 
 
-@given("both outbound egress escape hatches are open")
-def given_egress_hatches_open(ctx: dict) -> None:
-    """Run this scenario with ADCP_OUTBOUND_ALLOW_PRIVATE and ..._ALLOW_INSECURE on.
+@given("the outbound private-range egress hatch is open")
+def given_egress_hatch_open(ctx: dict) -> None:
+    """Run this scenario with ADCP_OUTBOUND_ALLOW_PRIVATE on (salesagent-e6h0).
 
     The permissive posture is the DELIBERATE choice for a refusal that must mean
-    the same thing everywhere: with both hatches open the reserved-range gate and
-    the scheme gate are disarmed, so a refusal can only come from the two causes
-    that are immune to them — a blocked cloud-metadata address, and a host that
-    does not resolve. That is also the posture the e2e stack runs in, so the
-    in-process transports and e2e_rest grade one production, not three.
+    the same thing everywhere: with the reserved-range gate disarmed, a refusal
+    can only come from the two causes that are immune to it — a blocked
+    cloud-metadata address, and a host that does not resolve. That is also the
+    posture the e2e stack runs in (this is the ONLY hatch left — the scheme
+    hatch was deleted, the seam now requires https unconditionally), so the
+    in-process transports and e2e_rest grade one production, not two.
     """
-    ctx["env"].set_egress_hatches(private=True, insecure=True)
+    ctx["env"].set_egress_hatches(private=True)
 
 
-@given("both outbound egress escape hatches are closed")
-def given_egress_hatches_closed(ctx: dict) -> None:
-    """Run this scenario with both escape hatches explicitly off — the production posture.
+@given("the outbound private-range egress hatch is closed")
+def given_egress_hatch_closed(ctx: dict) -> None:
+    """Run this scenario with the private-range hatch explicitly off — the production posture.
 
-    Pinned rather than assumed: ``run_all_tests_host.sh`` exports both as ``true``
-    for the full host run, so a scheme-refusal scenario that leaves them unset
-    passes under ``saci`` and fails only in the full run. Over e2e_rest the env
-    declares this unrealizable (the server's environment is not ours to set).
+    Pinned rather than assumed: a scenario that leaves it unset passes under
+    ``saci`` and fails only in a run that opens it ambiently. Over e2e_rest the
+    env declares this unrealizable (the server's environment is not ours to
+    set). Used ONLY by the plaintext-http scenario, deliberately: that scenario
+    dials a resolvable PUBLIC host, so private=True would refuse it for the
+    identical reason (scheme) without ever exercising the private-range gate —
+    closing this hatch here keeps the scenario declared unrealizable over
+    e2e_rest rather than silently xpassing there without the graduation
+    workflow (verify-then-shrink-the-pin) actually being run.
     """
-    ctx["env"].set_egress_hatches(private=False, insecure=False)
+    ctx["env"].set_egress_hatches(private=False)
 
 
 # ── When steps ──────────────────────────────────────────────────────

@@ -144,7 +144,7 @@ def agent_at(origin: LocalOrigin) -> CreativeAgent:
 class TestAttemptsThroughTheSeam:
     """How many times the origin is actually reached — the real behaviour change."""
 
-    async def test_a_5xx_creative_agent_now_costs_three_origin_hits(self, registry, local_origin, monkeypatch):
+    async def test_a_5xx_creative_agent_now_costs_three_origin_hits(self, registry, local_origin_tls, monkeypatch):
         """A 5xx is retried to the seam's default max_attempts instead of failing on the first.
 
         Today this path calls ``raise_for_status`` and raises out of
@@ -156,15 +156,15 @@ class TestAttemptsThroughTheSeam:
         """
         allow_local_origin(monkeypatch)
         fast_backoff(monkeypatch)
-        local_origin.respond_with(503, body=b'{"error": "unavailable"}')
+        local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
 
         with pytest.raises(AdCPServiceUnavailableError):
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
-        assert local_origin.hits == 3, f"expected the seam's three attempts, got {local_origin.hits}"
+        assert local_origin_tls.hits == 3, f"expected the seam's three attempts, got {local_origin_tls.hits}"
 
     async def test_the_fetch_lands_on_the_mcp_endpoint_of_the_registered_agent(
-        self, registry, local_origin, monkeypatch
+        self, registry, local_origin_tls, monkeypatch
     ):
         """``/mcp`` is appended to the registered agent URL, and the JSON-RPC call is what crosses the socket.
 
@@ -173,12 +173,12 @@ class TestAttemptsThroughTheSeam:
         which proves nothing about what was actually sent.
         """
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(200, body=_jsonrpc_body())
+        local_origin_tls.respond_with(200, body=_jsonrpc_body())
 
-        await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+        await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
-        assert local_origin.paths == ["/mcp"]
-        assert local_origin.last_request.json() == {
+        assert local_origin_tls.paths == ["/mcp"]
+        assert local_origin_tls.last_request.json() == {
             "jsonrpc": "2.0",
             "method": "tools/call",
             "params": {"name": "list_creative_formats", "arguments": {}},
@@ -196,21 +196,21 @@ class TestParsing:
     migration: the contract must not go away with them.
     """
 
-    async def test_a_json_response_parses_formats(self, registry, local_origin, monkeypatch):
+    async def test_a_json_response_parses_formats(self, registry, local_origin_tls, monkeypatch):
         """``application/json`` with a JSON-RPC result yields the formats it carries."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(200, body=_jsonrpc_body())
+        local_origin_tls.respond_with(200, body=_jsonrpc_body())
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
         assert [fmt.format_id.id for fmt in formats] == ["display_image"]
 
-    async def test_an_sse_response_parses_formats(self, registry, local_origin, monkeypatch):
+    async def test_an_sse_response_parses_formats(self, registry, local_origin_tls, monkeypatch):
         """``text/event-stream`` is read off the same body, one ``data:`` line at a time."""
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(200, body=_sse_body(), content_type="text/event-stream")
+        local_origin_tls.respond_with(200, body=_sse_body(), content_type="text/event-stream")
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
         assert [fmt.format_id.id for fmt in formats] == ["display_image"]
 
@@ -224,7 +224,7 @@ class TestTaxonomy:
     classified as transient.
     """
 
-    async def test_a_404_is_terminal_not_transient(self, registry, local_origin, monkeypatch):
+    async def test_a_404_is_terminal_not_transient(self, registry, local_origin_tls, monkeypatch):
         """A 4xx that is not 429 tells the buyer to stop, not to retry forever.
 
         The seam raises ``OutboundDeliveryFailed``, which IS a
@@ -235,19 +235,19 @@ class TestTaxonomy:
         classification.
         """
         allow_local_origin(monkeypatch)
-        local_origin.respond_with(404, body=b'{"error": "no such tool"}')
+        local_origin_tls.respond_with(404, body=b'{"error": "no such tool"}')
 
         with pytest.raises(AdCPAdapterError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
         assert_envelope_shape(
             build_two_layer_error_envelope(excinfo.value),
             "SERVICE_UNAVAILABLE",
             recovery="terminal",
         )
-        assert local_origin.hits == 1
+        assert local_origin_tls.hits == 1
 
-    async def test_a_429_carries_retry_after_on_the_envelope_top_level(self, registry, local_origin, monkeypatch):
+    async def test_a_429_carries_retry_after_on_the_envelope_top_level(self, registry, local_origin_tls, monkeypatch):
         """A rate-limited creative agent is RATE_LIMITED, with the wait in the spec's own slot.
 
         ``core/error.json`` @3.1.1 puts ``retry_after`` at the top level of the
@@ -264,10 +264,10 @@ class TestTaxonomy:
         """
         allow_local_origin(monkeypatch)
         fast_backoff(monkeypatch)
-        local_origin.respond_with(429, body=b'{"error": "slow down"}', headers={"Retry-After": "0"})
+        local_origin_tls.respond_with(429, body=b'{"error": "slow down"}', headers={"Retry-After": "0"})
 
         with pytest.raises(AdCPRateLimitError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
         envelope = build_two_layer_error_envelope(excinfo.value)
         assert_envelope_shape(envelope, "RATE_LIMITED", recovery="transient")
@@ -306,7 +306,9 @@ class TestTaxonomy:
             f"errors[0] names a request-payload path for an operator-configured URL: {envelope}"
         )
 
-    async def test_a_delivery_failure_does_not_echo_the_operators_endpoint(self, registry, local_origin, monkeypatch):
+    async def test_a_delivery_failure_does_not_echo_the_operators_endpoint(
+        self, registry, local_origin_tls, monkeypatch
+    ):
         """The failure envelope names attempts and status — never the registered agent URL.
 
         Today's message is ``f"Creative agent unavailable (HTTP 503): {mcp_url}"``,
@@ -316,15 +318,15 @@ class TestTaxonomy:
         """
         allow_local_origin(monkeypatch)
         fast_backoff(monkeypatch)
-        local_origin.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
+        local_origin_tls.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
 
         with pytest.raises(AdCPServiceUnavailableError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
         envelope = build_two_layer_error_envelope(excinfo.value)
         assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
 
         serialized = json.dumps(envelope)
-        assert local_origin.host not in serialized, f"the operator's endpoint host leaked into {envelope}"
-        assert str(local_origin.port) not in serialized, f"the operator's endpoint port leaked into {envelope}"
+        assert local_origin_tls.host not in serialized, f"the operator's endpoint host leaked into {envelope}"
+        assert str(local_origin_tls.port) not in serialized, f"the operator's endpoint port leaked into {envelope}"
         assert "LEAKED-ORIGIN-BODY-MARKER" not in serialized, f"the origin's body leaked into {envelope}"

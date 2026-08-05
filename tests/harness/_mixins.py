@@ -42,6 +42,7 @@ from tests.helpers.local_http_origin import (
     responds,
     run_local_origin,
 )
+from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 
 
 def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryResponse) -> Any:
@@ -283,10 +284,17 @@ class LocalOriginMixin:
     same thing under both. That is why this lands before the migration and not
     with it.
 
-    Both outbound escape hatches are opened for the duration of the env because
-    the origin necessarily listens on loopback with plain HTTP, which the seam
-    refuses by default; opening them here is the same statement the seam's own
-    integration tests make with ``set_flags(private=True, insecure=True)``.
+    The origin serves real TLS off the generated CA/leaf (salesagent-40qh's
+    primitive, reused here — never a second mechanism), so it no longer needs
+    the scheme hatch (deleted entirely, salesagent-e6h0); the private-range
+    hatch stays open for the duration of the env because the origin
+    necessarily listens on loopback, which the seam refuses by default —
+    opening it here is the same statement the seam's own integration tests
+    make with ``set_flags(private=True)``. ``SSL_CERT_FILE`` is scoped to the
+    origin's lifetime only (patched and restored alongside it, not left
+    ambient for the rest of the env), pointed at the COMBINED CA bundle (system
+    + private) so any other outbound work inside the same scenario keeps
+    trusting real public roots too.
     """
 
     origin: LocalOrigin
@@ -294,9 +302,13 @@ class LocalOriginMixin:
     # -- Lifecycle ----------------------------------------------------------
 
     def __enter__(self) -> Self:
-        self._origin_ctx = run_local_origin()
+        gen_test_tls = load_gen_test_tls()
+        gen_test_tls.ensure_test_tls()
+        self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(gen_test_tls.COMBINED_CERT)})
+        self._ssl_cert_file.start()
+        self._origin_ctx = run_local_origin(ssl_context=server_ssl_context(gen_test_tls))
         self.origin = self._origin_ctx.__enter__()
-        self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True, insecure=True))
+        self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True))
         self._egress_hatches.start()
         return super().__enter__()  # type: ignore[misc,no-any-return]
 
@@ -306,6 +318,7 @@ class LocalOriginMixin:
         finally:
             self._egress_hatches.stop()
             self._origin_ctx.__exit__(None, None, None)
+            self._ssl_cert_file.stop()
 
     # -- The endpoint under test -------------------------------------------
 

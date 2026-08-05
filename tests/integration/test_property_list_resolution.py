@@ -129,7 +129,7 @@ class TestPropertyListResolution:
             assert "prop_nonmatch" not in product_ids, "Product with non-matching IDs should be excluded"
 
     @pytest.mark.asyncio
-    async def test_resolve_with_cursor_returns_next_page(self, local_origin, monkeypatch):
+    async def test_resolve_with_cursor_returns_next_page(self, local_origin_tls, monkeypatch):
         """Cursor-based pagination: resolver fetches paginated identifiers from external service.
 
         Runs against a real origin rather than a substituted ``httpx.AsyncClient``:
@@ -145,7 +145,7 @@ class TestPropertyListResolution:
         allow_local_origin(monkeypatch)
 
         # First page response: 2 identifiers + cursor for next page
-        local_origin.respond_with(
+        local_origin_tls.respond_with(
             200,
             body=property_list_body(
                 [
@@ -158,18 +158,18 @@ class TestPropertyListResolution:
             ),
         )
 
-        result = await resolve_property_list(origin_ref(local_origin, list_id="paginated_list"))
+        result = await resolve_property_list(origin_ref(local_origin_tls, list_id="paginated_list"))
 
         # Resolver should return identifiers from the response
         assert len(result) == 2
         assert "site1.com" in result
         assert "site2.com" in result
-        assert local_origin.paths == ["/lists/paginated_list"]
+        assert local_origin_tls.paths == ["/lists/paginated_list"]
 
         clear_cache()
 
     @pytest.mark.asyncio
-    async def test_resolve_exhausted_cursor_returns_empty(self, local_origin, monkeypatch):
+    async def test_resolve_exhausted_cursor_returns_empty(self, local_origin_tls, monkeypatch):
         """Exhausted cursor: response with has_more=false and no identifiers yields empty list.
 
         Covers: BR-RULE-077-01
@@ -180,16 +180,16 @@ class TestPropertyListResolution:
         allow_local_origin(monkeypatch)
 
         # Response with no identifiers (cursor exhausted)
-        local_origin.respond_with(200, body=property_list_body([], has_more=False))
+        local_origin_tls.respond_with(200, body=property_list_body([], has_more=False))
 
-        result = await resolve_property_list(origin_ref(local_origin, list_id="exhausted_list"))
+        result = await resolve_property_list(origin_ref(local_origin_tls, list_id="exhausted_list"))
 
         assert result == [], "Exhausted cursor should yield empty identifier list"
 
         clear_cache()
 
     @pytest.mark.asyncio
-    async def test_resolve_respects_page_size(self, local_origin, monkeypatch):
+    async def test_resolve_respects_page_size(self, local_origin_tls, monkeypatch):
         """Page size (max_results) limits the number of returned identifiers per page.
 
         Covers: BR-RULE-077-01
@@ -201,7 +201,7 @@ class TestPropertyListResolution:
 
         # Response with exactly max_results identifiers (simulating server respecting limit)
         page_size = 3
-        local_origin.respond_with(
+        local_origin_tls.respond_with(
             200,
             body=property_list_body(
                 [{"type": "domain", "value": f"site{i}.com"} for i in range(page_size)],
@@ -211,7 +211,7 @@ class TestPropertyListResolution:
             ),
         )
 
-        result = await resolve_property_list(origin_ref(local_origin, list_id="sized_list"))
+        result = await resolve_property_list(origin_ref(local_origin_tls, list_id="sized_list"))
 
         # The resolver returns exactly the identifiers from the current page
         assert len(result) == page_size, (

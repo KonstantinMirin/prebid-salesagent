@@ -37,14 +37,16 @@ DEFAULT_LIST_ID = "test_list"
 
 
 def allow_local_origin(monkeypatch) -> None:
-    """Open both egress escape hatches so a loopback, plain-HTTP origin is reachable.
+    """Open the private-range egress escape hatch so a loopback origin is reachable.
 
-    A local origin is ``127.0.0.1`` over plain HTTP — a reserved address and a
-    non-TLS scheme, both of which the seam refuses by default and rightly so. A
-    test that wants a real fetch to succeed has to say that out loud; a test of
-    a refusal must never call this, or it would grade nothing.
+    A local origin is ``127.0.0.1`` — a reserved address, which the seam refuses
+    by default and rightly so. A test that wants a real fetch to succeed has to
+    say that out loud; a test of a refusal must never call this, or it would
+    grade nothing. Pair with the ``local_origin_tls`` fixture (not
+    ``local_origin``) — the seam requires https unconditionally now
+    (salesagent-e6h0), so a plain-http origin is refused regardless of this hatch.
     """
-    set_flags(monkeypatch, private=True, insecure=True)
+    set_flags(monkeypatch, private=True)
 
 
 def enforce_egress_policy(monkeypatch) -> None:
