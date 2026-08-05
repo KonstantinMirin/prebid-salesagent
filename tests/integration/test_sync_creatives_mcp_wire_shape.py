@@ -26,7 +26,7 @@ import pytest
 
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.harness import CreativeSyncEnv, Transport
-from tests.helpers.pinned_schema import validate_against_pinned_schema
+from tests.harness.assertions import assert_wire_omits_unset
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -40,9 +40,8 @@ def _sync_one_creative_via_mcp():
         )
         result = env.call_via(Transport.MCP, creatives=[creative])
     assert result.is_success, f"Expected success but got error: {result.error}"
-    wire = result.wire_response
-    assert wire is not None, "MCP dispatch must stash the real structured_content wire"
-    return wire
+    assert result.wire_response is not None, "MCP dispatch must stash the real structured_content wire"
+    return result
 
 
 def test_mcp_wire_changes_and_warnings_are_never_null(integration_db):
@@ -54,7 +53,7 @@ def test_mcp_wire_changes_and_warnings_are_never_null(integration_db):
     Mutation check: revert any of the three redeclarations to inherit the parent's
     None default -> this test goes red on that field.
     """
-    wire = _sync_one_creative_via_mcp()
+    wire = _sync_one_creative_via_mcp().wire_response
     creatives = wire.get("creatives")
     assert isinstance(creatives, list) and creatives, f"MCP wire must carry the creatives array, got {creatives!r}"
     for i, item in enumerate(creatives):
@@ -80,5 +79,5 @@ def test_mcp_wire_validates_against_pinned_response_schema(integration_db):
     ``response.model_dump(mode="json")`` (a plain dict) so the same exclude-none/
     nested-serialization behavior A2A/REST already had applies on MCP too.
     """
-    wire = _sync_one_creative_via_mcp()
-    validate_against_pinned_schema("sync-creatives-response.json", wire)
+    result = _sync_one_creative_via_mcp()
+    assert_wire_omits_unset(result, schema="sync-creatives-response.json", absent_paths=[], transport=Transport.MCP)

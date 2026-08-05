@@ -26,11 +26,10 @@ each one genuinely grades ``Product.model_dump``; get_products has none of the
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness.assertions import assert_wire_omits_unset
 from tests.harness.product import ProductEnv
 from tests.harness.transport import Transport
 from tests.helpers import pinned_schema
@@ -66,22 +65,16 @@ def wire_schema_product_env(integration_db):
         yield env
 
 
-def _assert_response_schema_valid(response: dict[str, Any], transport: Transport) -> None:
-    products = response.get("products")
-    assert isinstance(products, list) and products, (
-        f"{transport}: expected a non-empty 'products' list in the response, got {products!r}"
-    )
-    pinned_schema.validate_against_pinned_schema(_RESPONSE_SCHEMA, response)
-
-
 @pytest.mark.parametrize("transport", [Transport.MCP, Transport.REST, Transport.A2A])
 def test_get_products_wire_response_is_schema_valid(wire_schema_product_env, transport):
     """The literal wire body from each transport is schema-valid — no leaked nulls."""
     result = wire_schema_product_env.call_via(transport, brief="display ads")
-    assert result.is_success, f"{transport} get_products failed: {result.error}"
-    assert result.wire_response is not None, f"{transport}: harness captured no wire response"
+    products = (result.wire_response or {}).get("products")
+    assert isinstance(products, list) and products, (
+        f"{transport}: expected a non-empty 'products' list in the response, got {products!r}"
+    )
 
-    _assert_response_schema_valid(result.wire_response, transport)
+    assert_wire_omits_unset(result, schema=_RESPONSE_SCHEMA, absent_paths=[], transport=transport)
 
 
 def test_get_products_impl_payload_is_schema_valid(wire_schema_product_env):
@@ -94,4 +87,9 @@ def test_get_products_impl_payload_is_schema_valid(wire_schema_product_env):
     result = wire_schema_product_env.call_via(Transport.IMPL, brief="display ads")
     assert result.is_success, f"IMPL get_products failed: {result.error}"
 
-    _assert_response_schema_valid(result.payload.model_dump(mode="json"), Transport.IMPL)
+    response = result.payload.model_dump(mode="json")
+    products = response.get("products")
+    assert isinstance(products, list) and products, (
+        f"IMPL: expected a non-empty 'products' list in the response, got {products!r}"
+    )
+    pinned_schema.validate_against_pinned_schema(_RESPONSE_SCHEMA, response)
