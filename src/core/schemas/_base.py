@@ -1254,6 +1254,10 @@ class Targeting(TargetingOverlay):
         if not isinstance(values, dict):
             return values
 
+        # Defensive copy: see Creative.validate_format_id (creative.py) for the
+        # traced production bug this in-place-mutation hazard caused elsewhere.
+        values = values.copy()
+
         for v2_key, v3_key, transform in _LEGACY_GEO_FIELDS:
             if v2_key not in values:
                 continue
@@ -1566,6 +1570,14 @@ def _upgrade_legacy_format_ids(values: dict) -> dict:
     """
     if not isinstance(values, dict):
         return values
+
+    # Defensive copy: a mode="before"
+    # validator must not mutate its input in place -- pydantic-core hands list-item
+    # dicts to it BY REFERENCE, so mutating `values` can corrupt a dict the caller
+    # still holds (see Creative.validate_format_id for the traced production bug
+    # this pattern caused). Matches the precedent already used by
+    # PackageRequest.remove_invalid_fields for the same hazard class.
+    values = values.copy()
 
     format_ids = values.get("format_ids")
     if format_ids and isinstance(format_ids, list):
@@ -2047,6 +2059,10 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         """Unwrap RootModel packages and parse datetime strings."""
         if not isinstance(values, dict):
             return values
+
+        # Defensive copy: see Creative.validate_format_id (creative.py) for the
+        # traced production bug this in-place-mutation hazard caused elsewhere.
+        values = values.copy()
 
         # Normalize package instances to dicts so the list[AdCPPackageUpdate] field
         # validates them. FastMCP coerces the incoming param to its annotated type

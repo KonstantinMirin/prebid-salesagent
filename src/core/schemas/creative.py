@@ -169,6 +169,22 @@ class Creative(LibraryCreative):
         """Validate and upgrade format_id to AdCP namespaced format."""
         from src.core.format_cache import upgrade_legacy_format_id
 
+        if not isinstance(values, dict):
+            return values
+
+        # Defensive copy: pydantic-core hands list-item dicts to a mode="before"
+        # validator BY REFERENCE (no copy) when validating a list[Creative] field
+        # on a parent model. Mutating `values` in place therefore corrupts whatever
+        # dict the CALLER still holds a reference to -- e.g.
+        # src/a2a_server/adcp_a2a_server.py's _reconstruct_response_object
+        # reconstructs a typed model from the SAME dict it is about to serialize
+        # onto the wire, so format_id (structured {agent_url, id}) got silently
+        # replaced by a live FormatId object here, then stringified by the wire
+        # serializer's json.dumps(default=str) fallback. Matches the precedent
+        # already used by PackageRequest.remove_invalid_fields (_base.py) for the
+        # same hazard class.
+        values = values.copy()
+
         # Handle both 'format' and 'format_id' keys
         format_val = values.get("format_id") or values.get("format")
         if format_val is not None:

@@ -322,18 +322,24 @@ class TestA2AAdCPCompliance:
         pass schema validation — masked entirely by the assertion below only
         checking that SOME results were collected (salesagent-1q8d.15).
 
-        list_creatives was tried here too and pulled back out: once enough
-        creatives accumulate in the shared e2e database (only reproduces at
-        full-suite scale, not in this file alone), its format_id serializes
-        as a bare string over the A2A wire instead of the spec's {agent_url,
-        id} object — a real, separate bug in the A2A response-serialization
-        path (NestedModelSerializerMixin's double model_dump + the
-        protobuf-conversion "default=str" silent-stringify fallback), filed
-        on its own rather than rushed in here.
+        list_creatives was tried here too and pulled back out: its format_id
+        serialized as a bare string over the A2A wire instead of the spec's
+        {agent_url, id} object. Root-caused and fixed: the A2A success path's
+        _reconstruct_response_object(skill, artifact_data) reconstructs a typed
+        response FROM the same dict about to be sent on the wire (purely to
+        generate the human-readable text part), and Creative.validate_format_id's
+        @model_validator(mode="before") mutated its input dict in place —
+        pydantic-core hands list-item dicts to before-validators by reference, so
+        this corrupted artifact_data itself, and _dict_to_value's
+        json.dumps(default=str) fallback then silently stringified the resulting
+        live FormatId object. Fixed by making the validator (and 3 sibling
+        validators with the same in-place-mutation hazard) defensively copy their
+        input before mutating.
         """
         # Note: signals skills removed - should come from dedicated signals agents
         skill_tests = [
             ("get_products", {"brief": "Display ads", "brand": {"domain": "testbrand.com"}}),
+            ("list_creatives", {"limit": 10}),
         ]
 
         for skill_name, params in skill_tests:
