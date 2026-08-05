@@ -105,7 +105,7 @@ subset). That tree moves automatically with the `pyproject.toml` SDK pin —
 there is exactly one upstream pin for schema *structure* (request/response
 shapes, `$ref` graphs, `required`/`properties`), and the CI guard above
 (`tests/unit/test_adcp_spec_version.py`) keeps it honest. Consumers:
-`tests/unit/test_pydantic_schema_alignment.py`, `tests/e2e/adcp_schema_validator.py`,
+`tests/unit/test_pydantic_schema_alignment.py`, `tests/helpers/adcp_schema_validator.py`,
 and the schema-validating integration tests (`tests/integration/test_get_products_placement_schema.py`
 and friends). The plain tree is deliberately used over `bundled/`: `bundled/`
 only physically ships 8 of the SDK's 16 top-level categories (no `account/`,
@@ -145,6 +145,6 @@ spec bump must consider it separately from the schema-shape pin above.
 - `tests/unit/test_adcp_spec_version.py` — CI guard
 - `tests/helpers/pinned_schema.py` — single source of truth for schema-SHAPE resolution (the installed SDK's plain tree)
 - `tests/unit/test_pinned_schema_single_source.py` — pins that `pinned_schema.py` tracks the SDK's own version, not an independently vendored one
-- `tests/e2e/adcp_schema_validator.py` — e2e request/response validation, delegates to `pinned_schema.py`
+- `tests/helpers/adcp_schema_validator.py` — e2e request/response validation, delegates to `pinned_schema.py`
 - `tests/fixtures/adcp_schemas_pinned/` — vendored error-code `enumMetadata` `suggestion` text, sole remaining consumer `test_architecture_error_suggestion_enum_conformance.py` (independent pin, error-code reconciliation epic only — NOT a general schema-shape source)
 - `docs/adcp-spec-version.md` — this document
