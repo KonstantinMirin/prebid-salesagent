@@ -10,20 +10,21 @@ This test validates that our A2A server sends the correct payload type based on 
 """
 
 import uuid
-from time import sleep
 from typing import Any
 
 import httpx
 import pytest
 
-from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
+from tests.e2e._webhook_capture import run_webhook_capture_server
+from tests.e2e._webhook_capture_loopback import WebhookCaptureHandler
+from tests.e2e._webhook_capture_loopback import run_webhook_capture_server as run_loopback_capture_server
 from tests.e2e.adcp_request_builder import (
     build_a2a_message_send,
     build_adcp_media_buy_request,
     get_test_date_range,
     parse_tool_result,
 )
-from tests.e2e.utils import make_mcp_client, set_live_adapter_behavior
+from tests.e2e.utils import make_mcp_client, set_live_adapter_behavior, wait_until
 
 
 async def _discover_product_and_pricing(live_server: dict, test_auth_token: str) -> tuple[str, str]:
@@ -115,52 +116,97 @@ def assert_no_classification_errors(received: list[dict[str, Any]]) -> None:
     )
 
 
-class WebhookPayloadCapture(WebhookCaptureHandler):
-    """Webhook receiver that captures each payload with its A2A classification.
+def _classify_entry(payload: dict[str, Any], *, path: str | None = None) -> dict[str, Any]:
+    """Map a raw inbound JSON payload to its A2A classification.
 
-    Extends the shared capture handler via the ``record`` hook — only the
-    classification logic lives here, never a copied ``do_POST``.
+    Shared by the hermetic path's server-side ``WebhookPayloadCapture.record()``
+    hook (below, ``path`` is the receiver's own ``self.path``) and the
+    compose-coupled path's client-side :class:`_ClassifiedReceivedView`
+    (``path`` is not available once capture is a remote keyed store —
+    salesagent-amht.3 — so it is ``None`` there; nothing asserts on it).
+    """
+    status = None
+    if "status" in payload:
+        status_obj = payload["status"]
+        status = status_obj.get("state") if isinstance(status_obj, dict) else str(status_obj)
+
+    # A2A wire contract is camelCase (proto json_name): taskId, contextId,
+    # messageId. snake_case (task_id, context_id) is a spec violation — the
+    # a2a-sdk protobuf descriptor declares the JSON names explicitly. Record
+    # the classification (or its failure) BEFORE responding so a regression
+    # in protocol_webhook_service is observable to the test instead of being
+    # swallowed by an "unknown" classification (gh-#1299 follow-up).
+    classification_error = None
+    payload_type = None
+    try:
+        payload_type = classify_a2a_payload(payload)
+    except AssertionError as classify_exc:
+        classification_error = str(classify_exc)
+
+    return {
+        "payload": payload,
+        "payload_type": payload_type,
+        "classification_error": classification_error,
+        "status": status,
+        "path": path,
+    }
+
+
+class WebhookPayloadCapture(WebhookCaptureHandler):
+    """HERMETIC-ONLY webhook receiver that captures each payload with its A2A classification.
+
+    Extends the shared loopback capture handler via the ``record`` hook — only
+    the classification logic lives here, never a copied ``do_POST``. Used
+    exclusively by ``TestProtocolWebhookWireFormat`` (no Docker stack); the
+    compose-coupled tests below classify client-side instead (salesagent-amht.3
+    — capture moved to a real network service, so a server-side subclass hook
+    has nowhere to live for that path).
     """
 
     received_webhooks: list[dict[str, Any]] = []
 
     def record(self, payload):
-        # Extract status
-        status = None
-        if "status" in payload:
-            status_obj = payload["status"]
-            if isinstance(status_obj, dict):
-                status = status_obj.get("state")
-            else:
-                status = str(status_obj)
+        return _classify_entry(payload, path=self.path)
 
-        # A2A wire contract is camelCase (proto json_name): taskId, contextId,
-        # messageId. snake_case (task_id, context_id) is a spec violation — the
-        # a2a-sdk protobuf descriptor declares the JSON names explicitly. Record
-        # the classification (or its failure) BEFORE responding so a regression
-        # in protocol_webhook_service is observable to the test instead of being
-        # swallowed by an "unknown" classification (gh-#1299 follow-up).
-        classification_error = None
-        payload_type = None
-        try:
-            payload_type = classify_a2a_payload(payload)
-        except AssertionError as classify_exc:
-            classification_error = str(classify_exc)
 
-        return {
-            "payload": payload,
-            "payload_type": payload_type,
-            "classification_error": classification_error,
-            "status": status,
-            "path": self.path,
-        }
+class _ClassifiedReceivedView:
+    """Wraps a :class:`~tests.e2e._webhook_capture.ReceivedView`, classifying each raw payload on read.
+
+    The webhook-capture service stores/returns only raw decoded JSON bodies —
+    classification is applied here, client-side, on every access, so ``not
+    received`` / ``received[0]`` / ``for w in received`` see the SAME enriched
+    shape (``payload``/``payload_type``/``classification_error``/``status``/
+    ``path``) the old server-side ``WebhookPayloadCapture.record()`` hook
+    produced.
+    """
+
+    def __init__(self, raw) -> None:
+        self._raw = raw
+
+    def _classified(self) -> list[dict[str, Any]]:
+        return [_classify_entry(payload) for payload in self._raw]
+
+    def __bool__(self) -> bool:
+        return bool(self._raw)
+
+    def __len__(self) -> int:
+        return len(self._raw)
+
+    def __getitem__(self, index):
+        return self._classified()[index]
+
+    def __iter__(self):
+        return iter(self._classified())
+
+    def clear(self) -> None:
+        self._raw.clear()
 
 
 @pytest.fixture
 def webhook_capture_server():
-    """Start a local HTTP server to capture webhook payloads."""
-    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks) as info:
-        yield info
+    """Register a fresh capture key against the shared webhook-capture service."""
+    with run_webhook_capture_server() as info:
+        yield {"url": info["url"], "received": _ClassifiedReceivedView(info["received"])}
 
 
 class TestA2AWebhookPayloadTypes:
@@ -224,13 +270,7 @@ class TestA2AWebhookPayloadTypes:
             assert "error" not in result, f"A2A error: {result.get('error')}"
 
         # Wait for webhook to be delivered
-        timeout_seconds = 15
-        poll_interval = 0.5
-        elapsed = 0
-
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
-            sleep(poll_interval)
-            elapsed += poll_interval
+        wait_until(lambda: bool(webhook_capture_server["received"]), timeout_seconds=15, poll_interval=0.5)
 
         # Verify webhook was received
         received = webhook_capture_server["received"]
@@ -324,21 +364,16 @@ class TestA2AWebhookPayloadTypes:
             # Request should succeed (returns submitted status for async operations)
             assert response.status_code == 200, f"A2A request failed: {response.text}"
 
-        # Wait for webhook to be delivered
-        timeout_seconds = 15
-        poll_interval = 0.5
-        elapsed = 0
-
         # A manual-approval media buy emits the intermediate `submitted`
         # TaskStatusUpdateEvent first, then (mock auto-approval simulation) a
         # terminal `completed` Task. Breaking on merely the first delivery
         # races against that ordering — poll until the submitted webhook is
         # actually captured (or timeout).
-        while elapsed < timeout_seconds and not any(
-            w["status"] == "submitted" for w in webhook_capture_server["received"]
-        ):
-            sleep(poll_interval)
-            elapsed += poll_interval
+        wait_until(
+            lambda: any(w["status"] == "submitted" for w in webhook_capture_server["received"]),
+            timeout_seconds=15,
+            poll_interval=0.5,
+        )
 
         received = webhook_capture_server["received"]
         assert received, "Expected at least one webhook delivery"
@@ -418,12 +453,7 @@ class TestA2AWebhookPayloadTypes:
             await client.post(a2a_url, json=message, headers=headers)
 
         # Wait for webhooks
-        timeout_seconds = 15
-        elapsed = 0
-
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
-            sleep(0.5)
-            elapsed += 0.5
+        wait_until(lambda: bool(webhook_capture_server["received"]), timeout_seconds=15, poll_interval=0.5)
 
         received = webhook_capture_server["received"]
         assert received, "Expected at least one webhook delivery"
@@ -504,11 +534,7 @@ class TestWebhookPayloadStructure:
             await client.post(a2a_url, json=message, headers=headers)
 
         # Wait for webhook
-        timeout_seconds = 15
-        elapsed = 0
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
-            sleep(0.5)
-            elapsed += 0.5
+        wait_until(lambda: bool(webhook_capture_server["received"]), timeout_seconds=15, poll_interval=0.5)
 
         received = webhook_capture_server["received"]
         assert received, "Expected at least one webhook delivery"
@@ -582,11 +608,7 @@ class TestWebhookPayloadStructure:
             await client.post(a2a_url, json=message, headers=headers)
 
         # Wait for webhook
-        timeout_seconds = 15
-        elapsed = 0
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
-            sleep(0.5)
-            elapsed += 0.5
+        wait_until(lambda: bool(webhook_capture_server["received"]), timeout_seconds=15, poll_interval=0.5)
 
         received = webhook_capture_server["received"]
         assert received, "Expected at least one webhook delivery"
@@ -664,7 +686,7 @@ class TestProtocolWebhookWireFormat:
         # Real outbound validator allows localhost when ADCP_TESTING=true
         # (do not patch the SSRF gate — that would hide regressions).
         with (
-            run_webhook_capture_server(
+            run_loopback_capture_server(
                 WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
             ) as info,
             patch.dict("os.environ", {"ADCP_TESTING": "true"}),

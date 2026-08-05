@@ -200,7 +200,8 @@ class TestLocalhostAllowanceUnderTestingMode:
     used to open no longer exists — ``_maybe_allow_localhost`` checks the
     SCHEME first and refuses to rescue a scheme failure, so an e2e capture
     server on loopback must register a REAL https URL now (matching
-    ``tests/e2e/_webhook_capture.py``'s own loopback-covered TLS front). This
+    ``tests/e2e/_webhook_capture_loopback.py``'s loopback-covered TLS front —
+    the hermetic (no-Docker-stack) capture path, salesagent-amht.3). This
     class grades the ADDRESS allowance specifically, decoupled from scheme —
     which colliding with the scheme gate would otherwise obscure.
     """
@@ -311,7 +312,8 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
         (``_maybe_allow_localhost``). It must not rescue the SCHEME verdict —
         collapsing the two would put http back in exactly the processes where
         the old bug lived. A capture server on loopback needs a real https URL
-        now (see ``tests.e2e._webhook_capture``'s loopback-covered TLS front).
+        now (see ``tests.e2e._webhook_capture_loopback``'s loopback-covered
+        TLS front, salesagent-amht.3).
         """
         monkeypatch.setenv("ADCP_TESTING", "true")
 

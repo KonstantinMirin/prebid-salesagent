@@ -1,143 +1,130 @@
-"""Shared webhook-capture HTTP receiver for e2e tests.
+"""HTTP-client webhook receiver for e2e tests (salesagent-amht.3).
 
-Several e2e suites stand up a throwaway HTTP server to capture the webhooks the
-sales agent posts back (delivery reports, A2A status notifications, reference
-async notifications). They all need the same bootstrap: bind a free port, serve
-on a daemon thread, hand back the callback URL, and tear the socket down
-cleanly afterwards. This is the single implementation of that — kept here
-instead of copy-pasted per test (PR #1420 / #1423).
+Backed by the long-lived ``webhook-capture`` compose service
+(``tests/e2e/webhook_capture_service.py``), fronted by the shared
+``tls-proxy`` at a fixed ``webhooks.adcp.test`` alias
+(salesagent-amht.2) — not a per-test, ephemeral-port, in-process receiver
+anymore. That is what a webhook receiver is in production.
 
-The bootstrap itself now lives in the suite-neutral
-``tests.helpers.local_http_origin``, shared with the integration suite's
-programmable local origin. What stays here is genuinely e2e-specific: the
-capture semantics, and the ``0.0.0.0`` listen host with a separate callback
-host, which a containerised server needs to reach this receiver.
+Two traffic patterns, never conflated:
+
+* DELIVERY — the sales agent POSTs a captured payload to
+  ``https://webhooks.adcp.test:8443/webhook/<key>``. TLS terminates at the
+  shared front; this module never runs a TLS server of its own.
+* READBACK — this test process reads/drains its own key's captures over
+  plain HTTP, directly against the service
+  (``WEBHOOK_CAPTURE_HOST``/``WEBHOOK_CAPTURE_PORT``, mirroring
+  ``e2e_host()``'s localhost-vs-service-name duality in ``tests/e2e/conftest.py``).
+  This is test control-plane, not part of the graded TLS/egress surface.
+
+Scope note: this module serves the 3 COMPOSE-COUPLED e2e consumers only.
+``test_a2a_webhook_payload_types.py::TestProtocolWebhookWireFormat`` is
+hermetic (no Docker stack — its sender runs in-process on the host) and
+cannot resolve ``webhooks.adcp.test`` at all; it keeps using
+``tests.e2e._webhook_capture_loopback`` unchanged (owner scope decision,
+2026-08-05, recorded in salesagent-amht.3).
 """
+
+from __future__ import annotations
 
 import contextlib
 import json
 import os
+import uuid
 from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
-from tests.helpers.local_http_origin import serve_in_thread
-from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+_READBACK_TIMEOUT_SECONDS = 5.0
+_DELIVERY_URL_TEMPLATE = "https://webhooks.adcp.test:8443/webhook/{key}"
 
 
-class WebhookCaptureHandler(BaseHTTPRequestHandler):
-    """Default capture handler: append each POSTed JSON body to ``received_webhooks``.
+class WebhookReadbackError(RuntimeError):
+    """The webhook-capture service's readback control-plane failed or answered wrong.
 
-    Subclass it and give the subclass its own ``received_webhooks`` list so
-    captures don't bleed across suites (``do_POST`` reads ``self.received_webhooks``,
-    which resolves to the subclass attribute). Handlers that store more than the
-    raw payload (e.g. the a2a status-notification classifier) override
-    :meth:`record` — the HTTP framing is never copied.
+    Raised loudly rather than degrading to an empty capture list, which would
+    read as "no webhook arrived" (No Quiet Failures) when the actual cause is
+    a transport error or a cross-wired sibling stack on the same published
+    readback port.
     """
 
-    received_webhooks: list = []
 
-    def record(self, payload):
-        """Map an inbound JSON payload to the entry appended to ``received_webhooks``.
-
-        Subclass hook. A raised exception is answered with a 500 and is visible
-        to the test via the sender's delivery failure — never swallowed here.
-        """
-        return payload
-
-    def do_POST(self):
-        """Handle POST requests (webhook notifications)."""
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
-
-        try:
-            self.received_webhooks.append(self.record(json.loads(body.decode("utf-8"))))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "received"}')
-        except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
-
-    def log_message(self, format, *args):
-        """Suppress HTTP server logs during tests."""
-        pass
+def _readback_base_url() -> str:
+    host = os.getenv("WEBHOOK_CAPTURE_HOST", "localhost")
+    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8080")
+    return f"http://{host}:{port}"
 
 
-def _tls_context_for(webhook_host: str):
-    """A server-side TLS context for ``webhook_host``, or ``None`` if it can't verify.
+def _readback_request(method: str, path: str) -> dict:
+    url = f"{_readback_base_url()}{path}"
+    req = Request(url, method=method)
+    try:
+        with urlopen(req, timeout=_READBACK_TIMEOUT_SECONDS) as resp:  # noqa: S310 - test-only, own compose network
+            return json.loads(resp.read())
+    except URLError as exc:
+        raise WebhookReadbackError(f"webhook-capture readback {method} {url} failed: {exc}") from exc
 
-    Trusts exactly the names the generated CA's SAN actually covers
-    (``scripts/dev/gen_test_tls.py`` is the single source of that list — never
-    duplicated here): the ``*.adcp.test``/``*.localhost`` wildcards, the exact
-    DNS names (``localhost``, ``agent.localhost``, and — since salesagent-e6h0 —
-    ``host.docker.internal``, the host-run callback name), and the loopback IP
-    SANs. Any other host gets no cert and keeps serving plain http, unchanged.
-    The in-network runner registers its callback host as ``tests.adcp.test``
-    (docker-compose.e2e.yml); the host-run path (run_all_tests_host.sh) and the
-    loopback-explicit e2e callers (host='127.0.0.1') are now covered too. Every
-    covered host reuses the SAME generated leaf every other TLS front in this
-    stack reuses, wrapped around this receiver's own ephemeral socket in-process
-    — no separate nginx sidecar, because the port is only known once this
-    server has already bound it (salesagent-40qh).
+
+def _assert_own_stack() -> None:
+    """Fail loudly if the readback port belongs to a different (cross-wired) stack."""
+    body = _readback_request("GET", "/health")
+    expected = os.environ.get("COMPOSE_PROJECT_NAME", "")
+    actual = body.get("compose_project_name", "")
+    if expected and actual != expected:
+        raise WebhookReadbackError(
+            f"webhook-capture at {_readback_base_url()} belongs to stack {actual!r}, "
+            f"expected {expected!r} — cross-wired readback port from a concurrent stack"
+        )
+
+
+class ReceivedView:
+    """Live view over one key's captures — every read is a fresh readback round trip.
+
+    There is no local cache, so ``not received`` / ``received[0]`` / ``for w in
+    received`` all reflect the service's CURRENT state. ``.clear()`` atomically
+    drains the key server-side (never a separate read-then-clear), so a
+    capture landing between two calls is never silently lost — the same
+    guarantee the old in-process shared list gave for free.
     """
-    gen_test_tls = load_gen_test_tls()
-    covered_exact = set(gen_test_tls.SAN_DNS_NAMES) | set(gen_test_tls.SAN_IP_ADDRESSES)
-    is_covered = webhook_host in covered_exact or any(
-        name.startswith("*.") and webhook_host.endswith(name[1:]) for name in gen_test_tls.SAN_DNS_NAMES
-    )
-    if not is_covered:
-        return None
-    gen_test_tls.ensure_test_tls()
-    return server_ssl_context(gen_test_tls)
+
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def _fetch(self) -> list[dict]:
+        return _readback_request("GET", f"/webhook/{self._key}")["received"]
+
+    def __bool__(self) -> bool:
+        return bool(self._fetch())
+
+    def __len__(self) -> int:
+        return len(self._fetch())
+
+    def __getitem__(self, index):
+        return self._fetch()[index]
+
+    def __iter__(self):
+        return iter(self._fetch())
+
+    def clear(self) -> None:
+        _readback_request("DELETE", f"/webhook/{self._key}")
 
 
 @contextlib.contextmanager
-def run_webhook_capture_server(
-    handler_class: type[BaseHTTPRequestHandler],
-    received: list,
-    host: str | None = None,
-) -> Iterator[dict]:
-    """Run a daemon HTTP receiver on a free port and yield its webhook handle.
+def run_webhook_capture_server() -> Iterator[dict]:
+    """Register a fresh per-test capture key and yield its webhook handle.
 
-    ``handler_class`` records inbound POST bodies into ``received`` (a list it
-    mutates in place). ``host`` controls the callback hostname: the default
-    honors ``ADCP_WEBHOOK_HOST``, falling back to 'host.docker.internal' so a
-    dockerized server can reach a host-run receiver regardless of which launcher
-    started the stack (test-stack.sh, the CI e2e job's conftest, or manual). The
-    in-network runner overrides it to its compose alias 'tests.adcp.test'
-    (docker-compose.e2e.yml). The server never rewrites the URL — it delivers
-    the registered hostname verbatim. Pass an explicit host (e.g. '127.0.0.1')
-    when the receiver is only reachable on loopback.
-
-    Serves https (real TLS, verification ON) for every host the generated CA
-    covers — the ``*.adcp.test`` in-network alias, the loopback names/IPs, and
-    (since salesagent-e6h0) ``host.docker.internal`` itself; plain http only
-    for a genuinely uncovered host (salesagent-40qh, salesagent-e6h0).
-
-    Yields ``{"url", "server", "received"}``. ``received`` is cleared on entry
-    and exit so each test sees only its own captures.
+    Yields ``{"url", "received"}`` — the delivery URL through the shared TLS
+    front, and a live :class:`ReceivedView` over this key's captures.
+    ``received.clear()`` on entry and exit, same as the old in-process
+    receiver, so each test starts and ends clean. Fails loudly at entry if the
+    service is unreachable or belongs to a different compose stack, rather
+    than yielding a handle whose captures would silently never arrive.
     """
+    _assert_own_stack()
+    key = uuid.uuid4().hex
+    received = ReceivedView(key)
     received.clear()
-
-    webhook_host = host if host is not None else os.getenv("ADCP_WEBHOOK_HOST", "host.docker.internal")
-    ssl_context = _tls_context_for(webhook_host)
-    scheme = "https" if ssl_context is not None else "http"
-
-    # Listen on 0.0.0.0 (all interfaces), not 127.0.0.1: the in-network runner
-    # reaches this receiver by its compose network alias, so a loopback-only
-    # bind would be unreachable from the server container. The callback host
-    # (below) is what narrows reachability for loopback-only callers, not the
-    # listen address.
-    with serve_in_thread(handler_class, listen_host="0.0.0.0", ssl_context=ssl_context) as server:
-        port = server.server_address[1]
-        try:
-            yield {
-                "url": f"{scheme}://{webhook_host}:{port}/webhook",
-                "server": server,
-                "received": received,
-            }
-        finally:
-            received.clear()
+    try:
+        yield {"url": _DELIVERY_URL_TEMPLATE.format(key=key), "received": received}
+    finally:
+        received.clear()

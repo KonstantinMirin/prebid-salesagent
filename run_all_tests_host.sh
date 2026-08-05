@@ -105,9 +105,10 @@ elif [ "$MODE" = "ci" ]; then
     # HOST, not inside the dockerized server (which gets its own SSL_CERT_FILE
     # from docker-compose.e2e.yml directly) — so the test PROCESS itself needs
     # to trust the generated CA to dial the same https fronts (creative-agent,
-    # the webhook capture at host.docker.internal) the server dials. The
-    # COMBINED bundle (system CA + our private CA), never the private CA alone
-    # — that broke `uv sync` against real pypi.org once already.
+    # the webhook capture at webhooks.adcp.test — salesagent-amht.3) the
+    # server dials. The COMBINED bundle (system CA + our private CA), never
+    # the private CA alone — that broke `uv sync` against real pypi.org once
+    # already.
     #
     # There is no scheme hatch anymore (salesagent-e6h0 deleted it) — every
     # outbound origin here is TLS-fronted, so there is nothing left to relax.

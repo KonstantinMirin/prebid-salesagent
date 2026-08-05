@@ -65,8 +65,8 @@ services:
       # on a compose network resolves to a private bridge address). What used
       # to also live here, ADCP_OUTBOUND_ALLOW_INSECURE, is DELETED — every
       # outbound origin this server dials is TLS-fronted now: the webhook
-      # capture (tests/e2e/_webhook_capture.py, https in-process on the
-      # tests.adcp.test alias, salesagent-40qh) and creative-agent (https via
+      # capture (webhook-capture, https via the shared tls-proxy front below
+      # at webhooks.adcp.test, salesagent-amht.3) and creative-agent (https via
       # the shared tls-proxy front below, salesagent-amht.2), and the LocalOrigin-backed
       # integration suites migrated to the https local_origin_tls fixture
       # (salesagent-e6h0). Nothing in this stack needs plaintext http anymore.
@@ -126,7 +126,6 @@ services:
       postgres:
         condition: service_healthy
     extra_hosts:
-      - "host.docker.internal:host-gateway"
       # BLACKHOLE the live public creative agent: tests must NEVER depend on it
       # (its catalog drifts and it rate-limits under CI load — salesagent-9qe2,
       # salesagent-kczg). The registry aliases this host to the pinned in-network
@@ -169,11 +168,12 @@ services:
   # that answer true rather than merely asserted.
   #
   # ONE service fronts every *.adcp.test origin the shared stack dials outbound
-  # (proxy.adcp.test, creative-agent.adcp.test — a dotted alias per origin,
-  # chosen by the nginx `map $ssl_server_name` in the shared template). Adding
-  # an origin is one alias here plus one map line there — NOT a new service:
-  # a compose service's `aliases` list can carry any number of names, so
-  # fronting a second upstream never required a second container.
+  # (proxy.adcp.test, creative-agent.adcp.test, webhooks.adcp.test — a dotted
+  # alias per origin, chosen by the nginx `map $ssl_server_name` in the shared
+  # template). Adding an origin is one alias here plus one map line there —
+  # NOT a new service: a compose service's `aliases` list can carry any
+  # number of names, so fronting a second upstream never required a second
+  # container.
   #
   # Stock nginx:stable — the entrypoint renders /etc/nginx/templates/*.template
   # into conf.d with envsubst, so ${TLS_UPSTREAM} is per-instance and no custom
@@ -196,6 +196,7 @@ services:
     depends_on:
       - adcp-server
       - creative-agent
+      - webhook-capture
     networks:
       default:
         # Dotted aliases are the whole mechanism for the SHARED stack — one per
@@ -205,15 +206,51 @@ services:
         aliases:
           - proxy.adcp.test
           - creative-agent.adcp.test
+          - webhooks.adcp.test
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health",
+          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health",
         ]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ─── Long-lived webhook receiver (salesagent-amht.3) ───────────────────────
+  # Replaces the old per-test, ephemeral-port, in-process TLS receiver
+  # (tests/e2e/_webhook_capture.py) with what a webhook receiver actually is
+  # in production: a real, long-lived, named service. DELIVERY (the sales
+  # agent POSTing a payload) reaches it ONLY through the shared tls-proxy
+  # front above, at the fixed webhooks.adcp.test:8443 alias — this service
+  # itself never terminates TLS. READBACK (the test process reading/draining
+  # its own captures) talks to it directly, plain HTTP, by service name —
+  # test control-plane, not part of the graded TLS/egress surface.
+  #
+  # image: python:3.12-slim rather than Dockerfile.test: the module is stdlib
+  # only (http.server, json — no dependency on this repo's own package), and
+  # Dockerfile.test is profile-gated to the `tests` service alone and bakes a
+  # multi-minute playwright/chromium install with no existing build to cache
+  # off — building this service from it would add that cost to every host
+  # e2e run and every `make test-stack-up` (architect review, salesagent-amht.3).
+  # NOT profile-gated: every e2e up needs it, exactly like creative-agent.
+  webhook-capture:
+    image: python:3.12-slim
+    environment:
+      PORT: "8080"
+      # Read by GET /health so a readback client can assert it is talking to
+      # ITS OWN stack, not a cross-wired sibling on the same published
+      # readback port (docker-compose.e2e.ports.yml).
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-}
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: ["python", "-m", "tests.e2e.webhook_capture_service"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   # In-network test runner (Option 1). Reaches Postgres/the server by SERVICE
   # NAME on the compose network — postgres:5432, proxy:8000 — so it needs NO
@@ -262,14 +299,14 @@ services:
       ADCP_TEST_HOST: proxy
       ADCP_TEST_DB_HOST: postgres
       ADCP_TEST_DB_PORT: "5432"
-      # Webhook reverse-addressing: the server calls back to this runner by its
-      # network alias (requires `docker compose run --use-aliases`, and the
-      # `tests.adcp.test` alias below). Overrides the host-run default
-      # 'host.docker.internal' in tests/e2e/_webhook_capture.py; the server
-      # delivers the registered hostname verbatim. Dotted (not bare `tests`)
-      # so it falls under the generated CA's `*.adcp.test` wildcard SAN — the
-      # webhook capture serves TLS in-process on this name (salesagent-40qh).
-      ADCP_WEBHOOK_HOST: tests.adcp.test
+      # Webhook readback control-plane (salesagent-amht.3): the runner reaches
+      # the long-lived webhook-capture service by SERVICE NAME on the compose
+      # network, same pattern as reaching postgres:5432 — no published port,
+      # no network alias needed. Delivery (the server calling back) is
+      # separate and always goes through the shared tls-proxy front at the
+      # fixed webhooks.adcp.test:8443 alias, never this var.
+      WEBHOOK_CAPTURE_HOST: webhook-capture
+      WEBHOOK_CAPTURE_PORT: "8080"
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
       # https, via the shared tls-proxy front above (salesagent-amht.2).
@@ -347,6 +384,8 @@ services:
         condition: service_healthy
       creative-agent:
         condition: service_healthy
+      webhook-capture:
+        condition: service_healthy
     extra_hosts:
       # BLACKHOLE the live public creative agent (see the adcp-server entry):
       # a runner-side leak fails instantly instead of flaking on a 429.
@@ -360,15 +399,10 @@ services:
     # the race. (Host runs use localhost, so they never hit DNS at all.)
     dns_opt:
       - single-request-reopen
-    # The `tests.adcp.test` alias makes ADCP_WEBHOOK_HOST above resolve for
-    # real over the Docker network — requires `docker compose run --use-aliases`
-    # (run_all_tests.sh already passes it) to actually apply this block; a
-    # bare `run` without the flag gets no alias at all, not even the default
-    # service name (salesagent-40qh).
-    networks:
-      default:
-        aliases:
-          - tests.adcp.test
+    # No network alias needed here anymore (salesagent-amht.3 deleted the last
+    # consumer, ADCP_WEBHOOK_HOST) — this runner reaches every other service it
+    # needs (postgres, proxy, webhook-capture) by plain service name, same as
+    # postgres:5432 above.
     volumes:
       - .:/app
       - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree

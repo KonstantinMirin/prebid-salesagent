@@ -78,15 +78,17 @@ def serve_in_thread(
     handler_class: type[BaseHTTPRequestHandler],
     *,
     listen_host: str = "127.0.0.1",
+    port: int = 0,
     server_attrs: dict[str, Any] | None = None,
     ssl_context: ssl.SSLContext | None = None,
 ) -> Iterator[ThreadingHTTPServer]:
-    """Serve ``handler_class`` on an ephemeral port of ``listen_host``, in a daemon thread.
+    """Serve ``handler_class`` on ``port`` of ``listen_host``, in a daemon thread.
 
-    Binds port 0 and reads the kernel-assigned port back off
-    ``server.server_address`` rather than probing for a free port and rebinding
-    it — the probe-close-rebind form races another xdist worker between the
-    close and the rebind.
+    ``port`` defaults to 0 (ephemeral): binds any free port and reads the
+    kernel-assigned value back off ``server.server_address`` rather than
+    probing for a free port and rebinding it — the probe-close-rebind form
+    races another xdist worker between the close and the rebind. Pass a fixed
+    port for a long-lived service with a well-known address (salesagent-amht.3).
 
     ``server_attrs`` are set on the server instance *before* the serving thread
     starts, so a handler may read per-server state (e.g. the programmable
@@ -99,7 +101,7 @@ def serve_in_thread(
     rest of the e2e stack trusts (``scripts/dev/gen_test_tls.py``); this
     helper does not generate or know about any certificate itself.
     """
-    server = _server_class_for(listen_host)((listen_host, 0), handler_class)
+    server = _server_class_for(listen_host)((listen_host, port), handler_class)
     for name, value in (server_attrs or {}).items():
         setattr(server, name, value)
     if ssl_context is not None:

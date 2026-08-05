@@ -89,10 +89,6 @@ SAN_DNS_NAMES = (
     "localhost",
     "agent.localhost",
     "*.localhost",
-    # The host-run webhook capture's callback name when the server runs in
-    # Docker and the test runner (this receiver) runs on the host — Docker's
-    # own DNS name for "the host machine", not ours to choose (salesagent-e6h0).
-    "host.docker.internal",
 )
 # 127.0.0.2 (salesagent-e6h0): a SECOND loopback address, distinct from
 # 127.0.0.1, that tests/integration/test_protocol_webhook_egress.py needs to

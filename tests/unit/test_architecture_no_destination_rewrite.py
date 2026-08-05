@@ -122,7 +122,8 @@ class TestNoDestinationRewrite:
                 "The URL a caller supplies must reach the egress seam byte-for-byte; nothing may",
                 "rebuild it or swap its netloc/scheme in front of (or inside) the seam. If a test",
                 "stack needs a reachable callback host, register a reachable hostname instead",
-                "(ADCP_WEBHOOK_HOST — see tests/e2e/_webhook_capture.py). There is no allowlist.",
+                "(webhooks.adcp.test — see tests/e2e/_webhook_capture.py, salesagent-amht.3).",
+                "There is no allowlist.",
             ]
             raise AssertionError("\n".join(lines))
 

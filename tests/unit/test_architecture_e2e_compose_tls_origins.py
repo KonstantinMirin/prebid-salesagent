@@ -1,12 +1,23 @@
 """Structural guard: the e2e compose stack's outbound-only origins stay https.
 
-salesagent-40qh gave the creative-agent and webhook-capture origins in
-``docker-compose.e2e.yml`` a real TLS front specifically so
-``ADCP_OUTBOUND_ALLOW_INSECURE`` could eventually close for them
-(salesagent-e6h0). A future edit reverting ``CREATIVE_AGENT_URL`` to plain
-http, or ``ADCP_WEBHOOK_HOST`` to a bare (non-``.adcp.test``) alias, would
-silently re-introduce the disease this ticket fixed — this guard catches that
-at ``make quality`` time instead of at the next full e2e run.
+salesagent-40qh gave the creative-agent origin in ``docker-compose.e2e.yml``
+a real TLS front specifically so ``ADCP_OUTBOUND_ALLOW_INSECURE`` could
+eventually close for it (salesagent-e6h0). A future edit reverting
+``CREATIVE_AGENT_URL`` to plain http would silently re-introduce the disease
+this ticket fixed — this guard catches that at ``make quality`` time instead
+of at the next full e2e run.
+
+salesagent-amht.3 replaced the per-launcher, env-configurable webhook
+callback host (``ADCP_WEBHOOK_HOST``, with a ``host.docker.internal``
+fallback) with a fixed compose-network alias (``webhooks.adcp.test``) behind
+the shared TLS front — the same primitive ``CREATIVE_AGENT_URL`` already
+uses. The check below is deliberately NOT a repoint of the old "does the
+value end in .adcp.test" check (that would pass vacuously forever once the
+var no longer exists to check); it instead guards the deletion itself — the
+var reappearing anywhere in ``docker-compose.e2e.yml`` is the regression,
+regardless of what value it would carry. The FULL generalized invariant —
+one TLS terminator, every dialed origin https, one set of TLS material — is
+salesagent-amht.5's explicit scope, not repeated here.
 """
 
 from __future__ import annotations
@@ -20,7 +31,7 @@ _COMPOSE_FILE = _REPO_ROOT / "docker-compose.e2e.yml"
 
 
 def find_tls_origin_violations(compose: dict) -> list[str]:
-    """Return one message per service whose CREATIVE_AGENT_URL/ADCP_WEBHOOK_HOST regressed to plain http."""
+    """Return one message per service whose CREATIVE_AGENT_URL regressed to plain http."""
     violations: list[str] = []
     for service_name, service in compose.get("services", {}).items():
         env = service.get("environment") or {}
@@ -29,16 +40,37 @@ def find_tls_origin_violations(compose: dict) -> list[str]:
         creative_url = env.get("CREATIVE_AGENT_URL")
         if creative_url is not None and not str(creative_url).startswith("https://"):
             violations.append(f"{service_name}.CREATIVE_AGENT_URL is not https: {creative_url!r}")
-        webhook_host = env.get("ADCP_WEBHOOK_HOST")
-        if webhook_host is not None and not str(webhook_host).endswith(".adcp.test"):
-            violations.append(f"{service_name}.ADCP_WEBHOOK_HOST is not a .adcp.test alias: {webhook_host!r}")
     return violations
 
 
-def test_e2e_compose_creative_agent_and_webhook_stay_https() -> None:
-    """The real docker-compose.e2e.yml has no plain-http regression on either origin."""
+def find_dead_webhook_env_var(compose: dict) -> list[str]:
+    """Return one message per service that resurrects the deleted ``ADCP_WEBHOOK_HOST`` mechanism.
+
+    salesagent-amht.3 deleted this var entirely — the webhook-capture service
+    is reachable at the fixed ``webhooks.adcp.test`` alias, never an
+    env-configurable hostname. Its reappearance means a future change
+    resurrected the per-launcher host-configuration disease this ticket removed.
+    """
+    violations: list[str] = []
+    for service_name, service in compose.get("services", {}).items():
+        env = service.get("environment") or {}
+        if not isinstance(env, dict):
+            continue
+        if "ADCP_WEBHOOK_HOST" in env:
+            violations.append(f"{service_name}.ADCP_WEBHOOK_HOST resurrected: {env['ADCP_WEBHOOK_HOST']!r}")
+    return violations
+
+
+def test_e2e_compose_creative_agent_stays_https() -> None:
+    """The real docker-compose.e2e.yml has no plain-http regression on the creative-agent origin."""
     compose = yaml.safe_load(_COMPOSE_FILE.read_text())
     assert find_tls_origin_violations(compose) == []
+
+
+def test_e2e_compose_never_resurrects_adcp_webhook_host() -> None:
+    """The real docker-compose.e2e.yml never re-adds ADCP_WEBHOOK_HOST to any service."""
+    compose = yaml.safe_load(_COMPOSE_FILE.read_text())
+    assert find_dead_webhook_env_var(compose) == []
 
 
 def test_detector_catches_a_reverted_creative_agent_url() -> None:
@@ -53,14 +85,14 @@ def test_detector_catches_a_reverted_creative_agent_url() -> None:
     ]
 
 
-def test_detector_catches_a_reverted_webhook_host_alias() -> None:
-    """The live detector reports a synthetic ADCP_WEBHOOK_HOST reverted to the bare (non-TLS) alias."""
+def test_detector_catches_a_resurrected_adcp_webhook_host() -> None:
+    """The live detector reports a synthetic ADCP_WEBHOOK_HOST resurrection, regardless of its value."""
     synthetic = {
         "services": {
-            "tests": {"environment": {"ADCP_WEBHOOK_HOST": "tests"}},
+            "tests": {"environment": {"ADCP_WEBHOOK_HOST": "tests.adcp.test"}},
         }
     }
-    assert find_tls_origin_violations(synthetic) == ["tests.ADCP_WEBHOOK_HOST is not a .adcp.test alias: 'tests'"]
+    assert find_dead_webhook_env_var(synthetic) == ["tests.ADCP_WEBHOOK_HOST resurrected: 'tests.adcp.test'"]
 
 
 def test_detector_ignores_unrelated_env_vars() -> None:
@@ -71,3 +103,4 @@ def test_detector_ignores_unrelated_env_vars() -> None:
         }
     }
     assert find_tls_origin_violations(synthetic) == []
+    assert find_dead_webhook_env_var(synthetic) == []
