@@ -112,28 +112,34 @@ storyboards:
       grades the v3 envelope's own required fields, which is untracked.
 
   universal/webhook-emission.yaml:
-    issues: [1639, 1735, 1712]
+    issues: [1869, 1291, 1639, 1735, 1712]
     coverage: partial
     note: >-
       MEASURED, not inferred: hosting a webhook receiver turned this storyboard
       from wholly skipped into 8 graded failures (capability_discovery,
       fetch_brand_json, trigger_webhook_operation, trigger_operation_id_echo,
       trigger_idempotent_webhook_initial, trigger_retry_scenario,
-      trigger_signed_webhook, assert_webhook_signing_key_present). The three
-      mapped issues do NOT cover them. #1639 is lifecycle emission — WHEN a
-      terminal webhook is enqueued — and says so ("lifecycle-final largely
-      ungraded in conformance"). #1735 and #1712 are test-infra: grading our own
-      UC-004 BDD scenarios on a real receiver, not production behaviour, and
-      #1735 targets the DEPRECATED HMAC fallback rather than RFC 9421.
-      Untracked entirely are the storyboard's four load-bearing payload
+      trigger_signed_webhook, assert_webhook_signing_key_present).
+      The three webhook issues that were mapped here first cover NONE of them:
+      #1639 is lifecycle emission — WHEN a terminal webhook is enqueued — and
+      says so ("lifecycle-final largely ungraded in conformance"); #1735 and
+      #1712 are test-infra, grading our own UC-004 BDD scenarios on a real
+      receiver rather than production behaviour, and #1735 targets the
+      DEPRECATED HMAC fallback rather than RFC 9421.
+      The 3 signing-side checks (fetch_brand_json, trigger_signed_webhook,
+      assert_webhook_signing_key_present) ARE addressed by #1291, whose
+      implementation branch signs webhook deliveries under the webhook profile
+      tag ("adcp/webhook-signing/v1") and publishes JWKS at
+      /.well-known/jwks.json governed by brand.json's jwks_uri. Judge #1291 by
+      that branch, not by its TL;DR: the issue text argues REQUEST signing is
+      optional and capability-advertised, which is true and is a different
+      thing — webhook signing is a separate profile and baseline in 3.0 unless
+      the buyer opts into the deprecated HMAC fallback.
+      Genuinely untracked are the payload-correlation and idempotency
       requirements: operation_id echoed from push_notification_config (sellers
-      MUST NOT derive it from the receiver URL), idempotency_key present and
-      byte-stable across retries (adcp#2417), replay of an idempotent request
-      not emitting a second logical webhook, and RFC 9421 webhook signing.
-      Do NOT map the signing checks to #1291 — that is REQUEST signing, which
-      the spec makes optional and capability-advertised; webhook signing is a
-      separate profile (tag="adcp/webhook-signing/v1", JWKS published via
-      brand.json) and is BASELINE in 3.0 unless the buyer opts into HMAC.
+      MUST NOT derive it by parsing the receiver URL), idempotency_key present
+      and byte-stable across retries (adcp#2417), and replay of an idempotent
+      request not emitting a second logical webhook. Those are #1869.
   universal/webhook-receiver-envelope.yaml:
     issues: [1735]
     coverage: partial
