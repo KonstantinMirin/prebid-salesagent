@@ -2432,8 +2432,12 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     The scenario sets up a non-existent package assignment under strict
     validation_mode. Production must raise AdCPNotFoundError whose message
     references the missing package — not just any AdCPError subclass.
+
+    Error code is wire-first (real wire envelope preferred over the lossy
+    reconstructed exception), same strategy as then_error_code.
     """
     from src.core.exceptions import AdCPError, AdCPNotFoundError
+    from tests.bdd.steps.generic.then_error import _wire_code
 
     error = ctx.get("error")
     assert error is not None, (
@@ -2443,12 +2447,11 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError for strict mode abort, got {type(error).__name__}: {error}"
     )
+    error_code = _wire_code(ctx) or getattr(error, "error_code", "") or ""
     # Verify the error is specifically a not-found error, not an incidental failure
     assert (
-        isinstance(error, AdCPNotFoundError)
-        or "not_found" in getattr(error, "error_code", "").lower()
-        or "not found" in str(error).lower()
-    ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
+        isinstance(error, AdCPNotFoundError) or "not_found" in error_code.lower() or "not found" in str(error).lower()
+    ), f"Expected not-found error for missing package, got error_code={error_code!r}: {error}"
     # Verify the error references the bad package from the Given step
     bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
     if bad_package:

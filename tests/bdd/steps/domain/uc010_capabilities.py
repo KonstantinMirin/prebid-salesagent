@@ -1237,7 +1237,7 @@ def then_wire_error_message_contains(ctx: dict, first: str, second: str) -> None
     for tenant '...'" and adcp_a2a_server.py "Authentication token is invalid or
     expired." both contain "token" and "invalid". Requiring both rejects the
     AUTH_REQUIRED missing-credential wording ("authentication required")."""
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    envelope = ctx["result"].wire_error_envelope
     assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
     errors = envelope.get("errors") or [{}]
     message = errors[0].get("message") or ""
@@ -2084,12 +2084,11 @@ def then_rejection_names(ctx: dict, token: str) -> None:
     An operator who declared several blocks needs to know which one to remove; a
     bare CONFIGURATION_ERROR would make them bisect their own config. Pins the
     message content because ``core/error.json`` leaves ``message`` a free string,
-    so only production's actual wording can be asserted.
+    so only production's actual wording can be asserted. Always follows
+    ``then_declaration_rejected`` in every scenario using this step, so the
+    code/recovery are the same CONFIGURATION_ERROR/terminal pair asserted there.
     """
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
-    assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
-    message = (envelope.get("errors") or [{}])[0].get("message") or ""
-    assert token in message, f"rejection message does not name {token!r}: {message!r}"
+    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal", message_substr=token)
 
 
 @then("each specialism should be a member of the 3.1.1 specialism enum")

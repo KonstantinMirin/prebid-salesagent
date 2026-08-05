@@ -1744,11 +1744,15 @@ def then_error_variant_no_accounts(ctx: dict) -> None:
 
 @then(parsers.re(r"the response is an error variant"))
 def then_error_exists(ctx: dict) -> None:
-    """Assert an error occurred — the response is an error variant."""
-    error = _get_error(ctx)
-    # Verify the error has a meaningful error_code (not just any exception)
-    error_code = getattr(error, "error_code", None)
-    assert error_code is not None, f"Error variant must carry an error_code, got: {error}"
+    """Assert an error occurred — the response is an error variant.
+
+    Wire-first, reconstructed fallback -- same strategy as then_error_code.
+    """
+    error_code = _wire_code(ctx)
+    if error_code is None:
+        error = _get_error(ctx)
+        error_code = getattr(error, "error_code", None)
+    assert error_code is not None, f"Error variant must carry an error_code, got: {ctx.get('error')!r}"
     assert isinstance(error_code, str) and error_code.strip(), (
         f"Error variant error_code must be a non-empty string, got: {error_code!r}"
     )
@@ -3015,10 +3019,12 @@ def then_no_context(ctx: dict) -> None:
 
 @then(parsers.re(r"the response is an error variant with (?P<code>\w+)"))
 def then_error_with_code(ctx: dict, code: str) -> None:
-    """Assert the response is an error with a specific error code."""
-    error = _get_error(ctx)
-    actual = getattr(error, "error_code", None)
-    assert actual == code, f"Expected error code '{code}', got '{actual}'"
+    """Assert the response is an error with a specific error code -- wire-first.
+
+    Same wire-first strategy as then_error_code (:1803): prefer the real wire
+    envelope's code over the lossy reconstructed ctx['error'].
+    """
+    ctx["result"].assert_wire_error(code)
 
 
 # ── Then: input validation assertions ──────────────────────────────────
