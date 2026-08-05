@@ -1177,6 +1177,25 @@ class TestResponseModelAlignment:
                 with pytest.raises(ValidationError):
                     alignment.model(**partial)
 
+        # constructor_optional_fields fields are excluded from the raise/default-value
+        # check above entirely (the model neither rejects their omission nor leaves a
+        # non-None attribute) -- WITHOUT this, nothing at the alignment-suite level ever
+        # exercises what happens when one is actually omitted. That gap is exactly how
+        # Product.reporting_capabilities shipped omitted from model_dump() output
+        # (salesagent-00pl.1): the model's own None default is the value left when
+        # omitted, so the requiredness invariant can only be enforced by model_dump()
+        # itself backfilling a real default -- assert that here, generically, for any
+        # current or future field using this escape hatch.
+        for fname in required & alignment.constructor_optional_fields:
+            partial = {k: v for k, v in alignment.sample.items() if k != fname}
+            instance = alignment.model(**partial)
+            dumped = instance.model_dump(mode="json")
+            assert dumped.get(fname) is not None, (
+                f"{alignment.model.__name__}.{fname} is schema-required and excluded from "
+                f"constructor-time enforcement (constructor_optional_fields) -- model_dump() "
+                f"must still guarantee a non-null value for it when omitted from construction."
+            )
+
 
 def _enumerate_grounded_response_models() -> set[type]:
     """Enumerate every local response model the registry MUST cover.

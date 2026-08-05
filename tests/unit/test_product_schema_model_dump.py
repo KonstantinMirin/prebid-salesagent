@@ -117,26 +117,11 @@ class TestCoreFieldsDoNotForceInvalidNull:
     """core_fields must never force-include a field the pinned schema types
     non-nullable (R3-8, salesagent-1zq3.8).
 
-    Per the pinned core/product.json: format_ids is typed "array" and
-    reporting_capabilities is a $ref object — neither accepts null. The
-    comment directly above core_fields already says format_ids "must not be
-    force-included as null"; this pins that both fields actually behave that
-    way when unset, rather than only documenting it.
+    Per the pinned core/product.json: format_ids is typed "array", which
+    rejects null. The comment directly above core_fields already says
+    format_ids "must not be force-included as null"; this pins that it
+    actually behaves that way when unset, rather than only documenting it.
     """
-
-    def test_reporting_capabilities_omitted_when_unset(self):
-        """reporting_capabilities=None must not appear as an explicit null.
-
-        Spec: core/product.json properties.reporting_capabilities is a $ref
-        to reporting-capabilities.json (object), which rejects null.
-        """
-        product = create_test_product(reporting_capabilities=None)
-        data = product.model_dump()
-
-        assert "reporting_capabilities" not in data, (
-            "reporting_capabilities=None must be omitted, not force-included as null "
-            "(the pinned schema types it as a non-nullable object)"
-        )
 
     def test_format_ids_omitted_when_unset(self):
         """format_ids=None must not appear as an explicit null.
@@ -162,6 +147,35 @@ class TestCoreFieldsDoNotForceInvalidNull:
             "format_ids=None must be omitted, not force-included as null "
             "(the pinned schema types it as a non-nullable array)"
         )
+
+
+class TestReportingCapabilitiesAlwaysPresent:
+    """reporting_capabilities is unconditionally required by the pinned
+    core/product.json's top-level required array (salesagent-00pl.1) —
+    unlike format_ids (only required via anyOf with format_options),
+    Product.model_dump() must never omit it, even when unset on the model.
+    When unset, model_dump() backfills the same minimal default
+    product_conversion.py's primary path already provides, now from one
+    shared source of truth instead of two.
+    """
+
+    def test_present_and_non_null_when_unset(self):
+        """reporting_capabilities=None must still appear, backfilled with a default."""
+        product = create_test_product(reporting_capabilities=None)
+        data = product.model_dump()
+
+        assert "reporting_capabilities" in data, (
+            "reporting_capabilities is schema-required and must never be omitted, even when unset on the model"
+        )
+        assert data["reporting_capabilities"] is not None
+
+    def test_preserves_explicit_value_when_set(self):
+        """An explicitly-set reporting_capabilities is not overwritten by the default."""
+        rc = {"available_metrics": ["impressions"], "expected_delay_minutes": 30}
+        product = create_test_product(reporting_capabilities=rc)
+        data = product.model_dump()
+
+        assert data["reporting_capabilities"]["expected_delay_minutes"] == 30
 
 
 class TestOptionalFieldsOmittedWhenUnset:

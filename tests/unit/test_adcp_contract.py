@@ -2799,7 +2799,7 @@ class TestProductV36FieldContract:
     - product_card (optional): presence-when-set + absence-when-null
     - product_card_detailed (optional): presence-when-set + absence-when-null
     - placements (optional): presence-when-set + absence-when-null
-    - reporting_capabilities (optional): presence-when-set + absence-when-null
+    - reporting_capabilities (REQUIRED): always present, default-backfilled when unset
     - signal_targeting_allowed (optional, default=False): presence + default
     - property_targeting_allowed (optional, default=False): presence + default
     - catalog_match (optional): presence-when-set + absence-when-null
@@ -2998,26 +2998,23 @@ class TestProductV36FieldContract:
         assert dump["placements"][0]["name"] == "Top Banner"
         assert dump["placements"][1]["placement_id"] == "sidebar"
 
-    # --- reporting_capabilities (optional here, default=None) ---
+    # --- reporting_capabilities (REQUIRED, default=None on the model) ---
 
-    def test_reporting_capabilities_absent_when_null(self):
-        """reporting_capabilities not force-included as null when unset (R3-8, salesagent-1zq3.8).
+    def test_reporting_capabilities_always_present(self):
+        """reporting_capabilities is never omitted from model_dump(), even when unset.
 
-        adcp 4.3 makes reporting_capabilities required on the *wire* schema,
-        but the pinned core/product.json types it as a $ref object that
-        rejects null — so when it is genuinely unset here, model_dump() must
-        OMIT the key like every other optional field in this class
-        (product_card, placements, etc.), not force it in as an explicit
-        null. This class's own docstring already documents
-        "reporting_capabilities (optional): presence-when-set +
-        absence-when-null"; forcing null contradicted that. The primary
-        production path (product_conversion.py) backfills a real value
-        before this ever runs, so the wire-required invariant is enforced
-        upstream, not by force-including null here.
+        The pinned core/product.json's top-level required array lists
+        reporting_capabilities unconditionally (unlike format_ids, which is
+        only required via anyOf with format_options) — it is a genuine
+        AdCP-schema requirement, not merely a wire-layer one. Product's field
+        override still accepts None at construction time (callers may not
+        know it yet), but model_dump() backfills a minimal default so the
+        output is always schema-valid regardless of caller (salesagent-00pl.1).
         """
         product = self._make_base_product()
         dump = product.model_dump()
-        assert "reporting_capabilities" not in dump
+        assert "reporting_capabilities" in dump
+        assert dump["reporting_capabilities"] is not None
 
     def test_reporting_capabilities_present_when_set(self):
         """reporting_capabilities appears in model_dump with correct structure."""

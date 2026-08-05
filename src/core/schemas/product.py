@@ -25,6 +25,19 @@ from src.core.schemas._base import (
     strip_none_deep,
 )
 
+# core/product.json requires reporting_capabilities unconditionally. Minimal
+# default for callers that haven't populated it yet — single source of
+# truth for both Product.model_dump() and product_conversion.py's primary
+# ORM->schema path (which just leaves the field unset and lets this apply).
+DEFAULT_REPORTING_CAPABILITIES: dict[str, Any] = {
+    "available_reporting_frequencies": ["daily"],
+    "expected_delay_minutes": 1440,
+    "timezone": "UTC",
+    "supports_webhooks": False,
+    "available_metrics": ["impressions"],
+    "date_range_support": "date_range",
+}
+
 
 class ProductCard(LibraryProductCard):
     """Visual card for displaying products in user interfaces per AdCP spec.
@@ -78,8 +91,10 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
-    # adcp 4.3 makes reporting_capabilities required.  Override as optional
-    # — our product builder sets it when available from the adapter.
+    # adcp 4.3 makes reporting_capabilities required. Override as optional at
+    # construction time — not every caller knows it yet — but model_dump()
+    # below backfills DEFAULT_REPORTING_CAPABILITIES when unset, so the
+    # pinned schema's unconditional requirement is always satisfied on output.
     reporting_capabilities: Any | None = None  # type: ignore[assignment]
 
     # Internal-only fields (not in AdCP spec)
@@ -162,16 +177,19 @@ class Product(LibraryProduct):
         # Only fields the Pydantic model guarantees are never None belong here.
         # product_id/name/description/delivery_type are required (non-Optional)
         # fields on the library base, so they can never actually be null —
-        # listing them is a no-op safety net. format_ids and
-        # reporting_capabilities must NOT be listed: both are Optional here
-        # (see the field overrides above) and the pinned product.json schema
-        # types format_ids "array" and reporting_capabilities as a $ref
-        # object — neither accepts null, so force-including either as None
-        # would emit schema-invalid output (R3-8, salesagent-1zq3.8). When
-        # actually unset, they must be OMITTED like any other optional field
-        # (product_conversion.py enforces both are populated on the primary
-        # path: it raises with no format_ids and backfills
-        # reporting_capabilities).
+        # listing them is a no-op safety net. format_ids must NOT be listed:
+        # it is Optional here (see the field override above) and the pinned
+        # product.json schema types it "array", which rejects null, so
+        # force-including it as None would emit schema-invalid output
+        # (R3-8, salesagent-1zq3.8). When actually unset, it must be OMITTED
+        # like any other optional field — it is only required via anyOf with
+        # format_options, not unconditionally.
+        #
+        # reporting_capabilities is different: the pinned schema's top-level
+        # required array lists it unconditionally, so omitting it is ALSO
+        # schema-invalid. It is not listed in core_fields (that would force
+        # in a raw None); instead it gets a real default backfilled below,
+        # after this loop, when still unset.
         core_fields = {
             "product_id",
             "name",
@@ -197,6 +215,11 @@ class Product(LibraryProduct):
             # Include empty pricing_options explicitly (required per AdCP schema)
             elif key == "pricing_options" and value == []:
                 adcp_data[key] = []
+
+        # reporting_capabilities is unconditionally schema-required (unlike
+        # format_ids) — never omit it, even when unset on the model.
+        if adcp_data.get("reporting_capabilities") is None:
+            adcp_data["reporting_capabilities"] = dict(DEFAULT_REPORTING_CAPABILITIES)
 
         return adcp_data
 
