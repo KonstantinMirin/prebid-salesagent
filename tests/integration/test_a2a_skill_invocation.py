@@ -132,6 +132,16 @@ class A2AAdCPValidator:
 
         return result
 
+    def assert_schema_valid(self, validation_result: dict, skill_name: str) -> None:
+        """Print validation errors/warnings, then assert the response is schema-valid."""
+        if validation_result["errors"]:
+            print(f"Schema validation errors: {validation_result['errors']}")
+        if validation_result["warnings"]:
+            print(f"Schema validation warnings: {validation_result['warnings']}")
+        assert validation_result["valid"] is True, (
+            f"{skill_name} response should be schema-valid but wasn't: {validation_result['errors']}"
+        )
+
 
 @pytest.mark.requires_db
 class TestA2ASkillInvocation:
@@ -210,13 +220,7 @@ class TestA2ASkillInvocation:
             validation_result = await validator.validate_a2a_skill_response("get_products", result)
             print(f"Natural language get_products validation: {validation_result}")
 
-            if validation_result["errors"]:
-                print(f"Schema validation errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Schema validation warnings: {validation_result['warnings']}")
-            assert validation_result["valid"] is True, (
-                f"get_products response should be schema-valid but wasn't: {validation_result['errors']}"
-            )
+            validator.assert_schema_valid(validation_result, "get_products")
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products(
@@ -267,13 +271,7 @@ class TestA2ASkillInvocation:
             validation_result = await validator.validate_a2a_skill_response("get_products", result)
             print(f"Explicit skill get_products validation: {validation_result}")
 
-            if validation_result["errors"]:
-                print(f"Schema validation errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Schema validation warnings: {validation_result['warnings']}")
-            assert validation_result["valid"] is True, (
-                f"get_products response should be schema-valid but wasn't: {validation_result['errors']}"
-            )
+            validator.assert_schema_valid(validation_result, "get_products")
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products_a2a_spec(
@@ -324,13 +322,7 @@ class TestA2ASkillInvocation:
             validation_result = await validator.validate_a2a_skill_response("get_products", result)
             print(f"A2A spec 'input' field get_products validation: {validation_result}")
 
-            if validation_result["errors"]:
-                print(f"Schema validation errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Schema validation warnings: {validation_result['warnings']}")
-            assert validation_result["valid"] is True, (
-                f"get_products response should be schema-valid but wasn't: {validation_result['errors']}"
-            )
+            validator.assert_schema_valid(validation_result, "get_products")
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy(
