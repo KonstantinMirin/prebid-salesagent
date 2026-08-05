@@ -60,6 +60,7 @@ class TestSignalsAgentRegistry:
         # Mock the adcp client
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock successful response
         from adcp import GetSignalsResponse
@@ -131,6 +132,7 @@ class TestSignalsAgentRegistry:
         # Mock the adcp client
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock async submission response
         mock_result = Mock()
@@ -169,6 +171,7 @@ class TestSignalsAgentRegistry:
         # Mock the adcp client
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock authentication error
         from adcp.exceptions import ADCPAuthenticationError
@@ -206,6 +209,7 @@ class TestSignalsAgentRegistry:
 
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         from adcp.exceptions import ADCPTimeoutError
 
@@ -241,6 +245,7 @@ class TestSignalsAgentRegistry:
 
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         from adcp.exceptions import ADCPConnectionError
 
@@ -281,6 +286,7 @@ class TestSignalsAgentRegistry:
 
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         from adcp.exceptions import ADCPError
 

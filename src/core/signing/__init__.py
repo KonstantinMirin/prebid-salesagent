@@ -24,6 +24,10 @@ auto-signing bundle). Ours — :class:`src.core.config.SigningConfig` — is a d
 thing. Alias at any import site that touches both.
 """
 
+from src.core.signing._mcp_client_signing_shim import (
+    bootstrap_capabilities_for_signed_call,
+    sign_scoped_mcp_call,
+)
 from src.core.signing._upstream.errors import (
     REQUEST_TO_WEBHOOK_CODE,
     WEBHOOK_TARGET_URI_MALFORMED,
@@ -81,6 +85,8 @@ _LAZY_EXPORTS = {
     "MINTABLE_REF_SCHEMES": "src.core.signing.keys",
     "provision_signing_key": "src.core.signing.keys",
     "clear_signing_provider_cache": "src.core.signing.provider",
+    "resolve_signing_material": "src.core.signing.provider",
+    "signing_config_from_material": "src.core.signing.provider",
     "adcp_challenge_signer": "src.core.signing.webhook_sender_factory",
     "credential_fingerprint": "src.core.signing.webhook_sender_factory",
     "declared_auth": "src.core.signing.webhook_sender_factory",
@@ -117,6 +123,7 @@ __all__ = [
     "WEBHOOK_TARGET_URI_MALFORMED",
     "WebhookSigningPosture",
     "adcp_challenge_signer",
+    "bootstrap_capabilities_for_signed_call",
     "bucket_names",
     "build_adagents_json",
     "build_brand_json",
@@ -139,7 +146,10 @@ __all__ = [
     "reject_malformed_target",
     "request_signing_buckets_declared",
     "requires_trust_root",
+    "resolve_signing_material",
     "send_signed_challenge",
+    "sign_scoped_mcp_call",
+    "signing_config_from_material",
     "signing_key_backed",
     "sql_value_list",
     "unsupported_webhook_signing_posture",

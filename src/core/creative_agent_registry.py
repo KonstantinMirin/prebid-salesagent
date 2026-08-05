@@ -290,28 +290,45 @@ class CreativeAgentRegistry:
         """
         return canonical_agent_url(agent_url)
 
-    def _build_adcp_client(self, agents: list[CreativeAgent]) -> ADCPMultiAgentClient:
+    def _build_adcp_client(self, agents: list[CreativeAgent], tenant_id: str | None = None) -> ADCPMultiAgentClient:
         """Build AdCP client from creative agent configs.
 
         Connections to the public default agent are rerouted through
         ``_connection_agent_url`` (pinned-container alias in test/CI stacks);
         the agents' identity urls (cache keys, format_id federation) are
         untouched — only the transport config sees the alias.
+
+        RFC 9421 outbound request signing (#1291 C3): when *tenant_id* is
+        known, routes through the shared
+        ``build_adcp_multi_agent_client`` seam, which owns its own short-lived
+        session to resolve the tenant's signing key -- signing is strictly
+        additive (a keyless tenant, or one with no publishable origin, gets an
+        unsigned client, exactly as before this seam existed). *tenant_id* is
+        ``None`` for callers that don't have one in scope yet
+        (``get_formats_for_agent`` / ``get_format`` -- filed as a follow-up to
+        thread tenant_id through that chain); those calls stay unsigned, same
+        as today.
         """
         from dataclasses import replace as _dc_replace
 
-        from src.core.helpers.adapter_helpers import build_agent_config
+        from src.core.helpers.adapter_helpers import build_adcp_multi_agent_client
 
-        return ADCPMultiAgentClient(
-            agents=[
-                build_agent_config(
-                    _dc_replace(agent, agent_url=_connection_agent_url(agent.agent_url))
-                    if _connection_agent_url(agent.agent_url) != agent.agent_url
-                    else agent
-                )
-                for agent in agents
-            ]
-        )
+        aliased_agents = [
+            _dc_replace(agent, agent_url=_connection_agent_url(agent.agent_url))
+            if _connection_agent_url(agent.agent_url) != agent.agent_url
+            else agent
+            for agent in agents
+        ]
+
+        if tenant_id is None:
+            return build_adcp_multi_agent_client(aliased_agents, tenant_id=None)
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.signing_key import SigningKeyRepository
+
+        with get_db_session() as session:
+            repo = SigningKeyRepository(session, tenant_id)
+            return build_adcp_multi_agent_client(aliased_agents, tenant_id=tenant_id, repo=repo)
 
     def _get_tenant_agents(self, tenant_id: str | None) -> list[CreativeAgent]:
         """Get list of creative agents for a tenant.
@@ -415,9 +432,26 @@ class CreativeAgentRegistry:
                 name_search=name_search,
             )
 
-            # Call agent using adcp library
+            # Call agent using adcp library. RFC 9421 outbound signing (#1291 C3):
+            # ADCPClient's own auto-signing is a verified no-op on MCP transport
+            # (adcontextprotocol/adcp-client-python#1017) unless the ENTIRE call
+            # -- including the lazy session connect -- is scoped inside
+            # sign_scoped_mcp_call. Only pay for the bootstrap+wrap when this
+            # agent's client actually has signing configured.
             logger.info(f"_fetch_formats_from_agent: Calling {agent.name} at {agent.agent_url}")
-            result = await client.agent(agent.name).list_creative_formats(request)
+            sub_client = client.agent(agent.name)
+            if sub_client.signing is not None:
+                from src.core.signing import (
+                    bootstrap_capabilities_for_signed_call,
+                    sign_scoped_mcp_call,
+                )
+
+                await bootstrap_capabilities_for_signed_call(sub_client, sub_client.agent_config)
+                result = await sign_scoped_mcp_call(
+                    "list_creative_formats", lambda: sub_client.list_creative_formats(request)
+                )
+            else:
+                result = await sub_client.list_creative_formats(request)
             logger.info(f"_fetch_formats_from_agent: Got result status={result.status}, type={type(result)}")
 
             # Handle response based on status
@@ -771,7 +805,7 @@ class CreativeAgentRegistry:
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
 
         # Build client for all agents
-        client = self._build_adcp_client(agents)
+        client = self._build_adcp_client(agents, tenant_id=tenant_id)
 
         for agent in agents:
             logger.info(f"list_all_formats: Fetching from {agent.agent_url}")

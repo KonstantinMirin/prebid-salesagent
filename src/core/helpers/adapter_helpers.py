@@ -6,11 +6,14 @@ import logging
 from typing import TYPE_CHECKING, Any, NoReturn, Protocol
 
 if TYPE_CHECKING:
-    from adcp import AgentConfig
+    from collections.abc import Sequence
+
+    from adcp import ADCPMultiAgentClient, AgentConfig
     from adcp.exceptions import ADCPError
 
     from src.adapters import AdServerAdapter
     from src.adapters.base import TargetingCapabilities
+    from src.core.database.repositories.signing_key import SigningKeyRepository
 
 
 class _HasAgentFields(Protocol):
@@ -47,6 +50,67 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
         auth_header=agent.auth_header or "x-adcp-auth",
         timeout=float(agent.timeout),
     )
+
+
+def build_adcp_multi_agent_client(
+    agents: Sequence[_HasAgentFields], *, tenant_id: str | None, repo: SigningKeyRepository | None = None
+) -> ADCPMultiAgentClient:
+    """The ONE seam that builds an outbound ``ADCPMultiAgentClient``, signed or not.
+
+    This is the ONLY place in ``src/`` that may construct an
+    ``ADCPMultiAgentClient``/``ADCPClient`` for an outbound call to another
+    agent (enforced by ``tests/unit/test_guards_outbound_adcp_client_seam.py``)
+    -- so neither registry (``CreativeAgentRegistry``, ``SignalsAgentRegistry``)
+    ever names ``SigningConfig`` or ``resolve_signing_material`` directly, and a
+    future new call site cannot silently skip RFC 9421 request signing (#1291 C3).
+
+    ``tenant_id``/``repo`` are ``None`` for callers with no tenant in scope yet
+    (e.g. a connectivity smoke-check against an as-yet-unsaved agent config) --
+    those calls stay unsigned, same as before this seam existed.
+
+    Signing is otherwise STRICTLY ADDITIVE (never breaks a call that works
+    unsigned today):
+
+    * No active signing key for *tenant_id* -> ``signing=None`` (unsigned,
+      same as before this seam existed).
+    * An active key, but the tenant's origin is not publishable (no
+      ``virtual_host``, so :func:`~src.core.agent_identity.canonical_agent_url`
+      derives a non-``https://`` default) -> ``signing=None``. A signature no
+      conformant receiver could ever resolve a key for is worse than sending
+      nothing (security.mdx @ v3.1.1 :1226) -- mirrors
+      :func:`~src.core.signing.posture.webhook_signing_posture`'s gate for the
+      webhook direction (C1).
+    """
+    from adcp import ADCPMultiAgentClient as _ADCPMultiAgentClient
+
+    if tenant_id is None or repo is None:
+        return _ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
+
+    from datetime import UTC, datetime
+
+    from src.core.agent_identity import canonical_agent_url
+    from src.core.database.repositories.tenant_config import TenantConfigRepository
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.signing import (
+        REQUEST_SIGNING,
+        origin_is_publishable,
+        resolve_signing_material,
+        signing_config_from_material,
+    )
+
+    signing = None
+    try:
+        material = resolve_signing_material(repo, tenant_id=tenant_id, purpose=REQUEST_SIGNING, now=datetime.now(UTC))
+    except AdCPConfigurationError:
+        material = None
+
+    if material is not None:
+        tenant = TenantConfigRepository(repo.session, tenant_id).get_tenant()
+        origin = canonical_agent_url(tenant) if tenant is not None else None
+        if origin_is_publishable(origin):
+            signing = signing_config_from_material(material)
+
+    return _ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents], signing=signing)
 
 
 def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging.Logger) -> NoReturn:

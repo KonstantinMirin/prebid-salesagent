@@ -118,11 +118,30 @@ class SignalsAgentRegistry:
         agents.sort(key=lambda a: a.name)
         return [a for a in agents if a.enabled]
 
-    def _build_adcp_client(self, agents: list[SignalsAgent]) -> ADCPMultiAgentClient:
-        """Build AdCP client from signals agent configs."""
-        from src.core.helpers.adapter_helpers import build_agent_config
+    def _build_adcp_client(self, agents: list[SignalsAgent], tenant_id: str | None = None) -> ADCPMultiAgentClient:
+        """Build AdCP client from signals agent configs.
 
-        return ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
+        RFC 9421 outbound request signing (#1291 C3): when *tenant_id* is
+        known, routes through the shared ``build_adcp_multi_agent_client``
+        seam, which owns its own short-lived session to resolve the tenant's
+        signing key -- signing is strictly additive (a keyless tenant, or one
+        with no publishable origin, gets an unsigned client, exactly as
+        before this seam existed). *tenant_id* is ``None`` for
+        ``test_connection`` (a connectivity smoke-check against an
+        as-yet-unsaved agent config, not a real tenant call) -- that call
+        stays unsigned, same as today.
+        """
+        from src.core.helpers.adapter_helpers import build_adcp_multi_agent_client
+
+        if tenant_id is None:
+            return build_adcp_multi_agent_client(agents, tenant_id=None)
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.signing_key import SigningKeyRepository
+
+        with get_db_session() as session:
+            repo = SigningKeyRepository(session, tenant_id)
+            return build_adcp_multi_agent_client(agents, tenant_id=tenant_id, repo=repo)
 
     async def _get_signals_from_agent(
         self,
@@ -166,7 +185,17 @@ class SignalsAgentRegistry:
             call_start = time.time()
 
             # Call agent
-            result = await client.agent(agent.name).get_signals(request)
+            sub_client = client.agent(agent.name)
+            if sub_client.signing is not None:
+                from src.core.signing import (
+                    bootstrap_capabilities_for_signed_call,
+                    sign_scoped_mcp_call,
+                )
+
+                await bootstrap_capabilities_for_signed_call(sub_client, sub_client.agent_config)
+                result = await sign_scoped_mcp_call("get_signals", lambda: sub_client.get_signals(request))
+            else:
+                result = await sub_client.get_signals(request)
 
             call_duration = time.time() - call_start
             logger.info(f"[TIMING] Agent call completed in {call_duration:.2f}s, status: {result.status}")
@@ -250,7 +279,7 @@ class SignalsAgentRegistry:
             return all_signals
 
         # Build AdCP client for all agents and use as async context manager
-        client = self._build_adcp_client(agents)
+        client = self._build_adcp_client(agents, tenant_id=tenant_id)
 
         # Use async context manager to ensure proper cleanup
         async with client:

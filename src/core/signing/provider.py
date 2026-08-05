@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import NamedTuple, Protocol
 
 from adcp.signing import InMemorySigningProvider, load_private_key_pem, pem_to_adcp_jwk
+from adcp.signing.autosign import SigningConfig
 from adcp.signing.crypto import PrivateKey
 from adcp.signing.provider import SigningAlgorithm, SigningProvider
 
@@ -366,3 +367,15 @@ def resolve_signing_material(
 def clear_signing_provider_cache() -> None:
     """Drop every cached provider. For rotation tooling and test isolation."""
     _provider_cache.clear()
+
+
+def signing_config_from_material(material: SigningMaterial) -> SigningConfig:
+    """Project :class:`SigningMaterial` into ``adcp.signing.autosign.SigningConfig``.
+
+    The ``adcp.signing`` import stays inside the layer (rule A,
+    ``tests/unit/test_architecture_signing_layer_boundary.py``) -- callers
+    outside ``src/core/signing/`` that need a client-side auto-signing bundle
+    (#1291 C3's ``build_adcp_multi_agent_client``) get the constructed object
+    through this facade export rather than importing the SDK type themselves.
+    """
+    return SigningConfig(private_key=material.private_key, key_id=material.kid, alg=material.alg)
