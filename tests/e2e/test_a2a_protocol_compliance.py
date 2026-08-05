@@ -20,6 +20,7 @@ our control.
 import pytest
 
 from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
+from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 
 
 class TestA2AProtocolCompliance:
@@ -54,11 +55,14 @@ class TestA2AProtocolCompliance:
     # Real schema conformance is covered by tests/unit/test_adcp_contract.py against
     # the pinned adcp library version. See PR #1186 notes.
 
-    # Skills with no request schema anywhere in the pinned index (verified via
-    # AdCPSchemaValidator._find_schema_ref_for_task, which searches every
-    # section — see salesagent-667l). Shrink-only: when the spec adds a schema
-    # for one of these, remove it here — do not add new entries.
-    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset({"list_authorized_properties"})
+    # Skills mapped to None in SKILL_TO_ADCP_TASK (no task in the pinned
+    # index yet) that we still actively watch for a newly-added schema.
+    # Shrink-only: when the spec adds a schema for one of these, remove it
+    # here — do not add new entries (add the skill to SKILL_TO_ADCP_TASK
+    # with its real task name instead).
+    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset(
+        skill for skill, task in SKILL_TO_ADCP_TASK.items() if task is None
+    )
 
     @pytest.mark.asyncio
     async def test_all_adcp_skills_have_schemas(self):
@@ -70,30 +74,23 @@ class TestA2AProtocolCompliance:
         2. Create tests for them
         3. Validate their request/response formats
 
-        Uses AdCPSchemaValidator._find_schema_ref_for_task (searches every
-        index section) rather than a hardcoded 'media-buy/' path, so a skill
-        whose schema lives outside media-buy (e.g. sync_creatives, under
-        creative/) is correctly found instead of silently treated as missing.
+        Skills and their canonical task names both come from
+        SKILL_TO_ADCP_TASK (tests/helpers/skill_to_adcp_task.py) — the single
+        shared source, not a locally hand-typed skill set combined with a
+        skill.replace("_", "-") derivation (R3-28, salesagent-1zq3.28: that
+        third derivation had already diverged from the shared map on 6
+        entries). Uses AdCPSchemaValidator._find_schema_ref_for_task
+        (searches every index section) rather than a hardcoded 'media-buy/'
+        path, so a skill whose schema lives outside media-buy (e.g.
+        sync_creatives, under creative/) is correctly found instead of
+        silently treated as missing.
         """
-        # Define which skills are AdCP-compliant (should have schemas)
-        # Note: signals skills removed - should come from dedicated signals agents
-        adcp_skills = {
-            "get_products",
-            "create_media_buy",
-            "update_media_buy",
-            "get_media_buy_delivery",
-            "sync_creatives",
-            "list_creatives",
-            "list_creative_formats",
-            "list_authorized_properties",
-        }
-
         async with AdCPSchemaValidator() as validator:
             missing_schemas = []
             newly_resolved = []
 
-            for skill in adcp_skills:
-                task_name = skill.replace("_", "-")
+            for skill, mapped_task_name in SKILL_TO_ADCP_TASK.items():
+                task_name = mapped_task_name or skill.replace("_", "-")
                 schema_ref = await validator._find_schema_ref_for_task(task_name, "request")
 
                 if skill in self._KNOWN_MISSING_SCHEMA_SKILLS:
