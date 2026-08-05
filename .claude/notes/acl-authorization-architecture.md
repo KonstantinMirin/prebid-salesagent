@@ -12,8 +12,8 @@ anywhere, or purely descriptive.
 |---|---|---|---|
 | `AUTH_OPTIONAL_SKILLS` | tool call (binary) | valid token, not identity | scattered across transports — see salesagent-3c4m |
 | Tenant isolation (`tenant_id`) | data rows | tenant | yes, pervasive |
-| `Product.allowed_principal_ids` | product visibility in `get_products` | buyer principal | **no — read-path only.** `create_media_buy` never re-checks it. **Filed as salesagent-7kwq / [GH #1849](https://github.com/prebid/salesagent/issues/1849), P0.** |
-| Admin UI `User.role` (`admin`/`manager`/`viewer`) | admin routes | human user + tenant | **no** — two correct decorators exist (`require_auth(admin_only=...)`, `require_tenant_access()` in `src/admin/utils/helpers.py:259,299`), but several blueprints hand-roll their own inline `session.get("role")` check instead: `src/admin/blueprints/policy.py:29,146,149,226`, `inventory.py:562`, `core.py:273,277`. Same "one correct pattern, several hand-rolled duplicates" disease as the transport auth-policy scatter. **Not yet filed as a ticket — see §3.** |
+| `Product.allowed_principal_ids` | product visibility in `get_products` | buyer principal | **no — read-path only.** `create_media_buy` never re-checks it. **Filed as salesagent-7kwq / [GH #1849](https://github.com/prebid/salesagent/issues/1849), P0.** Not an isolated instance — see §1a: this is a recurring disease, not a single bug. |
+| Admin UI `User.role` (`admin`/`manager`/`viewer`) | admin routes | human user + tenant | **no** — two correct decorators exist (`require_auth(admin_only=...)`, `require_tenant_access()` in `src/admin/utils/helpers.py:259,299`), but several blueprints hand-roll their own inline `session.get("role")` check instead: `src/admin/blueprints/policy.py:29,146,149,226`, `inventory.py:562`, `core.py:273,277`. Same "one correct pattern, several hand-rolled duplicates" disease as the transport auth-policy scatter. **Not yet filed as a ticket — see §3.** Adjacent: **[GH #1805](https://github.com/prebid/salesagent/issues/1805)** — `require_tenant_access()` sits outside `log_admin_action`'s decorator, so a correct denial from the decorator itself goes unaudited. Different bug (audit gap, not a missing check), same decorator-stack neighborhood. |
 | `SUPER_ADMIN_DOMAINS`/`_EMAILS` | cross-tenant admin access | human email domain | yes, routed through the same admin_only checks |
 | `WorkflowStep.assigned_to` | — | — | **not a permission at all** — a queue label; nothing restricts who can act on an assigned step |
 | Webhook HMAC signing | outbound message integrity | — | different category (authenticity, not access control) |
@@ -21,6 +21,35 @@ anywhere, or purely descriptive.
 | Creative approval | — | status transition, not identity | any principal owning the buy can act; not actor-gated |
 | `Account.account_scope` | — | — | pass-through AdCP spec field, not internally enforced |
 | `specialisms` (`get_adcp_capabilities`) | — | seller/tenant (declared, not buyer) | **no — purely descriptive.** See §2. |
+
+## 1a. The `allowed_principal_ids` gap is one instance of a recurring disease
+
+`#1849` is not isolated. The same shape — a scoping check that exists on the
+read path but is never re-checked on a write/action path, surfacing as a 200
+(sometimes with an empty body) instead of a 403 — recurs across resources:
+
+- **[GH #1318](https://github.com/prebid/salesagent/issues/1318)** (2026-05-18,
+  predates this investigation) — `MediaBuyRepository.get_by_principal` filters
+  silently by `principal_id`; a request for a media buy the caller doesn't own
+  returns an empty deliveries list, not a denial. The earliest known instance
+  of this exact pattern.
+- **[GH #1808](https://github.com/prebid/salesagent/issues/1808)** — MCP task
+  tools are tenant-scoped only; a sibling principal can read and terminalize
+  another principal's task. Partially closed by #1812 (`get_task`/
+  `complete_task`); `list_tasks`/`list_by_tenant` still open.
+- **[GH #1702](https://github.com/prebid/salesagent/issues/1702)** — A2A
+  `tasks/get`'s in-memory task-map fast path has no identity check at all
+  (the durable path added by #1544 does check). Same subsystem as #1808, same
+  underlying gap.
+
+None of these three are filed under `salesagent-0krw` — they were each found
+independently, in their own review threads, before this note existed. Listed
+here because §3's root cause (`ResolvedIdentity` carries no scoping beyond
+`tenant_id`; nothing enforces per-principal ownership on non-read paths) is
+exactly what all four bugs share. A structural fix — one ownership-check
+helper every mutating/task-reading path calls, instead of each repository
+method re-deriving its own scoping — would close all four at once instead of
+four independent patches. Not scoped as its own epic yet.
 
 ## 2. `specialisms` is a self-report, not a gate
 
@@ -92,5 +121,19 @@ spec, not blocking anything currently in flight.
 ## 4. Tracking
 
 - salesagent-7kwq / [GH #1849](https://github.com/prebid/salesagent/issues/1849) — P0, the confirmed exploitable gap (§1, `allowed_principal_ids`).
+- [GH #1318](https://github.com/prebid/salesagent/issues/1318), [GH #1808](https://github.com/prebid/salesagent/issues/1808), [GH #1702](https://github.com/prebid/salesagent/issues/1702) — same disease as #1849 on other resources (§1a). Each filed and tracked independently, not under `salesagent-0krw`; listed here for the shared-root-cause context.
+- [GH #1805](https://github.com/prebid/salesagent/issues/1805) — admin-RBAC-audit-adjacent (§1 admin row). Independent bug, same code neighborhood as salesagent-0krw.2.
 - salesagent-3c4m — AuthPolicy centralization epic; the choke-point/target-shape work in §3 is additive on top of it, not part of it yet.
 - salesagent-0krw — epic for this note. Children: salesagent-0krw.1 (specialisms non-enforcement, §2), salesagent-0krw.2 (admin RBAC duplicated checks, §1). Separate from the PR #1838 lineage (salesagent-1zq3 and its 4 successors) since neither finding came from that review.
+
+### Related but distinct: auth-boundary status-code / error-classification bugs
+
+Not access-control-decision bugs — the underlying auth/ACL logic here is
+correct; the defect is in how a decision gets translated to a wire response.
+Listed because they surfaced from the same general area (auth path
+correctness) and are easy to conflate with the ACL-enforcement findings
+above:
+
+- [GH #1859](https://github.com/prebid/salesagent/issues/1859) — unauthenticated MCP/A2A calls to protected tools return HTTP 200 instead of 401 (transport never maps the correctly-raised `AdCPAuthenticationError` to a status code).
+- [GH #1861](https://github.com/prebid/salesagent/issues/1861) — DB/infra errors get caught and misclassified as auth-deny decisions; `google_callback` fails open on one such path.
+- [GH #1743](https://github.com/prebid/salesagent/issues/1743) — a rejected credential is classified `AUTH_MISSING` (retryable) instead of `AUTH_INVALID` (terminal), telling the agent to retry a revoked token.
