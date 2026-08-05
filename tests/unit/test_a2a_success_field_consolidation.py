@@ -16,11 +16,12 @@ _serialize_for_a2a.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.schemas import GetProductsResponse
 from tests.factories.principal import PrincipalFactory
 
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
@@ -28,15 +29,18 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
 )
 
 
-def _mock_get_products_response(errors=None):
-    """A MagicMock standing in for a GetProductsResponse Pydantic model."""
-    mock_response = MagicMock()
-    mock_response.__str__.return_value = "Found 0 products"
-    dump = {"products": []}
+def _make_get_products_response(errors=None) -> GetProductsResponse:
+    """A real GetProductsResponse -- no MagicMock standing in for the response object.
+
+    A MagicMock's canned .model_dump()/__str__ return values round-trip regardless of
+    what _stamp_a2a_protocol_fields actually does with a real Pydantic model, so it
+    cannot observe a regression in that behavior. This constructs the same response
+    type production actually returns from core_get_products_tool.
+    """
+    kwargs = {"products": []}
     if errors is not None:
-        dump["errors"] = errors
-    mock_response.model_dump.return_value = dump
-    return mock_response
+        kwargs["errors"] = errors
+    return GetProductsResponse(**kwargs)
 
 
 class TestSerializeForA2ADerivesSuccessFromErrors:
@@ -44,12 +48,12 @@ class TestSerializeForA2ADerivesSuccessFromErrors:
 
     def test_success_true_when_no_errors(self):
         handler = AdCPRequestHandler()
-        result = handler._serialize_for_a2a(_mock_get_products_response())
+        result = handler._serialize_for_a2a(_make_get_products_response())
         assert result["success"] is True
 
     def test_success_false_when_errors_present(self):
         handler = AdCPRequestHandler()
-        result = handler._serialize_for_a2a(_mock_get_products_response(errors=[{"code": "X", "message": "y"}]))
+        result = handler._serialize_for_a2a(_make_get_products_response(errors=[{"code": "X", "message": "y"}]))
         assert result["success"] is False
 
 
@@ -60,7 +64,7 @@ class TestHandleGetProductsSkillDerivesSuccessFromErrors:
     async def test_success_false_when_errors_present(self):
         handler = AdCPRequestHandler()
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
-            mock_core_tool.return_value = _mock_get_products_response(errors=[{"code": "X", "message": "y"}])
+            mock_core_tool.return_value = _make_get_products_response(errors=[{"code": "X", "message": "y"}])
             result = await handler._handle_get_products_skill({"brief": "test"}, _MOCK_IDENTITY)
 
         assert result["success"] is False, (
@@ -72,7 +76,7 @@ class TestHandleGetProductsSkillDerivesSuccessFromErrors:
     async def test_success_true_when_no_errors(self):
         handler = AdCPRequestHandler()
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
-            mock_core_tool.return_value = _mock_get_products_response()
+            mock_core_tool.return_value = _make_get_products_response()
             result = await handler._handle_get_products_skill({"brief": "test"}, _MOCK_IDENTITY)
 
         assert result["success"] is True
@@ -85,7 +89,7 @@ class TestNaturalLanguageGetProductsDerivesSuccessFromErrors:
     async def test_success_false_when_errors_present(self):
         handler = AdCPRequestHandler()
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
-            mock_core_tool.return_value = _mock_get_products_response(errors=[{"code": "X", "message": "y"}])
+            mock_core_tool.return_value = _make_get_products_response(errors=[{"code": "X", "message": "y"}])
             result = await handler._get_products("test query", _MOCK_IDENTITY)
 
         assert result["success"] is False, (
@@ -97,7 +101,7 @@ class TestNaturalLanguageGetProductsDerivesSuccessFromErrors:
     async def test_success_true_when_no_errors(self):
         handler = AdCPRequestHandler()
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
-            mock_core_tool.return_value = _mock_get_products_response()
+            mock_core_tool.return_value = _make_get_products_response()
             result = await handler._get_products("test query", _MOCK_IDENTITY)
 
         assert result["success"] is True
