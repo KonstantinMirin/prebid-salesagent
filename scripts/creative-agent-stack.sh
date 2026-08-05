@@ -209,9 +209,11 @@ cmd_up() {
         return 1
     fi
 
-    # TLS front (salesagent-40qh): same reasoning as the docker-compose.e2e.yml
-    # tls-proxy-creative service, applied to this standalone stack — the
-    # generator writes/refreshes .test-tls/ before nginx needs it.
+    # TLS front (salesagent-40qh): same image+template as the shared stack's
+    # tls-proxy service (salesagent-amht.2), applied to this standalone stack —
+    # this SNI name matches nothing in that template's map, so it falls back to
+    # the TLS_UPSTREAM set below. The generator writes/refreshes .test-tls/
+    # before nginx needs it.
     scripts/dev/ensure-test-tls.sh
     if ! docker ps --format '{{.Names}}' | grep -qx "$TLS_PROXY"; then
         docker rm -f "$TLS_PROXY" >/dev/null 2>&1 || true

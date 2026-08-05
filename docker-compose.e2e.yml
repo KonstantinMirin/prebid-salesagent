@@ -67,7 +67,7 @@ services:
       # outbound origin this server dials is TLS-fronted now: the webhook
       # capture (tests/e2e/_webhook_capture.py, https in-process on the
       # tests.adcp.test alias, salesagent-40qh) and creative-agent (https via
-      # tls-proxy-creative below, salesagent-40qh), and the LocalOrigin-backed
+      # the shared tls-proxy front below, salesagent-amht.2), and the LocalOrigin-backed
       # integration suites migrated to the https local_origin_tls fixture
       # (salesagent-e6h0). Nothing in this stack needs plaintext http anymore.
       #
@@ -113,7 +113,7 @@ services:
       # alias has nothing to route to and the server calls the LIVE public host,
       # which rate-limits under CI load (salesagent-9qe2). The runner service
       # already sets the same value for the direct integration tests.
-      # https, via the tls-proxy-creative front below (salesagent-40qh).
+      # https, via the shared tls-proxy front below (salesagent-amht.2).
       CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
       CREATE_DEMO_TENANT: "true"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
@@ -160,18 +160,27 @@ services:
       timeout: 5s
       retries: 5
 
-  # ─── TLS listener (salesagent-tgzb) ────────────────────────────────────────
+  # ─── TLS listener (salesagent-tgzb, collapsed onto one front — amht.2) ─────
   # ADDITIVE, never a migration: `proxy` above keeps its plaintext :8000 exactly
   # as it is, and E2E_BASE_URL still points there. This is a SECOND listener, on
-  # a SECOND port, at a DOTTED name — the one thing the plaintext stack cannot
+  # a SECOND port, at DOTTED names — the one thing the plaintext stack cannot
   # provide. `_get_protocol_for_domain` answers https for `proxy.adcp.test:8443`
   # because the name has a dot and is not loopback; this service is what makes
   # that answer true rather than merely asserted.
   #
+  # ONE service fronts every *.adcp.test origin the shared stack dials outbound
+  # (proxy.adcp.test, creative-agent.adcp.test — a dotted alias per origin,
+  # chosen by the nginx `map $ssl_server_name` in the shared template). Adding
+  # an origin is one alias here plus one map line there — NOT a new service:
+  # a compose service's `aliases` list can carry any number of names, so
+  # fronting a second upstream never required a second container.
+  #
   # Stock nginx:stable — the entrypoint renders /etc/nginx/templates/*.template
   # into conf.d with envsubst, so ${TLS_UPSTREAM} is per-instance and no custom
-  # image is needed. Per-worker bdd_e2e sidecars run this same service with their
-  # own upstream (see run_all_tests.sh).
+  # image is needed. Per-worker bdd_e2e sidecars run this same service+template
+  # with their own single upstream (see run_all_tests.sh) — the SNI map falls
+  # back to ${TLS_UPSTREAM} for any name it doesn't recognize, which is exactly
+  # every per-worker sidecar's dotted container name.
   #
   # The certificate must exist BEFORE `up`: every entry point calls
   # scripts/dev/ensure-test-tls.sh first (test-stack.sh, run_all_tests.sh,
@@ -186,42 +195,22 @@ services:
       - ./.test-tls:/app/.test-tls:ro
     depends_on:
       - adcp-server
-    networks:
-      default:
-        # A dotted alias is the whole mechanism for the SHARED stack. (The
-        # per-worker sidecars cannot use one — `docker compose run` has no
-        # --network-alias — so they carry a dotted CONTAINER NAME instead.)
-        aliases:
-          - proxy.adcp.test
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://proxy.adcp.test:8443/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # ─── TLS front for the creative-agent origin (salesagent-40qh) ─────────────
-  # Same primitive as `tls-proxy` above — the exact same image + template +
-  # generated CA/leaf — fronting a DIFFERENT upstream. This CANNOT be a second
-  # instance of `tls-proxy` itself: compose network aliases are per-SERVICE,
-  # not per-container, so a service already aliased `proxy.adcp.test` cannot
-  # also answer to `creative-agent.adcp.test` pointed at a different upstream.
-  # A distinct service reusing the same image + template is the correct reuse
-  # of the primitive, not a second TLS mechanism.
-  tls-proxy-creative:
-    image: nginx:stable
-    environment:
-      TLS_UPSTREAM: creative-agent:8080
-    volumes:
-      - ./config/nginx/nginx-tls-test.conf.template:/etc/nginx/templates/tls-test.conf.template:ro
-      - ./.test-tls:/app/.test-tls:ro
-    depends_on:
       - creative-agent
     networks:
       default:
+        # Dotted aliases are the whole mechanism for the SHARED stack — one per
+        # fronted origin, all on this one service. (The per-worker sidecars
+        # cannot use aliases at all — `docker compose run` has no
+        # --network-alias — so they carry a dotted CONTAINER NAME instead.)
         aliases:
+          - proxy.adcp.test
           - creative-agent.adcp.test
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://creative-agent.adcp.test:8443/api/creative-agent/health"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -283,7 +272,7 @@ services:
       ADCP_WEBHOOK_HOST: tests.adcp.test
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
-      # https, via the tls-proxy-creative front above (salesagent-40qh).
+      # https, via the shared tls-proxy front above (salesagent-amht.2).
       CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
       # Playwright chromium is pre-installed in Dockerfile.test at this path.
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
@@ -330,8 +319,8 @@ services:
       # dial through the seam (now against the https local_origin_tls fixture,
       # salesagent-e6h0, so it is the ADDRESS gate this opens, not scheme —
       # there is no scheme hatch left anywhere). The creative-agent origin
-      # (CREATIVE_AGENT_URL) needs no hatch at all: it is https via
-      # tls-proxy-creative (salesagent-40qh). tox only forwards this to pytest
+      # (CREATIVE_AGENT_URL) needs no hatch at all: it is https via the shared
+      # tls-proxy front (salesagent-amht.2). tox only forwards this to pytest
       # because it is listed in tox.ini pass_env. See the adcp-server entry for
       # why docker-compose.yml is left alone, and for the constraint this
       # places on refusal grading (private-range refusal cannot happen in this

@@ -133,14 +133,13 @@ echo "Ensuring the test stack's TLS material..."
 scripts/dev/ensure-test-tls.sh || dc run --rm --no-deps -T tests python scripts/dev/gen_test_tls.py
 
 # Bring up Postgres + the app server + proxy + the TLS listener + the pinned
-# creative-agent (and its own registry Postgres) + its TLS front. None publish
-# host ports — all reached by service name. tls-proxy and tls-proxy-creative
-# are in this explicit list deliberately: they are normal `up` services, and
-# omitting either would leave its https origin pointing at nothing while every
-# scenario that depends on it reported green on the http branch instead
-# (E2E_TLS_BASE_URL for tls-proxy; CREATIVE_AGENT_URL for tls-proxy-creative,
-# salesagent-40qh).
-dc up -d postgres adcp-server proxy tls-proxy tls-proxy-creative creative-pg creative-agent
+# creative-agent (and its own registry Postgres). None publish host ports —
+# all reached by service name. tls-proxy is in this explicit list
+# deliberately: it is a normal `up` service, and omitting it would leave both
+# https origins it fronts (proxy.adcp.test, creative-agent.adcp.test) pointing
+# at nothing while every scenario that depends on either reported green on the
+# http branch instead (E2E_TLS_BASE_URL / CREATIVE_AGENT_URL, salesagent-amht.2).
+dc up -d postgres adcp-server proxy tls-proxy creative-pg creative-agent
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))

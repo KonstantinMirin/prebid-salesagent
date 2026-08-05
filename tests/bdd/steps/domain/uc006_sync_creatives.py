@@ -36,7 +36,7 @@ from tests.factories.principal import PrincipalFactory
 # ═══════════════════════════════════════════════════════════════════════
 
 # Docker's creative agent URL (internal to Docker network, used by the app
-# container) — https via tls-proxy-creative (salesagent-40qh); the seam
+# container) — https via the shared tls-proxy front (salesagent-amht.2); the seam
 # requires https unconditionally now (salesagent-e6h0), so this stopped being
 # reachable at all once ADCP_OUTBOUND_ALLOW_INSECURE was deleted, and this
 # literal was the one thing in this file that was never caught by that
