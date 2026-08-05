@@ -20,6 +20,7 @@ model whose ``validate_backing()`` raises ``AdCPConfigurationError`` rather than
 silently clamping or emitting a non-conformant response.
 """
 
+from collections.abc import Iterable
 from typing import Any
 
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
@@ -113,6 +114,39 @@ _BACKED_SPECIALISMS: dict[AdcpSpecialism, SupportedProtocol] = {
     # non-vacuous rather than an echo of the default.
     AdcpSpecialism.signal_owned: SupportedProtocol.signals,
 }
+
+
+def _reject_unbacked(
+    claimed: Iterable[Any],
+    backed: Iterable[Any],
+    *,
+    field: str,
+    noun: str,
+    tracked_by: str | None = None,
+) -> None:
+    """Raise ``AdCPConfigurationError`` if ``claimed`` contains a value ``backed``
+    does not cover.
+
+    Shared shape for the ``supported_protocols`` and ``specialisms`` platform-backing
+    checks (salesagent-c0ia.10 M1 / D1 -- was duplicated verbatim). ``backed`` may be
+    a frozenset (protocols) or a dict keyed by the claimed enum (specialisms) --
+    ``in`` and iteration both work identically for either.
+    """
+    from src.core.exceptions import AdCPConfigurationError
+
+    unbacked = sorted({v.value for v in claimed if v not in backed})
+    if not unbacked:
+        return
+    backed_values = sorted(b.value for b in backed)
+    tracked_suffix = f" {tracked_by}" if tracked_by else ""
+    raise AdCPConfigurationError(
+        f"capability_declarations.{field} cannot claim {', '.join(unbacked)}: this "
+        f"deployment does not implement the {noun}, and advertising it would promise "
+        f"buyers behavior that does not exist.{tracked_suffix} Backed {field}: "
+        f"{', '.join(backed_values)}.",
+        details={f"unbacked_{field}": unbacked, f"backed_{field}": backed_values},
+    )
+
 
 # Declaring a block whose surface is x-status:experimental obliges the agent to list
 # the feature id: "Sellers that implement any experimental surface MUST list its
@@ -225,38 +259,25 @@ class CapabilityDeclarations(BaseModel):
         """
         from src.core.exceptions import AdCPConfigurationError
 
-        # Platform backing: a tenant may only claim protocols this deployment
-        # actually serves. Advertising an unserved protocol is the exact
+        # Platform backing: a tenant may only claim protocols/specialisms this
+        # deployment actually serves. Advertising an unserved one is the exact
         # over-promise STRICT exists to prevent -- the buyer would route traffic
-        # for a domain we cannot answer.
-        unbacked = sorted({p.value for p in (self.supported_protocols or []) if p not in _BACKED_PROTOCOLS})
-        if unbacked:
-            backed = sorted(p.value for p in _BACKED_PROTOCOLS)
-            raise AdCPConfigurationError(
-                f"capability_declarations.supported_protocols cannot claim {', '.join(unbacked)}: this "
-                f"deployment does not implement the required tool surface, and advertising it would "
-                f"promise buyers a protocol domain that cannot answer. Backed protocols: "
-                f"{', '.join(backed)}.",
-                details={"unbacked_protocols": unbacked, "backed_protocols": backed},
-            )
-
-        # Platform backing: same rule, applied to specialisms. `creative-generative`
-        # is the scenario's case -- nothing implements generative creative, and the
-        # AAO runner grades the claim.
-        unbacked_specialisms = sorted({s.value for s in (self.specialisms or []) if s not in _BACKED_SPECIALISMS})
-        if unbacked_specialisms:
-            backed_specialisms = sorted(s.value for s in _BACKED_SPECIALISMS)
-            raise AdCPConfigurationError(
-                f"capability_declarations.specialisms cannot claim "
-                f"{', '.join(unbacked_specialisms)}: this deployment does not implement the tools "
-                f"the specialism's conformance bundle requires, and the compliance runner grades "
-                f"the claim. Backed specialisms: {', '.join(backed_specialisms)}. Generative "
-                f"creative is tracked by #1724.",
-                details={
-                    "unbacked_specialisms": unbacked_specialisms,
-                    "backed_specialisms": backed_specialisms,
-                },
-            )
+        # for a domain we cannot answer. `creative-generative` is the specialisms
+        # scenario's case -- nothing implements generative creative, and the AAO
+        # runner grades the claim.
+        _reject_unbacked(
+            self.supported_protocols or [],
+            _BACKED_PROTOCOLS,
+            field="supported_protocols",
+            noun="required tool surface",
+        )
+        _reject_unbacked(
+            self.specialisms or [],
+            _BACKED_SPECIALISMS,
+            field="specialisms",
+            noun="tools the specialism's conformance bundle requires",
+            tracked_by="Generative creative is tracked by #1724.",
+        )
 
         # Roll-up coherence: "the runner rejects a specialism claim whose parent
         # protocol is missing" (#/properties/specialisms). Checked against the

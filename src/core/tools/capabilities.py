@@ -97,7 +97,7 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     and warnings" and the envelope still reports success, so discovery is not
     failed by a partial result.
     """
-    logger.warning(f"Could not get {what}: {exc}")
+    logger.warning("Could not get %s: %s", what, exc)
     advisories.append(
         Error(  # structural-guard: advisory degradation in GetAdcpCapabilitiesResponse.errors[]
             code="SERVICE_UNAVAILABLE",

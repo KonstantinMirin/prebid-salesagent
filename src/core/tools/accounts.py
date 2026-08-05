@@ -17,6 +17,7 @@ import base64
 import logging
 import time
 import uuid
+from collections.abc import Callable, Iterable
 from datetime import UTC
 from typing import Annotated, Any
 
@@ -756,7 +757,15 @@ def _build_failed_result(
     per-entry gate rejection (domain validity, billing policy, sandbox
     capability, settings-update-not-found), so a shared shape can't drift
     across call sites (salesagent-5g8e disease scan).
+
+    The single choke point where every accounts.py advisory ``errors[]`` list
+    is routed through ``normalize_advisory_errors`` before reaching the wire
+    (salesagent-c0ia.10 M1) -- one call here covers all six gate-check sites
+    plus the settings-update-not-found and activation-proof advisories, since
+    they all build their result through this function.
     """
+    from src.core.exceptions import normalize_advisory_errors
+
     return _build_sync_result(
         brand=brand,
         operator=operator,
@@ -764,8 +773,52 @@ def _build_failed_result(
         status="rejected",
         billing=billing,
         sandbox=sandbox,
-        errors=errors,
+        errors=normalize_advisory_errors(errors),
     )
+
+
+def _first_gate_failure(gates: Iterable[Callable[[], list[Any] | None]]) -> list[Any] | None:
+    """Run per-entry gate checks in order; return the first one's errors, or None.
+
+    Both the provisioning arm (domain/billing/sandbox/notification-configs) and
+    the settings-update arm (notification-configs/rejected-fields) are a list of
+    independent gate checks where the first failure short-circuits the rest --
+    this is the ONE place that shape is expressed (salesagent-c0ia.10 M1; was 6
+    duplicated check-then-build-then-continue blocks).
+    """
+    for gate in gates:
+        errors = gate()
+        if errors is not None:
+            return errors
+    return None
+
+
+def _provisioning_gates(
+    *,
+    brand_domain: str,
+    billing_val: str | None,
+    identity: ResolvedIdentity,
+    sandbox: bool | None,
+    tenant: Any,
+    index: int,
+    entry: Any,
+    proof_failures: dict[int, list[Any]],
+) -> list[Callable[[], list[Any] | None]]:
+    """The provisioning arm's gate list, in order: domain validity (reserved
+    TLDs) -> billing policy (BR-RULE-059) -> sandbox capability (BR-RULE-209
+    INV-6) -> notification_configs. The first failure short-circuits the rest.
+
+    A module-level function, not a per-entry closure defined inside the sync
+    loop: the returned lambdas close over ITS OWN parameters (fresh on every
+    call), so this adds zero complexity to ``_sync_accounts_impl`` and raises
+    no ruff B023 loop-variable-closure warning (salesagent-c0ia.10 M1).
+    """
+    return [
+        lambda: _check_domain_validity(brand_domain),
+        lambda: _check_billing_policy(billing_val, identity),
+        lambda: _check_sandbox_capability(sandbox, tenant, index),
+        lambda: _notification_configs_gate(entry, proof_failures.get(index)),
+    ]
 
 
 def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
@@ -809,6 +862,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
                     f"and cannot be used for account provisioning.",
                     suggestion="Use a real domain name for production accounts.",
                     field="brand.domain",
+                    recovery="correctable",
                 )
             ]
     return None
@@ -923,7 +977,7 @@ def _check_sandbox_capability(entry_sandbox: bool | None, tenant: Any, index: in
 _MEDIA_BUY_ANCHORED_EVENT_TYPES = frozenset({"scheduled", "final", "delayed", "adjusted", "impairment"})
 
 
-def _validate_notification_configs(configs: Any) -> list[Any] | None:
+def _check_notification_configs(configs: Any) -> list[Any] | None:
     """Validate a submitted notification_configs array; None when it is acceptable.
 
     Same per-entry gate shape as ``_check_domain_validity`` / ``_check_billing_policy``
@@ -994,6 +1048,20 @@ def _validate_notification_configs(configs: Any) -> list[Any] | None:
                 )
             ]
     return None
+
+
+def _notification_configs_gate(entry: Any, proof_errors: list[Any] | None) -> list[Any] | None:
+    """The notification_configs gate, shared verbatim by both sync-accounts arms.
+
+    Runs BEFORE any write so a rejected entry leaves the persisted array
+    byte-identical. When the array itself is schema-valid, falls back to the
+    precomputed activation-proof errors -- the proof ran before any
+    transaction opened, so a failure here still writes nothing for this entry.
+    A module-level function (not a per-entry closure) so neither call site's
+    complexity grows with it (salesagent-c0ia.10 M1).
+    """
+    errors = _check_notification_configs(getattr(entry, "notification_configs", None))
+    return errors if errors is not None else proof_errors
 
 
 def _settings_update_preview_state(
@@ -1124,33 +1192,22 @@ def _process_settings_update_entry(
     echo_brand = persisted.brand if persisted is not None else existing.brand
     echo_operator = persisted.operator if persisted is not None else existing.operator
 
-    # Same shared validator as the provisioning arm, and BEFORE any write so a
-    # rejected entry leaves the persisted array byte-identical.
-    notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
-    if notif_errors is None:
-        # Same pre-computed verdicts as the provisioning arm: the proof ran before
-        # any transaction opened, and a failure writes nothing for this entry.
-        notif_errors = proof_errors
-    if notif_errors is not None:
+    # notification_configs (shared with the provisioning arm) -> rejected-field
+    # check (BR-RULE-209-family fields the table marks `rejected` on this arm --
+    # schema-LEGAL, so per-account "failed", never an operation-level raise).
+    gate_errors = _first_gate_failure(
+        [
+            lambda: _notification_configs_gate(entry, proof_errors),
+            lambda: _rejected_field_errors(entry, mode="settings_update", index=index),
+        ]
+    )
+    if gate_errors is not None:
         return _build_failed_result(
             brand=echo_brand,
             operator=echo_operator or "",
             billing=existing.billing,
             sandbox=existing.sandbox,
-            errors=notif_errors,
-        )
-
-    # A schema-LEGAL field the table marks `rejected` on this arm. Per-account
-    # (action "failed"), never operation-level: the field parses, so an
-    # operation-level raise would kill an otherwise valid batch.
-    reject_errors = _rejected_field_errors(entry, mode="settings_update", index=index)
-    if reject_errors is not None:
-        return _build_failed_result(
-            brand=echo_brand,
-            operator=echo_operator or "",
-            billing=existing.billing,
-            sandbox=existing.sandbox,
-            errors=reject_errors,
+            errors=gate_errors,
         )
 
     # The SAME table walk the provisioning arm runs -- the two arms cannot
@@ -1594,65 +1651,26 @@ async def _sync_accounts_impl(
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
             billing_val = _enum_to_str(entry.billing)
 
-            # Domain validation: reject reserved TLDs
-            domain_errors = _check_domain_validity(brand_domain)
-            if domain_errors is not None:
-                results.append(
-                    _build_failed_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=domain_errors,
-                    )
+            gate_errors = _first_gate_failure(
+                _provisioning_gates(
+                    brand_domain=brand_domain,
+                    billing_val=billing_val,
+                    identity=identity,
+                    sandbox=sandbox,
+                    tenant=tenant,
+                    index=index,
+                    entry=entry,
+                    proof_failures=proof_failures,
                 )
-                continue
-
-            # BR-RULE-059: check billing policy before processing
-            billing_errors = _check_billing_policy(billing_val, identity)
-            if billing_errors is not None:
+            )
+            if gate_errors is not None:
                 results.append(
                     _build_failed_result(
                         brand=entry.brand,
                         operator=operator,
                         billing=billing_val,
                         sandbox=sandbox,
-                        errors=billing_errors,
-                    )
-                )
-                continue
-
-            # BR-RULE-209 INV-6: sandbox provisioning requires a declared capability
-            sandbox_errors = _check_sandbox_capability(sandbox, tenant, index)
-            if sandbox_errors is not None:
-                results.append(
-                    _build_failed_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=sandbox_errors,
-                    )
-                )
-                continue
-
-            # notification_configs validation runs BEFORE any write, so a rejected
-            # entry leaves the account's prior array byte-identical. Same shared
-            # validator as the settings-update arm.
-            notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
-            if notif_errors is None:
-                # Proof verdicts were computed before this transaction opened; a
-                # failure here means NOTHING is written for the entry, so the
-                # account's prior array stays byte-identical.
-                notif_errors = proof_failures.get(index)
-            if notif_errors is not None:
-                results.append(
-                    _build_failed_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=notif_errors,
+                        errors=gate_errors,
                     )
                 )
                 continue

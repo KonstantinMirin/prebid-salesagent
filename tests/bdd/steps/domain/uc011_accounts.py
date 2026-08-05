@@ -3598,7 +3598,7 @@ def then_listed_account_echoes_subscriber(ctx: dict, domain: str, sub: str, flag
 # ── UC-011 notification_configs — final batch ──
 # event-scope-reject, duplicate-subscriber, activation-proof-fail, omit-preserves.
 # All four grade the account-level notification_configs surface. Graduated
-# (T2 increments F4a/F4b/F4c): _validate_notification_configs runs pre-persist and
+# (T2 increments F4a/F4b/F4c): _check_notification_configs runs pre-persist and
 # rejects media-buy-anchored event_types / duplicate subscriber_ids per entry;
 # SyncResponseAccount persists and echoes notification_configs; NotificationProofService
 # performs a bounded proof-of-control challenge before the write transaction opens.

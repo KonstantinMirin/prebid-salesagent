@@ -683,7 +683,7 @@ Feature: BR-UC-011 Manage Accounts
     And the account has status "rejected"
     And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].event_types[0]"
-    # Graduated (T2 increment F4b): _validate_notification_configs rejects
+    # Graduated (T2 increment F4b): _check_notification_configs rejects
     # media-buy-anchored event types on the account surface pre-persist.
     # Media-buy-anchored event types (scheduled, final, delayed, adjusted, impairment) do not
     # belong on the account surface; also no account-lifecycle event types exist here (no
@@ -699,7 +699,7 @@ Feature: BR-UC-011 Manage Accounts
     And the account has status "rejected"
     And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[1].subscriber_id"
-    # Graduated (T2 increment F4b): _validate_notification_configs rejects duplicate
+    # Graduated (T2 increment F4b): _check_notification_configs rejects duplicate
     # subscriber_id values within one submitted array pre-persist.
     # "Duplicate subscriber_id values within one submitted array are rejected" — no
     # last-write-wins merging, no duplicate subscriptions

@@ -72,6 +72,15 @@ _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
         "recovery": "correctable",
         "message": "Settings-update entry matched no existing account",
     },
+    # v3.1.1 error-code.json: the seller declines the requested `billing` value,
+    # either at the seller-wide capability level or the per-account-relationship
+    # level. Recovery: correctable -- the buyer can re-check get_adcp_capabilities
+    # for supported_billing and resubmit with a supported value (closes the
+    # #1602 half tracked here; UNSUPPORTED_PROVISIONING above closed the other).
+    "BILLING_NOT_SUPPORTED": {
+        "recovery": "correctable",
+        "message": "Billing model is not supported by this seller",
+    },
 }
 
 # SDK STANDARD_ERROR_CODES entries AdCP v3.1.1 dropped; translated to their
@@ -136,7 +145,6 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "UNSUPPORTED_TARGETING": "UNSUPPORTED_FEATURE",
     "PLACEMENT_TARGETING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
     "UNSUPPORTED_ACTION": "UNSUPPORTED_FEATURE",
-    "BILLING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
     # Legacy SDK code AdCP v3.1.1 dropped (see _SPEC_DEMOTED_CODES);
     # feature-unsupported is canonically UNSUPPORTED_FEATURE per v3.1.1
     # error-code.json.
@@ -253,13 +261,19 @@ def _iter_adcp_error_subclasses() -> Iterator[type[AdCPError]]:
 
 def normalize_advisory_errors(errors: list[Error]) -> list[Error]:
     """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes
-    and populate ``recovery``.
+    and populate ``recovery``, preserving every other caller-set field verbatim.
 
     Unlike a raised ``AdCPError`` (translated at the transport boundary), advisory
     entries serialize verbatim, so an internal-only code would leak to the buyer.
     ``to_wire_error_code`` both translates mapped codes AND collapses anything
     still non-standard to ``SERVICE_UNAVAILABLE``, so no internal code can reach
     the buyer even if a future advisory is built with an unmapped internal code.
+
+    ``field``/``suggestion``/``details``/``retry_after``/``issues``/``source``/
+    ``sdk_id`` pass through untouched -- only ``code`` is re-coded. ``recovery``
+    is FILLED via ``advisory_recovery_for`` only when the caller left it unset;
+    an explicit ``recovery`` the caller pinned (e.g. because the code's default
+    classification doesn't fit the specific advisory) is never clobbered.
 
     ``recovery`` is populated even though ``core/error.json`` lists only
     ``[code, message]`` as required: the ``recovery`` property description is
@@ -277,7 +291,14 @@ def normalize_advisory_errors(errors: list[Error]) -> list[Error]:
         Error(  # structural-guard: advisory entry serialized verbatim into a response errors[]
             code=(wire_code := to_wire_error_code(e.code)),
             message=e.message,
-            recovery=advisory_recovery_for(wire_code),
+            recovery=e.recovery if e.recovery is not None else advisory_recovery_for(wire_code),
+            field=e.field,
+            suggestion=e.suggestion,
+            details=e.details,
+            retry_after=e.retry_after,
+            issues=e.issues,
+            source=e.source,
+            sdk_id=e.sdk_id,
         )
         for e in errors
     ]

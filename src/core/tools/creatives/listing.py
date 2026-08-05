@@ -367,9 +367,7 @@ def _list_creatives_impl(
                 # `pending_review` is the worst choice (it asserts processing already
                 # succeeded AND that the seller owes a decision, i.e. "wait for us").
                 #
-                # The advisory code is PINNED to CONFIGURATION_ERROR and the creative_id
-                # MUST live in `message`: normalize_advisory_errors rebuilds each entry as
-                # code/message/recovery only (`field` and `details` are dropped), and it
+                # The advisory code is PINNED to CONFIGURATION_ERROR: normalize_advisory_errors
                 # collapses any code outside WIRE_STANDARD_CODES to SERVICE_UNAVAILABLE /
                 # recovery=transient — which would tell the buyer to retry a permanently
                 # bad row forever. Honest caveat: CONFIGURATION_ERROR's pinned prose says

@@ -515,7 +515,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # tenant's account_sandbox capability is not declared. T-UC-011-sandbox-capability-not-declared removed.
     # ── UC-011 notification_configs per-account rejections — ALL GRADUATED ──
     # Graduated (T2 increment F4b): T-UC-011-notif-event-scope-reject and
-    # -notif-duplicate-subscriber removed. _validate_notification_configs runs pre-persist in BOTH
+    # -notif-duplicate-subscriber removed. _check_notification_configs runs pre-persist in BOTH
     # entry handlers and emits a per-account failure inside a transport-level success, with the
     # exact error.field pointers the storyboards grade.
     # Graduated (T2 increment F4c): T-UC-011-notif-activation-proof-fail
