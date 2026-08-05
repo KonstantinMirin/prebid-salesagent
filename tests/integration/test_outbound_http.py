@@ -1001,7 +1001,77 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
 
 
 # ---------------------------------------------------------------------------
-# 11. Retry-After — the origin's own instruction, honoured in ONE direction
+# 11. Reserved-range equivalence pin — the delegation's soundness, executable
+#
+# Everywhere else in this file, "the seam refuses SSRF" is graded case by case
+# against whatever URLs a scenario happens to construct. This is the one place
+# that pins the underlying claim directly: adcp.signing's reserved-range
+# coverage, one representative address per class, so a regression in the SDK's
+# own classification (not a bug in this repo's call sites) goes red here
+# first. No address-classification logic of its own — every verdict below is
+# produced by calling validate_url, never recomputed.
+# ---------------------------------------------------------------------------
+
+# One representative literal-IP URL per reserved class. IP literals (not
+# hostnames) so the case tests the SDK's classification directly, with no DNS
+# resolution step to also be right about.
+_RESERVED_RANGE_URLS = {
+    "loopback": "https://127.0.0.1/",
+    "link-local": "https://169.254.1.1/",
+    "cloud-metadata": "https://169.254.169.254/",
+    "rfc1918-10": "https://10.0.0.1/",
+    "rfc1918-172": "https://172.16.0.1/",
+    "rfc1918-192168": "https://192.168.1.1/",
+    "zero-net": "https://0.0.0.0/",
+    "ipv6-ula": "https://[fc00::1]/",
+    "ipv4-mapped-ipv6": "https://[::ffff:127.0.0.1]/",
+}
+
+# CGNAT / Shared Address Space (RFC 6598, 100.64.0.0/10) is the one class the
+# SDK does NOT refuse today: Python's ipaddress.IPv4Address neither
+# is_private nor is_reserved flags it (adcp-client-python#973/#974). This
+# repo compensates at ingest only (src/core/webhook_validator.py, commit
+# 29c45b199) — deliberately not at send time (GH #1792) — so validate_url
+# genuinely accepts it. Asserting ACCEPTED here, not refused, keeps this test
+# honest about the real boundary; if it ever flips, the fix landed and this
+# entry (and its special-casing below) should move into _RESERVED_RANGE_URLS.
+_CGNAT_URL = "https://100.64.0.1/"
+
+
+@pytest.mark.parametrize("range_name", sorted(_RESERVED_RANGE_URLS))
+def test_reserved_range_is_refused_by_validate_url(range_name, monkeypatch):
+    """One representative address per reserved class is refused, via the real seam.
+
+    Pins adcp.signing's delegation, not application logic: goes red the day
+    the SDK's classification for any of these classes regresses.
+    """
+    set_flags(monkeypatch)
+
+    refused = was_refused_before_connecting(lambda: _seam().validate_url(_RESERVED_RANGE_URLS[range_name]))
+
+    assert refused, f"{range_name} ({_RESERVED_RANGE_URLS[range_name]!r}) is no longer refused by validate_url"
+
+
+def test_cgnat_is_the_one_documented_gap_not_refused_by_validate_url(monkeypatch):
+    """CGNAT (100.64.0.0/10) is accepted today -- a known, compensated-at-ingest gap.
+
+    If this starts failing because CGNAT is now refused, the upstream fix
+    (adcp-client-python#973/#974) landed: move "cgnat" into
+    _RESERVED_RANGE_URLS and delete this test.
+    """
+    set_flags(monkeypatch)
+
+    refused = was_refused_before_connecting(lambda: _seam().validate_url(_CGNAT_URL))
+
+    assert not refused, (
+        "CGNAT (100.64.0.0/10) is now refused by validate_url -- the upstream gap "
+        "(adcp-client-python#973/#974) appears to have closed. Move 'cgnat' into "
+        "_RESERVED_RANGE_URLS and delete this test."
+    )
+
+
+# ---------------------------------------------------------------------------
+# 12. Retry-After — the origin's own instruction, honoured in ONE direction
 #
 # Section 6 grades the schedule the seam picks for itself. This section grades
 # what an origin is allowed to do to that schedule, and it is deliberately
@@ -1320,7 +1390,7 @@ def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monk
 
 
 # ---------------------------------------------------------------------------
-# 12. The terminal-client-error predicate — WHICH 4xx the seam refused to retry
+# 13. The terminal-client-error predicate — WHICH 4xx the seam refused to retry
 # ---------------------------------------------------------------------------
 #
 # ``terminal_client_error_status`` lives in ``src/core/helpers/outbound_error_mapping.py``,
