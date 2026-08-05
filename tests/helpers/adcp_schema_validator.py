@@ -67,7 +67,7 @@ class AdCPSchemaValidator:
     """
 
     def __init__(self) -> None:
-        self.schema_root = _sdk_schema_root()
+        self.schema_root = self._resolve_pinned(_sdk_schema_root)
 
         # Compiled-validator cache, keyed by normalized ref.
         self._schema_registry: dict[str, dict[str, Any]] = {}
@@ -120,7 +120,7 @@ class AdCPSchemaValidator:
         which ``pinned_schema`` resolver function it uses."""
         normalized = self._normalize_ref(schema_ref)
         if normalized not in cache:
-            cache[normalized] = self._resolve_pinned(normalized, resolver)
+            cache[normalized] = self._resolve_pinned(lambda: resolver(normalized))
         return cache[normalized]
 
     async def get_schema(self, schema_ref: str) -> dict[str, Any]:
@@ -137,14 +137,14 @@ class AdCPSchemaValidator:
         return self._cached(self._compiled_validators, schema_ref, pinned_schema.validator_for)
 
     @staticmethod
-    def _resolve_pinned(normalized_ref: str, resolver: Callable[[str], _T]) -> _T:
-        """Call a ``pinned_schema`` resolver, translating its ``AssertionError``
-        (missing schema, or a ref that escapes the schema tree) into
-        ``SchemaError`` — the type this module's callers branch on to mean
-        "resolution failed", distinct from ``SchemaValidationError`` (payload
-        violates the contract)."""
+    def _resolve_pinned(fn: Callable[[], _T]) -> _T:
+        """Call a zero-arg resolver, translating its ``AssertionError``
+        (missing schema, a ref that escapes the schema tree, or a missing SDK
+        schema tree) into ``SchemaError`` — the type this module's callers
+        branch on to mean "resolution failed", distinct from
+        ``SchemaValidationError`` (payload violates the contract)."""
         try:
-            return resolver(normalized_ref)
+            return fn()
         except AssertionError as e:
             raise SchemaError(str(e)) from e
 

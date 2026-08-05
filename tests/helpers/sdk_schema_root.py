@@ -25,7 +25,7 @@ def sdk_schema_root() -> Path:
     major_minor = ".".join(spec_version.split(".")[:2])
     root = Path(adcp.__file__).parent / "_schemas" / major_minor
     if not root.is_dir():
-        raise RuntimeError(
+        raise AssertionError(
             f"Installed adcp SDK (spec {spec_version}) has no bundled schema tree at {root} — "
             "the SDK layout changed; update sdk_schema_root()."
         )
