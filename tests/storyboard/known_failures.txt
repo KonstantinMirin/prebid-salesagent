@@ -132,3 +132,16 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[media_buy
 # --- wholesale_feed_signal_webhooks (1) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[signals::wholesale_feed_signal_webhooks::register_signal_pricing_webhook]
 
+# --- webhook_emission (8) ---
+# Newly gradable once the run hosted a reachable webhook receiver
+# (adcontextprotocol/adcp-client#2448 + the patch-package bridge). Previously the
+# whole storyboard skipped as `requirement_unmet: webhook_receiver`, so these are
+# not regressions — they are gaps that were never measured before.
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::assert_webhook_signing_key_present]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::fetch_brand_json]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_idempotent_webhook_initial]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_operation_id_echo]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_retry_scenario]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_signed_webhook]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_webhook_operation]

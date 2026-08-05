@@ -119,6 +119,14 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-011-ipv6-authority]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[security_transport::signed_requests::positive-012-ipv6-authority-default-port-stripped]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[signals::wholesale_feed_signal_webhooks::register_signal_pricing_webhook]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::assert_webhook_signing_key_present]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::fetch_brand_json]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_idempotent_webhook_initial]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_operation_id_echo]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_retry_scenario]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_signed_webhook]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[core::webhook_emission::trigger_webhook_operation]",
     }
 )
 
