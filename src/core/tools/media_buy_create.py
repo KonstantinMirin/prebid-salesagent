@@ -40,7 +40,6 @@ from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CreativeRepository
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -59,6 +58,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 
 
 class PackageAssignmentDict(TypedDict):

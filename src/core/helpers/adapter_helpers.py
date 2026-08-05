@@ -82,7 +82,6 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
-from src.core.database.database_session import get_db_session
 from src.core.schemas import Principal
 
 
@@ -123,14 +122,12 @@ def resolve_tenant_adapter_type(tenant: Any = None) -> str:
     tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(tenant)
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import read_adapter_config
 
-    with get_db_session() as session:
-        repo = AdapterConfigRepository(session, tenant_id)
-        config_row = repo.find_by_tenant()
-        if config_row and config_row.adapter_type:
-            selected_adapter = config_row.adapter_type
-            logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
+    config_row = read_adapter_config(tenant_id)
+    if config_row and config_row.adapter_type:
+        selected_adapter = config_row.adapter_type
+        logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
 
     return selected_adapter or "mock"
 
@@ -139,27 +136,26 @@ def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> dict:
     """Read the per-tenant mock-adapter ``test_behavior`` fault-injection config.
 
     Single seam (salesagent-689e Core Invariant) for reading
-    ``AdapterConfig.config_json["test_behavior"]`` outside an ``_impl`` file —
-    ``src/core/tools/capabilities.py`` is scanned by
-    ``test_architecture_repository_pattern.py`` with an EMPTY
-    ``IMPL_SESSION_ALLOWLIST``, so callers there must go through this helper
-    instead of opening their own ``get_db_session()``. Gated on
+    ``AdapterConfig.config_json["test_behavior"]`` outside an ``_impl`` file --
+    ``src/core/tools/capabilities.py`` and this module are both scanned by
+    ``test_architecture_repository_pattern.py``'s discovery glob, so the
+    session lives in ``read_adapter_config`` (the repository layer), never
+    here or in a caller (#1721 M2 -- this docstring previously
+    described a per-call ``get_db_session()`` here as the sanctioned seam;
+    that was itself the D2 loophole, not the fix for it). Gated on
     ``adapter_type == "mock"`` so the fault-injection channel never leaks onto
     real ad-server adapters. Returns ``{}`` when not applicable/configured.
     """
     if adapter_type != "mock":
         return {}
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import read_adapter_config
 
-    with get_db_session() as session:
-        repo = AdapterConfigRepository(session, tenant_id)
-        row = repo.find_by_tenant()
-        if row and isinstance(row.config_json, dict):
-            behavior = row.config_json.get("test_behavior", {})
-            if isinstance(behavior, dict):
-                return behavior
+    row = read_adapter_config(tenant_id)
+    if row and isinstance(row.config_json, dict):
+        behavior = row.config_json.get("test_behavior", {})
+        if isinstance(behavior, dict):
+            return behavior
     return {}
 
 
@@ -261,12 +257,10 @@ def resolve_manual_approval_signal(tenant: Any = None) -> bool:
 
     tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import read_adapter_config
 
-    with get_db_session() as session:
-        row = AdapterConfigRepository(session, tenant_id).find_by_tenant()
-        return bool(row and getattr(row, column, None) is True)
+    row = read_adapter_config(tenant_id)
+    return bool(row and getattr(row, column, None) is True)
 
 
 def get_adapter(
@@ -294,65 +288,63 @@ def get_adapter(
     tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
 
     # Get adapter config via repository
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
 
     targeting_config: dict[str, Any] | None = None
     naming_templates: tuple[str | None, str | None] | None = None
 
-    with get_db_session() as session:
-        repo = AdapterConfigRepository(session, tenant_id)
-        config_row = repo.find_by_tenant()
+    config_row = read_adapter_config(tenant_id)
 
-        adapter_config: dict[str, Any] = {"enabled": True}
-        if config_row:
-            adapter_type = config_row.adapter_type
-            logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
-            if adapter_type == "mock":
-                adapter_config["dry_run"] = config_row.mock_dry_run or False
-                # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.mock_manual_approval_required
-                    if config_row.mock_manual_approval_required is not None
-                    else True
+    adapter_config: dict[str, Any] = {"enabled": True}
+    if config_row:
+        adapter_type = config_row.adapter_type
+        logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
+        if adapter_type == "mock":
+            adapter_config["dry_run"] = config_row.mock_dry_run or False
+            # Default to True (require approval) for safety
+            adapter_config["manual_approval_required"] = (
+                config_row.mock_manual_approval_required
+                if config_row.mock_manual_approval_required is not None
+                else True
+            )
+        elif adapter_type == "google_ad_manager":
+            adapter_config = AdapterConfigRepository.get_gam_config(config_row)
+            targeting_config = AdapterConfigRepository.get_gam_targeting_config(config_row)
+            naming_templates = AdapterConfigRepository.get_gam_naming_templates(config_row)
+
+            # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
+            # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
+            advertiser_id: str | None = None
+            if principal.platform_mappings:
+                # Try nested format first
+                gam_mappings = principal.platform_mappings.get("google_ad_manager", {})
+                advertiser_id = gam_mappings.get("advertiser_id")
+                logger.info(
+                    f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, platform_mappings={principal.platform_mappings}, gam_mappings={gam_mappings}, advertiser_id={advertiser_id}"
                 )
-            elif adapter_type == "google_ad_manager":
-                adapter_config = repo.get_gam_config(config_row)
-                targeting_config = repo.get_gam_targeting_config(config_row)
-                naming_templates = repo.get_gam_naming_templates(config_row)
 
-                # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
-                # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
-                advertiser_id: str | None = None
-                if principal.platform_mappings:
-                    # Try nested format first
-                    gam_mappings = principal.platform_mappings.get("google_ad_manager", {})
-                    advertiser_id = gam_mappings.get("advertiser_id")
-                    logger.info(
-                        f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, platform_mappings={principal.platform_mappings}, gam_mappings={gam_mappings}, advertiser_id={advertiser_id}"
-                    )
+                # Fall back to root-level format if nested not found
+                if not advertiser_id:
+                    advertiser_id = principal.platform_mappings.get("gam_advertiser_id")
+                    logger.info(f"[ADAPTER_CONFIG] Fell back to root-level gam_advertiser_id: {advertiser_id}")
 
-                    # Fall back to root-level format if nested not found
-                    if not advertiser_id:
-                        advertiser_id = principal.platform_mappings.get("gam_advertiser_id")
-                        logger.info(f"[ADAPTER_CONFIG] Fell back to root-level gam_advertiser_id: {advertiser_id}")
-
-                    adapter_config["company_id"] = advertiser_id
-                    logger.info(f"[ADAPTER_CONFIG] Set adapter_config['company_id']={advertiser_id}")
-                else:
-                    adapter_config["company_id"] = None
-                    logger.info("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
-            elif adapter_type == "kevel":
-                adapter_config["network_id"] = config_row.kevel_network_id or ""
-                adapter_config["api_key"] = config_row.kevel_api_key or ""
-                # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.kevel_manual_approval_required
-                    if config_row.kevel_manual_approval_required is not None
-                    else True
-                )
-            elif adapter_type == "triton":
-                adapter_config["station_id"] = config_row.triton_station_id or ""
-                adapter_config["api_key"] = config_row.triton_api_key or ""
+                adapter_config["company_id"] = advertiser_id
+                logger.info(f"[ADAPTER_CONFIG] Set adapter_config['company_id']={advertiser_id}")
+            else:
+                adapter_config["company_id"] = None
+                logger.info("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
+        elif adapter_type == "kevel":
+            adapter_config["network_id"] = config_row.kevel_network_id or ""
+            adapter_config["api_key"] = config_row.kevel_api_key or ""
+            # Default to True (require approval) for safety
+            adapter_config["manual_approval_required"] = (
+                config_row.kevel_manual_approval_required
+                if config_row.kevel_manual_approval_required is not None
+                else True
+            )
+        elif adapter_type == "triton":
+            adapter_config["station_id"] = config_row.triton_station_id or ""
+            adapter_config["api_key"] = config_row.triton_api_key or ""
 
     if not selected_adapter:
         # Default to mock if no adapter specified

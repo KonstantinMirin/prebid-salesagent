@@ -15,7 +15,7 @@ Why "no field" rather than "a field we validate": a field that exists but is alw
 rejected still tempts the next implementer to relax the check. The absence is the
 enforcement.
 
-Shape follows ``IdempotencyPosture`` (repositories/idempotency_attempt.py): a typed
+Shape follows ``IdempotencyPosture`` (src/core/idempotency_policy.py): a typed
 model whose ``validate_backing()`` raises ``AdCPConfigurationError`` rather than
 silently clamping or emitting a non-conformant response.
 """
@@ -128,7 +128,7 @@ def _reject_unbacked(
     does not cover.
 
     Shared shape for the ``supported_protocols`` and ``specialisms`` platform-backing
-    checks (salesagent-c0ia.10 M1 / D1 -- was duplicated verbatim). ``backed`` may be
+    checks (#1721 M1 / D1 -- was duplicated verbatim). ``backed`` may be
     a frozenset (protocols) or a dict keyed by the claimed enum (specialisms) --
     ``in`` and iteration both work identically for either.
     """

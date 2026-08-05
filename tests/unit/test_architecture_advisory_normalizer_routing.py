@@ -9,7 +9,7 @@ same ``# structural-guard:`` marker ``test_architecture_no_error_construction_
 in_impl.py`` uses to recognize a legitimate per-item advisory) but never calls
 ``normalize_advisory_errors`` can leak a non-standard code and omit
 ``recovery`` entirely -- exactly the regression this guard would have caught
-in accounts.py and media_buy_list.py (salesagent-c0ia.10 M1).
+in accounts.py and media_buy_list.py (#1721 M1).
 
 Coarse by design: module-level "does this file call the normalizer at all",
 not a data-flow proof that every specific site is wrapped. That is enough to

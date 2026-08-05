@@ -245,6 +245,49 @@ class AccountRepository:
     # Write methods (flush, never commit)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def build_row(
+        *,
+        tenant_id: str,
+        account_id: str,
+        name: str,
+        status: str,
+        brand_domain: str,
+        brand_id: str | None,
+        operator: str,
+        principal_id: str | None,
+        created_fields: dict[str, object],
+    ) -> Account:
+        """Build the Account row a provisioning entry would create.
+
+        Pure, non-persisting factory -- no DB access. Shared by the live create
+        and the dry_run preview (``src/core/tools/accounts.py``) so the two
+        cannot describe different rows -- a preview built from its own field
+        list is how the two arms drift (#1721). The dry_run caller deliberately
+        never adds the result to the session; it only needs an object to
+        compare LATER entries in the same request against, the way the live
+        arm compares them against the flushed row.
+
+        Natural-key assembly (``build_row`` OWNS the row's identity columns --
+        ``tenant_id``/``account_id``/``brand``/``operator``) lives here rather
+        than in the tools layer: it is the exact shape CLAUDE.md Pattern #3
+        names (raw ORM kwargs assembled in business logic), now on the
+        repository the guard actually scans (#1721 M2).
+        """
+        return Account(
+            tenant_id=tenant_id,
+            account_id=account_id,
+            name=name,
+            status=status,
+            brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+            operator=operator,
+            principal_id=principal_id,
+            # Every settable field comes from the one walk in the caller -- naming
+            # them here is what let a field be added to the re-sync arm and
+            # forgotten at create.
+            **created_fields,
+        )
+
     def create(self, account: Account) -> Account:
         """Add a new account to the session.
 

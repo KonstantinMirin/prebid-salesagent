@@ -217,12 +217,13 @@ class CapabilitiesEnv(IntegrationEnv):
         """Override the seller's declared adcp.idempotency posture.
 
         In-process only: monkeypatches get_idempotency_posture() at its module
-        seam (src.core.tools.capabilities._build_adcp_block re-imports it per
-        call). The overridden posture still flows through the REAL
-        IdempotencyPosture.check_bounds()/to_sdk_union() production code --
-        only the input posture is test-controlled, not the validation/shaping.
+        seam (src.core.idempotency_policy -- src.core.tools.capabilities
+        ._build_adcp_block re-imports it per call). The overridden posture
+        still flows through the REAL IdempotencyPosture.check_bounds()/
+        to_sdk_union() production code -- only the input posture is
+        test-controlled, not the validation/shaping.
         """
-        from src.core.database.repositories.idempotency_attempt import IdempotencyPosture
+        from src.core.idempotency_policy import IdempotencyPosture
 
         posture = IdempotencyPosture(
             supported=supported,
@@ -231,7 +232,7 @@ class CapabilitiesEnv(IntegrationEnv):
             account_id_is_opaque=account_id_is_opaque,
         )
         patcher = patch(
-            "src.core.database.repositories.idempotency_attempt.get_idempotency_posture",
+            "src.core.idempotency_policy.get_idempotency_posture",
             return_value=posture,
         )
         self.mock["idempotency_posture"] = patcher.start()

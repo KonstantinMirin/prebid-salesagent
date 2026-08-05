@@ -119,7 +119,7 @@ def _build_adcp_block(tenant: Mapping | None) -> Adcp:
     get_idempotency_posture(tenant), the single source shared by both
     response paths.
     """
-    from src.core.database.repositories.idempotency_attempt import get_idempotency_posture
+    from src.core.idempotency_policy import get_idempotency_posture
     from src.core.version_negotiation import SUPPORTED_ADCP_MAJORS, SUPPORTED_ADCP_VERSIONS
 
     posture = get_idempotency_posture(tenant)

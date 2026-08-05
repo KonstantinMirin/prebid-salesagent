@@ -17,94 +17,13 @@ get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds = 86400).
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from src.core.database.models import IdempotencyAttempt
-
-if TYPE_CHECKING:
-    from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency, Idempotency3
-
-# Matches GetAdcpCapabilitiesResponse.adcp.idempotency.replay_ttl_seconds (86400 = 24h).
-DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
-
-# get-adcp-capabilities-response.json#/properties/adcp/properties/idempotency/oneOf/0:
-# replay_ttl_seconds bounds (schema-enforced integer minimum/maximum).
-_MIN_REPLAY_TTL_SECONDS = 3600
-_MAX_REPLAY_TTL_SECONDS = 604800
-
-
-class IdempotencyPosture(BaseModel):
-    """The seller's declared adcp.idempotency posture, pre-wire-serialization.
-
-    Mirrors resolve_supported_billing()'s shape: one typed value both
-    response-construction sites in capabilities.py derive from, instead of a
-    literal Idempotency(...) duplicated at each site. ``check_bounds()``
-    enforces the schema minimum/maximum and the cross-field
-    in_flight_max_seconds <= replay_ttl_seconds rule the JSON Schema cannot
-    express, raising AdCPConfigurationError (terminal — a seller-side
-    deployment fault the buyer cannot fix) rather than silently clamping or
-    emitting a non-conformant response.
-    """
-
-    supported: bool
-    replay_ttl_seconds: int | None = None
-    in_flight_max_seconds: int | None = None
-    account_id_is_opaque: bool = False
-
-    def check_bounds(self) -> None:
-        if not self.supported:
-            return
-        from src.core.exceptions import AdCPConfigurationError
-
-        if self.replay_ttl_seconds is None or not (
-            _MIN_REPLAY_TTL_SECONDS <= self.replay_ttl_seconds <= _MAX_REPLAY_TTL_SECONDS
-        ):
-            raise AdCPConfigurationError(
-                f"idempotency.replay_ttl_seconds {self.replay_ttl_seconds!r} is outside the required "
-                f"[{_MIN_REPLAY_TTL_SECONDS}, {_MAX_REPLAY_TTL_SECONDS}] bounds",
-                details={"replay_ttl_seconds": self.replay_ttl_seconds},
-            )
-        if self.in_flight_max_seconds is not None and self.in_flight_max_seconds > self.replay_ttl_seconds:
-            raise AdCPConfigurationError(
-                f"idempotency.in_flight_max_seconds {self.in_flight_max_seconds!r} exceeds "
-                f"replay_ttl_seconds {self.replay_ttl_seconds!r}",
-                details={
-                    "in_flight_max_seconds": self.in_flight_max_seconds,
-                    "replay_ttl_seconds": self.replay_ttl_seconds,
-                },
-            )
-
-    def to_sdk_union(self) -> Idempotency | Idempotency3:
-        """The SDK's discriminated Adcp.idempotency union. ``Idempotency3`` is a
-        generator artifact name for the ``supported: Literal[False]`` branch --
-        no friendlier alias exists in adcp.types (mirrors the ``Targeting``
-        false-cognate comment, capabilities.py:33-37)."""
-        from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency, Idempotency3
-
-        if not self.supported:
-            return Idempotency3(supported=False)
-        return Idempotency(
-            supported=True,
-            replay_ttl_seconds=self.replay_ttl_seconds,
-            in_flight_max_seconds=self.in_flight_max_seconds,
-            account_id_is_opaque=self.account_id_is_opaque,
-        )
-
-
-def get_idempotency_posture(tenant: object = None) -> IdempotencyPosture:  # noqa: ARG001 -- tenant reserved for future per-tenant config (#1592 C4 Q3, follow-up)
-    """Single source for the adcp.idempotency posture on get_adcp_capabilities.
-
-    Currently returns the same fixed posture for every tenant (matches
-    pre-existing hardcoded behavior exactly) -- per-tenant posture
-    persistence is deferred (salesagent-rldj research Q3), not a behavior
-    change here. Tests override this via CapabilitiesEnv.set_idempotency_posture
-    (in-process monkeypatch of this module's function).
-    """
-    return IdempotencyPosture(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds()))
+from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 
 
 class IdempotencyAttemptRepository:

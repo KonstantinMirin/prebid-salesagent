@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
-from src.core.database.repositories.account import NaturalKeyConflict
+from src.core.database.repositories.account import AccountRepository, NaturalKeyConflict
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -760,7 +760,7 @@ def _build_failed_result(
 
     The single choke point where every accounts.py advisory ``errors[]`` list
     is routed through ``normalize_advisory_errors`` before reaching the wire
-    (salesagent-c0ia.10 M1) -- one call here covers all six gate-check sites
+    (#1721 M1) -- one call here covers all six gate-check sites
     plus the settings-update-not-found and activation-proof advisories, since
     they all build their result through this function.
     """
@@ -783,7 +783,7 @@ def _first_gate_failure(gates: Iterable[Callable[[], list[Any] | None]]) -> list
     Both the provisioning arm (domain/billing/sandbox/notification-configs) and
     the settings-update arm (notification-configs/rejected-fields) are a list of
     independent gate checks where the first failure short-circuits the rest --
-    this is the ONE place that shape is expressed (salesagent-c0ia.10 M1; was 6
+    this is the ONE place that shape is expressed (#1721 M1; was 6
     duplicated check-then-build-then-continue blocks).
     """
     for gate in gates:
@@ -811,7 +811,7 @@ def _provisioning_gates(
     A module-level function, not a per-entry closure defined inside the sync
     loop: the returned lambdas close over ITS OWN parameters (fresh on every
     call), so this adds zero complexity to ``_sync_accounts_impl`` and raises
-    no ruff B023 loop-variable-closure warning (salesagent-c0ia.10 M1).
+    no ruff B023 loop-variable-closure warning (#1721 M1).
     """
     return [
         lambda: _check_domain_validity(brand_domain),
@@ -1058,7 +1058,7 @@ def _notification_configs_gate(entry: Any, proof_errors: list[Any] | None) -> li
     precomputed activation-proof errors -- the proof ran before any
     transaction opened, so a failure here still writes nothing for this entry.
     A module-level function (not a per-entry closure) so neither call site's
-    complexity grows with it (salesagent-c0ia.10 M1).
+    complexity grows with it (#1721 M1).
     """
     errors = _check_notification_configs(getattr(entry, "notification_configs", None))
     return errors if errors is not None else proof_errors
@@ -1179,7 +1179,8 @@ def _process_settings_update_entry(
     existing = _resolve_settings_update_target(ref, repo)
 
     # Echo brand/operator from the persisted row when there is one — the preview
-    # state's brand dict is REBUILT by _new_account_row and may drop extra keys.
+    # state's brand dict is REBUILT by AccountRepository.build_row and may drop
+    # extra keys.
     persisted = existing
     if dry_run:
         if previewed_by_key is None:
@@ -1397,40 +1398,6 @@ def _entry_account_hint(entry: Any) -> str:
     return str(getattr(brand, "domain", None) or "unknown")
 
 
-def _new_account_row(
-    *,
-    tenant_id: str,
-    account_id: str,
-    name: str,
-    status: str,
-    brand_domain: str,
-    brand_id: str | None,
-    operator: str,
-    principal_id: str | None,
-    created_fields: dict[str, Any],
-) -> DBAccount:
-    """Build the Account row a provisioning entry would create.
-
-    Shared by the live create and the dry_run preview so the two cannot describe
-    different rows — a preview built from its own field list is how the two arms
-    drift (#1721). The dry_run caller deliberately never adds the result to the
-    session; it only needs an object to compare LATER entries in the same request
-    against, the way the live arm compares them against the flushed row.
-    """
-    return DBAccount(
-        tenant_id=tenant_id,
-        account_id=account_id,
-        name=name,
-        status=status,
-        brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
-        operator=operator,
-        principal_id=principal_id,
-        # Every settable field comes from the one walk in the caller -- naming them
-        # here is what let a field be added to the re-sync arm and forgotten at create.
-        **created_fields,
-    )
-
-
 def _preview_state_from(
     existing: DBAccount, *, mode: str, brand_domain: str, brand_id: str | None, operator: str
 ) -> DBAccount:
@@ -1450,9 +1417,10 @@ def _preview_state_from(
     applies its own serialization on top, on both arms, so the seed must mirror
     the raw COLUMN state the live arm's row carries.
 
-    Construction goes through :func:`_new_account_row` so accounts.py keeps ONE
-    row-construction site (tests/unit/test_guards_sync_accounts_row_builder.py).
-    Never ``copy``/``deepcopy``/``expunge`` the loaded row: the first two carry
+    Construction goes through :meth:`AccountRepository.build_row` so accounts.py
+    keeps ONE row-construction call site
+    (tests/unit/test_guards_sync_accounts_row_builder.py). Never
+    ``copy``/``deepcopy``/``expunge`` the loaded row: the first two carry
     ``_sa_instance_state`` and the last breaks the live arm's identity map.
 
     ``mode`` is a parameter rather than a constant because the settings-update
@@ -1470,7 +1438,7 @@ def _preview_state_from(
     created_fields = {
         field: getattr(existing, field) for field in _FIELD_POLICY if _disposition(field, mode).kind == "applied"
     }
-    return _new_account_row(
+    return AccountRepository.build_row(
         tenant_id=existing.tenant_id,
         account_id=existing.account_id,
         name=existing.name,
@@ -1760,7 +1728,7 @@ async def _sync_accounts_impl(
                     # account_ids, an outcome no real run can produce (BR-RULE-062).
                     # The row is built by the SAME helper the live arm uses and is
                     # deliberately never added to the session.
-                    previewed_by_key[natural_key] = _new_account_row(
+                    previewed_by_key[natural_key] = AccountRepository.build_row(
                         tenant_id=tenant_id,
                         account_id=account_id,
                         name=account_name,
@@ -1791,7 +1759,7 @@ async def _sync_accounts_impl(
                     )
                     continue
 
-                new_account = _new_account_row(
+                new_account = AccountRepository.build_row(
                     tenant_id=tenant_id,
                     account_id=account_id,
                     name=account_name,
