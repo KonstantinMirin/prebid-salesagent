@@ -47,25 +47,29 @@ _NOQA_MARKER = "# noqa: TID251"
 _NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*TID251[^\n]*")
 
 # ---------------------------------------------------------------------------
-# (d) The recorded closed set of sanctioned exemption sites.
+# (d) The two seam definitions -- not an exemption list, a floor.
 #
-# Every entry is a line-scoped `noqa: TID251` comment (never a per-file-ignore) at
-# the one construction/import site the seam architecture sanctions:
+# A seam architecture cannot have zero sanctioned importers of the thing it
+# wraps: the seam itself has to import httpx, and the guarded MCP seam has to
+# import StreamableHttpTransport to factory-pin it. Every entry is a
+# line-scoped `noqa: TID251` comment (never a per-file-ignore) at the one
+# construction/import site the seam architecture sanctions:
 #   - outbound_http.py       — the seam itself imports httpx
 #   - mcp_client.py          — StreamableHttpTransport, factory-pinned
 # Adding a file here requires a matching live violation (case c) — the set
-# and the noqa lines move together or this module fails.
+# and the noqa lines move together or this module fails. Both are
+# liveness-proven: strip the noqa and the build fails.
 #
-# creative_agent_registry.py / signals_agent_registry.py were exempted here
+# creative_agent_registry.py / signals_agent_registry.py were listed here
 # for constructing adcp.ADCPMultiAgentClient on the un-pinned OPERATOR-agent
 # path (adcp 6.6.0 exposed no transport injection point — GH #1589). Both were
 # migrated onto the guarded MCP seam (src.core.utils.mcp_client.create_mcp_client)
 # by salesagent-4n88, so neither file constructs an adcp SDK client anymore —
-# the exemption set SHRINKS from 4 to 2, per this module's own non-vacuity
-# contract (case c/d): removing a noqa without a live violation is required,
-# not merely permitted.
+# the set SHRANK from 4 to 2, per this module's own non-vacuity contract
+# (case c/d): removing a noqa without a live violation is required, not
+# merely permitted. It does not grow beyond the two seam definitions.
 # ---------------------------------------------------------------------------
-EXPECTED_EXEMPT_FILES: frozenset[str] = frozenset(
+SEAM_FILES: frozenset[str] = frozenset(
     {
         "src/core/security/outbound_http.py",
         "src/core/utils/mcp_client.py",
@@ -200,7 +204,7 @@ def _files_carrying_noqa() -> set[str]:
 class TestExemptionsAreExecutable:
     """(c) Each sanctioned noqa still covers a LIVE violation (never dead prose)."""
 
-    @pytest.mark.parametrize("rel_path", sorted(EXPECTED_EXEMPT_FILES))
+    @pytest.mark.parametrize("rel_path", sorted(SEAM_FILES))
     def test_stripping_the_noqa_makes_the_file_violate(self, rel_path: str) -> None:
         path = repo_root() / rel_path
         assert path.is_file(), f"recorded exemption file does not exist: {rel_path}"
@@ -220,10 +224,10 @@ class TestExemptSetIsClosed:
 
     def test_noqa_files_equal_recorded_constant(self) -> None:
         found = _files_carrying_noqa()
-        unrecorded = found - EXPECTED_EXEMPT_FILES
-        missing = EXPECTED_EXEMPT_FILES - found
+        unrecorded = found - SEAM_FILES
+        missing = SEAM_FILES - found
         assert not unrecorded and not missing, (
-            "src/ files carrying '# noqa: TID251' must equal EXPECTED_EXEMPT_FILES.\n"
+            "src/ files carrying '# noqa: TID251' must equal SEAM_FILES.\n"
             + (f"unrecorded exemptions (record here or remove the noqa): {sorted(unrecorded)}\n" if unrecorded else "")
             + (f"recorded exemptions with no noqa in the file: {sorted(missing)}\n" if missing else "")
         )

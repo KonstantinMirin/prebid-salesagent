@@ -33,9 +33,11 @@ What does NOT count, deliberately:
 - Exponentiation that never reaches a sleep. The power has to flow into the
   duration, by one of the three routes above.
 
-The allowlist is seeded at its maximum — every geometric sleep in ``src/`` at
-the time salesagent-4fya.6 landed — and only shrinks. Each entry names the
-ticket that removes it, so an entry that outlives its ticket is visible.
+``NON_HTTP_BACKOFF`` is a taxonomy, not a debt list: every remaining entry is
+a geometric sleep that is genuinely not outbound HTTP (a business-state poll,
+a non-HTTP protocol, a database connection retry), so the seam is not where
+it belongs. It only shrinks — a site migrating onto the seam removes its
+entry — and it does not grow by exempting a real violation.
 """
 
 from __future__ import annotations
@@ -69,7 +71,7 @@ SLEEP_NAME = "sleep"
 # "not outbound HTTP" from the real thing; the comment on each entry below is
 # what makes that call. The set only shrinks (a site migrating onto the seam
 # removes its entry); it does not grow by exempting a real violation.
-ALLOWLIST = {
+NON_HTTP_BACKOFF = {
     # All three entries below are geometric, but not outbound HTTP — so the
     # seam is not where they belong, and they stay listed with the reason in
     # writing rather than exempted by a path rule the next reader has to
@@ -204,7 +206,7 @@ class TestNoCallSiteBackoff:
         """
         assert_violations_match_allowlist(
             {(path, count) for path, count in _scan_src().items()},
-            ALLOWLIST,
+            NON_HTTP_BACKOFF,
             fix_hint=FIX_HINT,
         )
 
@@ -219,8 +221,8 @@ class TestNoCallSiteBackoff:
         new call site grew its own schedule, which is the thing the guard
         exists to prevent.
         """
-        assert len(ALLOWLIST) == 3, (
-            f"allowlist is {len(ALLOWLIST)} entries, expected exactly 3 — a call-site backoff was "
+        assert len(NON_HTTP_BACKOFF) == 3, (
+            f"NON_HTTP_BACKOFF is {len(NON_HTTP_BACKOFF)} entries, expected exactly 3 — a call-site backoff was "
             f"added or removed without updating this pin. {FIX_HINT}"
         )
 

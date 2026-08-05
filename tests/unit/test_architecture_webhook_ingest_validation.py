@@ -70,9 +70,10 @@ ACCEPTED_GATES: dict[str, frozenset[str]] = {
 ACCEPTED_GATE_SYMBOLS = frozenset(sym for symbols in ACCEPTED_GATES.values() for sym in symbols)
 
 # Tool modules that legitimately name the fields WITHOUT importing a gate.
-# Reasons in writing, like the no_call_site_backoff allowlist — these are
+# A taxonomy, not a debt list -- reasons in writing, like
+# test_architecture_no_call_site_backoff.py's NON_HTTP_BACKOFF: these are
 # correct designs, not debt, so no FIXME. The set may only shrink.
-ALLOWLIST = frozenset(
+CORRECT_DESIGN_NO_GATE = frozenset(
     {
         # Transport wrappers: they FORWARD the raw field to _sync_creatives_impl,
         # which runs the gate. Validating in the wrapper would be the layer
@@ -166,7 +167,7 @@ def find_unguarded_modules(tools_dir: Path | None = None, root: Path | None = No
     violations: list[str] = []
     for path in sorted(scan_dir.rglob("*.py")):
         relpath = rel(path) if root is None else str(path.relative_to(scan_root))
-        if relpath in ALLOWLIST:
+        if relpath in CORRECT_DESIGN_NO_GATE:
             continue
         tree = parse_module(path)
         if module_names_webhook_fields(tree) and not module_routes_through_a_gate(tree):
@@ -215,14 +216,17 @@ def test_allowlist_only_shrinks():
     (or started importing a gate) must leave the allowlist, so the list can only
     shrink and never quietly masks a live violation.
     """
-    for relpath in sorted(ALLOWLIST):
+    for relpath in sorted(CORRECT_DESIGN_NO_GATE):
         path = repo_root() / relpath
         assert path.exists(), f"stale allowlist entry (file gone): {relpath}"
         tree = parse_module(path)
         assert module_names_webhook_fields(tree) and not module_routes_through_a_gate(tree), (
             f"stale allowlist entry — {relpath} no longer needs it; remove the entry"
         )
-    assert len(ALLOWLIST) <= 2, "the allowlist may only shrink — fix the new module instead of listing it"
+    assert len(CORRECT_DESIGN_NO_GATE) == 2, (
+        f"CORRECT_DESIGN_NO_GATE is {len(CORRECT_DESIGN_NO_GATE)} entries, expected exactly 2 — "
+        "fix the new module instead of listing it, or update this pin if a listed one genuinely left."
+    )
 
 
 # ── Meta-tests: the detector itself ─────────────────────────────────
