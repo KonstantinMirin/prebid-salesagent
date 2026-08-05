@@ -1308,19 +1308,19 @@ def _process_settings_update_entry(
 _PROOF_BUDGET_SECONDS = 6.0
 
 
-def _proof_tuple(config: object) -> tuple:
+def _proof_tuple(config: NotificationConfig) -> tuple[str, str, str | None, tuple[str, ...]]:
     """The identity of a proof, per the spec's proof-reuse allowance.
 
     A re-sent config whose (subscriber_id, normalized url, auth binding, normalized
     event_types) matches an already-proven persisted entry MAY skip re-proof.
     """
-    auth = getattr(config, "authentication", None)
+    auth = config.authentication
     auth_scheme = getattr(auth, "scheme", None) if auth is not None else None
     return (
-        getattr(config, "subscriber_id", None),
-        str(getattr(config, "url", "") or "").rstrip("/"),
+        config.subscriber_id,
+        str(config.url or "").rstrip("/"),
         enum_value(auth_scheme) if auth_scheme is not None else None,
-        tuple(sorted(enum_value(e) for e in (getattr(config, "event_types", None) or []))),
+        tuple(sorted(enum_value(e) for e in (config.event_types or []))),
     )
 
 
