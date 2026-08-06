@@ -3303,6 +3303,47 @@ def _parametrize_ctx(
     metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
 
 
+#: Per-tag tracking issue for the dormant UC-010 scenarios.
+#:
+#: There was ONE shared reason string here, citing #1855 for all 33 dormant T-UC-010-*
+#: tags. It was right for the media_buy presence-object cluster and wrong for everything
+#: else, and because it was a single hardcoded fallback rather than a per-tag reason,
+#: neither stale-citation guard could see it (they read .feature comments and _XFAIL_TAGS,
+#: not this branch). Swapping it to #1291 would only have inverted the defect onto the tags
+#: #1855 genuinely homes (#1721 review F2).
+#:
+#: Every entry was checked with `gh issue view` against the scenario it labels. A tag with
+#: no ESTABLISHED home is deliberately ABSENT rather than guessed: a citation-free reason is
+#: honest, an invented one is the defect this map exists to remove.
+_UC010_DORMANT_TRACKING: dict[str, str] = {
+    # RFC 9421 signing + agent key lifecycle. #1291's title scopes it to "inbound, outbound
+    # and key lifecycle"; the in-file _SELECTIVE_XFAIL entries already cite #1291 for
+    # webhook_signing, so this keeps the file internally consistent.
+    "T-UC-010-v31-request-signing-posture": "#1291",
+    "T-UC-010-v31-request-signing-namespace-split": "#1291",
+    "T-UC-010-v31-request-signing-subset": "#1291",
+    "T-UC-010-v31-webhook-signing": "#1291",
+    "T-UC-010-v31-identity-brand-json-url": "#1291",
+    "T-UC-010-v31-identity-key-origins": "#1291",
+    "T-UC-010-v31-identity-compromise-notification": "#1291",
+    "T-UC-010-v31-agent-signing-key-bounds": "#1291",
+    "T-UC-010-v31-agent-encryption-key-bounds": "#1291",
+    # media_buy presence-object sections. #1855's body enumerates these by name, including
+    # media_buy.content_standards -- which the old blanket citation got right by accident
+    # and a naive #1855 -> #1291 swap would have got wrong.
+    "T-UC-010-v31-creative-multiplicity": "#1855",
+    "T-UC-010-v31-creative-agentic-flags": "#1855",
+    "T-UC-010-v31-governance-aware": "#1855",
+    "T-UC-010-v31-vendor-metric-optimization": "#1855",
+    "T-UC-010-v31-content-standards-block": "#1855",
+    # Capability surfaces excluded from declaration under the strict policy. #1724 names
+    # adapter creative_specs and generative creative; conftest already cites it in-file for
+    # the specialism tags.
+    "T-UC-010-v31-creative-specs": "#1724",
+    "T-UC-010-v31-creative-extended": "#1724",
+}
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Parametrize BDD scenarios across the wire transports (a2a/mcp/rest).
 
@@ -4010,9 +4051,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):
-            pytest.xfail(
-                "UC-010 harness wiring not extended to this tag (dormant, never graded) — steps tracked by #1855; presence-object production gap is #1855"
-            )
+            tracked = sorted({_UC010_DORMANT_TRACKING[t] for t in marker_names if t in _UC010_DORMANT_TRACKING})
+            suffix = f" — tracked by {', '.join(tracked)}" if tracked else ""
+            pytest.xfail(f"UC-010 harness wiring not extended to this tag (dormant, never graded){suffix}")
 
         from tests.harness.capabilities import CapabilitiesEnv
 
