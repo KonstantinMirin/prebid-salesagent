@@ -141,8 +141,8 @@ ALLOWLIST_DEFERRED: frozenset[tuple[str, str, str]] = frozenset(
         # UC-006 domain, out of salesagent-689e's UC-010 capabilities scope.
         # setup_generative_build is NOT in this allowlist: it doesn't match
         # _GIVEN_STEP_METHOD_RE (name is "setup_", not "set_"-prefixed), so
-        # this guard doesn't detect it at all -- tracked only in salesagent-jlug.
-        ("tests/harness/creative_sync.py", "set_run_async_result", "salesagent-jlug"),
+        # this guard doesn't detect it at all -- both methods are tracked in FIXME(#1887).
+        ("tests/harness/creative_sync.py", "set_run_async_result", "FIXME(#1887)"),
     }
 )
 

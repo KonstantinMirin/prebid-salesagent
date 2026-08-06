@@ -37,21 +37,10 @@ _SCAN_FILES = [
 #: (relpath, enclosing_def, form): reason. Pre-existing / deferred instances,
 #: each tracked by a filed GitHub issue.
 #: Ratchet like EXPECTED_LEDGER -- shrinks as those issues land, never grows.
-ALLOWLIST_DEFERRED: frozenset[tuple[str, str, str, str]] = frozenset(
-    {
-        # MCP wrapper for list_authorized_properties has NO adcp_validation_boundary
-        # at all (unlike its A2A/REST siblings, which are already boundary-wrapped --
-        # just missing a shared builder, a dedup concern out of THIS guard's scope).
-        # This is the genuine boundary-protection gap. (list_accounts/sync_accounts
-        # in accounts.py had the same gap -- already fixed.)
-        (
-            "src/core/tools/properties.py",
-            "list_authorized_properties",
-            "ListAuthorizedPropertiesRequest",
-            "FIXME(#1882)",
-        ),
-    }
-)
+#: Deferred violations, each with a filed GitHub issue. SHRINK ONLY -- never add.
+#: Now EMPTY: properties.py's list_authorized_properties MCP wrapper was the last entry
+#: (#1882), and it is now boundary-wrapped like its A2A and REST siblings.
+ALLOWLIST_DEFERRED: frozenset[tuple[str, str, str, str]] = frozenset()
 
 #: Legitimate false positives -- checked, not disease instances.
 ALLOWLIST_NOT_APPLICABLE: frozenset[tuple[str, str, str]] = frozenset(

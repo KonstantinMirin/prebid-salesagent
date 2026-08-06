@@ -41,18 +41,33 @@ from count_ratchet import (
 BASELINE_FILE = ".fixme-citation-baseline"
 TRACKED_DIRS = ("src", "tests")
 MAIN_REF = "origin/main"
-KEYS = ("src_fixme_beads", "tests_fixme_beads")
+KEYS = ("src_fixme_beads", "tests_fixme_beads", "src_quoted_beads", "tests_quoted_beads")
 
+#: ``FIXME(salesagent-x)`` / ``TODO(bd-x)`` -- the call-syntax spelling. Ratcheted debt.
 _LOCAL_BEADS_CITATION = re.compile(r"\b(?:FIXME|TODO)\(\s*(?:salesagent|bd)-")
+
+#: A bare local beads id used as a quoted VALUE -- an allowlist tuple's ticket element, or an
+#: id embedded in a developer-facing message. CLAUDE.md's rule ("cite a GitHub issue, never a
+#: local beads id -- beads ids don't resolve for outside contributors") applies just as much
+#: there, but the call-syntax pattern above cannot see it: that is exactly how
+#: ``("tests/harness/creative_sync.py", "set_run_async_result", "salesagent-jlug")`` sat
+#: invisible to this hook (#1721 review F4).
+#:
+#: Baselined at ZERO, deliberately. Both pre-existing sites are fixed in the same change, so
+#: this half is a HARD GATE rather than another ratcheted debt number to be paid down later.
+_QUOTED_BEADS_ID = re.compile(r"""(['"])\s*(?:salesagent|bd)-[0-9a-z]+(?:\.[0-9a-z]+)*\s*\1""")
 
 
 def count_beads_citations(repo_root: Path) -> dict[str, int]:
-    """Count local-beads-id FIXME/TODO citations under src/ and tests/."""
+    """Count local-beads-id citations under src/ and tests/, in both spellings."""
     counts = dict.fromkeys(KEYS, 0)
-    for tracked_dir, key in zip(TRACKED_DIRS, KEYS, strict=True):
+    for tracked_dir in TRACKED_DIRS:
+        fixme_key = f"{tracked_dir}_fixme_beads"
+        quoted_key = f"{tracked_dir}_quoted_beads"
         for path in sorted((repo_root / tracked_dir).rglob("*.py")):
             text = path.read_text(encoding="utf-8")
-            counts[key] += len(_LOCAL_BEADS_CITATION.findall(text))
+            counts[fixme_key] += len(_LOCAL_BEADS_CITATION.findall(text))
+            counts[quoted_key] += len(_QUOTED_BEADS_ID.findall(text))
     return counts
 
 
