@@ -7,7 +7,7 @@ bytes via ``content=`` through :mod:`src.core.security.outbound_http`. No
 webhook sender may reach ``json=`` on the egress seam.
 
 Spec grounding: pinned AdCP 3.1.1,
-``dist/docs/3.1.1/building/by-layer/L3/webhooks.mdx:404-418`` — the legacy
+``dist/docs/3.1.0/building/by-layer/L3/webhooks.mdx:404-418`` — the legacy
 HMAC-SHA256 fallback signs ``{unix_timestamp}.{raw_body_bytes}`` and requires
 ``X-ADCP-Signature: sha256=<hex digest>`` / ``X-ADCP-Timestamp: <unix
 seconds>`` on compact-separator JSON. ``adcp.sign_legacy_webhook`` (the
@@ -17,6 +17,21 @@ confirming the spec reading, not the authority.
 Placed beside :mod:`outbound_http` rather than in ``src/services/``: this is
 egress policy (what bytes represent a payload, and how those bytes are
 authenticated), not business logic.
+
+Signer-side duplicate-object-key MUST (salesagent-47n9.19; pinned AdCP 3.1.1,
+``dist/docs/3.1.0/building/by-layer/L1/security.mdx`` §Duplicate object keys):
+signers MUST reject duplicate-key input before signing. ``prepare_signed_request``
+takes ``payload: dict[str, Any]`` — a Python ``dict`` cannot represent a
+duplicate key, so this MUST is satisfied *by construction*: there is no
+production path in this codebase that feeds this function parsed-from-text
+JSON (every payload source is already a dict — ``_to_wire_dict`` and
+JSONB-sourced rows). Do NOT add a ``bytes``/``str``-accepting overload "for
+convenience" — it would have no caller today, and it would reopen exactly the
+gap this paragraph closes. ``tests/unit/test_architecture_no_webhook_egress_text_payload.py``
+guards this as a build failure, not just a paragraph: if a future PR needs a
+text-accepting entry point, it MUST route the text through
+:func:`src.core.security.webhook_strict_json.loads_rejecting_duplicate_keys`
+first.
 """
 
 from __future__ import annotations
