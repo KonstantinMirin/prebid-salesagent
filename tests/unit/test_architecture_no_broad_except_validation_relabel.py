@@ -39,7 +39,6 @@ GH #1843, #1868
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 
@@ -52,31 +51,39 @@ _BROAD_NAMES = frozenset({"Exception", "BaseException"})
 # Known violations — shrink-only, never grow. Keyed by (path, enclosing function,
 # raised type) rather than line number: a fix elsewhere in the file shifts lines,
 # and a line-keyed allowlist then reads as "fixed" when nothing changed.
-_KNOWN_VIOLATIONS: set[tuple[str, str, str]] = {
-    # FIXME(#1888): buyer-facing — an AttributeError inside property-list
-    # resolution reaches the buyer as VALIDATION_ERROR.
-    ("src/core/tools/products.py", "_get_products_impl", "AdCPValidationError"),
-    # FIXME(#1889): a babel locale-data failure is reported to the admin as
-    # "your currency_code is invalid".
-    ("src/services/policy_service.py", "validate_currency_code", "ValidationError"),
-}
+# EMPTY, and it must stay empty. Both original entries (#1888 get_products
+# property-list resolution, #1889 currency-code validation) were fixed by
+# deleting the handlers, not by allowlisting them. An AST sweep of src/, tests/
+# and scripts/ finds no other instance of this shape anywhere in the tree, so a
+# new entry here would be a NEW defect, never inherited debt.
+_KNOWN_VIOLATIONS: set[tuple[str, str, str]] = set()
 
 
-def _is_broad_handler(handler: ast.ExceptHandler) -> bool:
-    """True for ``except:``, ``except Exception:``, ``except BaseException:``.
-
-    A tuple of named types is never broad, even if one member is ``Exception``
-    — that would be a strict superset of the tuple and is caught by the plain
-    ``ast.Name`` arm below only when written alone.
-    """
-    node = handler.type
-    if node is None:
-        return True
+def _is_broad_name(node: ast.expr) -> bool:
+    """True for a reference to ``Exception``/``BaseException``, bare or dotted."""
     if isinstance(node, ast.Name):
         return node.id in _BROAD_NAMES
     if isinstance(node, ast.Attribute):
         return node.attr in _BROAD_NAMES
     return False
+
+
+def _is_broad_handler(handler: ast.ExceptHandler) -> bool:
+    """True for ``except:``, ``except Exception:``, ``except BaseException:``,
+    and for any tuple containing one of those.
+
+    A tuple whose members are all named, specific types is narrow and permitted.
+    """
+    node = handler.type
+    if node is None:
+        return True
+    if isinstance(node, ast.Tuple):
+        # A tuple CONTAINING Exception is exactly as broad as Exception alone —
+        # the named siblings are already subsumed by it. Treating tuples as
+        # narrow left "except (ValueError, Exception)" as a one-token way past
+        # this guard. Measured when tightened: zero new violations tree-wide.
+        return any(_is_broad_name(element) for element in node.elts)
+    return _is_broad_name(node)
 
 
 def _relabelled_validation_types(handler: ast.ExceptHandler) -> list[str]:
@@ -146,7 +153,7 @@ def test_known_violations_not_stale():
     assert_violations_match_allowlist(
         _scan_repo(),
         _KNOWN_VIOLATIONS,
-        fix_hint="Remove fixed entries from _KNOWN_VIOLATIONS (see #1888, #1889).",
+        fix_hint="_KNOWN_VIOLATIONS is empty and stays empty — delete the handler instead.",
     )
 
 
@@ -193,19 +200,3 @@ def test_guard_permits_correct_shapes(sample):
     """Each permitted shape is NOT reported — a guard that fires on everything is noise."""
     found = _scan_tree(ast.parse(_NEGATIVE_SAMPLES[sample]), "sample.py")
     assert not found, f"guard wrongly flagged the {sample!r} form: {found}"
-
-
-def test_allowlist_entries_cite_a_github_issue():
-    """Every allowlisted entry carries a FIXME(#<gh-issue>) at its definition.
-
-    Project convention (CLAUDE.md § Structural Guards): an allowlisted violation
-    is tracked debt, and the tracker must be a GitHub number that resolves for
-    outside contributors — never a local beads id.
-    """
-    source = Path(__file__).read_text(encoding="utf-8")
-    block = source.split("_KNOWN_VIOLATIONS: set[tuple[str, str, str]] = {", 1)[1].split("\n}\n", 1)[0]
-    fixmes = [line for line in block.splitlines() if "FIXME(#" in line]
-    assert len(fixmes) == len(_KNOWN_VIOLATIONS), (
-        f"{len(_KNOWN_VIOLATIONS)} allowlisted violation(s) but {len(fixmes)} FIXME(#<gh-issue>) "
-        "comment(s) — every entry needs one."
-    )

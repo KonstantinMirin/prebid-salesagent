@@ -396,25 +396,23 @@ async def _get_products_impl(
     # Use isinstance check to safely handle mock objects in tests
     _property_list_ref = getattr(req, "property_list", None)
     if isinstance(_property_list_ref, PropertyListReference):
-        try:
-            from src.core.property_list_resolver import resolve_property_list
+        # No try/except here on purpose. Typed AdCPErrors already carry their own
+        # buyer-facing classification, and anything else is a fault on our side —
+        # the transport boundary translates it honestly (SERVICE_UNAVAILABLE,
+        # transient, 500). The handler that used to sit here relabelled every
+        # implementation bug as AdCPValidationError, so the buyer read "your
+        # request is malformed" for our crash, and it forced recovery="transient"
+        # against the pinned enum's "correctable" for that code — telling the
+        # buyer their request was invalid AND that retrying it might work.
+        from src.core.property_list_resolver import resolve_property_list
 
-            allowed_property_ids = await resolve_property_list(_property_list_ref)
-            allowed_set = set(allowed_property_ids)
-            products = filter_products_by_property_list(products, allowed_set)
-            logger.info(
-                f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
-                f"(allowed {len(allowed_set)} properties)"
-            )
-        except AdCPError:
-            raise
-        # FIXME(#1888): broad catch relabels implementation bugs (AttributeError,
-        # TypeError) as VALIDATION_ERROR — the buyer reads "your request is
-        # malformed" for a server-side fault. Allowlisted in
-        # tests/unit/test_architecture_no_broad_except_validation_relabel.py.
-        except Exception as e:
-            logger.error(f"Property list resolution failed: {e}")
-            raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
+        allowed_property_ids = await resolve_property_list(_property_list_ref)
+        allowed_set = set(allowed_property_ids)
+        products = filter_products_by_property_list(products, allowed_set)
+        logger.info(
+            f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
+            f"(allowed {len(allowed_set)} properties)"
+        )
 
     # Generate dynamic product variants from signals agents
     try:

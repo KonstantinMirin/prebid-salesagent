@@ -208,7 +208,11 @@ async def compliance_client(a2a_url, auth_token):
             response = await test_client.get(f"{a2a_url.replace('/a2a', '')}/.well-known/agent-card.json")
             if response.status_code != 200:
                 pytest.skip(f"A2A server not available at {a2a_url} (status: {response.status_code})")
-    except (httpx.ConnectError, httpx.TimeoutException, Exception) as e:
+    # Exactly the two failures that mean 'no server is listening'. A bare
+    # Exception used to sit in this tuple, so ANY instrument failure -- a bug in
+    # the fixture, a bad URL, an import error -- became a green skip and the whole
+    # module reported success while grading nothing.
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
         pytest.skip(f"A2A server not available at {a2a_url}: {e}")
 
     async with A2AAdCPComplianceClient(
