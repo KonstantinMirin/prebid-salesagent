@@ -1,5 +1,5 @@
 """Structural guard: typed AdCP request construction must be validation-boundary
-protected (salesagent-5yik sweep-verify).
+protected.
 
 Disease pattern this guards against: a transport wrapper (MCP tool, A2A skill
 handler, REST route) constructs a typed ``*Request(...)`` Pydantic model with
@@ -12,10 +12,8 @@ recovery/suggestion the boundary exists to attach (see
 Scope: this guard covers the CONCRETE, automatable half of the disease
 (missing boundary protection around a non-trivial construction) — not the
 "reimplements the builder instead of calling it" half, which needs semantic
-judgment a structural scan can't make reliably. See the salesagent-5yik
-codebase-scan disposition table (bead notes) for the full picture, including
-the 16 DEFER instances tracked by follow-up tickets (salesagent-2ari, p99d,
-rhux, z1li, 1s4j).
+judgment a structural scan can't make reliably and is tracked separately
+(GH #1885).
 
 Zero-argument constructions (``XRequest()``) are exempt -- nothing for a
 boundary to protect (no ``ValidationError`` can occur).
@@ -37,22 +35,20 @@ _SCAN_FILES = [
 ]
 
 #: (relpath, enclosing_def, form): reason. Pre-existing / deferred instances,
-#: tracked by follow-up tickets filed at the salesagent-5yik codebase-scan atom.
-#: Ratchet like EXPECTED_LEDGER -- shrinks as those tickets land, never grows.
+#: each tracked by a filed GitHub issue.
+#: Ratchet like EXPECTED_LEDGER -- shrinks as those issues land, never grows.
 ALLOWLIST_DEFERRED: frozenset[tuple[str, str, str, str]] = frozenset(
     {
-        # MCP wrappers for list_accounts/sync_accounts/list_authorized_properties
-        # have NO adcp_validation_boundary at all (unlike their A2A/REST siblings,
-        # which are already boundary-wrapped -- just missing a shared builder,
-        # a dedup concern out of THIS guard's scope). This is the genuine
-        # boundary-protection gap.
-        ("src/core/tools/accounts.py", "list_accounts", "ListAccountsRequest", "salesagent-2ari"),
-        ("src/core/tools/accounts.py", "sync_accounts", "SyncAccountsRequest", "salesagent-2ari"),
+        # MCP wrapper for list_authorized_properties has NO adcp_validation_boundary
+        # at all (unlike its A2A/REST siblings, which are already boundary-wrapped --
+        # just missing a shared builder, a dedup concern out of THIS guard's scope).
+        # This is the genuine boundary-protection gap. (list_accounts/sync_accounts
+        # in accounts.py had the same gap -- already fixed.)
         (
             "src/core/tools/properties.py",
             "list_authorized_properties",
             "ListAuthorizedPropertiesRequest",
-            "salesagent-2ari",
+            "FIXME(#1882)",
         ),
     }
 )
@@ -155,7 +151,7 @@ def _find_unprotected_constructions() -> list[tuple[str, str, str]]:
 def test_request_construction_is_boundary_protected() -> None:
     """Every non-trivial *Request(...) construction in a transport file is
     either wrapped in adcp_validation_boundary, or pinned as a known,
-    ticket-tracked gap (salesagent-5yik).
+    ticket-tracked gap.
     """
     actual = set(_find_unprotected_constructions())
     deferred_triples = {(f, d, form) for f, d, form, _ticket in ALLOWLIST_DEFERRED}

@@ -35,6 +35,10 @@ from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
 from src.core.signing import deliver_adcp_webhook
+from src.core.webhook_validator import (
+    reject_unsafe_outbound_webhook_url,
+    webhook_url_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +156,11 @@ class ProtocolWebhookService:
     """
 
     def __init__(self) -> None:
-        self._client = httpx.AsyncClient(timeout=10.0)
+        # ``follow_redirects=False`` is httpx's default, stated here because it is a
+        # security property this service depends on, not an incidental one: the SSRF
+        # gate judges the configured URL, so a followed 302 to a metadata/private IP
+        # would slip past it (open-redirect SSRF).
+        self._client = httpx.AsyncClient(timeout=10.0, follow_redirects=False)
 
     async def send_notification(
         self,
@@ -179,9 +187,21 @@ class ProtocolWebhookService:
             )
             return False
 
-        # Rewritten BEFORE signing: ``@target-uri`` and ``@authority`` are covered
-        # components of the RFC 9421 signature, so signing the pre-rewrite URL would
-        # self-invalidate every dev/e2e delivery.
+        # SSRF gate on the configured URL *before* docker localhost rewrite.
+        # Under ADCP_TESTING, localhost/loopback is allowed for capture servers;
+        # production uses the full DNS-backed check (HTTPS required).
+        rejected, _error_msg = reject_unsafe_outbound_webhook_url(
+            push_notification_config.url,
+            log=logger,
+            kind="Protocol",
+        )
+        if rejected:
+            return False
+
+        # Rewritten AFTER the gate and BEFORE signing: the gate must judge the URL the
+        # operator actually configured, while ``@target-uri`` and ``@authority`` are
+        # covered components of the RFC 9421 signature, so signing the pre-rewrite URL
+        # would self-invalidate every dev/e2e delivery.
         url = _normalize_localhost_for_docker(push_notification_config.url)
 
         # Content-Type is the sender's (it frames the body it serialized), and the
@@ -308,13 +328,23 @@ class ProtocolWebhookService:
 
         for attempt in range(max_attempts):
             try:
-                logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
+                safe_url = webhook_url_for_log(url)
+                logger.info(
+                    "Sending webhook for task %s to %s (attempt %s/%s)",
+                    task_id,
+                    safe_url,
+                    attempt + 1,
+                    max_attempts,
+                )
 
                 # Serialize + authenticate + POST as ONE act, so the bytes signed
                 # are the bytes sent (#1441). The key material read behind this runs
                 # on the loop, the same side as ``_write_delivery_log`` below — this
                 # method already does synchronous DB work inline, and moving one of
                 # the two behind a thread hop would only look like a rule.
+                # Redirects are never followed (``self._client`` is built with
+                # ``follow_redirects=False``): a 302 to metadata/private IPs would
+                # bypass the pre-POST SSRF check (open-redirect SSRF).
                 delivery = await deliver_adcp_webhook(
                     url=url,
                     payload=payload,

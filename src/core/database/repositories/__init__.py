@@ -27,6 +27,7 @@ from src.core.database.repositories.push_notification_config import PushNotifica
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.database.repositories.uow import (
     AccountUoW,
     MediaBuyUoW,
@@ -59,6 +60,7 @@ __all__ = [
     "SigningKeyUoW",
     "TenantConfigRepository",
     "TenantConfigUoW",
+    "TenantLookupRepository",
     "TrustRootUoW",
     "WorkflowRepository",
     "WorkflowUoW",

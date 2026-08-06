@@ -112,9 +112,48 @@ from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
 from src.core.version import get_version
+from src.core.webhook_validator import (
+    reject_unsafe_webhook_registration_url,
+    webhook_ssrf_suggestion,
+    webhook_url_for_log,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
+    """Wrap an SSRF rejection as A2A InvalidParamsError with AdCP ``data`` envelope."""
+    if isinstance(exc, AdCPValidationError):
+        adcp_err = exc
+    else:
+        adcp_err = AdCPValidationError(
+            str(exc),
+            field="push_notification_config.url",
+            suggestion=webhook_ssrf_suggestion(),
+            recovery="correctable",
+        )
+    return InvalidParamsError(
+        message=adcp_err.message,
+        data=build_two_layer_error_envelope(adcp_err),
+    )
+
+
+def _reject_unsafe_a2a_webhook_url(url: str) -> None:
+    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate.
+
+    A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
+    translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
+    two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
+    + suggestion) — same pattern as the auth rejection on ``on_message_send``.
+    Delegates to ``reject_unsafe_webhook_registration_url`` so recovery/suggestion/field
+    cannot drift from the tool-path gate. AdCP tool wrappers raise ``AdCPValidationError``
+    directly for the same helper.
+    """
+    try:
+        reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
+    except AdCPValidationError as e:
+        raise _invalid_params_from_ssrf_error(e) from e
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -129,6 +168,83 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     s = struct_pb2.Struct()
     s.update(d)
     return s
+
+
+# Field names typed `integer` (not `number`) in the pinned AdCP v3.1.1 schema
+# that this server can place in an A2A Part.data (via _dict_to_value above).
+#
+# google.protobuf.Value/Struct -- the well-known types backing Part.data --
+# have NO integer variant: every JSON number is stored as number_value (a
+# double), by protobuf's own well-known-type design. Any int placed in a
+# Part.data is therefore irreversibly widened to a double the moment it
+# enters the Struct/Value, and comes back out as a JSON float (86400 ->
+# 86400.0) from ANY subsequent json_format.MessageToJson/MessageToDict call
+# -- ours or the a2a-sdk's own jsonrpc_dispatcher.py, which performs the
+# identical conversion to build the real HTTP response body. There is no way
+# to preserve the distinction inside the Struct/Value representation itself;
+# the only fix point is a coercion applied to the JSON produced FROM the
+# Struct/Value, driven by which fields are known to be integer-typed per spec.
+#
+# Spec: v3.1.1 (adcp==6.6.0) -- replay_ttl_seconds:
+# get-adcp-capabilities-response.json #/properties/adcp/properties/idempotency
+# (type: integer). limit: get-creative-delivery-response.json
+# #/properties/limit. Others below are verified `type: integer` fields on
+# this server's other explicit-skill responses (sync/assign counts, delivery
+# totals, revision, attribution window). Extend this set as new integer
+# fields are found on the A2A wire -- coercion only fires for a listed name
+# whose value is a whole-numbered float, so an unlisted or genuinely
+# fractional field is never touched.
+A2A_WIRE_INTEGER_FIELDS = frozenset(
+    {
+        "replay_ttl_seconds",
+        "limit",
+        "returned_count",
+        "revision",
+        "interval",
+        "attribution_window_days",
+        "total_processed",
+        "created",
+        "updated",
+        "unchanged",
+        "failed",
+        "deleted",
+        "total_assignments_processed",
+        "assigned",
+        "unassigned",
+        "total_impressions",
+        "active_count",
+        "impressions",
+    }
+)
+
+
+def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
+    """Recursively coerce known integer-typed fields back to ``int``.
+
+    Reverses the double-widening every number undergoes when it round-trips
+    through a protobuf Struct/Value (see A2A_WIRE_INTEGER_FIELDS above).
+    Only touches a value that is BOTH a whole-numbered float AND at a key in
+    ``integer_field_names`` -- an unlisted key or a genuinely fractional
+    value is returned unchanged, so this cannot silently corrupt real
+    ``number``-typed fields.
+
+    Shared by the production ``/a2a`` route wrapper (src/app.py) and the test
+    harness's ``extract_data_from_artifact`` (tests/utils/a2a_helpers.py) --
+    both perform the same Struct/Value -> JSON conversion the a2a-sdk itself
+    performs, so both need the same restoration to keep the harness's "real
+    A2A wire" claim honest.
+    """
+    if isinstance(data, dict):
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            if key in integer_field_names and isinstance(value, float) and value.is_integer():
+                result[key] = int(value)
+            else:
+                result[key] = restore_a2a_integer_types(value, integer_field_names)
+        return result
+    if isinstance(data, list):
+        return [restore_a2a_integer_types(item, integer_field_names) for item in data]
+    return data
 
 
 # ADCP Discovery Skills: Skills that don't require authentication
@@ -471,9 +587,14 @@ class AdCPRequestHandler(RequestHandler):
                 "principal_id": principal_id,
             }
 
-            await push_notification_service.send_notification(
+            sent = await push_notification_service.send_notification(
                 push_notification_config=push_notification_config, payload=payload, metadata=metadata
             )
+            if not sent:
+                logger.warning(
+                    "Protocol webhook not delivered for task %s (send_notification returned False)",
+                    task.id,
+                )
         except Exception as e:
             # Don't fail the task if webhook fails
             logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
@@ -604,14 +725,12 @@ class AdCPRequestHandler(RequestHandler):
         msg_id = params.message.message_id or None
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
 
-        # Extract push notification config from protocol layer (A2A SendMessageConfiguration)
+        # Extract push notification config from protocol layer (A2A SendMessageConfiguration).
+        # SSRF gate runs after auth resolution below (defense-in-depth: AUTH_REQUIRED
+        # before scheme/blocked-host checks when the request requires credentials).
         push_notification_config: TaskPushNotificationConfig | None = None
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config
-            if push_notification_config.url:
-                logger.info(
-                    f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
-                )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)
         task_metadata: dict[str, Any] = {
@@ -627,9 +746,6 @@ class AdCPRequestHandler(RequestHandler):
             status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
             metadata=_dict_to_struct(task_metadata),
         )
-        # Store push notification config outside protobuf metadata (not JSON-serializable)
-        if push_notification_config:
-            self._task_push_configs[task_id] = push_notification_config
         self.tasks[task_id] = task
 
         try:
@@ -663,6 +779,18 @@ class AdCPRequestHandler(RequestHandler):
                         )
                     ),
                 )
+
+            # SSRF-reject unsafe push URLs after the auth-required gate so callers
+            # that need credentials see AUTH_REQUIRED before scheme/blocked-host checks.
+            if push_notification_config and push_notification_config.url:
+                _reject_unsafe_a2a_webhook_url(push_notification_config.url)
+                logger.info(
+                    "Protocol-level push notification config provided for task %s: %s",
+                    task_id,
+                    webhook_url_for_log(push_notification_config.url),
+                )
+            if push_notification_config:
+                self._task_push_configs[task_id] = push_notification_config
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
@@ -1246,23 +1374,30 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
+            _reject_unsafe_a2a_webhook_url(url)
+
             auth_type = None
             auth_token_value = None
             if params.HasField("authentication"):
                 auth_type = params.authentication.scheme or None
                 auth_token_value = params.authentication.credentials or None
 
-            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
-                assert uow.push_notification_configs is not None
-                _config, created = uow.push_notification_configs.upsert(
-                    config_id=config_id,
-                    principal_id=tool_context.principal_id,
-                    url=url,
-                    authentication_type=auth_type,
-                    authentication_token=auth_token_value,
-                    validation_token=validation_token,
-                    session_id=None,
-                )
+            try:
+                with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                    assert uow.push_notification_configs is not None
+                    _config, created = uow.push_notification_configs.upsert(
+                        config_id=config_id,
+                        principal_id=tool_context.principal_id,
+                        url=url,
+                        authentication_type=auth_type,
+                        authentication_token=auth_token_value,
+                        validation_token=validation_token,
+                        session_id=None,
+                    )
+            except ValueError as e:
+                # Repository SSRF gate (defense in depth) — same enveloped path as
+                # _reject_unsafe_a2a_webhook_url above.
+                raise _invalid_params_from_ssrf_error(e) from e
 
             logger.info(
                 f"Push notification config {'created' if created else 'updated'}: {config_id} for tenant {tool_context.tenant_id}"

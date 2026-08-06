@@ -161,7 +161,7 @@ def given_full_capabilities(ctx: dict) -> None:
 @given("the tenant supports audience targeting")
 def given_supports_audience_targeting(ctx: dict) -> None:
     """Declare audience-targeting support. Production does not emit the
-    media_buy.audience_targeting block yet (#1592) — records intent; the
+    media_buy.audience_targeting block yet (#1855) — records intent; the
     value asserts xfail until the block lands."""
     _config(ctx)["audience_targeting"] = True
 
@@ -169,7 +169,7 @@ def given_supports_audience_targeting(ctx: dict) -> None:
 @given("the tenant supports conversion tracking")
 def given_supports_conversion_tracking(ctx: dict) -> None:
     """Declare conversion-tracking support. Production does not emit the
-    media_buy.conversion_tracking block yet (#1592) — records intent; the
+    media_buy.conversion_tracking block yet (#1855) — records intent; the
     presence/value asserts xfail until the block lands."""
     _config(ctx)["conversion_tracking"] = True
 
@@ -177,14 +177,14 @@ def given_supports_conversion_tracking(ctx: dict) -> None:
 @given('"creative" is in supported_protocols')
 def given_creative_in_supported_protocols(ctx: dict) -> None:
     """Declare the creative protocol. Production advertises only the media_buy
-    protocol, so the creative section is not emitted (#1592) — records intent."""
+    protocol, so the creative section is not emitted (#1724) — records intent."""
     _config(ctx).setdefault("supported_protocols", []).append("creative")
 
 
 @given("the tenant declares creative supports_compliance true")
 def given_creative_supports_compliance(ctx: dict) -> None:
     """Declare the optional creative.supports_compliance value. Records intent;
-    production does not emit the creative section yet (#1592)."""
+    production does not emit the creative section yet (#1724)."""
     _config(ctx)["creative_supports_compliance"] = True
 
 
@@ -464,8 +464,18 @@ def given_partial_account_config(ctx: dict) -> None:
 @given(parsers.parse("the tenant capabilities are configured as {capability_config}"))
 def given_capability_config(ctx: dict, capability_config: str) -> None:
     """Outline-row config declaration (features-partitions). Records the raw
-    row text; the row→assertion table in the satisfy-Then grades it."""
+    row text; the row→assertion table in the satisfy-Then grades it.
+
+    ``sandbox={true,false}`` is the one token in this outline with a REAL
+    tenant-config surface (Tenant.account_sandbox) rather than a pure Then-side
+    echo -- write it through configure_tenant_field so the sandbox_disabled row
+    isn't silently graded against the untouched DB default (#1721 M4; was the
+    same missing-Given-side-write class of gap as T-UC-010-main's).
+    """
     _config(ctx)["row"] = capability_config
+    match = re.search(r"\bsandbox=(true|false)\b", capability_config)
+    if match:
+        ctx["env"].configure_tenant_field("account_sandbox", match.group(1) == "true")
 
 
 # ── Givens: creative_approval_mode (real config — salesagent-y9ld R7) ─────
@@ -767,6 +777,35 @@ def then_account_sandbox_equals(ctx: dict, expected: str) -> None:
     value = wire_field(ctx, "account.sandbox")
     want = json.loads(expected)
     assert value is want, f"account.sandbox expected {want!r}, got {value!r}"
+
+
+# boundary_point -> Tenant.account_sandbox value to configure, or None to
+# deliberately leave the column at its DB default (True, models.py:82) --
+# the "absent" row's premise. Shared by @T-UC-010-v31-account-sandbox and
+# T-UC-010-main's explicit-production row (#1721 M4).
+_SANDBOX_BOUNDARY_CONFIG: dict[str, bool | None] = {
+    "sandbox: true in response (sandbox account)": True,
+    "sandbox absent in response (production account)": None,
+    "sandbox: false in response (explicit production)": False,
+}
+
+
+@given(parsers.parse("the tenant account is configured for {boundary_point}"))
+def given_tenant_account_sandbox_boundary(ctx: dict, boundary_point: str) -> None:
+    """Configure Tenant.account_sandbox per the account.sandbox boundary table."""
+    if boundary_point not in _SANDBOX_BOUNDARY_CONFIG:
+        raise ValueError(f"unknown account-sandbox boundary_point: {boundary_point!r}")
+    value = _SANDBOX_BOUNDARY_CONFIG[boundary_point]
+    if value is not None:
+        ctx["env"].configure_tenant_field("account_sandbox", value)
+
+
+@then(parsers.parse("the capabilities response should be schema-valid and account.sandbox should be {expected_value}"))
+def then_account_sandbox_boundary(ctx: dict, expected_value: str) -> None:
+    """Schema-valid is implicit in a successful dispatch (a schema violation
+    would already have failed at construction/serialization); the boundary
+    grades account.sandbox's exact value per the row."""
+    _expect_flag(ctx, "account.sandbox", expected_value.removesuffix(" (buyer-default false)"))
 
 
 def _expect_flag(ctx: dict, path: str, expected: str) -> None:
@@ -1218,7 +1257,7 @@ def then_wire_error_message_contains(ctx: dict, first: str, second: str) -> None
     for tenant '...'" and adcp_a2a_server.py "Authentication token is invalid or
     expired." both contain "token" and "invalid". Requiring both rejects the
     AUTH_REQUIRED missing-credential wording ("authentication required")."""
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    envelope = ctx["result"].wire_error_envelope
     assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
     errors = envelope.get("errors") or [{}]
     message = errors[0].get("message") or ""
@@ -1560,7 +1599,8 @@ def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:
 @given('"brand" is in supported_protocols')
 def given_brand_in_supported_protocols(ctx: dict) -> None:
     """Declare the brand protocol. Production advertises only media_buy, so the
-    brand top-level block is never emitted (#1592) — records intent."""
+    brand top-level block is never emitted (#1724 — the brand family is re-homed
+    entirely, not partially delivered) — records intent."""
     _config(ctx).setdefault("supported_protocols", []).append("brand")
 
 
@@ -1585,7 +1625,7 @@ def given_measurement_in_supported_protocols(ctx: dict) -> None:
 def given_brand_posture(ctx: dict) -> None:
     """Declare a concrete brand posture (rights/right_types/available_uses/
     generation_providers). Records intent; the capabilities builder does not emit
-    the brand block yet (#1592) so the value Thens xfail."""
+    the brand block (#1724) so the value Thens xfail."""
     _config(ctx)["brand"] = {
         "rights": True,
         "right_types": ["talent", "music"],
@@ -1597,8 +1637,10 @@ def given_brand_posture(ctx: dict) -> None:
 @given(parsers.parse("the tenant declares reporting delivery methods {methods} with offline protocols {protocols}"))
 def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) -> None:
     """Declare push-based reporting delivery methods + offline protocols. Records
-    intent; production never emits media_buy.reporting_delivery_methods /
-    offline_delivery_protocols (#1592)."""
+    intent; the declaration store deliberately carries no field for either under
+    the STRICT capability policy (#1291) — declaring [webhook] would fire the
+    schema must_equal_when forcing webhook_signing.supported=true, and no offline
+    report delivery is implemented."""
     _config(ctx)["reporting_delivery_methods"] = None if methods.strip() == "omitted" else _parse_bracket_list(methods)
     _config(ctx)["offline_delivery_protocols"] = (
         None if protocols.strip() == "omitted" else _parse_bracket_list(protocols)
@@ -1612,16 +1654,19 @@ def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) ->
 )
 def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
     """Declare a mutating-webhook emission posture (or its absence) for the
-    webhook-signing required_when invariant. Records intent; production emits no
-    webhook_signing block (#1592) so the must_equal_when invariant is ungraded."""
+    webhook-signing required_when invariant. Records intent; the declaration store
+    deliberately carries no webhook_signing field under the STRICT capability policy
+    (#1291) so the must_equal_when invariant is ungraded."""
     _config(ctx)["webhook_emission_state"] = emission_state.strip()
 
 
 @given(parsers.parse("the tenant declares {signing_posture} with identity block {identity_state}"))
 def given_signing_posture_with_identity(ctx: dict, signing_posture: str, identity_state: str) -> None:
     """Declare a signing posture + identity-block state for the identity
-    required_when invariant. Records intent; the builder never rejects
-    signing-without-brand_json_url (identity/signing posture not built, #1592)."""
+    required_when invariant. Records intent; the declaration store deliberately
+    carries no identity or request_signing field under the STRICT capability policy
+    (#1291), so a signing posture missing brand_json_url cannot be declared and the
+    required_when rejection has nothing to fire on."""
     _config(ctx)["signing_posture"] = signing_posture.strip()
     _config(ctx)["identity_state"] = identity_state.strip()
 
@@ -1877,7 +1922,7 @@ def then_experimental_features_contains(ctx: dict, feature: str) -> None:
 # top-level errors[] array, or a config-derived specialisms set, and advertises
 # only the media_buy protocol. The Givens record declared intent; the Thens grade
 # the exact v3.1.1-pinned shape on the wire. Every scenario in this batch strict-
-# xfails on the unemitted/hard-coded block (#1592), never a dormant skip.
+# xfails on the genuinely-unemitted block (per-family GH homes: #1855/#1856/#1724), never a dormant skip.
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -2059,12 +2104,11 @@ def then_rejection_names(ctx: dict, token: str) -> None:
     An operator who declared several blocks needs to know which one to remove; a
     bare CONFIGURATION_ERROR would make them bisect their own config. Pins the
     message content because ``core/error.json`` leaves ``message`` a free string,
-    so only production's actual wording can be asserted.
+    so only production's actual wording can be asserted. Always follows
+    ``then_declaration_rejected`` in every scenario using this step, so the
+    code/recovery are the same CONFIGURATION_ERROR/terminal pair asserted there.
     """
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
-    assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
-    message = (envelope.get("errors") or [{}])[0].get("message") or ""
-    assert token in message, f"rejection message does not name {token!r}: {message!r}"
+    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal", message_substr=token)
 
 
 @then("each specialism should be a member of the 3.1.1 specialism enum")
@@ -2142,11 +2186,12 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 # identity.brand_json_url required_when rule. Each <expected> column drives a
 # concrete graded observable — a schema-valid success whose emitted block satisfies
 # the pinned relation/bound, or a seller-side CONFIGURATION_ERROR rejection — never
-# a vague valid/invalid word. The capabilities builder emits no request_signing,
-# derives no idempotency posture from config, runs no version negotiation, and
-# builds no identity/signing posture (#1592); the Givens record declared intent and
-# the graded rows strict-xfail on the unemitted block (tag-level for the all-fail
-# outlines; selective for the identity outline whose no-rejection valid rows pass).
+# a vague valid/invalid word. Idempotency posture derivation and version negotiation
+# are now implemented; request_signing/webhook_signing/identity remain undeclarable —
+# the declaration store deliberately carries no field for these postures under the
+# STRICT capability policy (#1291); the Givens record declared intent and the graded
+# rows strict-xfail on the undeclarable block (tag-level for the all-fail outlines;
+# selective for the identity outline whose no-rejection valid rows pass).
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -2156,8 +2201,9 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 @given(parsers.parse("the tenant declares request_signing posture sets for {boundary_point}"))
 def given_request_signing_posture_sets(ctx: dict, boundary_point: str) -> None:
     """Declare a request_signing posture-set boundary (supported_for/required_for/
-    warn_for and their protocol_methods_* siblings). Records intent; the capabilities
-    builder emits no request_signing block (#1592)."""
+    warn_for and their protocol_methods_* siblings). Records intent; the declaration
+    store deliberately carries no request_signing field under the STRICT capability
+    policy (#1291)."""
     _config(ctx)["request_signing_boundary"] = boundary_point.strip()
 
 
@@ -2220,16 +2266,19 @@ def given_idempotency_posture_freeform(ctx: dict, posture: str) -> None:
 @given(parsers.parse("the seller's error-details builder is configured for {boundary_point}"))
 def given_error_details_builder(ctx: dict, boundary_point: str) -> None:
     """Declare a (malformed) VERSION_UNSUPPORTED details configuration — empty
-    supported_versions array or omitted. Records intent; the capabilities builder runs
-    no version negotiation and raises no VERSION_UNSUPPORTED (#1592)."""
+    supported_versions array or omitted. Records intent; version negotiation is
+    now implemented (src/core/version_negotiation.py) and grades this boundary
+    directly, so this Given only seeds the declared boundary_point value."""
     _config(ctx)["version_unsupported_details"] = boundary_point.strip()
 
 
 @given(parsers.parse("the tenant identity and signing posture are configured for {boundary_point}"))
 def given_identity_signing_posture(ctx: dict, boundary_point: str) -> None:
     """Declare an identity + signing-posture boundary for the brand_json_url
-    required_when rule. Records intent; the capabilities builder never builds
-    identity/the signing posture and so never rejects the invalid config (#1592)."""
+    required_when rule. Records intent; the declaration store deliberately carries
+    no identity or request_signing field under the STRICT capability policy (#1291),
+    so a signing posture missing brand_json_url cannot be declared and the
+    required_when rejection has nothing to fire on."""
     _config(ctx)["identity_signing_boundary"] = boundary_point.strip()
 
 
@@ -2370,8 +2419,9 @@ def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
 @given(parsers.parse("the tenant declares webhook_signing posture described as {boundary_point}"))
 def given_webhook_signing_boundary(ctx: dict, boundary_point: str) -> None:
     """Declare a webhook_signing boundary — a mutating-webhook trigger paired with a
-    supported value, or an algorithms set. Records intent; the capabilities builder emits
-    no webhook_signing block (#1592), so the outline strict-xfails on all transports."""
+    supported value, or an algorithms set. Records intent; the declaration store
+    deliberately carries no webhook_signing field under the STRICT capability policy
+    (#1291), so the outline strict-xfails on all transports."""
     _config(ctx)["webhook_signing_boundary"] = boundary_point.strip()
 
 

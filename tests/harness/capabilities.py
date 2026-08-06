@@ -246,7 +246,7 @@ class CapabilitiesEnv(IntegrationEnv):
         e2e_unsupported(
             "no production test_behavior channel for overriding reported default_channels "
             "(only 'unavailable' and 'targeting_capabilities' are wired to AdapterConfig "
-            "test_behavior — salesagent-689e)"
+            "test_behavior) — #1871"
         )
     )
     def set_adapter_channels(self, channels: list[str]) -> None:
@@ -290,7 +290,7 @@ class CapabilitiesEnv(IntegrationEnv):
     @realize_e2e(
         e2e_unsupported(
             "no production tenant-config surface for the seller's advertised adcp version set "
-            "(SUPPORTED_ADCP_VERSIONS/MAJORS are process-wide constants, salesagent-rldj) — a "
+            "(SUPPORTED_ADCP_VERSIONS/MAJORS are process-wide constants) — a "
             "module-constant monkeypatch cannot cross a real HTTP process boundary"
         )
     )
@@ -312,8 +312,8 @@ class CapabilitiesEnv(IntegrationEnv):
     @realize_e2e(
         e2e_unsupported(
             "no production tenant-config surface for the seller's advertised build_version "
-            "(src.core.version.get_version() is a process-wide package-metadata read, "
-            "salesagent-rldj) — cannot be injected over real HTTP"
+            "(src.core.version.get_version() is a process-wide package-metadata read) "
+            "— cannot be injected over real HTTP"
         )
     )
     def set_build_version(self, build_version: str) -> None:
@@ -325,7 +325,7 @@ class CapabilitiesEnv(IntegrationEnv):
     @realize_e2e(
         e2e_unsupported(
             "no production tenant-config surface for the adcp.idempotency posture "
-            "(get_idempotency_posture() is a process-wide provider, salesagent-rldj) — a "
+            "(get_idempotency_posture() is a process-wide provider) — a "
             "module-function monkeypatch cannot cross a real HTTP process boundary"
         )
     )
@@ -340,12 +340,13 @@ class CapabilitiesEnv(IntegrationEnv):
         """Override the seller's declared adcp.idempotency posture.
 
         In-process only: monkeypatches get_idempotency_posture() at its module
-        seam (src.core.tools.capabilities._build_adcp_block re-imports it per
-        call). The overridden posture still flows through the REAL
-        IdempotencyPosture.check_bounds()/to_sdk_union() production code --
-        only the input posture is test-controlled, not the validation/shaping.
+        seam (src.core.idempotency_policy -- src.core.tools.capabilities
+        ._build_adcp_block re-imports it per call). The overridden posture
+        still flows through the REAL IdempotencyPosture.check_bounds()/
+        to_sdk_union() production code -- only the input posture is
+        test-controlled, not the validation/shaping.
         """
-        from src.core.database.repositories.idempotency_attempt import IdempotencyPosture
+        from src.core.idempotency_policy import IdempotencyPosture
 
         posture = IdempotencyPosture(
             supported=supported,
@@ -354,7 +355,7 @@ class CapabilitiesEnv(IntegrationEnv):
             account_id_is_opaque=account_id_is_opaque,
         )
         patcher = patch(
-            "src.core.database.repositories.idempotency_attempt.get_idempotency_posture",
+            "src.core.idempotency_policy.get_idempotency_posture",
             return_value=posture,
         )
         self.mock["idempotency_posture"] = patcher.start()

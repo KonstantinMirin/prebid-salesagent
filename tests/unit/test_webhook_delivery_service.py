@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.webhook_delivery_service import CircuitState, WebhookDeliveryService
-from tests.helpers.webhook_wire import capture_outbound_webhooks
+from tests.helpers.webhook_wire import capture_outbound_webhooks, constructed_http_clients
 
 
 @pytest.fixture
@@ -314,3 +314,85 @@ def test_no_webhooks_configured(webhook_service, mock_db_session):
 
     # Should return False but not error
     assert result is False
+
+
+def test_deliver_rejects_metadata_url_without_post(webhook_service, mock_db_session, monkeypatch):
+    """Outbound SSRF gate must refuse cloud-metadata URLs before httpx POST."""
+    monkeypatch.delenv("ADCP_TESTING", raising=False)
+    start_time = datetime.now(UTC)
+
+    mock_config = MagicMock()
+    mock_config.url = "http://169.254.169.254/latest/meta-data/"
+    mock_config.authentication_type = None
+    mock_config.authentication_token = None
+    mock_config.validation_token = None
+    mock_config.webhook_secret = None
+    mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+    # Graded on the SOCKET, not on a constructor mock: "no POST left the process" has
+    # to stay true however the delivery path builds its client, and an
+    # ``assert_not_called`` on a client this path no longer constructs would pass even
+    # with the SSRF gate deleted (#1291 C1 relocated the client into the signing
+    # boundary).
+    with capture_outbound_webhooks() as captured:
+        result = webhook_service.send_delivery_webhook(
+            media_buy_id="buy_ssrf",
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=1000,
+            spend=100.0,
+        )
+
+    assert result is False
+    assert captured == []
+    endpoint_key = f"tenant1:{mock_config.url}"
+    breaker = webhook_service._circuit_breakers[endpoint_key]
+    assert breaker.failure_count == 1
+
+
+def test_deliver_disables_httpx_redirects(webhook_service, mock_db_session):
+    """The delivering client must refuse redirects, to prevent open-redirect SSRF.
+
+    Graded on the client INSTANCE the send path actually constructs rather than on a
+    constructor mock's call args. #1291 C1 moved delivery off the service's own
+    ``httpx.Client`` onto the signing boundary's ``AsyncClient``, and an
+    ``assert_called_with(follow_redirects=False)`` cannot survive that move: the
+    boundary leaves httpx's already-``False`` default alone instead of naming the
+    kwarg, so the obligation still holds while the constructor assertion goes red.
+    """
+    start_time = datetime.now(UTC)
+
+    mock_config = MagicMock()
+    mock_config.url = "https://example.com/webhook"
+    mock_config.authentication_type = None
+    mock_config.authentication_token = None
+    mock_config.validation_token = None
+    mock_config.webhook_secret = None
+    mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+    with (
+        patch(
+            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
+            return_value=(True, ""),
+        ),
+        constructed_http_clients() as built,
+        capture_outbound_webhooks() as captured,
+    ):
+        webhook_service.send_delivery_webhook(
+            media_buy_id="buy_redir",
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=1000,
+            spend=100.0,
+        )
+
+    # "The webhook was sent at all" is asserted first — otherwise a send path that
+    # silently stopped delivering would satisfy every redirect assertion below by
+    # constructing nothing.
+    assert len(captured) == 1
+    assert built, "no HTTP client was constructed for the delivery webhook"
+    assert all(client.follow_redirects is False for client in built)

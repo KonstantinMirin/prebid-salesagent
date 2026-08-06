@@ -20,6 +20,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import _get_response_field
+from tests.bdd.steps.generic._account_resolution import seed_natural_key_matches
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -189,14 +190,14 @@ def given_multiple_matches(ctx: dict, count: int) -> None:
     brand = ctx.get("request_brand", "multi-brand.com")
     operator = ctx.get("request_operator", "agency.com")
 
-    for i in range(count):
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=f"acc-multi-{i}",
-            brand={"domain": brand},
-            operator=operator,
-        )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    seed_natural_key_matches(
+        tenant,
+        count=count,
+        brand_domain=brand,
+        operator=operator,
+        owner_for_index=lambda _i: principal,
+        account_id_prefix="acc-multi",
+    )
 
 
 @given(parsers.parse("the natural key matches {total:d} accounts but the agent can access {accessible:d}"))
@@ -221,20 +222,15 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
     operator = ctx.get("request_operator", "agency.com")
     other_principal = PrincipalFactory(tenant=tenant)
 
-    accessible_ids: list[str] = []
-    for i in range(total):
-        account_id = f"acc-scope-{i}"
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=account_id,
-            status="active",
-            brand={"domain": brand},
-            operator=operator,
-        )
-        owner = principal if i < accessible else other_principal
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=owner, account=account)
-        if i < accessible:
-            accessible_ids.append(account_id)
+    accounts = seed_natural_key_matches(
+        tenant,
+        count=total,
+        brand_domain=brand,
+        operator=operator,
+        owner_for_index=lambda i: principal if i < accessible else other_principal,
+        account_id_prefix="acc-scope",
+    )
+    accessible_ids: list[str] = [a.account_id for a in accounts[:accessible]]
     # Record the accessible account id(s) so a Then step can pin the resolved
     # account to the one the agent can actually access (#1417).
     ctx["accessible_account_ids"] = accessible_ids
@@ -368,17 +364,16 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         )
 
     elif partition == "natural_key_ambiguous":
-        for i in range(3):
-            account = AccountFactory(
-                tenant=tenant,
-                account_id=f"acc-amb-{i}",
-                status="active",
-                brand={"domain": "ambiguous.com"},
-                operator="ambiguous.com",
-            )
-            # Grant the requesting agent access so ambiguity is genuine FOR THIS AGENT —
-            # natural-key resolution is access-scoped (#1417).
-            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        # The requesting agent is granted access to all three so the ambiguity is
+        # genuine FOR THIS AGENT — natural-key resolution is access-scoped (#1417).
+        seed_natural_key_matches(
+            tenant,
+            count=3,
+            brand_domain="ambiguous.com",
+            operator="ambiguous.com",
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-amb",
+        )
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
         )
@@ -494,17 +489,16 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         )
 
     elif config.startswith("brand+op") and "multi match" in config:
-        for i in range(2):
-            account = AccountFactory(
-                tenant=tenant,
-                account_id=f"acc-multi-{i}",
-                status="active",
-                brand={"domain": "multi.com"},
-                operator="multi.com",
-            )
-            # Access-scoped ambiguity (#1417): grant the agent access so the
-            # two matches are genuinely ambiguous for it.
-            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        # Access-scoped ambiguity (#1417): the agent is granted access to both,
+        # so the two matches are genuinely ambiguous for it.
+        seed_natural_key_matches(
+            tenant,
+            count=2,
+            brand_domain="multi.com",
+            operator="multi.com",
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-multi",
+        )
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="multi.com"), operator="multi.com"),
         )

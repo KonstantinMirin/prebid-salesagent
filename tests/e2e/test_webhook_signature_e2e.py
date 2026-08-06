@@ -237,7 +237,7 @@ def _await_deliveries(receiver: dict) -> list[CapturedWebhook]:
     we registered. ``protocol_webhook_service._normalize_localhost_for_docker`` rewrites
     the URL BEFORE signing and the SDK signs the post-hook effective URL, so the
     registered URL is not the signed one, and passing it would surface as
-    ``request_signature_invalid`` — which reads like a crypto bug.
+    ``webhook_signature_invalid`` — which reads like a crypto bug.
     """
     elapsed = 0.0
     while elapsed < _DELIVERY_TIMEOUT_SECONDS and not receiver["received_raw"]:
@@ -277,7 +277,7 @@ def _jwks_with_swapped_key_material(jwks: dict[str, Any], kid: str) -> dict[str,
     """The published JWKS with the SAME ``kid`` carrying a DIFFERENT public key.
 
     Same kid on purpose. A negative control that used a different kid would fail at key
-    LOOKUP (``request_signature_key_unknown``) and never reach the crypto step, so it
+    LOOKUP (``webhook_signature_key_unknown``) and never reach the crypto step, so it
     would grade the resolver rather than the signature. Substituting real key material
     from a freshly generated pair — rather than mangling the ``x`` bytes — keeps the
     point on the curve, so the only thing that can fail is the signature check itself.
@@ -417,14 +417,20 @@ async def test_an_outbound_webhook_is_signed_and_verifies_against_the_published_
     # The negative control. Same kid, different key material: the failure must be at the
     # crypto step, which is what proves the positive result above was crypto and not a
     # verifier that accepts anything it can look up.
-    from adcp.signing.errors import SignatureVerificationError
+    from adcp.signing.errors import WEBHOOK_SIGNATURE_INVALID, SignatureVerificationError
 
     with pytest.raises(SignatureVerificationError) as rejected:
         verify_as_conformant_receiver(delivery, _jwks_with_swapped_key_material(jwks, published_kid))
-    assert rejected.value.code == "request_signature_invalid", (
+    # The WEBHOOK taxonomy, not the request one: this is a webhook being verified under the
+    # webhook profile. security.mdx @ v3.1.1 :1483 (webhook verifier checklist step 10 —
+    # "verify the signature against the JWK (`webhook_signature_invalid` on failure)") and
+    # the webhook failure table at :1563 ("Cryptographic verification failed |
+    # `webhook_signature_invalid`"). `request_signature_invalid` is that same row of the
+    # REQUEST checklist (:1242) and table (:1388) — a different profile.
+    assert rejected.value.code == WEBHOOK_SIGNATURE_INVALID, (
         "swapping the key material under the SAME kid must be rejected at the SIGNATURE check; got code "
-        f"{rejected.value.code!r} at step {rejected.value.step!r}. A key_unknown here would mean the "
-        "control never reached the crypto step and graded the resolver instead"
+        f"{rejected.value.code!r} at step {rejected.value.step!r}. A webhook_signature_key_unknown here "
+        "would mean the control never reached the crypto step and graded the resolver instead"
     )
 
 

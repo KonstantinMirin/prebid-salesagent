@@ -18,6 +18,7 @@ onto :func:`wire_field` / :func:`wire_absent`.
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
 from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_dict, wire_field, wire_lookup
 from tests.harness.transport import Transport, TransportResult
@@ -172,6 +173,46 @@ class TestLoudGuardSurvivesTheExtension:
     def test_a_captured_wire_still_wins_over_a_stale_error(self):
         ctx = {"transport": Transport.REST, "wire_response": _WIRE, "error": RuntimeError("stale")}
         assert wire_field(ctx, "adcp_version") == "3.1.1"
+
+
+class _TypedPayload(BaseModel):
+    """Stand-in for a typed response payload, as ctx["response"] carries one."""
+
+    adcp_version: str = "3.1.1"
+
+
+class TestUnsetTransportIsNotImpl:
+    """``transport=None`` (unset) must raise loudly, never silently serialize.
+
+    The model_dump fallback is legitimate ONLY for an EXPLICIT ``Transport.IMPL``
+    — the caller declaring "there is no wire here, grade the serializer". An
+    unset transport is a non-parametrized caller (transport-tagged BDD scenarios
+    get an empty ctx) that never told the helper whether a real wire must exist;
+    falling back silently turns its wire assertion into a serializer round-trip
+    (GH #1744).
+    """
+
+    @pytest.mark.parametrize("base_ctx", [{}, {"transport": None}], ids=["key-absent", "explicit-none"])
+    @pytest.mark.parametrize("helper", [wire_field, wire_absent])
+    def test_unset_transport_raises_and_names_the_fix(self, base_ctx, helper):
+        ctx = {**base_ctx, "response": _TypedPayload()}
+        with pytest.raises(AssertionError, match=r"transport unset.*ctx\['transport'\].*Transport\.IMPL"):
+            helper(ctx, "adcp_version")
+
+    @pytest.mark.parametrize("base_ctx", [{}, {"transport": None}], ids=["key-absent", "explicit-none"])
+    def test_wire_dict_unset_transport_raises(self, base_ctx):
+        ctx = {**base_ctx, "response": _TypedPayload()}
+        with pytest.raises(AssertionError, match=r"transport unset.*ctx\['transport'\].*Transport\.IMPL"):
+            wire_dict(ctx)
+
+    def test_explicit_impl_still_serializes_the_typed_payload(self):
+        """The sanctioned no-wire path: IMPL declared explicitly grades the serializer."""
+        ctx = {"transport": Transport.IMPL, "response": _TypedPayload()}
+        assert wire_field(ctx, "adcp_version") == "3.1.1"
+
+    def test_a_captured_wire_wins_regardless_of_unset_transport(self):
+        """A stashed wire is a real wire — the guard is about the MISSING-wire path only."""
+        assert wire_field({"wire_response": _WIRE}, "adcp_version") == "3.1.1"
 
 
 def _error_envelope(field: str | None) -> dict:

@@ -31,7 +31,7 @@ _PINNED_ERROR_ENUM = (
 def _pinned_error_metadata() -> dict[str, dict[str, str]]:
     """code -> {recovery, suggestion} from the pinned AdCP error-code enum.
 
-    The pinned enum (@04f59d2d5) is the authoritative recovery classification;
+    The pinned enum (@v3.1.1) is the authoritative recovery classification;
     the installed SDK ships fewer codes and diverges on several recovery values,
     so it is NOT used here (pin-wins).
     """
@@ -194,7 +194,7 @@ class TransportResult:
         meta = _pinned_error_metadata()
         spec = meta.get(code)
         assert spec is not None, (
-            f"{code!r} is not a canonical AdCP error code (pinned error-code.json @04f59d2d5). "
+            f"{code!r} is not a canonical AdCP error code (pinned error-code.json @v3.1.1). "
             "Reconcile the feature to a canonical code."
         )
         expected_recovery = recovery if recovery is not None else spec["recovery"]

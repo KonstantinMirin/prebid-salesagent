@@ -632,6 +632,17 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
     env.set_http_status(status_code, reason)
 
 
+@given("the outbound webhook URL is blocked by SSRF validation")
+def given_outbound_webhook_ssrf_blocked(ctx: dict) -> None:
+    """Force send-time SSRF gate to reject the configured webhook URL.
+
+    Does not blanket-mock all UC-004 scenarios: only this Given opts into the
+    reject branch via CircuitBreakerEnv.set_url_invalid().
+    """
+    env = ctx["env"]
+    env.set_url_invalid("Webhook URL resolves to blocked IP range 169.254.0.0/16")
+
+
 @given("the webhook endpoint is unreachable (connection timeout)")
 def given_webhook_unreachable(ctx: dict) -> None:
     """Configure webhook endpoint to timeout.
@@ -1434,6 +1445,23 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
     assert d.status == status, f"Expected status '{status}', got '{d.status}'"
 
 
+@then(parsers.parse('buyers MAY treat the legacy alias "{legacy_status}" as equivalent to "{status}"'))
+def then_legacy_status_alias(ctx: dict, legacy_status: str, status: str) -> None:
+    """Buyer-side compatibility note, not a seller behavior: confirms the
+    response actually carries the NEW v3.1 canonical status name (the
+    precondition for "buyers who used to check for the legacy name MAY treat
+    the new one as equivalent" to be meaningful at all) rather than silently
+    also emitting the retired legacy value.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    d = resp.media_buy_deliveries[0]
+    assert d.status == status, f"Expected canonical status {status!r}, got {d.status!r}"
+    assert d.status != legacy_status, (
+        f"response carries the retired legacy status {legacy_status!r} instead of canonical {status!r}"
+    )
+
+
 @then("the response should include aggregated totals across both media buys")
 def then_has_aggregated_totals(ctx: dict) -> None:
     """Assert aggregated totals equal the sum of per-delivery totals."""
@@ -1854,6 +1882,31 @@ def then_webhook_marked_failed(ctx: dict) -> None:
     assert success is False, (
         f"Expected webhook delivery to be marked as failed (success=False), "
         f"got success={success!r} from webhook_result={ctx.get('webhook_result')!r}"
+    )
+
+
+@then("the webhook delivery should be skipped without an HTTP POST")
+def then_webhook_skipped_no_post(ctx: dict) -> None:
+    """Assert send-time SSRF skip: delivery failed and httpx POST was never called."""
+    env = ctx["env"]
+    success = _extract_webhook_success(ctx)
+    assert success is False, f"Expected SSRF-skipped delivery to return False, got success={success!r}"
+    post_mock = env.mock["post"]
+    assert post_mock.call_count == 0, f"Expected no HTTP POST after SSRF rejection, got {post_mock.call_count} call(s)"
+
+
+@then("the circuit breaker should record a failure")
+def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
+    """Assert the send-time SSRF path called circuit_breaker.record_failure()."""
+    env = ctx["env"]
+    service = env.get_service()
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    cb = service._circuit_breakers.get(endpoint_key)
+    assert cb is not None, (
+        f"Expected circuit breaker for {endpoint_key!r} after SSRF skip, found keys={list(service._circuit_breakers)}"
+    )
+    assert cb.failure_count >= 1, (
+        f"Expected failure_count >= 1 after SSRF rejection for {endpoint_key!r}, got {cb.failure_count}"
     )
 
 

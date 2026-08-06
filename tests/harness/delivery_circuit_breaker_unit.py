@@ -22,6 +22,7 @@ Available mocks via env.mock:
     "db"        -- get_db_session mock
     "logger"    -- module-level logger mock
     "post"      -- the outbound webhook socket; called (url, headers=, content=)
+    "ssrf"      -- send-time outbound SSRF gate (allows fixture hosts by default)
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from unittest.mock import MagicMock
 
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import BaseTestEnv
-from tests.harness._mixins import CircuitBreakerMixin
+from tests.harness._mixins import SSRF_EXTERNAL_PATCH, CircuitBreakerMixin
 
 
 class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
@@ -41,7 +42,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
     Fluent API (from CircuitBreakerMixin):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- answer every outbound webhook with status_code
         call_send(...)                   -- call service.send_delivery_webhook
 
     Unit-only API:
@@ -55,6 +56,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         "random": f"{MODULE}.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
         "logger": f"{MODULE}.logger",
+        **SSRF_EXTERNAL_PATCH,
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -71,6 +73,9 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
+        self._configure_ssrf_default()
+
+        # Installs mock["post"] (the outbound socket) answering 200 by default.
         self.install_webhook_wire()
 
         # DB session: return a mock session with one active webhook config

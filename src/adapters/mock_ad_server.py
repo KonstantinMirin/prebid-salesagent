@@ -896,10 +896,13 @@ class MockAdServer(AdServerAdapter):
             for package in packages:
                 if package.targeting_overlay:
                     targeting = package.targeting_overlay
+                    # GeoCountry/GeoRegion are RootModels — log the wrapped values,
+                    # not root='US' reprs. geo_metros stays as-is on purpose:
+                    # GeoMetro is a plain model (system/values), not a RootModel.
                     if targeting.geo_countries:
-                        self.log(f"      'countries': {targeting.geo_countries},")
+                        self.log(f"      'countries': {[c.root for c in targeting.geo_countries]},")
                     if targeting.geo_regions:
-                        self.log(f"      'regions': {targeting.geo_regions},")
+                        self.log(f"      'regions': {[r.root for r in targeting.geo_regions]},")
                     if targeting.geo_metros:
                         self.log(f"      'metros': {targeting.geo_metros},")
                     if getattr(targeting, "key_value_pairs", None):

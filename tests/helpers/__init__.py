@@ -76,6 +76,7 @@ from tests.helpers.adcp_factories import (
     create_test_property,
     create_test_property_dict,
 )
+from tests.helpers.admin_session import admin_auth_session
 from tests.helpers.envelope_assertions import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.idempotency_seeds import (
     make_active_cached_success,
@@ -88,8 +89,11 @@ from tests.helpers.orm_constraints import (
     check_constraint_values,
     quoted_values,
 )
+from tests.helpers.race_window import concurrent_commit_in_write_window, operator_answer
 
 __all__ = [
+    # Admin blueprint session helper
+    "admin_auth_session",
     # Auth helpers
     "assert_resolve_auth_dep_passes_token",
     # Envelope assertions
@@ -99,6 +103,9 @@ __all__ = [
     "check_constraint_sql",
     "check_constraint_values",
     "quoted_values",
+    # Concurrency harness
+    "concurrent_commit_in_write_window",
+    "operator_answer",
     # Idempotency cache seeding
     "make_active_cached_success",
     "seed_cached_success",

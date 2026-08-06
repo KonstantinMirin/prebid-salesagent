@@ -14,19 +14,40 @@ from adcp.types import McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
 from pydantic import BaseModel
 from rich.console import Console
-from sqlalchemy import select
+from sqlalchemy import literal, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.sql import func
 
 from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
+from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
+from src.core.database.repositories.workflow import append_step_comment
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhook_validator import (
+    validate_webhook_task_type,
+    webhook_url_for_log,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+
+def _log_webhook_send_outcome(config_url: str, sent: bool) -> None:
+    """Log webhook delivery result; never treat ``False`` as success.
+
+    ``config_url`` is sanitized to ``scheme://host/path`` so credentials in
+    userinfo/query never reach the console (AdCP L1 SSRF log hygiene).
+    """
+    safe_url = webhook_url_for_log(config_url)
+    if sent:
+        console.print(f"[green]✅ Webhook sent successfully for {safe_url}[/green]")
+    else:
+        console.print(f"[red]❌ Webhook not delivered for {safe_url} (send_notification returned False)[/red]")
+
 
 # Fire-and-forget webhook tasks are pinned against asyncio's weak-ref GC via
 # the shared src.core.async_utils.pin_task helper (single source of truth;
@@ -303,19 +324,18 @@ class ContextManager(DatabaseManager):
                     step.transaction_details = transaction_details
 
                 if add_comment:
-                    # Ensure comments is a list
-                    if not isinstance(step.comments, list):
-                        step.comments = []
-                    # Create a new list to trigger SQLAlchemy change detection
-                    new_comments = list(step.comments)
-                    new_comments.append(
-                        {
-                            "user": add_comment.get("user", "system"),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "text": add_comment.get("text", add_comment.get("comment", "")),
-                        }
+                    # Single-statement atomic append (salesagent-pgqs): the
+                    # old whole-list write-back erased concurrent comments.
+                    # Autoflush pushes the pending field updates above first;
+                    # the instance's stale comments are expired below.
+                    append_step_comment(
+                        session,
+                        step_id,
+                        user=add_comment.get("user", "system"),
+                        text=add_comment.get("text", add_comment.get("comment", "")),
+                        tenant_id=tenant_id,
                     )
-                    step.comments = new_comments
+                    session.expire(step, ["comments"])
 
                 # DEBUG: Log the condition check values BEFORE commit
                 console.print("[magenta]🔍 PRE-COMMIT WEBHOOK DEBUG:[/magenta]")
@@ -618,18 +638,28 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            stmt = select(Context).filter_by(context_id=context_id)
-
-            context = session.scalars(stmt).first()
-            if context:
-                if not isinstance(context.conversation_history, list):
-                    context.conversation_history = []
-
-                context.conversation_history.append(
-                    {"role": role, "content": content, "timestamp": datetime.now(UTC).isoformat()}
+            # Single-statement atomic append: the old load-append-write-back
+            # lost concurrent messages (and an in-place append on an
+            # already-list history was never even flushed) — salesagent-pgqs.
+            entry = func.jsonb_build_object(
+                "role",
+                literal(role),
+                "content",
+                literal(content),
+                "timestamp",
+                literal(datetime.now(UTC).isoformat()),
+            )
+            stmt = (
+                sa_update(Context)
+                .where(Context.context_id == context_id)
+                .values(
+                    conversation_history=jsonb_list_append(Context.conversation_history, entry),
+                    last_activity_at=datetime.now(UTC),
                 )
-                context.last_activity_at = datetime.now(UTC)
-                session.commit()
+                .execution_options(synchronize_session=False)
+            )
+            session.execute(stmt)
+            session.commit()
         finally:
             session.close()
 
@@ -846,8 +876,9 @@ class ContextManager(DatabaseManager):
 
                     service = get_protocol_webhook_service()
 
+                    safe_webhook_url = webhook_url_for_log(push_notification_config.url)
                     console.print(
-                        f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
+                        f"[cyan]📤 Sending webhook to {safe_webhook_url} for {mapping.object_type} {mapping.object_id}[/cyan]"
                     )
 
                     # Build webhook payload based on protocol type.
@@ -902,37 +933,37 @@ class ContextManager(DatabaseManager):
                             )
 
                             def _log_task_result(
-                                t: asyncio.Task, config_url: str = push_notification_config.url
+                                t: asyncio.Task,
+                                raw_url: str = push_notification_config.url,
+                                safe_url: str = safe_webhook_url,
                             ) -> None:
                                 # Runs AFTER pin_task's discard (see pin_task
                                 # docstring), so this log-and-swallow can't hold
                                 # the strong ref past completion.
+                                # Pass raw URL — _log_webhook_send_outcome owns sanitize.
                                 try:
-                                    t.result()
-                                    console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
+                                    _log_webhook_send_outcome(raw_url, t.result())
                                 except Exception as e:
-                                    console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
+                                    console.print(f"[red]❌ Webhook failed for {safe_url}: {str(e)}[/red]")
 
                             # Strong-ref pin against asyncio's weak-ref task
                             # tracker; discard runs before _log_task_result.
                             pin_task(task, on_done=_log_task_result)
                         except RuntimeError:
                             # No running loop; safe to run synchronously
-                            asyncio.run(
+                            sent = asyncio.run(
                                 service.send_notification(
                                     push_notification_config=push_notification_config,
                                     payload=payload,
                                     metadata=metadata,
                                 )
                             )
-                            console.print(
-                                f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
-                            )
+                            _log_webhook_send_outcome(push_notification_config.url, sent)
 
                     except requests.exceptions.Timeout:
-                        console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
+                        console.print(f"[red]❌ Webhook timeout for {safe_webhook_url}[/red]")
                     except requests.exceptions.RequestException as e:
-                        console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
+                        console.print(f"[red]❌ Webhook failed for {safe_webhook_url}: {str(e)}[/red]")
 
         except Exception as e:
             console.print(f"[red]Error sending push notifications: {e}[/red]")

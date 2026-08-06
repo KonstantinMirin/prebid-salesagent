@@ -244,6 +244,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
     _supported_fields = {
         "media_buy_id",
         "paused",
+        "canceled",
         "start_time",
         "end_time",
         "packages",
@@ -269,6 +270,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
+        elif field == "canceled":
+            kwargs["canceled"] = value.lower() == "true"
         elif field == "start_time":
             kwargs["start_time"] = _resolve_date_token(value, clock)
         elif field == "end_time":
@@ -1961,12 +1964,22 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.re(r"the request includes (?P<update_fields>(?!\d+ packages with valid).+[^:])$"))
+@given(
+    parsers.re(
+        r"the request includes (?P<update_fields>"
+        r"(?!\d+ packages with valid)"
+        r"(?!a reporting_webhook)"
+        r"(?!a push_notification_config)"
+        r".+[^:])$"
+    )
+)
 def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
     """Configure the update request with specific field combinations.
 
     Uses regex to avoid matching the datatable step 'the request includes 1 package update with:'
     and UC-002 steps like 'the request includes 2 packages with valid product_ids'.
+    Also excludes registration-SSRF Givens ('a reporting_webhook…', 'a push_notification_config…')
+    so those bind to their dedicated create/sync steps instead of this update catch-all.
     The negative lookahead excludes UC-002 package creation patterns (e.g. "2 packages with valid").
     The [^:] at the end ensures this step doesn't capture text ending with ':'.
 

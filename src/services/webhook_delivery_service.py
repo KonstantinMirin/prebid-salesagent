@@ -29,6 +29,10 @@ from adcp import get_adcp_spec_version
 from adcp.webhooks import generate_webhook_idempotency_key
 
 from src.core.signing import deliver_adcp_webhook_sync
+from src.core.webhook_validator import (
+    reject_unsafe_outbound_webhook_url,
+    webhook_url_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -353,9 +357,13 @@ class WebhookDeliveryService:
                 # Send to all configured webhooks
                 sent_count = 0
                 for config in configs:
+                    safe_url = webhook_url_for_log(config.url)
                     # Skip auth-blocked endpoints (UC-004-EXT-G-07)
                     if isinstance(getattr(config, "auth_blocked_at", None), datetime):
-                        logger.warning(f"⚠️ Auth blocked for {config.url}, skipping until credentials reconfigured")
+                        logger.warning(
+                            "⚠️ Auth blocked for %s, skipping until credentials reconfigured",
+                            safe_url,
+                        )
                         continue
 
                     endpoint_key = f"{tenant_id}:{config.url}"
@@ -373,7 +381,14 @@ class WebhookDeliveryService:
 
                     # Check circuit breaker
                     if not circuit_breaker.can_attempt():
-                        logger.warning(f"⚠️ Circuit breaker OPEN for {config.url}, skipping webhook delivery")
+                        logger.warning(
+                            "⚠️ Circuit breaker OPEN for %s, skipping webhook delivery",
+                            safe_url,
+                        )
+                        continue
+
+                    # Send-time SSRF gate before enqueue/POST (registration may skip DNS).
+                    if self._reject_unsafe_outbound_url(config.url, circuit_breaker):
                         continue
 
                     # Add to queue (bounded). ``tenant_id`` and the signing repository
@@ -391,7 +406,7 @@ class WebhookDeliveryService:
                     }
 
                     if not queue.enqueue(webhook_data):
-                        logger.warning(f"⚠️ Queue full for {config.url}, webhook dropped")
+                        logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
                         continue
 
                     # Deliver from queue with enhanced features
@@ -408,6 +423,14 @@ class WebhookDeliveryService:
         except Exception as e:
             logger.error(f"❌ Error in webhook delivery: {e}", exc_info=True)
             return False
+
+    def _reject_unsafe_outbound_url(self, url: str, circuit_breaker: CircuitBreaker) -> bool:
+        """Return True when outbound URL fails SSRF (caller must skip delivery)."""
+        rejected, _error_msg = reject_unsafe_outbound_webhook_url(url, log=logger, kind="Application")
+        if rejected:
+            circuit_breaker.record_failure()
+            return True
+        return False
 
     def _deliver_with_backoff(
         self,
@@ -434,6 +457,7 @@ class WebhookDeliveryService:
 
         config = webhook_data["config"]
         payload = webhook_data["payload"]
+        safe_url = webhook_url_for_log(config.url)
 
         # Authentication is NOT decided here — the receiver's registration selects
         # exactly one mode at the single boundary (#1291 C1). What stays local is the
@@ -452,7 +476,11 @@ class WebhookDeliveryService:
                     time.sleep(delay)
 
                 # Send webhook — serialize, authenticate and POST as one act, so the
-                # bytes signed are the bytes sent (#1441).
+                # bytes signed are the bytes sent (#1441). The destination was already
+                # SSRF-gated above (the sender owns authentication, the caller owns
+                # destination policy) and the sender's client leaves httpx's
+                # ``follow_redirects`` at its False default, so an open redirect
+                # cannot walk the POST off the vetted host.
                 delivery = deliver_adcp_webhook_sync(
                     url=config.url,
                     payload=payload,
@@ -464,30 +492,49 @@ class WebhookDeliveryService:
                 )
 
                 if 200 <= delivery.status_code < 300:
-                    logger.debug(f"Webhook delivered to {config.url} (status: {delivery.status_code})")
+                    logger.debug(
+                        "Webhook delivered to %s (status: %s)",
+                        safe_url,
+                        delivery.status_code,
+                    )
                     circuit_breaker.record_success()
                     return True
 
                 # Client errors (4xx): do NOT retry — the request is invalid
                 if 400 <= delivery.status_code < 500:
                     logger.warning(
-                        f"Webhook delivery to {config.url} returned client error {delivery.status_code}, will not retry"
+                        "Webhook delivery to %s returned client error %s, will not retry",
+                        safe_url,
+                        delivery.status_code,
                     )
                     circuit_breaker.record_failure()
                     return False
 
                 logger.warning(
-                    f"Webhook delivery to {config.url} returned "
-                    f"status {delivery.status_code} "
-                    f"(attempt: {attempt + 1}/{max_retries})"
+                    "Webhook delivery to %s returned status %s (attempt: %s/%s)",
+                    safe_url,
+                    delivery.status_code,
+                    attempt + 1,
+                    max_retries,
                 )
 
             except httpx.TimeoutException:
-                logger.warning(f"Webhook delivery to {config.url} timed out (attempt: {attempt + 1}/{max_retries})")
+                logger.warning(
+                    "Webhook delivery to %s timed out (attempt: %s/%s)",
+                    safe_url,
+                    attempt + 1,
+                    max_retries,
+                )
             except httpx.RequestError as e:
-                logger.warning(f"Webhook delivery to {config.url} failed: {e} (attempt: {attempt + 1}/{max_retries})")
+                logger.warning(
+                    "Webhook delivery to %s failed: %s (attempt: %s/%s)",
+                    safe_url,
+                    e,
+                    attempt + 1,
+                    max_retries,
+                )
             except Exception as e:
-                logger.error(f"Unexpected error delivering to {config.url}: {e}", exc_info=True)
+                logger.error("Unexpected error delivering to %s: %s", safe_url, e, exc_info=True)
                 break
 
         # All retries failed

@@ -67,6 +67,7 @@ from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
+    normalize_advisory_errors,
 )
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
@@ -116,11 +117,13 @@ def _get_media_buys_impl(
         # bypassing the exception hierarchy entirely (salesagent-mkso).
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_MISSING", message="Principal ID not found in context"
-                )
-            ],
+            errors=normalize_advisory_errors(
+                [
+                    Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                        code="AUTH_MISSING", message="Principal ID not found in context"
+                    )
+                ]
+            ),
         )
 
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
@@ -129,11 +132,13 @@ def _get_media_buys_impl(
         # per v3.1.1 error-code.json.
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_INVALID", message=f"Principal {principal_id} not found"
-                )
-            ],
+            errors=normalize_advisory_errors(
+                [
+                    Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                        code="AUTH_INVALID", message=f"Principal {principal_id} not found"
+                    )
+                ]
+            ),
         )
 
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
@@ -297,7 +302,7 @@ def _get_media_buys_impl(
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
         context=req.context,
-        errors=hydration_errors or None,
+        errors=normalize_advisory_errors(hydration_errors) or None,
     )
 
 

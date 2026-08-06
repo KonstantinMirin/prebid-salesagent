@@ -252,6 +252,42 @@ def capture_outbound_webhooks(
         yield captured
 
 
+@contextmanager
+def constructed_http_clients() -> Iterator[list[Any]]:
+    """Record every REAL httpx client a sender constructs inside the block.
+
+    Grades transport-level properties that live on the CLIENT rather than in the
+    request bytes — ``follow_redirects`` and ``timeout`` — which
+    :func:`capture_outbound_webhooks` cannot see because it replaces the socket,
+    not the client.
+
+    Asserting on the constructed INSTANCE rather than on a constructor mock's call
+    args is what keeps the obligation true whichever client the delivery path
+    builds: the sync client a service opens itself, or the ``AsyncClient`` the RFC
+    9421 signing boundary owns (#1291 C1). A constructor-mock assertion goes
+    silently vacuous the moment delivery moves between those two seams -- which is
+    exactly what a ``follow_redirects=False`` assertion did when C1 relocated the
+    client, so it is deliberately not the shape used here.
+
+    Note the property is graded as ``is False``, never as "was passed explicitly":
+    httpx's own default is already ``False``, so a sender that never names the
+    kwarg still satisfies the no-open-redirect obligation.
+    """
+    real_sync, real_async = httpx.Client, httpx.AsyncClient
+    built: list[Any] = []
+
+    def _spy_sync(*args: Any, **kwargs: Any) -> Any:
+        built.append(real_sync(*args, **kwargs))
+        return built[-1]
+
+    def _spy_async(*args: Any, **kwargs: Any) -> Any:
+        built.append(real_async(*args, **kwargs))
+        return built[-1]
+
+    with patch("httpx.Client", _spy_sync), patch("httpx.AsyncClient", _spy_async):
+        yield built
+
+
 def signature_input_label(captured: CapturedWebhook, label: str = "sig1") -> Any:
     """The whole RFC 9421 ``Signature-Input`` entry for *label*, parsed by the SDK's parser.
 

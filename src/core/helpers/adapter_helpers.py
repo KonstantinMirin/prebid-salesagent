@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -13,7 +13,17 @@ if TYPE_CHECKING:
 
     from src.adapters import AdServerAdapter
     from src.adapters.base import TargetingCapabilities
+    from src.core.database.models import Tenant as DBTenant
     from src.core.database.repositories.signing_key import SigningKeyRepository
+    from src.core.tenant_context import TenantContext
+    from src.core.testing_hooks import TestingContext
+
+    #: Same shape as ResolvedIdentity.tenant (src/core/resolved_identity.py).
+    IdentityTenant = TenantContext | dict[str, object]
+    #: IdentityTenant plus the raw ORM row some call sites pass directly (e.g.
+    #: media_buy_create.py's session.scalars(...).first()) instead of routing
+    #: through identity.tenant.
+    TenantLike = DBTenant | IdentityTenant | None
 
 
 class _HasAgentFields(Protocol):
@@ -21,7 +31,7 @@ class _HasAgentFields(Protocol):
 
     name: str
     agent_url: str
-    auth: dict[str, Any] | None
+    auth: dict[str, str] | None
     auth_header: str | None
     timeout: int
 
@@ -146,11 +156,10 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
-from src.core.database.database_session import get_db_session
 from src.core.schemas import Principal
 
 
-def _resolve_tenant_id_and_fallback_adapter(tenant: Any) -> tuple[str, str]:
+def _resolve_tenant_id_and_fallback_adapter(tenant: DBTenant | IdentityTenant) -> tuple[str, str]:
     """Extract tenant_id and the tenant.ad_server fallback adapter type.
 
     Supports both the ORM model (Tenant) and the dict shape (identity.tenant).
@@ -158,12 +167,33 @@ def _resolve_tenant_id_and_fallback_adapter(tenant: Any) -> tuple[str, str]:
     authoritative adapter type must go through ``resolve_tenant_adapter_type``.
     """
     if isinstance(tenant, dict):
-        return tenant["tenant_id"], tenant.get("ad_server") or "mock"
-    # ORM model (Tenant) — use attribute access
+        tenant_id = tenant["tenant_id"]
+        ad_server = tenant.get("ad_server")
+        return (
+            tenant_id if isinstance(tenant_id, str) else str(tenant_id),
+            ad_server if isinstance(ad_server, str) and ad_server else "mock",
+        )
+    # ORM model or TenantContext — use attribute access
     return tenant.tenant_id, tenant.ad_server or "mock"
 
 
-def resolve_tenant_adapter_type(tenant: Any = None) -> str:
+def _resolved_tenant(tenant: TenantLike) -> DBTenant | IdentityTenant:
+    """Resolve an Optional tenant param to a concrete tenant, falling back to
+    the ContextVar for callers that haven't threaded identity.tenant through yet.
+
+    Single home for the ``tenant is None`` fallback (previously duplicated --
+    and, in three of the five callers below, MISSING entirely, meaning
+    ``_resolve_tenant_id_and_fallback_adapter(None)`` would crash on a bare
+    ``AttributeError`` the moment ``tenant: Any`` stopped hiding it).
+    """
+    if tenant is not None:
+        return tenant
+    from src.core.config_loader import get_current_tenant
+
+    return get_current_tenant()
+
+
+def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
     """Resolve the authoritative ad-server adapter type for a tenant.
 
     Single source of truth for adapter-TYPE resolution: ``AdapterConfig.adapter_type``
@@ -178,23 +208,16 @@ def resolve_tenant_adapter_type(tenant: Any = None) -> str:
     """
     logger = logging.getLogger(__name__)
 
-    if tenant is None:
-        # Fallback for callers that haven't been updated yet (e.g., async approval handlers)
-        from src.core.config_loader import get_current_tenant
-
-        tenant = get_current_tenant()
-
-    tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(tenant)
+    resolved_tenant = _resolved_tenant(tenant)
+    tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import read_adapter_config
 
-    with get_db_session() as session:
-        repo = AdapterConfigRepository(session, tenant_id)
-        config_row = repo.find_by_tenant()
-        if config_row and config_row.adapter_type:
-            selected_adapter = config_row.adapter_type
-            logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
+    config_row = read_adapter_config(tenant_id)
+    if config_row and config_row.adapter_type:
+        selected_adapter = config_row.adapter_type
+        logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
 
     return selected_adapter or "mock"
 
@@ -203,31 +226,30 @@ def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> dict:
     """Read the per-tenant mock-adapter ``test_behavior`` fault-injection config.
 
     Single seam (salesagent-689e Core Invariant) for reading
-    ``AdapterConfig.config_json["test_behavior"]`` outside an ``_impl`` file —
-    ``src/core/tools/capabilities.py`` is scanned by
-    ``test_architecture_repository_pattern.py`` with an EMPTY
-    ``IMPL_SESSION_ALLOWLIST``, so callers there must go through this helper
-    instead of opening their own ``get_db_session()``. Gated on
+    ``AdapterConfig.config_json["test_behavior"]`` outside an ``_impl`` file --
+    ``src/core/tools/capabilities.py`` and this module are both scanned by
+    ``test_architecture_repository_pattern.py``'s discovery glob, so the
+    session lives in ``read_adapter_config`` (the repository layer), never
+    here or in a caller (#1721 M2 -- this docstring previously
+    described a per-call ``get_db_session()`` here as the sanctioned seam;
+    that was itself the D2 loophole, not the fix for it). Gated on
     ``adapter_type == "mock"`` so the fault-injection channel never leaks onto
     real ad-server adapters. Returns ``{}`` when not applicable/configured.
     """
     if adapter_type != "mock":
         return {}
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import read_adapter_config
 
-    with get_db_session() as session:
-        repo = AdapterConfigRepository(session, tenant_id)
-        row = repo.find_by_tenant()
-        if row and isinstance(row.config_json, dict):
-            behavior = row.config_json.get("test_behavior", {})
-            if isinstance(behavior, dict):
-                return behavior
+    row = read_adapter_config(tenant_id)
+    if row and isinstance(row.config_json, dict):
+        behavior = row.config_json.get("test_behavior", {})
+        if isinstance(behavior, dict):
+            return behavior
     return {}
 
 
-def get_adapter_class_for_tenant(tenant: Any = None) -> type[AdServerAdapter]:
+def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdapter]:
     """Resolve the ad-server adapter CLASS for a tenant, without a Principal.
 
     For read-only capability/discovery paths (e.g. get_adcp_capabilities) that
@@ -249,8 +271,9 @@ def get_adapter_class_for_tenant(tenant: Any = None) -> type[AdServerAdapter]:
     """
     from src.adapters import get_adapter_class
 
-    adapter_type = resolve_tenant_adapter_type(tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
+    resolved_tenant = _resolved_tenant(tenant)
+    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
 
     test_behavior = _read_mock_test_behavior(tenant_id, adapter_type)
     if test_behavior.get("unavailable"):
@@ -265,7 +288,7 @@ def get_adapter_class_for_tenant(tenant: Any = None) -> type[AdServerAdapter]:
     return get_adapter_class(adapter_type)
 
 
-def get_targeting_capabilities_override(tenant: Any = None) -> TargetingCapabilities | None:
+def get_targeting_capabilities_override(tenant: TenantLike = None) -> TargetingCapabilities | None:
     """Return the per-tenant mock-adapter targeting-capability override, if any.
 
     Reads the same ``test_behavior`` seam as ``get_adapter_class_for_tenant``
@@ -274,8 +297,9 @@ def get_targeting_capabilities_override(tenant: Any = None) -> TargetingCapabili
     under ``test_architecture_repository_pattern.py``'s empty
     ``IMPL_SESSION_ALLOWLIST`` because the session lives in this file, not theirs.
     """
-    adapter_type = resolve_tenant_adapter_type(tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
+    resolved_tenant = _resolved_tenant(tenant)
+    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
 
     test_behavior = _read_mock_test_behavior(tenant_id, adapter_type)
     override = test_behavior.get("targeting_capabilities")
@@ -296,7 +320,7 @@ _MANUAL_APPROVAL_COLUMNS: dict[str, str] = {
 }
 
 
-def resolve_manual_approval_signal(tenant: Any = None) -> bool:
+def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool:
     """Whether this tenant's configuration genuinely requires manual approval
     on new media buys -- the same signal ``_create_media_buy_impl`` enforces
     (media_buy_create.py), read tenant/DB-side so it works without a live
@@ -318,23 +342,25 @@ def resolve_manual_approval_signal(tenant: Any = None) -> bool:
     if tenant and tenant.get("human_review_required"):
         return True
 
-    adapter_type = resolve_tenant_adapter_type(tenant)
+    resolved_tenant = _resolved_tenant(tenant)
+    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
     column = _MANUAL_APPROVAL_COLUMNS.get(adapter_type)
     if not column:
         return False
 
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import read_adapter_config
 
-    with get_db_session() as session:
-        row = AdapterConfigRepository(session, tenant_id).find_by_tenant()
-        return bool(row and getattr(row, column, None) is True)
+    row = read_adapter_config(tenant_id)
+    return bool(row and getattr(row, column, None) is True)
 
 
 def get_adapter(
-    principal: Principal, dry_run: bool = False, testing_context: Any = None, tenant: Any = None
+    principal: Principal,
+    dry_run: bool = False,
+    testing_context: TestingContext | None = None,
+    tenant: TenantLike = None,
 ) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
     """Get the appropriate adapter instance for the selected adapter type.
 
@@ -348,75 +374,68 @@ def get_adapter(
 
     logger = logging.getLogger(__name__)
 
-    if tenant is None:
-        # Fallback for callers that haven't been updated yet (e.g., async approval handlers)
-        from src.core.config_loader import get_current_tenant
-
-        tenant = get_current_tenant()
-
-    selected_adapter = resolve_tenant_adapter_type(tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(tenant)
+    resolved_tenant = _resolved_tenant(tenant)
+    selected_adapter = resolve_tenant_adapter_type(resolved_tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
 
     # Get adapter config via repository
-    from src.core.database.repositories.adapter_config import AdapterConfigRepository
+    from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config
 
-    targeting_config: dict[str, Any] | None = None
+    targeting_config: dict[str, object] | None = None
     naming_templates: tuple[str | None, str | None] | None = None
 
-    with get_db_session() as session:
-        repo = AdapterConfigRepository(session, tenant_id)
-        config_row = repo.find_by_tenant()
+    config_row = read_adapter_config(tenant_id)
 
-        adapter_config: dict[str, Any] = {"enabled": True}
-        if config_row:
-            adapter_type = config_row.adapter_type
-            logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
-            if adapter_type == "mock":
-                adapter_config["dry_run"] = config_row.mock_dry_run or False
-                # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.mock_manual_approval_required
-                    if config_row.mock_manual_approval_required is not None
-                    else True
+    adapter_config: dict[str, object] = {"enabled": True}
+    if config_row:
+        adapter_type = config_row.adapter_type
+        logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
+        if adapter_type == "mock":
+            adapter_config["dry_run"] = config_row.mock_dry_run or False
+            # Default to True (require approval) for safety
+            adapter_config["manual_approval_required"] = (
+                config_row.mock_manual_approval_required
+                if config_row.mock_manual_approval_required is not None
+                else True
+            )
+        elif adapter_type == "google_ad_manager":
+            adapter_config = AdapterConfigRepository.get_gam_config(config_row)
+            targeting_config = AdapterConfigRepository.get_gam_targeting_config(config_row)
+            naming_templates = AdapterConfigRepository.get_gam_naming_templates(config_row)
+
+            # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
+            # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
+            advertiser_id: str | None = None
+            if principal.platform_mappings:
+                # Try nested format first
+                gam_mappings = principal.platform_mappings.get("google_ad_manager", {})
+                advertiser_id = gam_mappings.get("advertiser_id")
+                logger.info(
+                    f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, platform_mappings={principal.platform_mappings}, gam_mappings={gam_mappings}, advertiser_id={advertiser_id}"
                 )
-            elif adapter_type == "google_ad_manager":
-                adapter_config = repo.get_gam_config(config_row)
-                targeting_config = repo.get_gam_targeting_config(config_row)
-                naming_templates = repo.get_gam_naming_templates(config_row)
 
-                # Get advertiser_id from principal's platform_mappings (per-principal, not tenant-level)
-                # Support both old format (nested under "google_ad_manager") and new format (root "gam_advertiser_id")
-                advertiser_id: str | None = None
-                if principal.platform_mappings:
-                    # Try nested format first
-                    gam_mappings = principal.platform_mappings.get("google_ad_manager", {})
-                    advertiser_id = gam_mappings.get("advertiser_id")
-                    logger.info(
-                        f"[ADAPTER_CONFIG] principal_id={principal.principal_id}, platform_mappings={principal.platform_mappings}, gam_mappings={gam_mappings}, advertiser_id={advertiser_id}"
-                    )
+                # Fall back to root-level format if nested not found
+                if not advertiser_id:
+                    advertiser_id = principal.platform_mappings.get("gam_advertiser_id")
+                    logger.info(f"[ADAPTER_CONFIG] Fell back to root-level gam_advertiser_id: {advertiser_id}")
 
-                    # Fall back to root-level format if nested not found
-                    if not advertiser_id:
-                        advertiser_id = principal.platform_mappings.get("gam_advertiser_id")
-                        logger.info(f"[ADAPTER_CONFIG] Fell back to root-level gam_advertiser_id: {advertiser_id}")
-
-                    adapter_config["company_id"] = advertiser_id
-                    logger.info(f"[ADAPTER_CONFIG] Set adapter_config['company_id']={advertiser_id}")
-                else:
-                    adapter_config["company_id"] = None
-                    logger.info("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
-            elif adapter_type == "kevel":
-                adapter_config["network_id"] = config_row.kevel_network_id or ""
-                adapter_config["api_key"] = config_row.kevel_api_key or ""
-                # Default to True (require approval) for safety
-                adapter_config["manual_approval_required"] = (
-                    config_row.kevel_manual_approval_required
-                    if config_row.kevel_manual_approval_required is not None
-                    else True
-                )
-            elif adapter_type == "triton":
-                adapter_config["station_id"] = config_row.triton_station_id or ""
-                adapter_config["api_key"] = config_row.triton_api_key or ""
+                adapter_config["company_id"] = advertiser_id
+                logger.info(f"[ADAPTER_CONFIG] Set adapter_config['company_id']={advertiser_id}")
+            else:
+                adapter_config["company_id"] = None
+                logger.info("[ADAPTER_CONFIG] principal.platform_mappings is None/empty, set company_id=None")
+        elif adapter_type == "kevel":
+            adapter_config["network_id"] = config_row.kevel_network_id or ""
+            adapter_config["api_key"] = config_row.kevel_api_key or ""
+            # Default to True (require approval) for safety
+            adapter_config["manual_approval_required"] = (
+                config_row.kevel_manual_approval_required
+                if config_row.kevel_manual_approval_required is not None
+                else True
+            )
+        elif adapter_type == "triton":
+            adapter_config["station_id"] = config_row.triton_station_id or ""
+            adapter_config["api_key"] = config_row.triton_api_key or ""
 
     if not selected_adapter:
         # Default to mock if no adapter specified
@@ -437,16 +456,21 @@ def get_adapter(
         if not network_code or not isinstance(network_code, str):
             raise ValueError("network_code is required for GoogleAdManager adapter")
 
+        company_id = adapter_config.get("company_id")
+        advertiser_id = company_id if isinstance(company_id, str) else None
+        trafficker_id_val = adapter_config.get("trafficker_id")
+        trafficker_id = trafficker_id_val if isinstance(trafficker_id_val, str) else None
+
         logger.info("[ADAPTER_SELECT] Instantiating GoogleAdManager")
         logger.info(
-            f"[ADAPTER_SELECT] GAM params: network_code={adapter_config.get('network_code')}, advertiser_id={adapter_config.get('company_id')}, trafficker_id={adapter_config.get('trafficker_id')}, dry_run={dry_run}"
+            f"[ADAPTER_SELECT] GAM params: network_code={network_code}, advertiser_id={advertiser_id}, trafficker_id={trafficker_id}, dry_run={dry_run}"
         )
         return GoogleAdManager(
             adapter_config,
             principal,
             network_code=network_code,
-            advertiser_id=adapter_config.get("company_id"),
-            trafficker_id=adapter_config.get("trafficker_id"),
+            advertiser_id=advertiser_id,
+            trafficker_id=trafficker_id,
             dry_run=dry_run,
             tenant_id=tenant_id,
             targeting_config=targeting_config,

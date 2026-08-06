@@ -19,6 +19,7 @@ from src.core.exceptions import (
     AdCPAccountSuspendedError,
     AdCPAuthorizationError,
 )
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -139,10 +140,7 @@ def _resolve_by_natural_key(
     repo: AccountRepository,
 ) -> str:
     """Resolve by natural key (brand + operator + sandbox) — lookup + ambiguity check + access check + status check."""
-    brand_domain = ref.brand.domain
-    brand_id = None
-    if ref.brand.brand_id is not None:
-        brand_id = str(ref.brand.brand_id.root)
+    brand_domain, brand_id = brand_key_parts(ref.brand)
 
     # Single query: fetch up to 2 matches for ambiguity detection, scoped to the
     # agent's accessible accounts (#1417) so detection — and the count

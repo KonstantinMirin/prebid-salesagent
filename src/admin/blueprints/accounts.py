@@ -81,19 +81,26 @@ def create_account(tenant_id):
     if brand and brand_id:
         brand["brand_id"] = brand_id
 
-    with AccountUoW(tenant_id) as uow:
-        new_account = Account(
-            tenant_id=tenant_id,
-            account_id=account_id,
-            name=name,
-            status="active",
-            brand=brand,
-            operator=operator or None,
-            billing=billing,
-            payment_terms=payment_terms,
-            sandbox=sandbox or None,
-        )
-        uow.accounts.create(new_account)
+    try:
+        with AccountUoW(tenant_id) as uow:
+            new_account = Account(
+                tenant_id=tenant_id,
+                account_id=account_id,
+                name=name,
+                status="active",
+                brand=brand,
+                operator=operator or None,
+                billing=billing,
+                payment_terms=payment_terms,
+                sandbox=sandbox or None,
+            )
+            uow.accounts.create(new_account)
+    except ValueError as exc:
+        # The repository refuses a create whose natural key is already occupied
+        # (salesagent-0njj). Surfaced as a form error rather than a 500: this is
+        # an operator mistake with an obvious remedy — edit the existing account.
+        flash(str(exc), "error")
+        return redirect(request.url)
 
     flash(f"Account '{name}' created successfully.", "success")
     return redirect(url_for("accounts.list_accounts", tenant_id=tenant_id))

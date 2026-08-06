@@ -182,7 +182,13 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error message should contain "past"
+    And the wire error message should contain "2020-01-01 00:00:00+00:00"
+    And the wire error message should not contain "root="
     And the error should include "suggestion" field
+    # POST-F2 hardening (locally added): the submitted start_time must render as its
+    # VALUE in the buyer-facing message. req.start_time is adcp StartTiming (a pydantic
+    # RootModel), so naive interpolation yields "root=datetime.datetime(2020, ...)" —
+    # a rendering defect only observable on the wire text, hence the wire-message steps.
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -197,7 +203,11 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error message should contain "end time"
+    And the wire error message should not contain "root="
     And the error should include "suggestion" field
+    # POST-F2 hardening (locally added): this message interpolates BOTH times; the
+    # start_time side is a StartTiming RootModel and must render as its value, not
+    # the model repr (see the sibling start-time-in-the-past scenario).
     # --- ext-d: Currency Not Supported ---
 
   @T-UC-002-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
@@ -428,6 +438,23 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # --- ext-o: Creative Not Found in Library ---
+
+  @T-UC-002-ext-webhook-ssrf @extension @ext-webhook-ssrf @error @post-f1 @post-f2 @post-f3
+  Scenario: Reporting webhook URL targeting a blocked host is rejected
+    Given a valid create_media_buy request
+    And the request includes a reporting_webhook with url "http://169.254.169.254/latest/meta-data/"
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    And the error recovery should be "correctable"
+    And the error should include "suggestion" field
+    # Repo-local SSRF policy (ungraded extension): reuses AdCP 3.1.1
+    # VALIDATION_ERROR / recovery=correctable enum values + suggestion on
+    # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
+    # push-config endpoints (message/send configuration,
+    # setTaskPushNotificationConfig) map the same gate to InvalidParamsError
+    # with the AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (recovery via enumMetadata)
 
   @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3
   Scenario: Creative IDs not found in library

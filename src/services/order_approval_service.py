@@ -11,11 +11,13 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import SyncJob
+from src.core.database.models import PushNotificationConfig, SyncJob
 from src.core.thread_registry import ThreadRegistry
+from src.core.webhook_validator import reject_unsafe_outbound_webhook_url, webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +346,130 @@ def _mark_approval_failed(
         logger.error(f"Failed to mark approval failed: {e}")
 
 
+def _load_approval_webhook_config(tenant_id: str, principal_id: str, webhook_url: str) -> PushNotificationConfig | None:
+    """The buyer's registration for this URL, read through the repository.
+
+    That row is the ONE selector for how this notification is authenticated
+    (#1291 C1, salesagent-98t2): it feeds both :func:`_approval_webhook_headers`
+    and the delivery boundary's auth-strategy choice, so it is read once here
+    rather than at each of those two points.
+
+    Detaching it at the end of the session is safe — ``get_db_session`` closes
+    without committing, so the loaded columns survive; the expiry hazard
+    ``_mark_approval_failed`` above guards against needs a ``commit()``.
+    """
+    from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+
+    with get_db_session() as db:
+        return PushNotificationConfigRepository(db, tenant_id).get_active_by_url(principal_id, webhook_url)
+
+
+def _approval_webhook_headers(config: PushNotificationConfig | None) -> dict[str, str]:
+    """The genuinely EXTRA headers for an order-approval webhook POST.
+
+    Neither ``Content-Type`` nor the authentication header belongs here. The
+    delivery boundary (``src.core.signing.webhook_sender_factory``, #1291 C1)
+    frames the body it serialized, and derives the auth scheme from this same
+    ``config`` row — legacy HMAC, legacy bearer (which is where a ``basic``
+    registration now lands, since any non-HMAC scheme carrying a credential
+    selects the bearer arm), or the RFC 9421 default when no ``authentication``
+    block was registered. Setting either header here would authenticate the
+    delivery twice, in two disagreeing ways.
+
+    ``validation_token`` is a receiver-side echo, not an auth scheme, so it
+    stays a plain extra header.
+    """
+    headers = {"User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)"}
+    if config and config.validation_token:
+        headers["X-Webhook-Token"] = config.validation_token
+    return headers
+
+
+def _reject_unsafe_approval_webhook_url(webhook_url: str) -> bool:
+    """Return True when the order-approval outbound URL fails the SSRF gate."""
+    rejected, _error_msg = reject_unsafe_outbound_webhook_url(webhook_url, log=logger, kind="OrderApproval")
+    return rejected
+
+
+def _post_approval_webhook_with_retries(
+    webhook_url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    config: PushNotificationConfig | None,
+    tenant_id: str,
+) -> None:
+    """Deliver the approval payload with retries, authenticated per *config*.
+
+    Serialization, authentication and the POST are ONE act at the signing
+    boundary (#1441), so the bytes signed are the bytes sent; ``config`` selects
+    the arm. No ``repo`` is passed: this caller holds no session, and
+    ``webhook_sender_factory._signing_repo`` opens a short-lived one per
+    delivery precisely so senders don't each grow their own.
+
+    Redirects are still never followed — the boundary's ``httpx`` client keeps
+    the library default (``follow_redirects=False``), so a 302 to a metadata or
+    private address cannot bypass the pre-send SSRF gate.
+    """
+    from adcp.webhooks import generate_webhook_idempotency_key
+
+    from src.core.signing import deliver_adcp_webhook_sync
+
+    # ONE key per distinct event, reused across this event's retries — a fresh
+    # one per attempt would defeat the receiver's dedup.
+    idempotency_key = generate_webhook_idempotency_key()
+
+    safe_url = webhook_url_for_log(webhook_url)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            delivery = deliver_adcp_webhook_sync(
+                url=webhook_url,
+                payload=payload,
+                idempotency_key=idempotency_key,
+                config=config,
+                tenant_id=tenant_id,
+                extra_headers=headers,
+            )
+
+            if 200 <= delivery.status_code < 300:
+                logger.info(
+                    "Approval webhook sent to %s (status: %s, attempt: %s)",
+                    safe_url,
+                    payload.get("status"),
+                    attempt + 1,
+                )
+                return
+
+            logger.warning(
+                "Approval webhook to %s returned status %s (attempt: %s/%s)",
+                safe_url,
+                delivery.status_code,
+                attempt + 1,
+                max_retries,
+            )
+
+        except httpx.TimeoutException:
+            logger.warning(
+                "Approval webhook to %s timed out (attempt: %s/%s)",
+                safe_url,
+                attempt + 1,
+                max_retries,
+            )
+        except httpx.RequestError as e:
+            logger.warning(
+                "Approval webhook to %s failed: %s (attempt: %s/%s)",
+                safe_url,
+                e,
+                attempt + 1,
+                max_retries,
+            )
+
+        if attempt < max_retries - 1:
+            time.sleep(2**attempt)
+
+    logger.error("Failed to send approval webhook to %s after %s attempts", safe_url, max_retries)
+
+
 def _send_approval_webhook(
     webhook_url: str,
     tenant_id: str,
@@ -367,12 +493,6 @@ def _send_approval_webhook(
         attempts: Number of polling attempts (if available)
     """
     try:
-        import httpx
-        from adcp.webhooks import generate_webhook_idempotency_key
-
-        from src.core.database.repositories.signing_key import SigningKeyRepository
-        from src.core.signing import deliver_adcp_webhook_sync
-
         payload: dict[str, Any] = {
             "event": "order_approval_update",
             "media_buy_id": media_buy_id,
@@ -388,64 +508,17 @@ def _send_approval_webhook(
         if attempts is not None:
             payload["attempts"] = attempts
 
-        # Get the buyer's registration — the ONE selector for how this notification
-        # is authenticated (#1291 C1, salesagent-98t2). Before C1 this sender read
-        # the same row as its two siblings but honoured only bearer/basic, so a
-        # receiver registered as HMAC-SHA256 was told the outcome unauthenticated.
-        from src.core.database.models import PushNotificationConfig
+        if _reject_unsafe_approval_webhook_url(webhook_url):
+            return
 
-        with get_db_session() as db:
-            stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, url=webhook_url, is_active=True
-            )
-            config = db.scalars(stmt).first()
-
-            headers = {"User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)"}
-            if config and config.validation_token:
-                headers["X-Webhook-Token"] = config.validation_token
-
-            signing_repo = SigningKeyRepository(db, tenant_id)
-            # ONE key per distinct event, reused across this event's retries.
-            idempotency_key = generate_webhook_idempotency_key()
-
-            # Send webhook with retries
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    delivery = deliver_adcp_webhook_sync(
-                        url=webhook_url,
-                        payload=payload,
-                        idempotency_key=idempotency_key,
-                        config=config,
-                        tenant_id=tenant_id,
-                        repo=signing_repo,
-                        extra_headers=headers,
-                    )
-
-                    if 200 <= delivery.status_code < 300:
-                        logger.info(
-                            f"Approval webhook sent to {webhook_url} (status: {status}, attempt: {attempt + 1})"
-                        )
-                        return
-
-                    logger.warning(
-                        f"Approval webhook to {webhook_url} returned status {delivery.status_code} (attempt: {attempt + 1}/{max_retries})"
-                    )
-
-                except httpx.TimeoutException:
-                    logger.warning(
-                        f"Approval webhook to {webhook_url} timed out (attempt: {attempt + 1}/{max_retries})"
-                    )
-                except httpx.RequestError as e:
-                    logger.warning(
-                        f"Approval webhook to {webhook_url} failed: {e} (attempt: {attempt + 1}/{max_retries})"
-                    )
-
-                # Wait before retry (exponential backoff)
-                if attempt < max_retries - 1:
-                    time.sleep(2**attempt)
-
-        logger.error(f"Failed to send approval webhook to {webhook_url} after {max_retries} attempts")
+        config = _load_approval_webhook_config(tenant_id, principal_id, webhook_url)
+        _post_approval_webhook_with_retries(
+            webhook_url,
+            payload,
+            _approval_webhook_headers(config),
+            config,
+            tenant_id,
+        )
 
     except Exception as e:
         logger.error(f"Error sending approval webhook: {e}", exc_info=True)

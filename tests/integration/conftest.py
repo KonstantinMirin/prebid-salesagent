@@ -565,15 +565,26 @@ from src.core.main import mcp
 mcp.run(transport='http', host='0.0.0.0', port={port})
 """
 
-    # Server output goes to a FILE, never a PIPE. An undrained PIPE fills at the
-    # kernel buffer (~64KB of log output) and the server's next logging write then
-    # blocks the asyncio event-loop thread mid-request — the server freezes, the
-    # client awaits forever, and the whole integration suite hangs at its tail.
+    # Server output MUST go to a FILE, never a PIPE: nothing drains the pipe while
+    # tests run, so once the server had logged ~64KB (uvicorn access lines + app
+    # INFO + rich console output) its next logging `emit` blocked on the full pipe
+    # buffer and the server froze mid-request — the client's await never returned
+    # and the whole integration env wedged at whatever test happened to cross the
+    # threshold (observed hanging create_media_buy in four consecutive CI runs;
+    # py-spy showed the server MainThread inside logging emit →
+    # resolve_tenant_adapter_type). A file-backed stream cannot block the writer,
+    # and the startup-failure paths read it for diagnostics.
     server_log = tempfile.NamedTemporaryFile(mode="w+b", prefix=f"mcp-server-{port}-", suffix=".log", delete=False)
 
-    def server_output() -> str:
-        with open(server_log.name, "rb") as fh:
-            return fh.read().decode(errors="replace") or "N/A"
+    def server_output(limit: int = 8000) -> str:
+        """Tail of the server's log file, for startup/crash diagnostics."""
+        try:
+            server_log.flush()
+            with open(server_log.name, "rb") as fh:
+                data = fh.read()
+            return data[-limit:].decode(errors="replace") if data else "N/A"
+        except OSError:
+            return "N/A (log unreadable)"
 
     process = subprocess.Popen(
         [sys.executable, "-c", server_script],
@@ -630,7 +641,10 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
         process.kill()
         process.wait()
     server_log.close()
-    os.unlink(server_log.name)
+    try:
+        os.unlink(server_log.name)
+    except OSError:
+        pass
 
     # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
 

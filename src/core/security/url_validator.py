@@ -6,18 +6,23 @@ property list resolution and webhook URL validation.
 
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
-# Blocked IP ranges (RFC 1918 private networks, loopback, link-local)
+# Blocked IP ranges (RFC 1918 private networks, loopback, link-local,
+# CGNAT shared space, and multicast).
 BLOCKED_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC 6598)
+    ipaddress.ip_network("224.0.0.0/4"),  # multicast
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("ff00::/8"),  # IPv6 multicast (AdCP L1 SSRF step 2)
+    ipaddress.ip_network("64:ff9b::/96"),  # NAT64 well-known prefix (RFC 6052)
 ]
 
 # Blocked hostnames (cloud metadata services, localhost aliases, Docker-internal hostnames)
@@ -51,6 +56,31 @@ def is_reserved_tld_host(hostname: str) -> bool:
     return any(lowered == tld.lstrip(".") or lowered.endswith(tld) for tld in RESERVED_TLDS)
 
 
+def _scheme_error(parsed: ParseResult, *, require_https: bool) -> str | None:
+    if require_https:
+        if parsed.scheme != "https":
+            return f"URL must use HTTPS scheme, got '{parsed.scheme}'"
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return "URL must use http or https protocol"
+    return None
+
+
+def _ip_range_error(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, verb: str) -> str | None:
+    """Error message if *ip* falls in a blocked/private range, else None.
+
+    ``verb`` distinguishes the literal-host case ("targets") from the
+    resolved-host case ("resolves to") so both callers keep their exact
+    pre-extraction messages.
+    """
+    for network in BLOCKED_NETWORKS:
+        if ip in network:
+            return f"URL {verb} blocked IP range {network} (private/internal network)"
+    if ip.is_loopback or ip.is_link_local or ip.is_private:
+        return f"URL {verb} private/internal IP address: {ip}"
+    return None
+
+
 def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, str]:
     """Check a URL's SHAPE without resolving DNS.
 
@@ -80,11 +110,9 @@ def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, st
     try:
         parsed = urlparse(url)
 
-        if require_https:
-            if parsed.scheme != "https":
-                return False, f"URL must use HTTPS scheme, got '{parsed.scheme}'"
-        elif parsed.scheme not in ("http", "https"):
-            return False, "URL must use http or https protocol"
+        scheme_err = _scheme_error(parsed, require_https=require_https)
+        if scheme_err:
+            return False, scheme_err
 
         hostname = parsed.hostname
         if not hostname:
@@ -100,11 +128,9 @@ def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, st
         except ValueError:
             return True, ""
 
-        for network in BLOCKED_NETWORKS:
-            if literal_ip in network:
-                return False, f"URL targets blocked IP range {network} (private/internal network)"
-        if literal_ip.is_loopback or literal_ip.is_link_local or literal_ip.is_private:
-            return False, f"URL targets private/internal IP address: {literal_ip}"
+        range_error = _ip_range_error(literal_ip, "targets")
+        if range_error:
+            return False, range_error
 
         return True, ""
 
@@ -112,7 +138,12 @@ def check_url_syntax(url: str, *, require_https: bool = False) -> tuple[bool, st
         return False, f"Invalid URL: {e}"
 
 
-def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]:
+def check_url_ssrf(
+    url: str,
+    *,
+    require_https: bool = False,
+    resolve_dns: bool = True,
+) -> tuple[bool, str]:
     """Check a URL for SSRF safety.
 
     Validates that the URL does not target private/internal networks
@@ -122,6 +153,12 @@ def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]
         url: The URL to validate.
         require_https: If True, reject non-HTTPS schemes. If False,
             allow both HTTP and HTTPS.
+        resolve_dns: If True (default), resolve the hostname and reject
+            private/link-local results. If False, only apply scheme,
+            blocked-hostname, and literal-IP checks — used at webhook
+            *registration* so fixture hostnames (e.g. ``buyer.example.com``)
+            are not rejected for NXDOMAIN; send-time still uses DNS.
+            Equivalent to :func:`check_url_syntax`.
 
     Returns:
         (is_safe, error_message) -- is_safe is True if the URL is safe,
@@ -135,11 +172,23 @@ def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]
     if not ok:
         return ok, err
 
+    if not resolve_dns:
+        return True, ""
+
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
         if not hostname:
             return False, "URL must have a valid hostname"
+
+        # An IP-literal host was already range-checked by check_url_syntax;
+        # nothing further to resolve.
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            return True, ""
 
         try:
             ip_str = socket.gethostbyname(hostname)
@@ -149,12 +198,9 @@ def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]
         except ValueError as e:
             return False, f"Invalid IP address from hostname resolution: {e}"
 
-        for network in BLOCKED_NETWORKS:
-            if ip in network:
-                return False, f"URL resolves to blocked IP range {network} (private/internal network)"
-
-        if ip.is_loopback or ip.is_link_local or ip.is_private:
-            return False, f"URL resolves to private/internal IP address: {ip}"
+        range_error = _ip_range_error(ip, "resolves to")
+        if range_error:
+            return False, range_error
 
         return True, ""
 

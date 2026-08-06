@@ -139,7 +139,8 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a list_accounts request with an account filter keyed by <key_shape> for brand domain "acme-corp.com"
     Then the response contains an accounts array with 1 items
     And the returned account has brand domain "acme-corp.com" and operator "acme-corp.com"
-    # XFAIL-EXPECTED: production gap — #1592 (list_accounts `account` exact filter is NEW in 3.1.1; not implemented)
+    # Graduated: _apply_list_account_filters honors req.account (AccountReference oneOf, both
+    # account_id and natural-key arms), forwarded by all 3 transports.
     # AccountRef oneOf: account_id XOR natural key (brand + operator, optionally sandbox)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/account
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account-ref.json pointer=/oneOf
@@ -157,7 +158,9 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a list_accounts request
     Then each returned account includes an authorization object with required key "allowed_tasks"
     And each allowed_tasks array is a non-empty list of unique snake_case task names
-    # XFAIL-EXPECTED: production gap — #1592 (account-with-authorization item shape is NEW in 3.1.1; production emits bare accounts)
+    # XFAIL-EXPECTED: production gap — GH #1615 (account-with-authorization item shape is NEW in
+    # 3.1.1; production Account schema has no authorization field, list items are bare — out of
+    # #1592 A3 core scope, tracked separately as #1615)
     # allowed_tasks is the only required field of account-authorization; absence of the whole
     # object means "no introspection", NOT denial — callers MUST NOT infer access from absence
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-response.json pointer=/properties/accounts/items
@@ -170,7 +173,8 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a list_accounts request carrying idempotency_key "read-tool-idem-key-0001", an ext object, and context {"correlation_id": "uc011-read-idem"}
     Then the response contains an accounts array with 3 items
     And the response includes context {"correlation_id": "uc011-read-idem"}
-    # XFAIL-EXPECTED: production gap — #1592 (read-wrapper tolerance of the 3.1 envelope ungraded)
+    # Graduated: ListAccountsRequest.idempotency_key added -- the read wrapper now tolerates
+    # the 3.1 idempotency envelope instead of rejecting it under extra=forbid.
     # list-accounts-request.json does NOT declare idempotency_key as a property at 3.1.1;
     # the duty is TOLERANCE (additionalProperties: true + graded storyboard step), not a declared field
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/read-tool-idempotency.yaml pointer=phases/read_requests_accept_idempotency_key/steps/list_accounts_with_idempotency_key
@@ -378,7 +382,9 @@ Feature: BR-UC-011 Manage Accounts
     # "no new account was created" is only observable on the account census, not on the seller's
     # internal state: a settings-update MUST NOT provision, so the post-call list stays at the one
     # pre-existing account. A second (provisioned) entry would surface with action "created".
-    # XFAIL-EXPECTED: production gap — #1592 (settings-update mode not implemented; SDK Accounts3 arm unhandled)
+    # Graduated: settings-update (AccountReference) mode implemented via
+    # _process_settings_update_entry (both AccountReference1/account_id and
+    # AccountReference2/natural-key arms), mode-exclusivity enforced in _impl before dispatch.
     # Settings-update entry carries `account` (AccountRef); trio fields MUST be absent;
     # the seller updates settable state with no provisioning side effects
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account
@@ -393,7 +399,7 @@ Feature: BR-UC-011 Manage Accounts
     And the per-account error recovery is "correctable"
     When the Buyer Agent sends a list_accounts request
     Then the response contains an empty accounts array
-    # XFAIL-EXPECTED: production gap — #1592 (UNSUPPORTED_PROVISIONING path unimplemented)
+    # Graduated: unmatched settings-update references are rejected with UNSUPPORTED_PROVISIONING.
     # "When `account` is present, the seller MUST NOT create a new account — entries that
     # would otherwise trigger provisioning are rejected with UNSUPPORTED_PROVISIONING"
     # (recovery "correctable" per the enum metadata). "No accounts were modified" is graded on the
@@ -407,7 +413,7 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an entry carrying both an account reference and the provisioning trio
     Then the request is rejected at the operation level with error code "VALIDATION_ERROR" naming field "accounts[0]"
-    # XFAIL-EXPECTED: production gap — #1592 (per-entry oneOf mode exclusivity not validated)
+    # Graduated: mode-exclusivity enforced in _impl before dispatch (VALIDATION_ERROR naming accounts[i]).
     # An entry satisfying BOTH arms violates the item oneOf (exactly one), which is a structural
     # request-schema violation — graded as an operation-level error variant (top-level errors[],
     # response oneOf arm 1) carrying VALIDATION_ERROR (recovery "correctable" per the enum) with
@@ -522,7 +528,7 @@ Feature: BR-UC-011 Manage Accounts
     And the per-account error details rejected_billing is "agent"
     And the per-account error details suggested_billing is "operator"
     And the per-account error details do not include permitted_billing, rate_card, payment_terms, credit_limit, billing_entity, or account_id
-    # XFAIL-EXPECTED: production gap — #1592 (no per-buyer-agent commercial gate exists in production)
+    # XFAIL-EXPECTED: production gap — GH #1772 (no per-buyer-agent commercial gate exists in production)
     # Clamped details shape (additionalProperties: false) — the per-agent code MUST NOT act as
     # a commercial-state oracle; only rejected_billing + optional suggested_billing may appear.
     # Only emitted under ESTABLISHED agent identity — unidentified callers get BILLING_NOT_SUPPORTED.
@@ -540,7 +546,7 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key
     Then the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "operator"
-    # XFAIL-EXPECTED: production gap — #1592 (per-agent gate + autonomous recovery unimplemented)
+    # XFAIL-EXPECTED: production gap — GH #1772 (per-agent gate + autonomous recovery unimplemented)
     # The recover phase is NOT a replay: different payload requires a fresh idempotency_key
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover/steps/sync_accounts_recover_with_suggested
 
@@ -643,7 +649,9 @@ Feature: BR-UC-011 Manage Accounts
     #     declared-nothing case D1 made reachable).
     When the Buyer Agent sends a list_accounts request
     Then the listed account for brand domain "acme-corp.com" echoes subscriber "buyer-primary" with active false
-    # XFAIL-EXPECTED: production gap — #1592 (notification_configs surface entirely unimplemented)
+    # Graduated (T2 increment F4a): accounts.notification_configs now persists as a
+    # whole-array JSONType column and is echoed on sync_accounts + list_accounts with
+    # authentication.credentials scrubbed.
     # Paused entries (active: false) may skip only the outbound proof challenge; the seller MUST
     # persist and echo applied state on sync_accounts AND list_accounts, credentials write-only
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs
@@ -660,7 +668,8 @@ Feature: BR-UC-011 Manage Accounts
     And the echoed subscriber has event_types "creative.purged"
     When the Buyer Agent sends a sync_accounts request with an empty notification_configs array for brand domain "acme-corp.com"
     Then the account notification_configs echo exactly 0 subscribers
-    # XFAIL-EXPECTED: production gap — #1592 (declarative replace keyed by subscriber_id unimplemented)
+    # Graduated (T2 increment F4a): declarative-replace semantics implemented (omit
+    # preserves, [] clears, re-sent subscriber_id replaces in place).
     # Declarative replace: full desired array replaces the persisted set; re-sending an existing
     # subscriber_id replaces (never duplicates); [] removes all subscribers; seller MUST NOT merge
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
@@ -675,7 +684,8 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the account notification_configs echo exactly 1 subscriber
     And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/creative" and active false
-    # XFAIL-EXPECTED: production gap — #1592 (notification_configs persistence unimplemented)
+    # Graduated (T2 increment F4a): omitting notification_configs leaves persisted
+    # subscribers unchanged.
     # "Omit this field to leave existing subscribers unchanged" — omission is not clearance
     # The seed declares a PAUSED subscriber (active false) so the echoed active flag is a
     # declared input, not an undeclared fixture default (F19)
@@ -690,7 +700,8 @@ Feature: BR-UC-011 Manage Accounts
     And the account has status "rejected"
     And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].event_types[0]"
-    # XFAIL-EXPECTED: production gap — #1592 (event-scope validation unimplemented)
+    # Graduated (T2 increment F4b): _check_notification_configs rejects
+    # media-buy-anchored event types on the account surface pre-persist.
     # Media-buy-anchored event types (scheduled, final, delayed, adjusted, impairment) do not
     # belong on the account surface; also no account-lifecycle event types exist here (no
     # account.status_changed — poll list_accounts or use push_notification_config instead)
@@ -705,7 +716,8 @@ Feature: BR-UC-011 Manage Accounts
     And the account has status "rejected"
     And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[1].subscriber_id"
-    # XFAIL-EXPECTED: production gap — #1592 (duplicate-subscriber rejection unimplemented)
+    # Graduated (T2 increment F4b): _check_notification_configs rejects duplicate
+    # subscriber_id values within one submitted array pre-persist.
     # "Duplicate subscriber_id values within one submitted array are rejected" — no
     # last-write-wins merging, no duplicate subscriptions
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
@@ -721,7 +733,9 @@ Feature: BR-UC-011 Manage Accounts
     And the per-account errors array contains an error with code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].url"
     And the account keeps its prior notification_configs set unchanged
-    # XFAIL-EXPECTED: production gap — #1592 (activation proof-of-control challenge unimplemented)
+    # Graduated (T2 increment F4c): NotificationProofService performs a bounded
+    # proof-of-control challenge before the write transaction opens; a failed proof rejects
+    # the entry with VALIDATION_ERROR at notification_configs[j].url and writes nothing.
     # Before activating a new/changed active subscriber the seller MUST complete the
     # proof-of-control challenge; on failure it rejects the entry (action=failed), leaves the
     # prior notification_configs[] set unchanged, and reports VALIDATION_ERROR at the url field
@@ -885,6 +899,23 @@ Feature: BR-UC-011 Manage Accounts
     And no accounts were actually created or modified on the seller
     # POST-S10: Buyer receives dry-run preview
 
+  @T-UC-011-ext-e-preview-settings-update @sync @dry-run @settings-update @partition @boundary
+  Scenario: dry_run_true with a settings-update entry previews without persisting
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with dry_run true and a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the response is a success variant
+    And the response includes dry_run true
+    And the account for brand domain "acme-corp.com" has action "updated"
+    And the persisted account for brand domain "acme-corp.com" has no payment_terms set
+    # Locally added (GH: settings-update entries ignored dry_run and persisted the write).
+    # The provisioning-trio preview scenario above never reaches the settings-update
+    # dispatch, which routes BEFORE any dry_run branch — this grades that arm.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/dry_run
+    # ("When true, preview what would change without applying. Returns what would be
+    # created/updated/deactivated.") Conformance storyboard: UNGRADED (dry_run absent
+    # from dist/compliance/3.1.1 at v3.1.1).
+
   @T-UC-011-ext-e-normal @sync @dry-run @partition @boundary
   Scenario: dry_run_false -- normal sync applies changes (dry_run = false)
     Given the Buyer Agent has an authenticated connection
@@ -913,6 +944,24 @@ Feature: BR-UC-011 Manage Accounts
     Then the response includes a result for brand domain "old-brand.com" showing deactivation
     And the account for brand domain "acme-corp.com" has action "unchanged" or "updated"
     # POST-S9: Buyer knows which accounts were deactivated
+
+  @T-UC-011-ext-f-settings-update @sync @delete-missing @settings-update @partition @boundary
+  Scenario: delete_missing_true does not deactivate an account included via a settings-update entry
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with delete_missing true and a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the response is a success variant
+    And the response contains an accounts array with 1 items
+    And the account payment_terms is "net_45"
+    And brand domain "acme-corp.com" remains in its current state
+    # Locally added (GH: seen_account_ids is only populated on the provisioning path,
+    # so a settings-update entry's target counted as "missing" and was CLOSED by the
+    # very request that successfully updated it — the response carried both the update
+    # result and an action=updated/status=closed result for the same account).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/delete_missing
+    # ("accounts previously synced by this agent but not included in this request will
+    # be deactivated" — the settings-update target IS included in this request.)
+    # Conformance storyboard: UNGRADED (delete_missing absent from dist/compliance/3.1.1 at v3.1.1).
 
   @T-UC-011-ext-f-scoped @sync @delete-missing @agent-scoped
   Scenario: Delete missing scoped to authenticated agent only

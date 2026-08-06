@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from src.services.order_approval_service import (
@@ -185,10 +186,14 @@ def test_get_approval_status_not_found(mock_db_session):
 def test_webhook_notification_sent_on_success():
     """Test webhook notification is sent when approval succeeds."""
     from src.services.order_approval_service import _send_approval_webhook
-    from tests.helpers.webhook_wire import capture_outbound_webhooks
+    from tests.helpers.webhook_wire import capture_outbound_webhooks, constructed_http_clients
 
+    # The client the sender builds is spied THROUGH the wire capture: the capture
+    # rebinds httpx.Client/AsyncClient to inject its transport, so the spy has to be
+    # installed first for the capture to wrap it.
     with (
         patch("src.services.order_approval_service.get_db_session") as mock_db,
+        constructed_http_clients() as built,
         capture_outbound_webhooks() as captured,
     ):
         # Mock push notification config
@@ -205,6 +210,10 @@ def test_webhook_notification_sent_on_success():
             authentication_token="test_token",
             is_active=True,
         )
+        # Answered on BOTH shapes so the test grades the sender, not the query style:
+        # PushNotificationConfigRepository.list_active_by_principal reads `.all()`, the
+        # direct `select(PushNotificationConfig)` in the signing path reads `.first()`.
+        mock_db_instance.scalars.return_value.all.return_value = [mock_config]
         mock_db_instance.scalars.return_value.first.return_value = mock_config
 
         # Send webhook
@@ -238,6 +247,43 @@ def test_webhook_notification_sent_on_success():
         assert request.headers["authorization"] == "Bearer test_token"
         assert "signature-input" not in request.headers
 
+        # The delivering client must refuse redirects — an open redirect would walk this
+        # POST, Authorization header and all, to whatever host the receiver names — and
+        # must not hang waiting on it.
+        assert built, "no HTTP client was constructed for the approval webhook"
+        assert all(client.follow_redirects is False for client in built)
+        assert all(client.timeout == httpx.Timeout(10.0) for client in built)
+
+
+def test_approval_webhook_rejects_metadata_url_without_post():
+    """Order-approval sender must share the outbound SSRF gate (no open redirect)."""
+    from src.services.order_approval_service import _send_approval_webhook
+    from tests.helpers.webhook_wire import capture_outbound_webhooks
+
+    with (
+        patch("src.services.order_approval_service.get_db_session") as mock_db,
+        capture_outbound_webhooks() as captured,
+    ):
+        mock_db_instance = MagicMock()
+        mock_db.return_value.__enter__.return_value = mock_db_instance
+        mock_db_instance.scalars.return_value.first.return_value = None
+        mock_db_instance.scalars.return_value.all.return_value = []
+
+        _send_approval_webhook(
+            webhook_url="http://169.254.169.254/latest/meta-data/",
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+            media_buy_id="mb_123",
+            status="approved",
+            message="Order approved successfully",
+        )
+
+        # Nothing reached the socket on ANY client — stronger than "httpx.Client was
+        # never constructed", which a delivery path that moved to the async signing
+        # client would satisfy vacuously. The link-local literal is refused by the real
+        # gate (no DNS involved), so the gate itself is graded rather than mocked out.
+        assert captured == []
+
 
 @patch("src.services.order_approval_service.time.sleep")
 def test_webhook_retries_on_failure(mock_sleep):
@@ -250,10 +296,12 @@ def test_webhook_retries_on_failure(mock_sleep):
         patch.object(service_module, "get_db_session") as mock_db,
         capture_outbound_webhooks(status_codes=(500, 500, 200)) as captured,
     ):
-        # Mock DB
+        # Mock DB — no auth config, on both the repository (`.all()`) and the direct
+        # `select()` (`.first()`) read shapes.
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
-        mock_db_instance.scalars.return_value.first.return_value = None  # No auth config
+        mock_db_instance.scalars.return_value.first.return_value = None
+        mock_db_instance.scalars.return_value.all.return_value = []
 
         # Send webhook
         service_module._send_approval_webhook(

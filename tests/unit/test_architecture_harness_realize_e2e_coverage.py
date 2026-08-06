@@ -99,6 +99,10 @@ ALLOWLIST_NOT_WIRE_DISPATCHED: frozenset[tuple[str, str]] = frozenset(
         ("tests/harness/_mixins.py", "set_http_sequence"),
         ("tests/harness/_mixins.py", "set_http_error"),
         ("tests/harness/_mixins.py", "set_url_invalid"),
+        # set_url_valid is set_url_invalid's mirror (same in-process SSRF mock
+        # knob, opposite value; added by #1697) -- same never-leaves-the-process
+        # classification as the rest of this bucket.
+        ("tests/harness/_mixins.py", "set_url_valid"),
         ("tests/harness/_mixins.py", "set_http_response"),
     }
 )

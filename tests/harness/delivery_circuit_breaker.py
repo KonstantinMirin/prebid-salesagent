@@ -23,6 +23,7 @@ Available mocks via env.mock:
     "post"      -- the outbound webhook socket; called (url, headers=, content=)
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
+    "ssrf"      -- send-time outbound SSRF gate (allows fixture hosts by default)
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from sqlalchemy import select
 from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
-from tests.harness._mixins import CircuitBreakerMixin
+from tests.harness._mixins import SSRF_EXTERNAL_PATCH, CircuitBreakerMixin
 from tests.helpers.log_capture import LogCaptureHandler
 
 
@@ -49,7 +50,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     Fluent API (from CircuitBreakerMixin):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- answer every outbound webhook with status_code
         call_send(...)                   -- call service.send_delivery_webhook
         make_webhook_config(...)         -- create a PushNotificationConfig in DB
         set_db_webhooks(configs)         -- replace webhook configs in DB
@@ -60,6 +61,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     EXTERNAL_PATCHES = {
         "sleep": "src.services.webhook_delivery_service.time.sleep",
         "random": "src.services.webhook_delivery_service.random.uniform",
+        **SSRF_EXTERNAL_PATCH,
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -91,6 +93,9 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
+        self._configure_ssrf_default()
+
+        # Installs mock["post"] (the outbound socket) answering 200 by default.
         self.install_webhook_wire()
 
     def make_webhook_config(

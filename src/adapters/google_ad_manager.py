@@ -423,7 +423,7 @@ class GoogleAdManager(AdServerAdapter):
                 # Check if pricing model is supported by GAM adapter at all
                 try:
                     gam_cost_type = PricingCompatibility.get_gam_cost_type(pricing_model)
-                except ValueError as e:
+                except AdCPCapabilityNotSupportedError:
                     error_msg = (
                         f"Google Ad Manager adapter does not support '{pricing_model}' pricing. "
                         f"Supported pricing models: CPM, VCPM, CPC, FLAT_RATE. "
@@ -431,7 +431,7 @@ class GoogleAdManager(AdServerAdapter):
                         f"Please choose a product with compatible pricing."
                     )
                     self.log(f"[red]Error: {error_msg}[/red]")
-                    raise AdCPCapabilityNotSupportedError(error_msg)
+                    raise AdCPCapabilityNotSupportedError(error_msg) from None
 
                 self.log(
                     f"📊 Package {pkg_id} pricing: {pricing_model} → GAM {gam_cost_type} "

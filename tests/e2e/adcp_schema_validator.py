@@ -98,10 +98,27 @@ class AdCPSchemaValidator:
         """Async context manager exit."""
         await self._http_client.aclose()
 
+    @staticmethod
+    def _normalize_schema_ref(schema_ref: str) -> str:
+        """Reduce a schema reference to its origin-relative path.
+
+        The registry index publishes absolute refs
+        ("https://adcontextprotocol.org/schemas/latest/core/version-envelope.json"),
+        but synchronous $ref resolution during validation strips the origin before
+        looking a schema up (see ``_resolve_http_schema_ref``). Both spellings name
+        the same document, so both must map to the same cache entry — otherwise a
+        schema downloaded under the absolute spelling is invisible to the resolver,
+        which then substitutes its strict fallback stub and fails every payload.
+        """
+        for origin in ("https://adcontextprotocol.org", "http://adcontextprotocol.org"):
+            if schema_ref.startswith(origin):
+                return schema_ref[len(origin) :]
+        return schema_ref
+
     def _get_cache_path(self, schema_ref: str) -> Path:
         """Get local cache path for a schema reference."""
         # Convert schema reference to safe filename
-        safe_name = schema_ref.replace("/", "_").replace(".", "_") + ".json"
+        safe_name = self._normalize_schema_ref(schema_ref).replace("/", "_").replace(".", "_") + ".json"
 
         # Try main cache directory first
         main_cache_path = self.cache_dir / safe_name

@@ -88,6 +88,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has registered publisher partnerships with domains "news.com", "sports.com"
     And the adapter provides targeting capabilities including geo
     And the tenant billing policy is configured as operator, agent
+    And the tenant account is configured for sandbox: false in response (explicit production)
     When the Buyer Agent calls get_adcp_capabilities
     Then the response should include adcp.major_versions containing 3
     And adcp.idempotency.supported should equal true
@@ -187,7 +188,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # supported_identifier_types items enum [hashed_email, hashed_phone]; minimum_audience_size
     # integer minimum 1 (1000 used); supported_uid_types items from uid-type enum (uid2, rampid
     # are enum members); supports_platform_customer_id boolean; matching_latency_hours object of
-    # integer min/max (both minimum 0). Production does not emit audience_targeting yet (#1592).
+    # integer min/max (both minimum 0). Production does not emit audience_targeting yet (#1855).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/audience_targeting/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L183: flag replaced by object presence)
@@ -215,7 +216,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # REQUIRED array of duration objects (interval integer >=1 + unit enum), NOT bare
     # durations. The exact per-seller SET is config-derived (spec-silent on value) — a
     # production config surface; production does not emit conversion_tracking at all yet
-    # (#1592), so the scenario executes and fails at "should be present" (strict xfail).
+    # (#1855), so the scenario executes and fails at "should be present" (strict xfail).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/conversion_tracking
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/event-type.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
@@ -239,7 +240,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # the declared fixture value (salesagent-ytq6, was "equal the tenant-configured value"
     # with no declared fixture; mirrors the concrete sibling row). Production emits only the
     # media_buy protocol (creative not in supported_protocols), so the scenario executes and
-    # fails at "should include the creative section" (strict xfail, #1592).
+    # fails at "should include the creative section" (strict xfail, #1724).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties/supports_compliance
 
   # Deliberately transport-specific: auth policy genuinely differs per channel and the
@@ -319,8 +320,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # `not.anyOf` MUST omit replay_ttl_seconds/in_flight_max_seconds (was "boolean supported
     # discriminator", a schema-role phrase asserting only the type); media_buy absence asserted
     # as wire-key absence (was "NOT include media_buy details" — there is no `media_buy.details`
-    # wire key). Strict xfail stands: the no-tenant branch does not emit adcp.supported_versions
-    # yet, so the scenario fails at the non-empty assert (#1592).
+    # wire key). Graduated: _build_adcp_block() now always emits adcp.supported_versions
+    # (derived from SUPPORTED_ADCP_VERSIONS) on both the no-tenant and tenant-resolved paths.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/supported_versions
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf/1
     # Design tension (flagged, production decision): advertising "media_buy" in
@@ -484,9 +485,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # token rides x-adcp-auth and discovery is the spec's no-prerequisite first call —
     # production is authoritative on the policy (spec-silent), the reading is pinned here.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
-    # INV-4 (salesagent-dn2s): capabilities describe the seller, not the caller — the invalid
-    # token must not degrade adapter-derived data (channels), only auth-scoped sections that
-    # remain genuinely unimplemented (audience_targeting/conversion_tracking, separate #1592 gap).
+    # INV-4: capabilities describe the seller, not the caller — the invalid
+    # token must not degrade adapter-derived data (channels). Graduated: MCP ToolResult now
+    # pre-serializes via model_dump(mode="json"), so audience_targeting is correctly omitted
+    # instead of serialized as null.
     # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L23)
 
   @T-UC-010-ext-d-filter @extension @ext-d @boundary @partition
@@ -497,9 +499,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response should include the media_buy section
     And the response should include adcp, supported_protocols and account as protocol-invariant blocks
     And the response should NOT include the signals, governance, sponsored_intelligence or creative sections
-    # XFAIL-EXPECTED: production gap — #1592 (capabilities builder constructs
-    # GetAdcpCapabilitiesRequest() ignoring request params; spec-true behavior is a response
-    # "filtered to the requested protocol domain")
+    # Graduated: the POST /api/v1/capabilities route carries protocols/context/adcp_version
+    # on all 3 transports; the response is filtered to the requested protocol domain.
     # Inverted 2026-07-13 from a @known-gap pin ("filter ignored") to the spec-true assertion:
     # the 3.1.1 storyboard step get_capabilities_filtered sends protocols=["media_buy"] and
     # expects only the requested domain details (filtering is storyboard-prose expected;
@@ -531,9 +532,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities with protocols filter ["marketing"]
     Then the wire error envelope should carry code "VALIDATION_ERROR" with recovery "correctable"
-    # XFAIL-EXPECTED: production gap — #1592 (implementation ignores request params entirely,
-    # so the schema-invalid filter is silently accepted today; spec-true behavior is
-    # rejection — "marketing" violates the closed 5-value request enum)
+    # Graduated: build_get_adcp_capabilities_request now constructs a real typed
+    # GetAdcpCapabilitiesRequest — Pydantic enforces the protocols enum, so "marketing"
+    # (outside the closed 5-value enum) is rejected.
     # Inverted 2026-07-13 from a @known-gap pin. Transport note: MCP may reject at the
     # FastMCP validation layer before _impl — assert the wire envelope on each transport.
     # @bva protocols: Unknown string not in enum
@@ -545,9 +546,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities with protocols filter []
     Then the wire error envelope should carry code "VALIDATION_ERROR" with recovery "correctable"
-    # XFAIL-EXPECTED: production gap — #1592 (implementation ignores request params; empty
-    # array violates the request schema minItems: 1 and must be rejected)
-    # Inverted 2026-07-13 from a @known-gap pin.
+    # Graduated: build_get_adcp_capabilities_request now constructs a real typed
+    # GetAdcpCapabilitiesRequest — Pydantic enforces minItems:1, so an empty protocols
+    # array is rejected. Inverted 2026-07-13 from a @known-gap pin.
     # @bva protocols: Empty array
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-request.json pointer=/properties/protocols (minItems 1)
 
@@ -559,9 +560,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response context should equal {"session_id": "abc-123", "trace": "xyz-789"}
     # Former @T-UC-010-ext-e-mcp / @T-UC-010-ext-e-a2a twins merged 2026-07-13: echo is
     # transport-invariant; the 4-way parametrization covers all transports.
-    # XFAIL-EXPECTED: production gap — #1592 (capabilities builder ignores request params and
-    # does not echo context; echo is a MUST at 3.1.1 — "MUST preserve byte-for-byte" — and is
-    # machine-graded by capability-discovery.yaml on both storyboard steps)
+    # Graduated: _get_adcp_capabilities_impl echoes req.context verbatim onto the response
+    # on every transport — echo is a MUST at 3.1.1 ("MUST preserve byte-for-byte") and is
+    # machine-graded by capability-discovery.yaml on both storyboard steps.
     # POST-S9: Application context echoed unchanged
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/context
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/capability-discovery.yaml pointer=/steps/0/validations (field_value context.correlation_id)
@@ -582,7 +583,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     When the Buyer Agent calls get_adcp_capabilities with context {"deep": {"nested": {"level": 3, "data": true}}}
     Then the response context should equal {"deep": {"nested": {"level": 3, "data": true}}}
-    # XFAIL-EXPECTED: production gap — #1592 (context echo not implemented)
+    # Graduated: _get_adcp_capabilities_impl echoes req.context verbatim.
     # Context is opaque — never parsed, modified, or validated; arbitrary nesting is valid
     # (core/context.json: object, additionalProperties true) and preserved byte-for-byte.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/context
@@ -592,7 +593,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     When the Buyer Agent calls get_adcp_capabilities with context {}
     Then the wire response context should equal {}
-    # XFAIL-EXPECTED: production gap — #1592 (context echo not implemented)
+    # Graduated: _get_adcp_capabilities_impl echoes req.context verbatim.
     # Empty object validates against core/context.json; echo-unchanged applies. Assert on the
     # wire (typed payloads may coerce empty-object/None ambiguously).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/context.json
@@ -671,7 +672,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # (strict xfail): the capabilities builder emits media_buy.features but NOT the
     # content_standards / conversion_tracking / audience_targeting presence-objects nor the
     # account block (account.sandbox) — the scenario executes, grades the features shape,
-    # then fails at the first missing presence-object (#1592).
+    # then fails at the first missing presence-object (#1855).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/media-buy-features.json pointer=/properties
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/audience_targeting/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
@@ -714,7 +715,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then media_buy.execution.targeting.geo_countries should equal true
     And media_buy.execution.targeting.geo_regions should equal true
     And media_buy.execution.targeting.geo_metros should equal {"nielsen_dma": true, "uk_itl1": true, "uk_itl2": true, "eurostat_nuts2": true}
-    And media_buy.execution.targeting.geo_postal_areas should be a country-keyed map where US contains "postal_code"
+    And media_buy.execution.targeting.geo_postal_areas should be a country-keyed map where US contains "zip"
     And media_buy.execution.targeting.age_restriction.supported should equal true
     And media_buy.execution.targeting.language should equal true
     And media_buy.execution.targeting.keyword_targets.supported_match_types should equal ["broad", "phrase", "exact"]
@@ -727,13 +728,14 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # geo_regions / language / age_restriction.supported = true; geo_metros = the 4-key all-true
     # object (additionalProperties: false); keyword_targets / negative_keywords match types =
     # the full [broad, phrase, exact] enum (minItems 1); geo_proximity = the full member object;
-    # geo_postal_areas = the native country-keyed map (items enum [postal_code, custom], NOT the
-    # deprecated country-fused boolean aliases). PRODUCTION GAP (strict xfail): the capabilities
-    # builder emits only geo_countries / geo_regions / geo_metros / geo_postal_areas, and
-    # geo_postal_areas is built from the DEPRECATED us_zip/de_plz boolean aliases (not the native
-    # US=[...] map) — age_restriction, language, keyword_targets, negative_keywords and
-    # geo_proximity are never built. The scenario executes, grades geo_countries/regions/metros,
-    # then fails at geo_postal_areas' native-map shape (#1592).
+    # geo_postal_areas = the native country-keyed map. US is enum [zip, zip_plus_four] exactly
+    # (postal-area-support.json's named US property) -- the [postal_code, custom] enum is a
+    # DIFFERENT arm of the same schema (additionalProperties, for countries with no named
+    # property), not what US uses. PRODUCTION GAP (strict xfail): _build_geo_postal_areas
+    # builds the native country-keyed map correctly -- the real remaining gap is
+    # age_restriction, language, keyword_targets, negative_keywords and geo_proximity, never
+    # built. The scenario executes, grades geo_countries/regions/metros/postal_areas, then
+    # fails at the first missing non-geo dimension (#1857).
     # 3.1.1: targeting is FLAT — there is NO nested geo object; geo_countries/geo_regions are
     # boolean siblings of the geo_metros/geo_postal_areas objects. geo_postal_areas is the
     # native country-keyed map of core/postal-area-support.json (legacy country-fused boolean
@@ -806,11 +808,14 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # no_principal "default targeting" → the exact production default {geo_countries: true,
     # geo_regions: true} (spec-silent on degradation — production authoritative; the same
     # concrete value is pinned by @T-UC-010-targeting-partitions' adapter_unavailable_defaults
-    # row). PRODUCTION GAPS (strict per-row xfail via conftest _SELECTIVE_XFAIL): the account
-    # block, adcp.supported_versions, and no_principal's [display] degradation (INV-4 keeps
-    # the adapter principal-free, so a missing principal does NOT degrade adapter-derived
-    # channels) are not emitted/enforced — those rows execute and fail; the rows that DO hold
-    # (adapter_fail, db_fail, adapter_and_db_fail, *_absent) pass on the wire (#1592).
+    # row). PRODUCTION GAPS (strict per-row xfail via conftest _SELECTIVE_XFAIL): no_tenant's
+    # top-level response carries extra keys beyond the minimal contract; no_principal does not
+    # degrade to [display] (INV-4 keeps the adapter principal-free, so a missing principal does
+    # NOT degrade adapter-derived channels); account_degraded's account block always emits
+    # require_operator_auth/sandbox as real values instead of a billing-only shape (#1856) —
+    # those rows execute and fail; the rows that DO hold (adapter_fail, db_fail,
+    # adapter_and_db_fail, *_absent) pass on the wire. The former "account block and
+    # adcp.supported_versions are not emitted" gaps have graduated — both are now emitted.
     # db_fail/adapter_and_db_fail corrected (salesagent-piyo, 2026-08-04): production used to
     # fabricate a "<subdomain>.example.com" placeholder domain when no real PublisherPartner
     # row existed; portfolio.publisher_domains is REQUIRED+minItems:1 (pinned v3.1.1
@@ -820,7 +825,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # domain, and (since primary_channels lives inside portfolio too) primary_channels is not
     # separately observable in that case either. adapter_fail's Given now seeds a real
     # publisher partner (unrelated to the DB-failure row) so this partition's own concern
-    # (adapter channel degradation) stays testable independent of domain resolution.
+    # (adapter channel degradation) stays testable independent of domain resolution. This
+    # supersedes the earlier db_fail reading ("other sections unaffected" → placeholder
+    # publisher_domains + intact [display, social, ctv] channels): there is no placeholder
+    # domain any more, so neither observable exists on that row.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/bundled/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
@@ -1286,7 +1294,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # the ... list_scenarios returns" is restated as the precise SUBSET relation. The runtime
     # reference is the seller's comply_test_controller (schema description: "the runtime source
     # of truth remains comply_test_controller with scenario: 'list_scenarios'"). This seller
-    # exposes no comply_test_controller in production (#1592) — the scenario strict-xfails on
+    # exposes no comply_test_controller in production (#1724) — the scenario strict-xfails on
     # the unemitted compliance_testing block.
     # POST-S27: Buyer knows compliance testing scenarios
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/compliance_testing
@@ -1370,8 +1378,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
     And the error details should include supported_versions as a non-empty array
     And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"
-    # XFAIL-EXPECTED: production gap — #1592 (capabilities builder ignores request params
-    # including adcp_version; no version negotiation is performed today)
+    # Graduated: version negotiation now implemented (src/core/version_negotiation.py) — a bad
+    # adcp_version/adcp_major_version pin raises AdCPVersionUnsupportedError -> VERSION_UNSUPPORTED.
     # Details shape (error-details/version-unsupported.json, "Recommended"): supported_versions
     # REQUIRED minItems 1 when the details block is emitted; supported_majors DEPRECATED
     # integer array (SHOULD-emit through 3.x — assertable when the fixture declares it);
@@ -1392,7 +1400,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities with adcp_major_version 4
     Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
     And the error details should include supported_versions containing "3.0" and "3.1"
-    # XFAIL-EXPECTED: production gap — #1592 (version negotiation not implemented)
+    # Graduated: version negotiation now implemented (src/core/version_negotiation.py).
     # adcp_major_version pin honored through 3.x ("Servers MUST continue to honor this field
     # through 3.x"); details still carries supported_versions. supported_majors is a
     # SHOULD-level emission (assert when the fixture emits it); "suggestion" is optional —
@@ -1413,7 +1421,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the error details should include build_version equal to "3.1.2+scope3.deploy.4821"
     And the error details should include supported_versions as a non-empty array
     And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"
-    # XFAIL-EXPECTED: production gap — #1592 (version negotiation not implemented)
+    # Graduated: version negotiation now implemented (src/core/version_negotiation.py).
     # Trimmed 2026-07-13 to seller-observable assertions: "Buyer Agent must select from
     # supported_versions" and "must not use build_version for negotiation" are BUYER conduct
     # a seller suite cannot grade (kept here as the spec context: "Buyers MUST NOT use this
@@ -1447,7 +1455,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # protocol_methods_supported_for); invalid rows → the builder rejects the relation-violating
     # config with CONFIGURATION_ERROR (seller-side deployment fault, recovery terminal) rather
     # than emitting the violating posture. The capabilities builder emits no request_signing
-    # block today (#1592), so every row strict-xfails.
+    # block today (#1291), so every row strict-xfails.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/required_for/x-adcp-validation
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/warn_for/x-adcp-validation
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/protocol_methods_required_for/x-adcp-validation
@@ -1477,9 +1485,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # Now valid rows → adcp.idempotency echoes the declared posture exactly and passes schema
     # validation (replay_ttl_seconds within 3600..604800; when in_flight_max_seconds is declared
     # it is present and ≤ replay_ttl_seconds); invalid rows → the builder rejects the
-    # out-of-bounds / cross-field-violating posture (CONFIGURATION_ERROR, recovery terminal) and
-    # never emits it. Production hard-codes idempotency(supported=true, replay_ttl_seconds=86400)
-    # and ignores tenant config (#1592), so every row strict-xfails.
+    # out-of-bounds / cross-field-violating posture (CONFIGURATION_ERROR, recovery terminal).
+    # Graduated: get_idempotency_posture() now returns a typed IdempotencyPosture whose
+    # check_bounds() enforces the replay_ttl_seconds/in_flight_max_seconds schema bounds,
+    # raising CONFIGURATION_ERROR (terminal) on the invalid rows.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf/0
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
 
@@ -1516,7 +1525,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the seller's error-details builder is configured for <boundary_point>
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
     Then the emitted VERSION_UNSUPPORTED details must carry supported_versions equal to ["3.0", "3.1"], never empty or omitted
-    # XFAIL-EXPECTED: production gap — #1592 (version negotiation not implemented)
+    # Graduated: version negotiation now implemented (src/core/version_negotiation.py), emitting
+    # a non-empty, release-precision supported_versions in VERSION_UNSUPPORTED details.
     # Rebuilt 2026-07-13: the former When ("Buyer Agent inspects the error details") was not
     # a tool call — the error is now produced via a real 4.0 pin like the scenario-family
     # above. supported_versions REQUIRED minItems 1 whenever the (Recommended) details block
@@ -1527,9 +1537,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # builder is configured to emit a malformed details block), so the Then asserts the concrete
     # conformance duty a spec-correct seller owes: when the details block is emitted it MUST carry
     # a non-empty supported_versions (required, minItems 1) — here exactly the release-precision
-    # versions the seller speaks, ["3.0", "3.1"] — never an empty array and never omitted. The
-    # capabilities builder ignores adcp_version and raises no VERSION_UNSUPPORTED (#1592), so both
-    # rows strict-xfail on the missing error envelope.
+    # versions the seller speaks, ["3.0", "3.1"] — never an empty array and never omitted.
+    # Graduated: version negotiation now implemented (src/core/version_negotiation.py), emitting
+    # a non-empty, release-precision supported_versions in VERSION_UNSUPPORTED details.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json pointer=/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json pointer=/properties/supported_versions
 
@@ -1556,7 +1566,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # invalid rows → the builder rejects the signing-posture-without-brand_json_url config with
     # CONFIGURATION_ERROR (recovery terminal) naming brand_json_url — the same observable decision
     # the identity-required-when-signing sibling grades. The builder never builds identity/the
-    # signing posture (#1592), so the invalid rows strict-xfail (selective) while the valid rows
+    # signing posture (#1291), so the invalid rows strict-xfail (selective) while the valid rows
     # pass on the degraded-but-schema-valid baseline response.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/identity/properties/brand_json_url
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/identity/properties/brand_json_url/x-adcp-validation/required_when
@@ -1597,8 +1607,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | algorithms=['rsa-pss-sha512']                           | invalid  |
 
   # ── New scenarios (2026-07-13, #1592 P0.2 gap closure): account block per-field ──────────
-  # The account block is not emitted per-field by production today — the scenarios below
-  # state the spec-true contract and land red/xfail against #1592.
+  # The account block core (supported_billing, require_operator_auth, sandbox) is emitted
+  # since #1721 C2; the per-field CONFIG surface (operator-auth true, authorization_endpoint,
+  # required_for_products, tenant-set sandbox) is tracked by #1856 — those rows xfail there.
 
   @T-UC-010-account-require-operator-auth @v31 @account @post-s3 @post-s30 @partition
   Scenario Outline: account-require-operator-auth — who must authenticate is declared up front
@@ -1606,7 +1617,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant is configured with require_operator_auth <configured>
     When the Buyer Agent calls get_adcp_capabilities
     Then account.require_operator_auth should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (account block fields beyond the legacy shape
+    # XFAIL-EXPECTED: production gap — #1856 (account block fields beyond the legacy shape
     # are not emitted)
     # 3.1.1 semantics (major rewrite vs beta.3): the flag declares WHO must authenticate —
     # not whether OAuth/list_accounts/sync modes exist. When true, account-scoped calls use
@@ -1630,7 +1641,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant is configured with require_operator_auth true and OAuth support <oauth_state>
     When the Buyer Agent calls get_adcp_capabilities
     Then account.authorization_endpoint should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (account.authorization_endpoint not emitted)
+    # XFAIL-EXPECTED: production gap — #1856 (account.authorization_endpoint not emitted)
     # Present (format uri) when the seller supports OAuth for operator authentication; if
     # absent while require_operator_auth is true, operators obtain credentials out-of-band
     # (seller portal, API key).
@@ -1647,7 +1658,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant is configured with required_for_products <configured>
     When the Buyer Agent calls get_adcp_capabilities
     Then account.required_for_products should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (account.required_for_products not emitted)
+    # XFAIL-EXPECTED: production gap — #1856 (account.required_for_products not emitted)
     # default false: buyer can browse products without an account (price comparison and
     # discovery before committing); true requires establishing an account before get_products.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/required_for_products
@@ -1666,8 +1677,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then account.supported_billing should equal <expected_set>
     And account.supported_billing should be a non-empty array
     And each supported_billing value should be one of "operator", "agent", "advertiser"
-    # XFAIL-EXPECTED: production gap — #1592 (supported_billing not derived from tenant
-    # billing config on the capabilities response)
+    # Graduated: account.supported_billing now derives from resolve_supported_billing(tenant)
+    # on the capabilities response.
     # supported_billing is the ONLY required member of the account block (minItems 1); items
     # from enums/billing-party.json [operator, agent, advertiser]. Derivation source must be
     # the same tenant billing config _check_billing_policy reads — the value the buyer "must
@@ -1706,7 +1717,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then supported_protocols should contain "media_buy"
     And the account section should be present with a non-empty supported_billing
     And account.supported_billing should equal [operator, agent, advertiser]
-    # XFAIL-EXPECTED: production gap — #1592 (account block emission incomplete)
+    # Graduated: the account block is now emitted on the tenant-resolved path.
     # SHOULD-level relationship grounded in the SCHEMA — the 3.1.1 mdx docs are not part of
     # the v3.1.1 tag (schemas + compliance yaml only), so the former docs @source did not
     # resolve. media_buy.description pins it: "Expected when media_buy is in
@@ -1719,7 +1730,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
 
-  # ── New scenarios (2026-07-13, #1592 P0.2 gap closure): fields new at 3.1.1 ───────────────
+  # ── New scenarios (2026-07-13, P0.2 gap closure): fields new at 3.1.1 ───────────────
 
   @T-UC-010-v31-creative-multiplicity @v31 @main-flow @post-s31 @partition
   Scenario: creative-multiplicity — build_creative fan-out pre-call discriminators
@@ -1733,7 +1744,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And creative.multiplicity.max_variants_limit should equal 8
     And creative.multiplicity.variant_dimensions should equal ["voice", "theme"]
     And each variant_dimensions value should be one of "voice", "theme", "best_of_n", "transformer_config", "custom"
-    # XFAIL-EXPECTED: production gap — #1592 (creative.multiplicity not emitted)
+    # DORMANT: no Given/Then step definitions exist for this scenario yet, so it
+    # never runs — it does not xfail on a graded production gap.
     # NEW at 3.1.1: pre-call discriminators so a buyer knows BEFORE sending max_creatives /
     # max_variants whether fan-out is supported and the ceilings (over-limit requests are
     # CLAMPED, not rejected). Absent means no fan-out. Experimental members
@@ -1753,7 +1765,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And creative.supports_spend_controls should equal true
     And creative.supports_evaluator should equal true
     And experimental_features should contain "creative.evaluator"
-    # XFAIL-EXPECTED: production gap — #1592 (3.1.1 creative.supports_* additions not emitted)
+    # DORMANT: no Given/Then step definitions exist for this scenario yet, so it
+    # never runs — it does not xfail on a graded production gap.
     # NEW at 3.1.1, all default false: supports_refinement (refine_from_build_variant_id;
     # false/absent -> UNSUPPORTED_FEATURE), refinable_retention_seconds (guaranteed-MINIMUM
     # refinability window, integer >= 0, only meaningful with supports_refinement),
@@ -1770,7 +1783,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant creative approval mode is configured as <configured>
     When the Buyer Agent calls get_adcp_capabilities
     Then media_buy.creative_approval_mode should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (media_buy.creative_approval_mode not emitted)
+    # Partially graded: production emits the constant require_human (shipped #1721 C5) — that row
+    # passes; the <configured>=auto_approve row is strict-excluded (#1724: never claim
+    # auto_approve without auto-approval behavior) and the tenant-config surface is #1856.
     # NEW at 3.1.1: closed enum [auto_approve, require_human] — not a workflow, an
     # applicability signal; require_human is a worst-case ceiling across the portfolio; when
     # ABSENT approval behavior is legacy-unspecified and runners SHOULD NOT treat omission as
@@ -1789,7 +1804,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant governance consultation is configured as <configured>
     When the Buyer Agent calls get_adcp_capabilities
     Then media_buy.governance_aware should be <expected>
-    # XFAIL-EXPECTED: production gap — #1592 (media_buy.governance_aware not emitted)
+    # DORMANT: no Given/Then step definitions exist for this scenario yet, so it
+    # never runs — it does not xfail on a graded production gap.
     # NEW at 3.1.1 (default false): conformance declaration that the seller consults a
     # registered governance agent (sync_governance + outbound check_governance) before
     # committing a media buy and surfaces GOVERNANCE_DENIED. true opts into governance-denial
@@ -1810,7 +1826,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then media_buy.vendor_metric_optimization should be present
     And media_buy.vendor_metric_optimization.supported_targets should equal ["cost_per"]
     And each supported_targets value should be one of "cost_per", "threshold_rate"
-    # XFAIL-EXPECTED: production gap — #1592 (media_buy.vendor_metric_optimization not emitted)
+    # DORMANT: no Given/Then step definitions exist for this scenario yet, so it
+    # never runs — it does not xfail on a graded production gap.
     # NEW at 3.1.1: seller-level rollup so buyers/runners can discover vendor_metric goal
     # scope before walking the catalog; product-level declarations remain authoritative and
     # "Sellers MUST keep this in sync with product-level vendor_metric_optimization

@@ -58,11 +58,14 @@ scope, so the obligation is prose plus schema, and
 """
 
 import logging
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx
 
 from src.core.security.url_validator import check_url_ssrf, is_reserved_tld_host
+
+if TYPE_CHECKING:
+    from adcp.webhook_auth import JwkSignerStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +89,10 @@ class ChallengeSigning(NamedTuple):
     """
 
     #: The RFC 9421 strategy from the shared outbound signing boundary. Its type is the
-    #: oracle: only a JWK signer can be handed here.
-    strategy: Any
+    #: oracle: only a JWK signer can be handed here. Spelled concretely rather than as
+    #: ``Any`` because ``src.core.tools.accounts`` -- which builds this tuple -- is scoped
+    #: ``disallow_any_explicit`` (#1721 M3), so an ``Any`` here surfaces at that caller.
+    strategy: "JwkSignerStrategy"
     #: The PUBLISHED ``agents[].url`` for the transport this registration arrived on. A
     #: receiver matches it byte-for-byte against our brand.json, so it is derived, never
     #: composed here.

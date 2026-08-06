@@ -365,6 +365,37 @@ def then_error_message_contains(ctx: dict, text: str) -> None:
     assert text.lower() in msg, f"Expected '{text}' in error message: {_get_error_message(error)}"
 
 
+def _wire_error_message(ctx: dict) -> str:
+    """The buyer-facing ``message`` from the captured wire envelope — no fallback.
+
+    Message-RENDERING defects (e.g. a pydantic RootModel interpolated as
+    ``root='...'`` instead of its value) are graded on the exact text the buyer
+    receives, so these steps refuse to fall back to the reconstructed
+    ``ctx['error']``: BDD always dispatches on a wire transport, so a missing
+    envelope is a wiring bug to surface, not to paper over.
+    """
+    obj = _wire_error_object(ctx)
+    assert obj is not None, (
+        "No wire error envelope captured — the scenario must dispatch through a wire "
+        f"transport before asserting on the wire message. Recorded error: {ctx.get('error')!r}"
+    )
+    return obj.get("message") or ""
+
+
+@then(parsers.parse('the wire error message should contain "{text}"'))
+def then_wire_error_message_contains(ctx: dict, text: str) -> None:
+    """Assert the buyer-facing WIRE message contains the text (case-insensitive)."""
+    msg = _wire_error_message(ctx)
+    assert text.lower() in msg.lower(), f"Expected {text!r} in wire error message: {msg!r}"
+
+
+@then(parsers.parse('the wire error message should not contain "{text}"'))
+def then_wire_error_message_not_contains(ctx: dict, text: str) -> None:
+    """Assert the buyer-facing WIRE message does NOT contain the text (case-insensitive)."""
+    msg = _wire_error_message(ctx)
+    assert text.lower() not in msg.lower(), f"Unexpected {text!r} in wire error message: {msg!r}"
+
+
 @then(parsers.parse('the suggestion should contain "{text}"'))
 def then_suggestion_contains(ctx: dict, text: str) -> None:
     """Assert error suggestion contains the given text — wire-first, reconstructed fallback.
@@ -496,7 +527,19 @@ def then_error_format_id_structure(ctx: dict) -> None:
 
 @then(parsers.parse('the error recovery should be "{recovery}"'))
 def then_error_recovery(ctx: dict, recovery: str) -> None:
-    """Assert the error recovery hint matches."""
+    """Assert the error recovery hint matches — wire-first, reconstructed fallback.
+
+    On a wire transport the recovery is read from the real envelope via
+    ``assert_wire_error`` (the buyer-facing contract); IMPL/no-wire scenarios
+    fall back to the reconstructed ``ctx['error']``.
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if envelope is not None:
+        wire_code = _wire_code(ctx)
+        assert wire_code, f"Expected wire error code when asserting recovery={recovery!r}: {envelope}"
+        result.assert_wire_error(wire_code, recovery=recovery)
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     from src.core.exceptions import AdCPError

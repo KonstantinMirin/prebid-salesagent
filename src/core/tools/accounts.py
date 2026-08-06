@@ -17,11 +17,13 @@ import base64
 import logging
 import time
 import uuid
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
-from typing import Annotated, Any, NamedTuple
+from typing import TYPE_CHECKING, Annotated, NamedTuple, cast
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, PaginationRequest, PaginationResponse
+from adcp.types import BrandReference as LibraryBrandReference
+from adcp.types import ContextObject, NotificationConfig, PaginationRequest, PaginationResponse
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
 )
@@ -31,16 +33,20 @@ from adcp.types.generated_poc.account.sync_accounts_request import (
 from adcp.types.generated_poc.account.sync_accounts_request import (
     Accounts1 as SettingsUpdateAccountInput,  # the account-reference / settings-update arm
 )
-from adcp.types.generated_poc.core.account_ref import AccountReference1
+from adcp.types.generated_poc.core.account_ref import AccountReference1, AccountReference2
+from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from fastmcp.server.context import Context
+from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
+from src.core.database.repositories.account import AccountRepository, NaturalKeyConflict
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -53,9 +59,28 @@ from src.core.schemas.account import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp_boundary import build_tool_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.services.notification_proof_service import get_notification_proof_service
+from src.core.validation_helpers import adcp_validation_boundary
+from src.services.notification_proof_service import (
+    ChallengeSigning,
+    NotificationProofService,
+    get_notification_proof_service,
+)
+
+if TYPE_CHECKING:
+    from adcp.types import Error, Setup
 
 logger = logging.getLogger(__name__)
+
+#: Either sync_accounts entry shape: the provisioning trio (brand/operator/
+#: billing) or the account-reference settings-update arm. Typed here (not
+#: Any) so a resolver written for one arm cannot silently accept the other's
+#: entry -- exactly the class of bug _FIELD_POLICY exists to prevent.
+SyncEntry = SyncAccountInput | SettingsUpdateAccountInput
+
+#: Either account-reference shape a settings-update entry's ``account`` field
+#: carries: the seller-assigned handle (AccountReference1) or the natural key
+#: (AccountReference2).
+AccountRef = AccountReference1 | AccountReference2
 
 
 def _db_account_to_schema(db_account: DBAccount) -> Account:
@@ -124,7 +149,7 @@ def _apply_pagination(
     )
 
 
-def _matches_account_ref(db_account: Any, ref: Any) -> bool:
+def _matches_account_ref(db_account: DBAccount, ref: AccountRef) -> bool:
     """Whether *db_account* matches an AccountReference (account_id XOR natural key).
 
     AccountReference1 carries account_id; AccountReference2 carries the natural
@@ -146,7 +171,7 @@ def _matches_account_ref(db_account: Any, ref: Any) -> bool:
     return True
 
 
-def _apply_list_account_filters(db_accounts: list[Any], req: Any) -> list[Any]:
+def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsRequest) -> list[DBAccount]:
     """Apply every list_accounts predicate filter in one place (DRY --
     salesagent-tm97 disease scan; status/sandbox/account were 3 near-identical
     inline list-comprehension filters before this extraction).
@@ -230,7 +255,7 @@ async def list_accounts(
     ext: Annotated[dict | None, Field(description="AdCP extension object -- accepted, has no effect")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-) -> Any:
+) -> ToolResult:
     """List accounts accessible to the authenticated agent (MCP tool).
 
     MCP wrapper that delegates to the shared implementation.
@@ -249,15 +274,16 @@ async def list_accounts(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    req = ListAccountsRequest(
-        account=account,
-        status=status,
-        pagination=pagination,
-        sandbox=sandbox,
-        idempotency_key=idempotency_key,
-        ext=ext,
-        context=context,
-    )
+    with adcp_validation_boundary(context="list_accounts request"):
+        req = ListAccountsRequest(
+            account=account,
+            status=status,
+            pagination=pagination,
+            sandbox=sandbox,
+            idempotency_key=idempotency_key,
+            ext=ext,
+            context=context,
+        )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_accounts_impl(req, identity)
@@ -305,12 +331,14 @@ def _generate_account_name(brand_domain: str, operator: str, brand_id: str | Non
     return f"{brand_part} c/o {operator}"
 
 
-def _enum_to_str(val: Any) -> str | None:
+def _enum_to_str(val: object) -> str | None:
     """Extract string value from an enum or return as-is. Returns None for None."""
     return enum_value(val)
 
 
-def _serialize_typed_list(items: Any, model: type[BaseModel]) -> list[dict[str, Any]] | None:
+def _serialize_typed_list(
+    items: Iterable[BaseModel | Mapping[str, object]] | None, model: type[BaseModel]
+) -> list[dict[str, object]] | None:
     """Normalize a list of typed models (or dicts) to JSON-serializable dicts.
 
     Both dict and model inputs go through ``model_dump(mode="json")`` so that
@@ -323,7 +351,7 @@ def _serialize_typed_list(items: Any, model: type[BaseModel]) -> list[dict[str, 
     """
     if items is None:
         return None
-    result: list[dict[str, Any]] = []
+    result: list[dict[str, object]] = []
     for item in items:
         if isinstance(item, dict):
             # Validate through the model to normalize types (AnyUrl -> str, etc.)
@@ -335,21 +363,25 @@ def _serialize_typed_list(items: Any, model: type[BaseModel]) -> list[dict[str, 
     return result
 
 
-def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
+def _serialize_governance_agents(
+    agents: Iterable[BaseModel | Mapping[str, object]] | None,
+) -> list[dict[str, object]] | None:
     """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
     from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
 
     return _serialize_typed_list(agents, GovernanceAgent)
 
 
-def _serialize_notification_configs(configs: Any) -> list[dict[str, Any]] | None:
+def _serialize_notification_configs(
+    configs: Iterable[BaseModel | Mapping[str, object]] | None,
+) -> list[dict[str, object]] | None:
     """Convert NotificationConfig models to JSON-serializable dicts for DB storage."""
-    from adcp.types import NotificationConfig
-
     return _serialize_typed_list(configs, NotificationConfig)
 
 
-def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
+def _scrub_notification_credentials(
+    configs: Iterable[BaseModel | Mapping[str, object]] | None,
+) -> list[NotificationConfig] | None:
     """Strip write-only ``authentication.credentials`` from an echoed subscriber set.
 
     ``credentials`` is ``minLength: 32`` and documented write-only: the seller
@@ -361,11 +393,9 @@ def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
     Returns ``None`` for ``None`` and ``[]`` for ``[]``: "never configured" and
     "explicitly cleared" are different states to the buyer.
     """
-    from adcp.types import NotificationConfig
-
     if configs is None:
         return None
-    scrubbed: list[Any] = []
+    scrubbed: list[NotificationConfig] = []
     for config in configs:
         data = config.model_dump(mode="json") if hasattr(config, "model_dump") else dict(config)
         auth = data.get("authentication")
@@ -376,7 +406,7 @@ def _scrub_notification_credentials(configs: Any) -> list[Any] | None:
     return scrubbed
 
 
-def _serialize_business_entity(entity: Any) -> dict[str, Any] | None:
+def _serialize_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> dict[str, object] | None:
     """Normalize a ``billing_entity`` (model or dict) to a JSON-serializable dict."""
     if entity is None:
         return None
@@ -385,7 +415,7 @@ def _serialize_business_entity(entity: Any) -> dict[str, Any] | None:
     return dict(entity)
 
 
-def _scrub_business_entity(entity: Any) -> Any:
+def _scrub_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> BusinessEntity | None:
     """Strip write-only ``bank`` from an echoed ``billing_entity``.
 
     The response account item documents ``billing_entity`` as "echoed from the
@@ -405,7 +435,7 @@ def _scrub_business_entity(entity: Any) -> Any:
     return BusinessEntity.model_validate(data)
 
 
-def _persisted_value(db_account: DBAccount, field: str) -> Any:
+def _persisted_value(db_account: DBAccount, field: str) -> object:
     """The persisted value of ``field``, serialized to compare against a resolved one."""
     current = getattr(db_account, field, None)
     if field == "notification_configs":
@@ -417,11 +447,18 @@ def _persisted_value(db_account: DBAccount, field: str) -> Any:
     return current
 
 
-def _resolve_notification_configs(entry: Any, existing: Any) -> tuple[bool, list[dict[str, Any]] | None]:
+def _resolve_notification_configs(
+    entry: SyncEntry, persisted: list[dict[str, object]] | None
+) -> tuple[bool, list[dict[str, object]] | None]:
     """Apply declarative-replace semantics for ``notification_configs``.
 
+    Unlike its sibling resolvers, ``persisted`` is the field's ALREADY-SERIALIZED
+    value (the caller wires it via ``_serialize_notification_configs(getattr(
+    existing, "notification_configs", None))``), not the whole ``DBAccount`` --
+    the wiring lambda in ``_FIELD_POLICY`` does that adaptation.
+
     Returns ``(changed, value)``:
-      - field omitted (``None``) -> ``(False, existing)``: omission is NOT clearance
+      - field omitted (``None``) -> ``(False, persisted)``: omission is NOT clearance
       - ``[]``                   -> ``(True, [])``: explicit clear, persisted as an
         empty array rather than NULL so the echo can carry it
       - non-empty                -> ``(True, <full array>)``: the submitted array
@@ -433,11 +470,11 @@ def _resolve_notification_configs(entry: Any, existing: Any) -> tuple[bool, list
     """
     submitted = getattr(entry, "notification_configs", None)
     if submitted is None:
-        return False, existing
+        return False, persisted
     return True, _serialize_notification_configs(submitted) or []
 
 
-def _resolve_scalar(entry: Any, existing: Any, field: str) -> tuple[bool, Any]:
+def _resolve_scalar(entry: SyncEntry, existing: DBAccount | None, field: str) -> tuple[bool, object]:
     """Omission-preserves resolver for a scalar enum/string field.
 
     ``None`` means "not submitted", not "clear it": the request schema gives the
@@ -452,7 +489,9 @@ def _resolve_scalar(entry: Any, existing: Any, field: str) -> tuple[bool, Any]:
     return True, incoming
 
 
-def _resolve_governance_agents(entry: Any, existing: Any) -> tuple[bool, Any]:
+def _resolve_governance_agents(
+    entry: SyncEntry, existing: DBAccount | None
+) -> tuple[bool, list[dict[str, object]] | None]:
     """Omission-preserves resolver for ``governance_agents``.
 
     Deliberately the SAME semantic as ``_resolve_notification_configs`` rather
@@ -469,7 +508,7 @@ def _resolve_governance_agents(entry: Any, existing: Any) -> tuple[bool, Any]:
     return True, _serialize_governance_agents(submitted)
 
 
-def _resolve_billing_entity(entry: Any, existing: Any) -> tuple[bool, Any]:
+def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, dict[str, object] | None]:
     """Omission-preserves resolver for ``billing_entity`` (whole-object replace).
 
     "Permitted in both provisioning and settings-update modes — sellers MAY
@@ -488,7 +527,7 @@ def _resolve_billing_entity(entry: Any, existing: Any) -> tuple[bool, Any]:
     return True, _serialize_business_entity(submitted)
 
 
-def _resolve_sandbox(entry: Any, existing: Any) -> tuple[bool, Any]:
+def _resolve_sandbox(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, bool | None]:
     """``sandbox`` is applied at CREATE only — it is part of the natural key.
 
     On an existing account this resolver is inert BY COUPLING, not as a local
@@ -531,7 +570,13 @@ class _FieldPolicy:
 
     __slots__ = ("provisioning", "settings_update", "resolve")
 
-    def __init__(self, *, provisioning: _Disposition, settings_update: _Disposition, resolve: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        provisioning: _Disposition,
+        settings_update: _Disposition,
+        resolve: Callable[[SyncEntry, DBAccount | None], tuple[bool, object]] | None = None,
+    ) -> None:
         self.provisioning = provisioning
         self.settings_update = settings_update
         self.resolve = resolve
@@ -626,7 +671,7 @@ def _disposition(field: str, mode: str) -> _Disposition:
     return getattr(_FIELD_POLICY[field], mode)
 
 
-def _resolve_entry_changes(entry: Any, existing: Any, *, mode: str) -> dict[str, Any]:
+def _resolve_entry_changes(entry: SyncEntry, existing: DBAccount | None, *, mode: str) -> dict[str, object]:
     """The ONE field-application walk, shared by all three sites.
 
     ``existing=None`` IS the create case — a create is "resolve against nothing",
@@ -636,7 +681,7 @@ def _resolve_entry_changes(entry: Any, existing: Any, *, mode: str) -> dict[str,
     suitable both as ``repo.update_fields(**changes)`` and as ``DBAccount``
     kwargs.
     """
-    changes: dict[str, Any] = {}
+    changes: dict[str, object] = {}
     for field, policy in _FIELD_POLICY.items():
         if _disposition(field, mode).kind != "applied":
             continue
@@ -648,7 +693,7 @@ def _resolve_entry_changes(entry: Any, existing: Any, *, mode: str) -> dict[str,
     return changes
 
 
-def _rejected_field_errors(entry: Any, *, mode: str, index: int) -> list[Any] | None:
+def _rejected_field_errors(entry: SyncEntry, *, mode: str, index: int) -> list["Error"] | None:
     """Per-account errors for fields the table marks ``rejected`` in ``mode``.
 
     A ``rejected`` field is schema-LEGAL on this arm but cannot be honored, so
@@ -662,7 +707,7 @@ def _rejected_field_errors(entry: Any, *, mode: str, index: int) -> list[Any] | 
     """
     from adcp.types import Error
 
-    errors: list[Any] = []
+    errors: list[Error] = []
     for field, policy in _FIELD_POLICY.items():
         if getattr(policy, mode).kind != "rejected":
             continue
@@ -683,7 +728,7 @@ def _rejected_field_errors(entry: Any, *, mode: str, index: int) -> list[Any] | 
     return errors or None
 
 
-def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
+def _account_fields_changed(db_account: DBAccount, entry: SyncEntry) -> dict[str, object]:
     """Fields a PROVISIONING re-sync changes on an existing account.
 
     Thin wrapper over the shared table walk, kept as a named function because the
@@ -698,7 +743,7 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
 
 def _build_sync_result(
     *,
-    brand: Any,
+    brand: LibraryBrandReference | Mapping[str, object],
     operator: str,
     action: str,
     status: str,
@@ -707,10 +752,10 @@ def _build_sync_result(
     billing: str | None = None,
     payment_terms: str | None = None,
     sandbox: bool | None = None,
-    errors: list[Any] | None = None,
-    setup: Any | None = None,
-    notification_configs: Any | None = None,
-    billing_entity: Any | None = None,
+    errors: list["Error"] | None = None,
+    setup: "Setup | None" = None,
+    notification_configs: Iterable[BaseModel | Mapping[str, object]] | None = None,
+    billing_entity: BusinessEntity | Mapping[str, object] | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object.
 
@@ -744,17 +789,25 @@ def _build_sync_result(
 
 def _build_failed_result(
     *,
-    brand: Any,
+    brand: LibraryBrandReference | Mapping[str, object],
     operator: str,
     billing: str | None,
     sandbox: bool | None,
-    errors: list[Any],
+    errors: list["Error"],
 ) -> SyncResponseAccount:
     """Build a failed/rejected sync result -- the single source for every
     per-entry gate rejection (domain validity, billing policy, sandbox
     capability, settings-update-not-found), so a shared shape can't drift
     across call sites (salesagent-5g8e disease scan).
+
+    The single choke point where every accounts.py advisory ``errors[]`` list
+    is routed through ``normalize_advisory_errors`` before reaching the wire
+    (#1721 M1) -- one call here covers all six gate-check sites
+    plus the settings-update-not-found and activation-proof advisories, since
+    they all build their result through this function.
     """
+    from src.core.exceptions import normalize_advisory_errors
+
     return _build_sync_result(
         brand=brand,
         operator=operator,
@@ -762,11 +815,55 @@ def _build_failed_result(
         status="rejected",
         billing=billing,
         sandbox=sandbox,
-        errors=errors,
+        errors=normalize_advisory_errors(errors),
     )
 
 
-def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
+def _first_gate_failure(gates: Iterable[Callable[[], list["Error"] | None]]) -> list["Error"] | None:
+    """Run per-entry gate checks in order; return the first one's errors, or None.
+
+    Both the provisioning arm (domain/billing/sandbox/notification-configs) and
+    the settings-update arm (notification-configs/rejected-fields) are a list of
+    independent gate checks where the first failure short-circuits the rest --
+    this is the ONE place that shape is expressed (#1721 M1; was 6
+    duplicated check-then-build-then-continue blocks).
+    """
+    for gate in gates:
+        errors = gate()
+        if errors is not None:
+            return errors
+    return None
+
+
+def _provisioning_gates(
+    *,
+    brand_domain: str,
+    billing_val: str | None,
+    identity: ResolvedIdentity,
+    sandbox: bool | None,
+    tenant: Mapping[str, object] | None,
+    index: int,
+    entry: SyncEntry,
+    proof_failures: dict[int, list["Error"]],
+) -> list[Callable[[], list["Error"] | None]]:
+    """The provisioning arm's gate list, in order: domain validity (reserved
+    TLDs) -> billing policy (BR-RULE-059) -> sandbox capability (BR-RULE-209
+    INV-6) -> notification_configs. The first failure short-circuits the rest.
+
+    A module-level function, not a per-entry closure defined inside the sync
+    loop: the returned lambdas close over ITS OWN parameters (fresh on every
+    call), so this adds zero complexity to ``_sync_accounts_impl`` and raises
+    no ruff B023 loop-variable-closure warning (#1721 M1).
+    """
+    return [
+        lambda: _check_domain_validity(brand_domain),
+        lambda: _check_billing_policy(billing_val, identity),
+        lambda: _check_sandbox_capability(sandbox, tenant, index),
+        lambda: _notification_configs_gate(entry, proof_failures.get(index)),
+    ]
+
+
+def _build_setup_for_approval(mode: str, tenant_id: str) -> "Setup | None":
     """Build a Setup object based on the approval mode.
 
     Returns Setup for pending_approval modes, None for auto-approve.
@@ -788,7 +885,7 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
     return None
 
 
-def _check_domain_validity(brand_domain: str) -> list[Any] | None:
+def _check_domain_validity(brand_domain: str) -> list["Error"] | None:
     """Check if the brand domain is valid for account provisioning.
 
     Returns a list of Error objects if invalid, None if valid.
@@ -807,6 +904,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
                     f"and cannot be used for account provisioning.",
                     suggestion="Use a real domain name for production accounts.",
                     field="brand.domain",
+                    recovery="correctable",
                 )
             ]
     return None
@@ -815,7 +913,7 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
 def _check_billing_policy(
     billing_val: str | None,
     identity: ResolvedIdentity,
-) -> list[Any] | None:
+) -> list["Error"] | None:
     """Check if the billing model is supported by the seller.
 
     Returns a list of Error objects if rejected, None if accepted.
@@ -839,7 +937,7 @@ def _check_billing_policy(
         # billing-not-supported.json: supported_billing minItems 1, "Sellers MAY
         # omit this field" -- an empty resolved policy must omit the key entirely,
         # never emit a schema-invalid empty array (salesagent-hh1f review MEDIUM #1).
-        details: dict[str, Any] = {"scope": "capability"}
+        details: dict[str, object] = {"scope": "capability"}
         supported_suffix = ""
         if supported:
             details["supported_billing"] = supported
@@ -858,7 +956,7 @@ def _check_billing_policy(
     return None
 
 
-def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]:
+def _extract_natural_key(entry: SyncEntry) -> tuple[str, str | None, str, bool | None]:
     """Extract natural key components from a PROVISIONING-mode sync request entry.
 
     Returns (brand_domain, brand_id, operator, sandbox).
@@ -873,25 +971,29 @@ def _extract_natural_key(entry: Any) -> tuple[str, str | None, str, bool | None]
     implemented — it no longer does).
 
     Raises:
-        AdCPValidationError: if the entry omits ``brand``.
+        AdCPValidationError: if the entry omits ``brand`` or ``operator`` --
+            both REQUIRED for provisioning mode per the pinned spec. Only
+            ``brand`` was checked before typing this function surfaced that
+            ``operator`` is ``str | None`` on the ``SyncEntry`` union (it is
+            optional on the settings-update arm) with no matching runtime
+            guard here.
     """
     brand = entry.brand
-    if brand is None:
+    operator = entry.operator
+    if brand is None or operator is None:
         raise AdCPValidationError(
             "Each provisioning account entry must include 'brand', 'operator', and 'billing' "
             "(or 'account' for a settings-update entry).",
             recovery="correctable",
         )
-    brand_domain = brand.domain
-    brand_id = None
-    if hasattr(brand, "brand_id") and brand.brand_id is not None:
-        brand_id = str(brand.brand_id)
-    operator = entry.operator
+    brand_domain, brand_id = brand_key_parts(brand)
     sandbox = entry.sandbox
     return brand_domain, brand_id, operator, sandbox
 
 
-def _check_sandbox_capability(entry_sandbox: bool | None, tenant: Any, index: int) -> list[Any] | None:
+def _check_sandbox_capability(
+    entry_sandbox: bool | None, tenant: Mapping[str, object] | None, index: int
+) -> list["Error"] | None:
     """Reject sandbox provisioning when the seller has not declared account.sandbox support.
 
     Mirrors the ``_check_domain_validity``/``_check_billing_policy`` per-entry
@@ -924,7 +1026,7 @@ def _check_sandbox_capability(entry_sandbox: bool | None, tenant: Any, index: in
 _MEDIA_BUY_ANCHORED_EVENT_TYPES = frozenset({"scheduled", "final", "delayed", "adjusted", "impairment"})
 
 
-def _validate_notification_configs(configs: Any) -> list[Any] | None:
+def _check_notification_configs(configs: Iterable[NotificationConfig] | None) -> list["Error"] | None:
     """Validate a submitted notification_configs array; None when it is acceptable.
 
     Same per-entry gate shape as ``_check_domain_validity`` / ``_check_billing_policy``
@@ -997,8 +1099,116 @@ def _validate_notification_configs(configs: Any) -> list[Any] | None:
     return None
 
 
+def _notification_configs_gate(entry: SyncEntry, proof_errors: list["Error"] | None) -> list["Error"] | None:
+    """The notification_configs gate, shared verbatim by both sync-accounts arms.
+
+    Runs BEFORE any write so a rejected entry leaves the persisted array
+    byte-identical. When the array itself is schema-valid, falls back to the
+    precomputed activation-proof errors -- the proof ran before any
+    transaction opened, so a failure here still writes nothing for this entry.
+    A module-level function (not a per-entry closure) so neither call site's
+    complexity grows with it (#1721 M1).
+    """
+    errors = _check_notification_configs(getattr(entry, "notification_configs", None))
+    return errors if errors is not None else proof_errors
+
+
+def _settings_update_preview_state(
+    existing: DBAccount | None,
+    ref: AccountRef,
+    previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount],
+) -> DBAccount | None:
+    """The request-local stand-in a dry_run settings-update reads and writes.
+
+    Mirrors the provisioning arm's seeding: first touch of a persisted row on a
+    key registers a never-persisted copy, so the entry's in-memory "write" can
+    not reach the session and later entries on the same key grade against the
+    previewed state. Seeded with the PROVISIONING superset of applied fields —
+    the settings-update set is a strict subset, and a later provisioning entry
+    on the same key must read real values off this object.
+
+    With no persisted row, a natural-key reference (AccountReference2) may still
+    target an account an EARLIER entry in this same preview would create — the
+    live arm finds that row because ``repo.create()`` flushed it, so the preview
+    must consult ``previewed_by_key`` for parity. An ``account_id`` reference
+    cannot name a not-yet-created account (ids are server-generated), so a repo
+    miss there stays unmatched, exactly as on the live arm.
+    """
+    if existing is not None:
+        brand_domain, brand_id = brand_key_parts(existing.brand)
+        key = (brand_domain, brand_id, existing.operator or "", bool(existing.sandbox))
+        state = previewed_by_key.get(key)
+        if state is None:
+            state = _preview_state_from(
+                existing,
+                mode="provisioning",
+                brand_domain=brand_domain or "",
+                brand_id=brand_id,
+                operator=existing.operator or "",
+            )
+            previewed_by_key[key] = state
+        return state
+    if isinstance(ref, AccountReference1):
+        return None
+    brand_domain, brand_id = brand_key_parts(ref.brand)
+    return previewed_by_key.get((brand_domain, brand_id, ref.operator or "", bool(ref.sandbox)))
+
+
+def _resolve_settings_update_target(ref: AccountRef, repo: AccountRepository) -> DBAccount | None:
+    """Resolve a settings-update AccountReference to its persisted row, if any."""
+    if isinstance(ref, AccountReference1):
+        return repo.get_by_id(ref.account_id)
+    brand_domain, brand_id = brand_key_parts(ref.brand)
+    return repo.get_by_natural_key(
+        operator=ref.operator,
+        brand_domain=brand_domain,
+        brand_id=brand_id,
+        sandbox=ref.sandbox,
+    )
+
+
+def _unmatched_settings_update_result(ref: AccountRef) -> SyncResponseAccount:
+    """The UNSUPPORTED_PROVISIONING failure for an unmatched account reference.
+
+    brand/operator are REQUIRED on SyncResponseAccount. A natural-key reference
+    (AccountReference2) still carries brand/operator to echo even when unmatched;
+    an account_id reference (AccountReference1) carries none -- "unknown" is the
+    established placeholder convention in this file for exactly that situation
+    (cf. the publisher-domain placeholder above), not a fabricated real value.
+    """
+    from adcp.types import Error
+
+    if isinstance(ref, AccountReference1):
+        fail_brand: LibraryBrandReference | Mapping[str, object] = {"domain": "unknown"}
+        fail_operator = "unknown"
+    else:
+        fail_brand = ref.brand if ref.brand else {"domain": "unknown"}
+        fail_operator = ref.operator or "unknown"
+    return _build_failed_result(
+        brand=fail_brand,
+        operator=fail_operator,
+        billing=None,
+        sandbox=None,
+        errors=[
+            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                code="UNSUPPORTED_PROVISIONING",
+                message="No existing account matches the provided account reference; "
+                "a settings-update entry never provisions a new account.",
+                suggestion="Provide 'brand', 'operator', and 'billing' to provision a new account instead.",
+                recovery="correctable",
+            )
+        ],
+    )
+
+
 def _process_settings_update_entry(
-    entry: Any, repo: Any, proof_errors: list[Any] | None = None, index: int = 0
+    entry: SyncEntry,
+    repo: AccountRepository,
+    proof_errors: list["Error"] | None = None,
+    index: int = 0,
+    *,
+    dry_run: bool = False,
+    previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount] | None = None,
 ) -> SyncResponseAccount:
     """Handle a settings-update entry (keyed by AccountReference) -- update an
     EXISTING account's settable fields, NEVER provision (F1b/F1c).
@@ -1009,79 +1219,53 @@ def _process_settings_update_entry(
     ``sandbox``). An unmatched reference is rejected with
     UNSUPPORTED_PROVISIONING -- a settings-update entry MUST NOT provision a
     new account under any circumstance.
-    """
-    from adcp.types import Error
 
+    Under ``dry_run`` the entry is graded identically but writes nothing: the
+    resolved changes are applied to a request-local preview state (the same
+    ``previewed_by_key`` mechanism the provisioning arm uses) instead of
+    ``repo.update_fields`` (sync-accounts-request.json#/properties/dry_run:
+    "preview what would change without applying").
+    """
+    assert entry.account is not None, "caller dispatches here only when entry.account is set"
     ref = entry.account.root
-    if isinstance(ref, AccountReference1):
-        existing = repo.get_by_id(ref.account_id)
-    else:
-        brand_domain = ref.brand.domain if ref.brand else None
-        brand_id = None
-        if ref.brand is not None and hasattr(ref.brand, "brand_id") and ref.brand.brand_id is not None:
-            brand_id = str(ref.brand.brand_id)
-        existing = repo.get_by_natural_key(
-            operator=ref.operator,
-            brand_domain=brand_domain,
-            brand_id=brand_id,
-            sandbox=ref.sandbox,
-        )
+    existing = _resolve_settings_update_target(ref, repo)
+
+    # Echo brand/operator from the persisted row when there is one — the preview
+    # state's brand dict is REBUILT by AccountRepository.build_row and may drop
+    # extra keys.
+    persisted = existing
+    if dry_run:
+        if previewed_by_key is None:
+            previewed_by_key = {}
+        existing = _settings_update_preview_state(existing, ref, previewed_by_key)
 
     if existing is None:
-        # brand/operator are REQUIRED on SyncResponseAccount. A natural-key reference
-        # (AccountReference2) still carries brand/operator to echo even when unmatched;
-        # an account_id reference (AccountReference1) carries none -- "unknown" is the
-        # established placeholder convention in this file for exactly that situation
-        # (cf. the publisher-domain placeholder above), not a fabricated real value.
-        if isinstance(ref, AccountReference1):
-            fail_brand: Any = {"domain": "unknown"}
-            fail_operator = "unknown"
-        else:
-            fail_brand = ref.brand if ref.brand else {"domain": "unknown"}
-            fail_operator = ref.operator or "unknown"
-        return _build_failed_result(
-            brand=fail_brand,
-            operator=fail_operator,
-            billing=None,
-            sandbox=None,
-            errors=[
-                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
-                    code="UNSUPPORTED_PROVISIONING",
-                    message="No existing account matches the provided account reference; "
-                    "a settings-update entry never provisions a new account.",
-                    suggestion="Provide 'brand', 'operator', and 'billing' to provision a new account instead.",
-                    recovery="correctable",
-                )
-            ],
-        )
+        return _unmatched_settings_update_result(ref)
 
-    # Same shared validator as the provisioning arm, and BEFORE any write so a
-    # rejected entry leaves the persisted array byte-identical.
-    notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
-    if notif_errors is None:
-        # Same pre-computed verdicts as the provisioning arm: the proof ran before
-        # any transaction opened, and a failure writes nothing for this entry.
-        notif_errors = proof_errors
-    if notif_errors is not None:
+    echo_brand = persisted.brand if persisted is not None else existing.brand
+    echo_operator = persisted.operator if persisted is not None else existing.operator
+    # Account.brand/.operator are DB-nullable (defensive column typing) but
+    # AccountRepository.build_row always sets both at creation -- an EXISTING,
+    # matched account (which is what this arm always operates on) cannot
+    # actually have either unset.
+    assert echo_brand is not None, "persisted account has no brand -- should be unreachable"
+
+    # notification_configs (shared with the provisioning arm) -> rejected-field
+    # check (BR-RULE-209-family fields the table marks `rejected` on this arm --
+    # schema-LEGAL, so per-account "failed", never an operation-level raise).
+    gate_errors = _first_gate_failure(
+        [
+            lambda: _notification_configs_gate(entry, proof_errors),
+            lambda: _rejected_field_errors(entry, mode="settings_update", index=index),
+        ]
+    )
+    if gate_errors is not None:
         return _build_failed_result(
-            brand=existing.brand,
-            operator=existing.operator or "",
+            brand=echo_brand,
+            operator=echo_operator or "",
             billing=existing.billing,
             sandbox=existing.sandbox,
-            errors=notif_errors,
-        )
-
-    # A schema-LEGAL field the table marks `rejected` on this arm. Per-account
-    # (action "failed"), never operation-level: the field parses, so an
-    # operation-level raise would kill an otherwise valid batch.
-    reject_errors = _rejected_field_errors(entry, mode="settings_update", index=index)
-    if reject_errors is not None:
-        return _build_failed_result(
-            brand=existing.brand,
-            operator=existing.operator or "",
-            billing=existing.billing,
-            sandbox=existing.sandbox,
-            errors=reject_errors,
+            errors=gate_errors,
         )
 
     # The SAME table walk the provisioning arm runs -- the two arms cannot
@@ -1091,12 +1275,19 @@ def _process_settings_update_entry(
 
     action = "unchanged"
     if changes:
-        repo.update_fields(existing.account_id, **changes)
+        if dry_run:
+            # The write the live arm performs, in memory only: `existing` is the
+            # request-local preview state (never a persisted row), so this can
+            # reach no session and later entries on the key read post-write state.
+            for field, value in changes.items():
+                setattr(existing, field, value)
+        else:
+            repo.update_fields(existing.account_id, **changes)
         action = "updated"
 
     return _build_sync_result(
-        brand=existing.brand,
-        operator=existing.operator,
+        brand=echo_brand,
+        operator=echo_operator or "",
         action=action,
         status=existing.status,
         account_id=existing.account_id,
@@ -1105,9 +1296,13 @@ def _process_settings_update_entry(
         payment_terms=existing.payment_terms,
         sandbox=existing.sandbox,
         # Post-write state: the applied value when this entry changed it, the
-        # persisted one otherwise.
-        notification_configs=changes.get("notification_configs", existing.notification_configs),
-        billing_entity=changes.get("billing_entity", existing.billing_entity),
+        # persisted one otherwise. changes is dict[str, object] (see
+        # _resolve_entry_changes); cast back to each field's own type.
+        notification_configs=cast(
+            "list[dict[str, object]] | None",
+            changes.get("notification_configs", existing.notification_configs),
+        ),
+        billing_entity=cast("dict[str, object] | None", changes.get("billing_entity", existing.billing_entity)),
     )
 
 
@@ -1117,25 +1312,25 @@ def _process_settings_update_entry(
 _PROOF_BUDGET_SECONDS = 6.0
 
 
-def _proof_tuple(config: object) -> tuple:
+def _proof_tuple(config: NotificationConfig) -> tuple[str, str, str | None, tuple[str, ...]]:
     """The identity of a proof, per the spec's proof-reuse allowance.
 
     A re-sent config whose (subscriber_id, normalized url, auth binding, normalized
     event_types) matches an already-proven persisted entry MAY skip re-proof.
     """
-    auth = getattr(config, "authentication", None)
+    auth = config.authentication
     auth_scheme = getattr(auth, "scheme", None) if auth is not None else None
     return (
-        getattr(config, "subscriber_id", None),
-        str(getattr(config, "url", "") or "").rstrip("/"),
+        config.subscriber_id,
+        str(config.url or "").rstrip("/"),
         enum_value(auth_scheme) if auth_scheme is not None else None,
-        tuple(sorted(enum_value(e) for e in (getattr(config, "event_types", None) or []))),
+        tuple(sorted(enum_value(e) for e in (config.event_types or []))),
     )
 
 
-def _collect_activating_entries(entries: list[Any]) -> list[tuple[int, Any, Any]]:
+def _collect_activating_entries(entries: list[SyncEntry]) -> list[tuple[int, SyncEntry, NotificationConfig]]:
     """(entry index, entry, config) for every config declaring ``active: true``."""
-    activating: list[tuple[int, Any, Any]] = []
+    activating: list[tuple[int, SyncEntry, NotificationConfig]] = []
     for index, entry in enumerate(entries):
         for config in getattr(entry, "notification_configs", None) or []:
             if getattr(config, "active", False):
@@ -1143,7 +1338,7 @@ def _collect_activating_entries(entries: list[Any]) -> list[tuple[int, Any, Any]
     return activating
 
 
-def _proof_error(entry: Any, config: Any, message: str, suggestion: str) -> Any:
+def _proof_error(entry: SyncEntry, config: NotificationConfig, message: str, suggestion: str) -> "Error":
     """The per-account error a failed/skipped activation produces.
 
     One builder for both the dry_run and challenge-failure paths -- they carry the
@@ -1170,7 +1365,7 @@ class _ProofPreflight(NamedTuple):
 
 
 def _proof_preflight(
-    activating: list[tuple[int, Any, Any]], tenant_id: str, minted_ids: dict[int, str]
+    activating: list[tuple[int, SyncEntry, NotificationConfig]], tenant_id: str, minted_ids: dict[int, str]
 ) -> _ProofPreflight:
     """Read the persisted proof tuples and resolve each entry's account id.
 
@@ -1199,7 +1394,7 @@ def _proof_preflight(
     return _ProofPreflight(already_proven=already_proven, account_ids=account_ids)
 
 
-def _challenge_signing(tenant_id: str, protocol: str) -> Any:
+def _challenge_signing(tenant_id: str, protocol: str) -> ChallengeSigning | None:
     """The signing identity for this tenant's challenges, or ``None`` if there is none.
 
     ONE short transaction yielding both halves a conformant challenge needs -- the tenant
@@ -1229,7 +1424,6 @@ def _challenge_signing(tenant_id: str, protocol: str) -> Any:
     from src.core.database.repositories.uow import TrustRootUoW
     from src.core.exceptions import AdCPError
     from src.core.signing import adcp_challenge_signer
-    from src.services.notification_proof_service import ChallengeSigning
 
     try:
         with TrustRootUoW(tenant_id) as uow:
@@ -1258,13 +1452,13 @@ def _challenge_signing(tenant_id: str, protocol: str) -> Any:
 
 
 async def _resolve_activation_proofs(
-    entries: list[Any],
+    entries: list[SyncEntry],
     tenant_id: str,
     *,
     dry_run: bool,
     protocol: str,
     minted_ids: dict[int, str],
-) -> dict[int, list[Any]]:
+) -> dict[int, list["Error"]]:
     """Run proof-of-control for every entry activating a subscriber. Index -> errors.
 
     Runs BEFORE the write transaction opens: an outbound call inside an open
@@ -1299,7 +1493,7 @@ async def _resolve_activation_proofs(
     # subscriber, so building it per challenge would open one session per entry.
     signing = _challenge_signing(tenant_id, protocol)
     prover = get_notification_proof_service()
-    failures: dict[int, list[Any]] = {}
+    failures: dict[int, list[Error]] = {}
     budget = _PROOF_BUDGET_SECONDS
 
     for index, entry, config in activating:
@@ -1325,7 +1519,12 @@ async def _resolve_activation_proofs(
 
 
 async def _prove_within_budget(
-    prover: Any, account_id: str, config: Any, budget: float, *, signing: Any = None
+    prover: NotificationProofService,
+    account_id: str,
+    config: NotificationConfig,
+    budget: float,
+    *,
+    signing: ChallengeSigning | None = None,
 ) -> tuple[bool, float]:
     """Run one challenge if the request-level budget allows. Returns (proven, budget left).
 
@@ -1344,7 +1543,7 @@ async def _prove_within_budget(
     return proven, budget - (time.monotonic() - started)
 
 
-def _config_index(entry: Any, config: Any) -> int:
+def _config_index(entry: SyncEntry, config: NotificationConfig) -> int:
     """Position of *config* in *entry*'s submitted array (for error.field)."""
     for index, candidate in enumerate(getattr(entry, "notification_configs", None) or []):
         if candidate is config:
@@ -1352,26 +1551,134 @@ def _config_index(entry: Any, config: Any) -> int:
     return 0
 
 
-def _lookup_existing_for_entry(entry: Any, repo: Any) -> Any:
+def _preview_state_from(
+    existing: DBAccount, *, mode: str, brand_domain: str, brand_id: str | None, operator: str
+) -> DBAccount:
+    """A request-local, never-persisted stand-in for an account already on file.
+
+    This is the POST-WRITE state object the dry_run arms have to read their
+    result fields off. The live arm gets that state for free — ``update_fields``
+    ``setattr``s the identity-mapped instance and flushes — so ``existing`` there
+    means "the row as the write LEFT it". Under dry_run nothing mutates the
+    loaded row, and mutating it would be written out at commit, so the preview
+    needs its own object to apply the resolved changes to.
+
+    The copied column set is DERIVED from :data:`_FIELD_POLICY` — every field
+    ``mode`` marks ``applied``, which is exactly the set the comparison can
+    change. Hand-listing it would make this seed the third field list this bug
+    is about. Raw ``getattr``, not :func:`_persisted_value`: the comparison
+    applies its own serialization on top, on both arms, so the seed must mirror
+    the raw COLUMN state the live arm's row carries.
+
+    Construction goes through :meth:`AccountRepository.build_row` so accounts.py
+    keeps ONE row-construction call site
+    (tests/unit/test_guards_sync_accounts_row_builder.py). Never
+    ``copy``/``deepcopy``/``expunge`` the loaded row: the first two carry
+    ``_sa_instance_state`` and the last breaks the live arm's identity map.
+
+    ``mode`` is a parameter rather than a constant because the settings-update
+    arm needs the same state object under its own disposition column.
+
+    Note the row's identity comes from the caller's NATURAL KEY rather than off
+    ``existing``: the two agree by construction (``get_by_natural_key`` filtered
+    on exactly these, and all three are immutable at the repository), and the key
+    is the non-optional spelling. A consequence is that ``brand`` is REBUILT, so
+    any extra key in the persisted brand dict is dropped — safe on the
+    provisioning arm, where nothing reads ``state.brand`` (the result echoes
+    ``entry.brand`` and ``_FIELD_POLICY`` has no brand field), but do not hand
+    this object to code that does.
+    """
+    created_fields = {
+        field: getattr(existing, field) for field in _FIELD_POLICY if _disposition(field, mode).kind == "applied"
+    }
+    return AccountRepository.build_row(
+        tenant_id=existing.tenant_id,
+        account_id=existing.account_id,
+        name=existing.name,
+        status=existing.status,
+        brand_domain=brand_domain,
+        brand_id=brand_id,
+        operator=operator,
+        principal_id=existing.principal_id,
+        created_fields=created_fields,
+    )
+
+
+def _build_update_result(
+    *, entry: SyncEntry, operator: str, state: DBAccount, changes: dict[str, object]
+) -> SyncResponseAccount:
+    """The ONE place a provisioning ``updated``/``unchanged`` result is built.
+
+    ``state`` MUST be the POST-WRITE row — the row as the write would leave it,
+    which is the loaded instance after ``repo.update_fields`` on the live arm and
+    the request-local preview object after the equivalent ``setattr`` loop on the
+    dry arm. Every reported value is read off it, so the two arms cannot describe
+    the same outcome differently.
+
+    Drift insurance, not a bug fix: before #1721 both arms already called one
+    builder with a byte-identical argument list and STILL diverged, because the
+    row they handed it meant different things. What this function adds is a
+    single, guarded place where "post-write" is stated as a precondition
+    (tests/unit/test_guards_sync_accounts_update_result_builder.py), so a future
+    edit cannot quietly reintroduce a pre-write read next to a post-write one.
+    """
+    assert entry.brand is not None, "only called for provisioning-mode entries"
+    return _build_sync_result(
+        brand=entry.brand,
+        operator=operator,
+        action="updated" if changes else "unchanged",
+        status=state.status,
+        account_id=state.account_id,
+        name=state.name,
+        billing=state.billing,
+        sandbox=state.sandbox,
+        notification_configs=state.notification_configs,
+        billing_entity=state.billing_entity,
+    )
+
+
+def _apply_to_existing_account(
+    entry: SyncEntry, existing: DBAccount, repo: AccountRepository, operator: str
+) -> SyncResponseAccount:
+    """Apply a provisioning entry to the account that already holds its natural key.
+
+    Shared by the two ways an entry can turn out to be an update rather than a
+    create: the lookup found the account, or the create LOST the unique-index race
+    to a concurrent writer (#1721). Both must produce the same result — the race
+    outcome is only "what this entry would have returned had it arrived a
+    microsecond later" — so they cannot be allowed to drift apart.
+    """
+    changes = _account_fields_changed(existing, entry)
+    if changes:
+        # ``update_fields`` setattrs the identity-mapped instance and flushes, so
+        # ``existing`` is the POST-write row from here on — which is what
+        # _build_update_result requires.
+        repo.update_fields(existing.account_id, **changes)
+
+    return _build_update_result(entry=entry, operator=operator, state=existing, changes=changes)
+
+
+def _lookup_existing_for_entry(entry: SyncEntry, repo: AccountRepository) -> DBAccount | None:
     """Resolve the persisted account an entry targets, in either entry mode."""
     ref = getattr(entry, "account", None)
     if ref is not None:
         inner = ref.root
         if isinstance(inner, AccountReference1):
             return repo.get_by_id(inner.account_id)
-        brand_domain = inner.brand.domain if inner.brand else None
-        brand_id = None
-        if inner.brand is not None and getattr(inner.brand, "brand_id", None) is not None:
-            brand_id = str(inner.brand.brand_id)
+        brand_domain, brand_id = brand_key_parts(inner.brand)
         return repo.get_by_natural_key(
             operator=inner.operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=inner.sandbox
         )
     brand = getattr(entry, "brand", None)
-    if brand is None:
+    operator = getattr(entry, "operator", None)
+    if brand is None or operator is None:
+        # A malformed provisioning entry (missing brand/operator) matches no
+        # existing account here; _extract_natural_key rejects it explicitly
+        # later in the main loop.
         return None
-    brand_id = str(brand.brand_id) if getattr(brand, "brand_id", None) is not None else None
+    brand_domain, brand_id = brand_key_parts(brand)
     return repo.get_by_natural_key(
-        operator=entry.operator, brand_domain=brand.domain, brand_id=brand_id, sandbox=entry.sandbox
+        operator=operator, brand_domain=brand_domain, brand_id=brand_id, sandbox=entry.sandbox
     )
 
 
@@ -1417,6 +1724,11 @@ async def _sync_accounts_impl(
     results: list[SyncResponseAccount] = []
     # Track natural keys in the payload for delete_missing
     seen_account_ids: set[str] = set()
+    #: dry_run only — natural key -> the POST-WRITE state this request has left on
+    #: that key: the row an earlier entry WOULD have created, or a never-persisted
+    #: stand-in for the row already on file. Stands in for the state the live arm
+    #: gets for free from repo.create()'s flush and repo.update_fields()' setattr.
+    previewed_by_key: dict[tuple[str | None, str | None, str, bool], DBAccount] = {}
 
     # Activation proof runs BEFORE the write transaction opens (see
     # _resolve_activation_proofs). Holding a Postgres transaction across an
@@ -1459,71 +1771,50 @@ async def _sync_accounts_impl(
                 )
 
             if entry.account is not None:
-                results.append(_process_settings_update_entry(entry, repo, proof_failures.get(index), index))
+                su_result = _process_settings_update_entry(
+                    entry,
+                    repo,
+                    proof_failures.get(index),
+                    index,
+                    dry_run=dry_run,
+                    previewed_by_key=previewed_by_key,
+                )
+                results.append(su_result)
+                # delete_missing deactivates accounts "not included in this
+                # request" (sync-accounts-request.json#/properties/delete_missing)
+                # — a settings-update target IS included, so it must be marked
+                # seen or the very request that updated it would close it. A
+                # FAILED result carries no account_id (built by
+                # _build_failed_result), so a failed entry does not shield its
+                # account — same boundary as failed provisioning entries, which
+                # never reach seen_account_ids either.
+                if su_result.account_id:
+                    seen_account_ids.add(su_result.account_id)
                 continue
 
             brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
             billing_val = _enum_to_str(entry.billing)
 
-            # Domain validation: reject reserved TLDs
-            domain_errors = _check_domain_validity(brand_domain)
-            if domain_errors is not None:
-                results.append(
-                    _build_failed_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=domain_errors,
-                    )
+            gate_errors = _first_gate_failure(
+                _provisioning_gates(
+                    brand_domain=brand_domain,
+                    billing_val=billing_val,
+                    identity=identity,
+                    sandbox=sandbox,
+                    tenant=tenant,
+                    index=index,
+                    entry=entry,
+                    proof_failures=proof_failures,
                 )
-                continue
-
-            # BR-RULE-059: check billing policy before processing
-            billing_errors = _check_billing_policy(billing_val, identity)
-            if billing_errors is not None:
+            )
+            if gate_errors is not None:
                 results.append(
                     _build_failed_result(
                         brand=entry.brand,
                         operator=operator,
                         billing=billing_val,
                         sandbox=sandbox,
-                        errors=billing_errors,
-                    )
-                )
-                continue
-
-            # BR-RULE-209 INV-6: sandbox provisioning requires a declared capability
-            sandbox_errors = _check_sandbox_capability(sandbox, tenant, index)
-            if sandbox_errors is not None:
-                results.append(
-                    _build_failed_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=sandbox_errors,
-                    )
-                )
-                continue
-
-            # notification_configs validation runs BEFORE any write, so a rejected
-            # entry leaves the account's prior array byte-identical. Same shared
-            # validator as the settings-update arm.
-            notif_errors = _validate_notification_configs(getattr(entry, "notification_configs", None))
-            if notif_errors is None:
-                # Proof verdicts were computed before this transaction opened; a
-                # failure here means NOTHING is written for the entry, so the
-                # account's prior array stays byte-identical.
-                notif_errors = proof_failures.get(index)
-            if notif_errors is not None:
-                results.append(
-                    _build_failed_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=notif_errors,
+                        errors=gate_errors,
                     )
                 )
                 continue
@@ -1536,57 +1827,51 @@ async def _sync_accounts_impl(
                 sandbox=sandbox,
             )
 
+            # The FULL key the unique index and every resolver use — a partial key
+            # would collapse accounts that differ only by brand_id or sandbox, which
+            # are legitimately distinct.
+            natural_key = (brand_domain, brand_id, operator, bool(sandbox))
+            if dry_run:
+                # The state this request has already left on the key — seeded from
+                # the persisted row on first touch, so a key that ALSO has a row
+                # gains the same in-request memory a previewed CREATE has. Without
+                # the seed every entry on that key is graded against the same
+                # unmutated row, and the result echoes the value the buyer is
+                # REPLACING rather than the one they would get (#1721).
+                state = previewed_by_key.get(natural_key)
+                if state is None and existing is not None:
+                    state = _preview_state_from(
+                        existing,
+                        mode="provisioning",
+                        brand_domain=brand_domain,
+                        brand_id=brand_id,
+                        operator=operator,
+                    )
+                    previewed_by_key[natural_key] = state
+                if state is not None:
+                    # Everything downstream — the create/update decision, the
+                    # comparison, and every reported field — reads the state, never
+                    # the loaded row.
+                    existing = state
+
             if existing is not None:
                 seen_account_ids.add(existing.account_id)
 
                 if dry_run:
-                    # Check if fields would change
                     changes = _account_fields_changed(existing, entry)
-                    action = "updated" if changes else "unchanged"
+                    # The write the live arm performs, in memory only: `existing` is
+                    # the request-local state seeded above, never a persisted row,
+                    # so this can reach no session. Applied UNFILTERED, exactly as
+                    # the live arm hands `changes` to repo.update_fields — filtering
+                    # here would let the preview report a change no real run makes.
+                    for field, value in changes.items():
+                        setattr(existing, field, value)
                     results.append(
-                        _build_sync_result(
-                            brand=entry.brand,
-                            operator=operator,
-                            action=action,
-                            status=existing.status,
-                            account_id=existing.account_id,
-                            name=existing.name,
-                            billing=existing.billing,
-                            sandbox=existing.sandbox,
-                            # Preview the array the write WOULD apply, not the
-                            # persisted one -- a dry_run that echoed the old set
-                            # would misreport what the buyer is about to change.
-                            notification_configs=changes.get("notification_configs", existing.notification_configs),
-                            billing_entity=changes.get("billing_entity", existing.billing_entity),
-                        )
+                        _build_update_result(entry=entry, operator=operator, state=existing, changes=changes)
                     )
                     continue
 
-                # Check for field changes and update if needed
-                changes = _account_fields_changed(existing, entry)
-                if changes:
-                    repo.update_fields(existing.account_id, **changes)
-                    action = "updated"
-                else:
-                    action = "unchanged"
-
-                results.append(
-                    _build_sync_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        action=action,
-                        status=existing.status,
-                        account_id=existing.account_id,
-                        name=existing.name,
-                        billing=existing.billing,
-                        sandbox=existing.sandbox,
-                        # Post-write state: the applied array, which is the
-                        # changed value when this sync touched it and the
-                        # persisted one when it did not (omission preserves).
-                        notification_configs=changes.get("notification_configs", existing.notification_configs),
-                        billing_entity=changes.get("billing_entity", existing.billing_entity),
-                    )
-                )
+                results.append(_apply_to_existing_account(entry, existing, repo, operator))
             else:
                 # Create new account. A create IS "resolve against nothing": the
                 # SAME table walk both update sites run, with existing=None, so a
@@ -1594,9 +1879,15 @@ async def _sync_accounts_impl(
                 # aperture bug that hid billing_entity). An omitted field simply
                 # produces no kwarg and the column keeps its default.
                 created_fields = _resolve_entry_changes(entry, None, mode="provisioning")
-                billing_val = created_fields.get("billing")
-                notification_configs_val = created_fields.get("notification_configs")
-                billing_entity_val = created_fields.get("billing_entity")
+                # created_fields is dict[str, object] (a generic field-application
+                # bag shared by all three _FIELD_POLICY call sites) -- cast() back
+                # to each field's own resolver-return type (_resolve_scalar /
+                # _resolve_notification_configs / _resolve_billing_entity), never Any.
+                billing_val = cast("str | None", created_fields.get("billing"))
+                notification_configs_val = cast(
+                    "list[dict[str, object]] | None", created_fields.get("notification_configs")
+                )
+                billing_entity_val = cast("dict[str, object] | None", created_fields.get("billing_entity"))
 
                 # The id minted before the proof pass, so a challenge that already went out
                 # named THIS account (#1291 C2) rather than one generated after the fact.
@@ -1613,6 +1904,25 @@ async def _sync_accounts_impl(
                 initial_status = "pending_approval" if setup else "active"
 
                 if dry_run:
+                    # Remember what this entry WOULD create, so a later entry on the
+                    # same natural key resolves against it. The live arm gets that
+                    # memory for free — repo.create() flushes, so the next lookup
+                    # finds the row — and without an equivalent here a payload
+                    # carrying one key twice previewed "created" twice, under two
+                    # account_ids, an outcome no real run can produce (BR-RULE-062).
+                    # The row is built by the SAME helper the live arm uses and is
+                    # deliberately never added to the session.
+                    previewed_by_key[natural_key] = AccountRepository.build_row(
+                        tenant_id=tenant_id,
+                        account_id=account_id,
+                        name=account_name,
+                        status=initial_status,
+                        brand_domain=brand_domain,
+                        brand_id=brand_id,
+                        operator=operator,
+                        principal_id=principal_id,
+                        created_fields=created_fields,
+                    )
                     # account_id was generated above (BR-RULE-062 — preview reflects
                     # what a real create would return). It is a preview value, not a
                     # commitment to that specific id.
@@ -1633,20 +1943,37 @@ async def _sync_accounts_impl(
                     )
                     continue
 
-                new_account = DBAccount(
+                new_account = AccountRepository.build_row(
                     tenant_id=tenant_id,
                     account_id=account_id,
                     name=account_name,
                     status=initial_status,
-                    brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+                    brand_domain=brand_domain,
+                    brand_id=brand_id,
                     operator=operator,
                     principal_id=principal_id,
-                    # Every settable field comes from the one walk above -- naming
-                    # them here is what let a field be added to the re-sync arm and
-                    # forgotten at create.
-                    **created_fields,
+                    created_fields=created_fields,
                 )
-                repo.create(new_account)
+                try:
+                    repo.create(new_account)
+                except NaturalKeyConflict as exc:
+                    # Lost the unique-index race: a concurrent writer committed this
+                    # natural key between our lookup above and our insert. The buyer's
+                    # semantic here is upsert-by-natural-key, so resolve to the winner
+                    # rather than failing the entry — the only difference between this
+                    # entry and one that arrived a microsecond later is timing, and
+                    # timing must not change the answer. repo.create rolled its insert
+                    # back through a SAVEPOINT, so this transaction is healthy and the
+                    # rest of the batch still runs.
+                    winner = repo.get_by_id(exc.existing_account_id) if exc.existing_account_id else None
+                    if winner is None:
+                        # The conflict named a row; if it is gone the key is free again
+                        # and we cannot explain the failure. Do not invent a cause.
+                        raise
+                    seen_account_ids.add(winner.account_id)
+                    results.append(_apply_to_existing_account(entry, winner, repo, operator))
+                    continue
+
                 seen_account_ids.add(account_id)
 
                 # Grant agent access to the new account
@@ -1668,12 +1995,20 @@ async def _sync_accounts_impl(
                     )
                 )
 
-        # BR-RULE-061: delete_missing — close accounts not in payload
-        if delete_missing and not dry_run:
+        # BR-RULE-061: delete_missing — close accounts not in payload.
+        # The block runs under dry_run too, and ONLY the mutation is skipped:
+        # deactivation is the sole effect delete_missing has, and dry_run "returns
+        # what would be created/updated/deactivated" (v3.1.1
+        # sync-accounts-request.json#/properties/dry_run), so a preview that walks
+        # nothing tells the buyer none of their accounts would close. Building the
+        # result outside the guard is what makes the two arms byte-identical here.
+        if delete_missing:
             agent_accounts = repo.list_by_principal(principal_id)
             for db_acct in agent_accounts:
                 if db_acct.account_id not in seen_account_ids:
-                    repo.update_status(db_acct.account_id, "closed")
+                    if not dry_run:
+                        repo.update_status(db_acct.account_id, "closed")
+                    assert db_acct.brand is not None, "persisted account has no brand -- should be unreachable"
                     results.append(
                         _build_sync_result(
                             brand=db_acct.brand,
@@ -1715,7 +2050,7 @@ async def sync_accounts(
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-) -> Any:
+) -> ToolResult:
     """Sync accounts by natural key (MCP tool).
 
     MCP wrapper that accepts individual parameters per AdCP spec and
@@ -1731,13 +2066,14 @@ async def sync_accounts(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    req = SyncAccountsRequest(
-        accounts=accounts or [],
-        delete_missing=delete_missing,
-        dry_run=dry_run,
-        context=context,
-        idempotency_key=str(uuid.uuid4()),
-    )
+    with adcp_validation_boundary(context="sync_accounts request"):
+        req = SyncAccountsRequest(
+            accounts=accounts or [],
+            delete_missing=delete_missing,
+            dry_run=dry_run,
+            context=context,
+            idempotency_key=str(uuid.uuid4()),
+        )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)
 

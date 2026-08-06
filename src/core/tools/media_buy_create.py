@@ -38,8 +38,8 @@ from fastmcp.server.context import Context
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CreativeRepository
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -58,6 +58,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 
 
 class PackageAssignmentDict(TypedDict):
@@ -116,7 +117,6 @@ from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
-from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
@@ -160,6 +160,7 @@ from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, reso
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
+from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -1929,7 +1930,9 @@ def _cache_and_return(
                 protocol_status=result.status,
                 payload_hash=request_hash,
             )
-    except IntegrityError:
+    except (
+        IntegrityError
+    ):  # structural-guard: integrity-narrowing - best-effort cache write; logs and continues, claims no cause
         logger.info(
             "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",
             req.idempotency_key,
@@ -1994,17 +1997,14 @@ _IDEMPOTENCY_BACKSTOP_INDEX = "idx_media_buys_idempotency_key"
 def _is_idempotency_backstop_violation(exc: IntegrityError) -> bool:
     """True iff ``exc`` is the media_buys idempotency-key unique-index collision.
 
-    The single home for the "is this the idempotency race?" decision. Prefers the
-    driver's structured constraint name (``exc.orig.diag.constraint_name``), matched
-    by PREFIX against the backstop index — so a build-time rename suffix (the
-    CONCURRENTLY swap variants ``…_acct`` / ``…_noacct``) still matches, while an
-    unrelated constraint that merely contains the column token does not. Falls back
-    to a message substring scan only when the structured diagnostic is unavailable.
+    The single home for the "is this the idempotency race?" decision. The
+    prefix-match-then-message-fallback mechanism is shared with every other
+    constraint-narrowed recovery (``is_constraint_violation``); only the index and
+    the fallback token are specific to this one. The token stays the bare column
+    name rather than the index name so the fallback keeps matching drivers whose
+    message names the column.
     """
-    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-    if constraint:
-        return constraint.startswith(_IDEMPOTENCY_BACKSTOP_INDEX)
-    return "idempotency_key" in str(getattr(exc, "orig", exc))
+    return is_constraint_violation(exc, _IDEMPOTENCY_BACKSTOP_INDEX, message_token="idempotency_key")
 
 
 def _resolve_idempotency_race_or_raise(
@@ -2091,6 +2091,24 @@ async def _create_media_buy_impl(
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
 
+    # SSRF gate at registration — after auth so unauthenticated callers get AUTH
+    # first. Must run before workflow metadata / DB writes.
+    # Use str(url): library ReportingWebhook.url is pydantic AnyUrl, not str.
+    if req.reporting_webhook:
+        rw_url = getattr(req.reporting_webhook, "url", None)
+        reject_unsafe_webhook_registration_url(
+            str(rw_url) if rw_url is not None else None,
+            field="reporting_webhook.url",
+            context=req.context,
+        )
+    if push_notification_config:
+        pnc_url = push_notification_config.get("url")
+        reject_unsafe_webhook_registration_url(
+            str(pnc_url) if pnc_url is not None else None,
+            field="push_notification_config.url",
+            context=req.context,
+        )
+
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:
         try:
@@ -2170,60 +2188,45 @@ async def _create_media_buy_impl(
         )
 
         # Register push notification config if provided (MCP/A2A protocol support)
-        # Skip for dry_run mode (no database writes)
+        # Skip for dry_run mode (no database writes). URL was SSRF-checked above;
+        # persist via repository upsert (registration gate + defense in depth).
         if push_notification_config:
-            # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
-            from src.core.database.repositories import MediaBuyUoW
+            # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
+            from src.core.database.repositories import PushNotificationConfigUoW
 
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
-
-            # Extract config details
             url = push_notification_config.get("url")
             authentication = push_notification_config.get("authentication", {})
 
-            if url:
-                # Extract authentication details (A2A format: schemes + credentials)
+            # Match the pre-gate: whitespace-only URL must not reach upsert.
+            # Log only inside the guard so blank URLs stay silent (same as sync).
+            if url is not None and str(url).strip():
+                # Log scheme+host+path only — never credentials / full auth blob.
+                logger.info(
+                    "[MCP/A2A] Registering push notification config id=%s url=%s",
+                    push_notification_config.get("id"),
+                    webhook_url_for_log(str(url)),
+                )
                 schemes = authentication.get("schemes", []) if authentication else []
                 auth_type = schemes[0] if schemes else None
                 credentials = authentication.get("credentials") if authentication else None
-
-                # Generate config ID
                 config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
 
-                # Save to database
-                with MediaBuyUoW(tenant["tenant_id"]) as pnc_uow:
-                    # FIXME(salesagent-9f2): push notification config should use a repository
-                    assert pnc_uow.session is not None
-                    db = pnc_uow.session
-                    # Check if config already exists
-                    stmt = select(DBPushNotificationConfig).filter_by(
-                        id=config_id, tenant_id=tenant["tenant_id"], principal_id=principal_id
+                # Save to database. validation_token/session_id are omitted on
+                # purpose: upsert preserves them on an existing row (a token set
+                # via A2A set_push_notification_config must survive this path).
+                with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
+                    assert pnc_uow.push_notification_configs is not None
+                    _config, created = pnc_uow.push_notification_configs.upsert(
+                        config_id=config_id,
+                        principal_id=principal_id,
+                        url=str(url),
+                        authentication_type=auth_type,
+                        authentication_token=credentials,
                     )
-                    existing_config = db.scalars(stmt).first()
-
-                    if existing_config:
-                        # Update existing
-                        existing_config.url = url
-                        existing_config.authentication_type = auth_type
-                        existing_config.authentication_token = credentials
-                        # updated_at automatically updated via onupdate=func.now()
-                        existing_config.is_active = True
-                    else:
-                        # Create new
-                        new_config = DBPushNotificationConfig(
-                            id=config_id,
-                            tenant_id=tenant["tenant_id"],
-                            principal_id=principal_id,
-                            url=url,
-                            authentication_type=auth_type,
-                            authentication_token=credentials,
-                            is_active=True,
-                        )
-                        db.add(new_config)
-
-                    # UoW auto-commits on clean exit
                     logger.info(
-                        f"[MCP/A2A] Push notification config {'updated' if existing_config else 'created'}: {config_id}"
+                        "[MCP/A2A] Push notification config %s: %s",
+                        "created" if created else "updated",
+                        config_id,
                     )
 
     try:
@@ -2269,7 +2272,9 @@ async def _create_media_buy_impl(
                 computed_start_time = computed_start_time.replace(tzinfo=UTC)
 
             if computed_start_time < now:
-                error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
+                # req.start_time is a StartTiming RootModel — interpolating it renders
+                # the repr (root=...); the buyer must see the value.
+                error_msg = f"Invalid start time: {computed_start_time}. Start time cannot be in the past."
                 raise AdCPInvalidRequestError(
                     error_msg,
                     suggestion="Use a future datetime or 'asap' for immediate start.",
@@ -2287,7 +2292,11 @@ async def _create_media_buy_impl(
             computed_end_time = computed_end_time.replace(tzinfo=UTC)
 
         if computed_end_time <= computed_start_time:
-            error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
+            # computed_* are the unwrapped, tz-normalized values; req.start_time is a
+            # StartTiming RootModel whose interpolation would render root=... instead.
+            error_msg = (
+                f"Invalid time range: end time ({computed_end_time}) must be after start time ({computed_start_time})."
+            )
             raise AdCPInvalidRequestError(
                 error_msg,
                 suggestion="Set end_time to a datetime after start_time.",
@@ -2919,7 +2928,7 @@ async def _create_media_buy_impl(
                         payload_hash=request_hash,
                     )
                     logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
-            except IntegrityError as exc:
+            except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
                 return _resolve_idempotency_race_or_raise(
                     exc,
                     tenant["tenant_id"],
@@ -3697,7 +3706,7 @@ async def _create_media_buy_impl(
                     payload_hash=request_hash,
                 )
                 # UoW auto-commits on clean exit
-        except IntegrityError as exc:
+        except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
             return _resolve_idempotency_race_or_raise(
                 exc,
                 tenant["tenant_id"],

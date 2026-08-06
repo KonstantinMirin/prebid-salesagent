@@ -20,7 +20,11 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
-from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
+from tests.bdd.steps.generic._account_resolution import (
+    ensure_tenant_principal,
+    seed_account_with_access,
+    seed_natural_key_matches,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.creative_asset import (
     assert_assets,
@@ -92,6 +96,14 @@ def _e2e_unique_id(prefix: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
 # ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('the request includes a push_notification_config with url "{url}"'))
+def given_push_notification_config_url(ctx: dict, url: str) -> None:
+    """Attach push_notification_config to the upcoming sync_creatives dispatch."""
+    push_config = {"url": url}
+    ctx["push_notification_config"] = push_config
+    ctx["push_notification_url"] = url
 
 
 @given("a creative with a known format_id")
@@ -206,18 +218,17 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     access_denied_domains = {"other-agent.com"}
 
     if brand_domain == "multi.com":
-        # Ambiguous: create 3 accounts with same natural key, all accessible to the
-        # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
-        # resolution is access-scoped (#1417).
-        for i in range(3):
-            seed_account_with_access(
-                tenant,
-                principal,
-                account_id=f"acc-multi-{i}",
-                status="active",
-                brand_domain=brand_domain,
-                operator=operator,
-            )
+        # Ambiguous: 3 accounts one brand+operator reference all resolve to, each
+        # accessible to the requesting agent so the ambiguity is genuine FOR THIS
+        # AGENT — natural-key resolution is access-scoped (#1417).
+        seed_natural_key_matches(
+            tenant,
+            count=3,
+            brand_domain=brand_domain,
+            operator=operator,
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-multi",
+        )
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
@@ -277,6 +288,8 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["validation_mode"] = ctx["validation_mode"]
     if "idempotency_key" in ctx:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
+    if "push_notification_config" in ctx:
+        kwargs["push_notification_config"] = ctx["push_notification_config"]
     if ctx.get("has_auth") is False:
         dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
     else:
@@ -2419,8 +2432,12 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     The scenario sets up a non-existent package assignment under strict
     validation_mode. Production must raise AdCPNotFoundError whose message
     references the missing package — not just any AdCPError subclass.
+
+    Error code is wire-first (real wire envelope preferred over the lossy
+    reconstructed exception), same strategy as then_error_code.
     """
     from src.core.exceptions import AdCPError, AdCPNotFoundError
+    from tests.bdd.steps.generic.then_error import _wire_code
 
     error = ctx.get("error")
     assert error is not None, (
@@ -2430,12 +2447,11 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError for strict mode abort, got {type(error).__name__}: {error}"
     )
+    error_code = _wire_code(ctx) or getattr(error, "error_code", "") or ""
     # Verify the error is specifically a not-found error, not an incidental failure
     assert (
-        isinstance(error, AdCPNotFoundError)
-        or "not_found" in getattr(error, "error_code", "").lower()
-        or "not found" in str(error).lower()
-    ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
+        isinstance(error, AdCPNotFoundError) or "not_found" in error_code.lower() or "not found" in str(error).lower()
+    ), f"Expected not-found error for missing package, got error_code={error_code!r}: {error}"
     # Verify the error references the bad package from the Given step
     bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
     if bad_package:

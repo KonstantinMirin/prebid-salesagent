@@ -418,12 +418,19 @@ class TestCreativeUploadFailure:
             env.setup_product_chain(tenant)
             # Creative exists, no platform_creative_id, with extractable url/dimensions
             # so _build_adapter_asset_from_creative succeeds and the upload runs.
+            # status is load-bearing: media_buy_create.py holds pending_review creatives
+            # back from the adapter upload (#1038), so the upload this test exercises only
+            # runs for a creative that is NOT pending_review. It used to run by accident —
+            # CreativeFactory defaulted to the non-spec "pending", which fell through to
+            # the upload branch. Now that the factory writes a real AdCP status, the state
+            # this test needs has to be stated (salesagent-zm5l).
             CreativeFactory(
                 tenant=tenant,
                 principal=principal,
                 creative_id="creative_no_platform",
                 format="display_300x250",
                 agent_url="https://creative.adcontextprotocol.org",
+                status="approved",
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 

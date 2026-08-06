@@ -27,20 +27,21 @@ class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
         model = Account
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
+        #: ``tenant`` exists only to derive ``tenant_id``; it must never reach
+        #: ``Account(...)``. ``Account.tenant`` is a real relationship, so passing
+        #: the SubFactory's throwaway Tenant makes SQLAlchemy re-sync ``tenant_id``
+        #: FROM it at flush time — silently relocating the row to that tenant and
+        #: leaving an explicit ``tenant_id=`` argument with no effect. Declared on
+        #: Meta (as AgentAccountAccessFactory already does) so it holds for BOTH
+        #: the create and build strategies; a ``_create``-only override left
+        #: ``.build()`` carrying the trap.
+        exclude = ["tenant"]
 
     tenant = SubFactory(TenantFactory)
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     account_id = Sequence(lambda n: f"acc_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Account {o.account_id}")
     status = "active"
-
-    class Params:
-        """Exclude tenant from model construction (it's only for deriving tenant_id)."""
-
-    @classmethod
-    def _create(cls, model_class, *args, **kwargs):
-        kwargs.pop("tenant", None)
-        return super()._create(model_class, *args, **kwargs)
 
 
 class AgentAccountAccessFactory(factory.alchemy.SQLAlchemyModelFactory):
