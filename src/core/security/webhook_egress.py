@@ -43,7 +43,11 @@ def _canonical_body(payload: dict[str, Any]) -> bytes:
 
 
 def prepare_signed_request(
-    payload: dict[str, Any], secret: str | None, headers: dict[str, str]
+    payload: dict[str, Any],
+    secret: str | None,
+    headers: dict[str, str],
+    *,
+    timestamp: str | int | None = None,
 ) -> tuple[dict[str, str], bytes]:
     """Serialize once; sign those exact bytes when a secret is given.
 
@@ -61,15 +65,17 @@ def prepare_signed_request(
     back — call this directly and pass the result to :func:`send`/:func:`asend`
     themselves, rather than through :func:`deliver_signed_webhook`. Call this
     at most ONCE per delivery: ``sign_legacy_webhook`` stamps the current time
-    when no explicit timestamp is given, so calling it twice for the "same"
+    when no explicit ``timestamp`` is given, so calling it twice for the "same"
     delivery signs two different timestamps and only one bytes value may
-    reach the wire.
+    reach the wire. ``timestamp`` exists to make callers (notably conformance
+    tests grading against fixed vectors) deterministic — real delivery callers
+    leave it ``None``.
     """
     merged_headers = dict(headers)
     merged_headers.setdefault("Content-Type", "application/json")
 
     if secret:
-        signed_headers, body_bytes = sign_legacy_webhook(secret, payload, headers=merged_headers)
+        signed_headers, body_bytes = sign_legacy_webhook(secret, payload, timestamp=timestamp, headers=merged_headers)
         return signed_headers, body_bytes
 
     return merged_headers, _canonical_body(payload)
