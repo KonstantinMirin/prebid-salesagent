@@ -2,15 +2,17 @@
 
 This test suite validates that:
 1. A2A handlers return AdCP spec-compliant responses (no extra fields like 'success', 'message')
-2. Human-readable messages are provided via Artifact.description (not in response data)
-3. Response data is identical between MCP and A2A protocols
+2. Response data is identical between MCP and A2A protocols
+
+The human-readable text a buyer sees is pinned where it is produced -- on the
+real ``on_message_send`` pipeline output, in
+``tests/integration/test_a2a_skill_invocation.py`` -- not here.
 
 Replaces: test_a2a_response_message_fields.py (which tested the old incorrect behavior)
 """
 
 import pytest
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.schemas import (
     CreateMediaBuySuccess,
     GetMediaBuyDeliveryResponse,
@@ -238,79 +240,6 @@ class TestA2ASpecCompliance:
         # No extra fields
         assert "success" not in response_dict
         assert "message" not in response_dict
-
-
-@pytest.mark.integration
-class TestA2AArtifactDescriptions:
-    """Test that A2A artifacts include human-readable descriptions from __str__()."""
-
-    def test_artifact_reconstruction_helper(self):
-        """Test _reconstruct_response_object helper."""
-        handler = AdCPRequestHandler()
-
-        # Test successful reconstruction
-        data = {
-            "publisher_domains": ["example.com", "test.com"],
-            "primary_channels": None,
-            "primary_countries": None,
-            "portfolio_description": None,
-            "advertising_policies": None,
-            "last_updated": None,
-            "errors": None,
-        }
-
-        response = handler._reconstruct_response_object("list_authorized_properties", data)
-
-        assert response is not None
-        assert isinstance(response, ListAuthorizedPropertiesResponse)
-        # Local schema's __str__() message format
-        assert str(response) == "Found 2 authorized publisher domains."
-
-    def test_artifact_reconstruction_all_skills(self):
-        """Test reconstruction works for all supported skills."""
-        handler = AdCPRequestHandler()
-
-        test_cases = [
-            (
-                "list_authorized_properties",
-                {"publisher_domains": ["test.com"], "errors": None},
-                ListAuthorizedPropertiesResponse,
-            ),
-            (
-                "get_products",
-                {"products": [], "errors": None},
-                GetProductsResponse,
-            ),
-            (
-                "list_creative_formats",
-                {"formats": [], "creative_agents": None, "errors": None},
-                ListCreativeFormatsResponse,
-            ),
-        ]
-
-        for skill_name, data, expected_class in test_cases:
-            response = handler._reconstruct_response_object(skill_name, data)
-            assert response is not None, f"Failed to reconstruct {skill_name}"
-            assert isinstance(response, expected_class)
-            assert hasattr(response, "__str__")
-            assert len(str(response)) > 0, f"{skill_name} __str__() returned empty string"
-
-    def test_artifact_reconstruction_invalid_data(self):
-        """Test reconstruction gracefully handles invalid data."""
-        handler = AdCPRequestHandler()
-
-        # Invalid data should return None, not raise
-        response = handler._reconstruct_response_object("list_authorized_properties", {"invalid": "data"})
-
-        assert response is None, "Should return None for invalid data"
-
-    def test_artifact_reconstruction_unknown_skill(self):
-        """Test reconstruction gracefully handles unknown skills."""
-        handler = AdCPRequestHandler()
-
-        response = handler._reconstruct_response_object("unknown_skill", {"data": "value"})
-
-        assert response is None, "Should return None for unknown skill"
 
 
 @pytest.mark.integration

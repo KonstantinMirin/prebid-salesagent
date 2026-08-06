@@ -561,6 +561,49 @@ class TestA2ASkillInvocation:
                         break
                 assert data_part_found, "Expected DataPart in artifact.parts"
 
+    @pytest.mark.asyncio
+    async def test_artifact_text_part_is_the_data_part_message(
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity
+    ):
+        """The artifact's TextPart carries exactly the DataPart's ``message``, verbatim.
+
+        The human-readable text is READ from the payload, not re-derived from
+        it: ``_stamp_a2a_protocol_fields`` stamps ``str(response)`` onto
+        ``message`` at serialization time, and ``on_message_send`` copies that
+        string into the TextPart. Equality is the whole contract — a future
+        change that rebuilds a response model from the outbound dict to call
+        ``__str__()`` again would hand pydantic before-validators a reference
+        to the dict about to go on the wire (the mechanism behind the
+        list_creatives format_id bare-string defect), and any drift between
+        the two parts would show up here first.
+        """
+        from tests.utils.a2a_helpers import extract_data_from_artifact
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            from tests.a2a_helpers import make_a2a_context
+
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
+            message = create_a2a_message_with_skill(
+                "get_products", {"brief": "video ads", "brand": {"domain": "testbrand.com"}}
+            )
+            result = await handler.on_message_send(SendMessageRequest(message=message), context=ctx)
+
+        assert isinstance(result, Task)
+        assert len(result.artifacts) == 1, "get_products produces exactly one artifact"
+        artifact = result.artifacts[0]
+
+        text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+        assert len(text_parts) == 1, f"expected exactly one TextPart, got {len(text_parts)}"
+
+        data = extract_data_from_artifact(artifact)
+        assert data["message"], "the DataPart must carry a non-empty stamped message"
+        assert text_parts[0] == data["message"], (
+            "the TextPart must be the stamped message verbatim, not a value re-derived "
+            f"from the payload — TextPart={text_parts[0]!r} DataPart.message={data['message']!r}"
+        )
+
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
     # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 

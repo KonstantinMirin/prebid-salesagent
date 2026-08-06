@@ -5,31 +5,35 @@ format_id serializes as bare string instead of {agent_url, id} object"): the pin
 spec (3.1, core/format-id.json) types every ``format_id`` as a structured object
 (``{agent_url, id}``, the v3.1 format-id federation contract) -- never a bare string.
 
-Root cause (traced via ``_reconstruct_response_object`` in
-``src/a2a_server/adcp_a2a_server.py``): the A2A explicit-skill success path calls
+Root cause (since removed): the A2A explicit-skill success path called
 ``self._serialize_for_a2a(result)`` first, producing a correctly-nested
-``artifact_data`` dict (``creatives[i].format_id`` is a plain ``{agent_url, id}``
-dict at this point). It then calls
-``self._reconstruct_response_object(skill_name, artifact_data)`` -- passing the SAME
-dict by reference -- purely to generate a human-readable ``__str__()`` text part.
-``_reconstruct_response_object`` does ``ListCreativesResponse(**artifact_data)``:
-pydantic-core validates the ``creatives: list[Creative]`` field by handing each list
-item's dict to ``Creative``'s ``@model_validator(mode="before")``
-(``validate_format_id``) WITHOUT a defensive copy -- and that validator does
-``values["format_id"] = upgrade_legacy_format_id(format_val)``, MUTATING the shared
-dict in place: ``artifact_data["creatives"][i]["format_id"]`` becomes a live
-``FormatId`` Python object.
+``artifact_data`` dict (``creatives[i].format_id`` a plain ``{agent_url, id}`` dict at
+that point) -- and then fed the SAME dict, by reference, back through a
+``ListCreativesResponse(**artifact_data)`` round trip purely to regenerate a
+human-readable ``__str__()`` text part. pydantic-core validates the
+``creatives: list[Creative]`` field by handing each list item's dict to ``Creative``'s
+``@model_validator(mode="before")`` (``validate_format_id``) WITHOUT a defensive copy,
+and that validator did ``values["format_id"] = upgrade_legacy_format_id(format_val)``,
+MUTATING the shared dict in place: ``artifact_data["creatives"][i]["format_id"]``
+became a live ``FormatId`` Python object.
 
 The task/artifact construction that follows (``Part(data=_dict_to_value(artifact_data))``)
-now hands ``_dict_to_value`` a dict containing a live, non-JSON-native object.
-``_dict_to_value``'s ``json.dumps(d, default=str)`` fallback silently stringifies it:
+then handed ``_dict_to_value`` a dict containing a live, non-JSON-native object.
+``_dict_to_value``'s ``json.dumps(d, default=str)`` fallback silently stringified it:
 ``FormatId.__str__`` returns ``self.id`` -- exactly the observed bare-string symptom.
+
+Both halves are now closed: the validators copy before mutating
+(``copy_before_mutating``, guarded by
+tests/unit/test_guards_before_validator_no_mutation.py), and the outbound round trip
+is gone -- the TextPart is read straight from the payload's stamped ``message``
+(pinned by
+tests/integration/test_a2a_skill_invocation.py::test_artifact_text_part_is_the_data_part_message).
 
 This reproduces deterministically with a single creative (not scale-dependent at the
 mechanism level) via the real in-process A2A pipeline
 (``AdCPRequestHandler.on_message_send`` -> explicit skill dispatch ->
-``_serialize_for_a2a`` -> ``_reconstruct_response_object`` -> ``_dict_to_value``),
-exercised end-to-end by the harness's ``_run_a2a_handler``.
+``_serialize_for_a2a`` -> ``_dict_to_value``), exercised end-to-end by the harness's
+``_run_a2a_handler``.
 """
 
 from __future__ import annotations

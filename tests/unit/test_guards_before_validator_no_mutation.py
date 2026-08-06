@@ -10,12 +10,15 @@ validator that mutates that dict in place (``values["x"] = y``, ``values.pop(...
 ``values.update(...)``) therefore corrupts whatever dict the CALLER still holds a
 reference to.
 
-Concretely: ``src/a2a_server/adcp_a2a_server.py``'s ``_reconstruct_response_object``
-reconstructs a typed response FROM the same dict about to be sent on the A2A wire
-(purely to build a human-readable text part). ``Creative.validate_format_id``
-mutated its input dict, silently replacing a spec-compliant ``{agent_url, id}``
-nested dict with a live ``FormatId`` Python object in the CALLER's dict -- which the
-wire serializer's ``json.dumps(default=str)`` fallback then silently stringified.
+Concretely: the A2A server used to reconstruct a typed response FROM the same dict
+about to be sent on the wire (purely to build a human-readable text part).
+``Creative.validate_format_id`` mutated its input dict, silently replacing a
+spec-compliant ``{agent_url, id}`` nested dict with a live ``FormatId`` Python
+object in the CALLER's dict -- which the wire serializer's
+``json.dumps(default=str)`` fallback then silently stringified. That outbound round
+trip is gone, but the hazard is live on the INBOUND path:
+``_handle_create_media_buy_skill`` validates the request params and then forwards
+the same raw dicts (``packages=params["packages"]``) into the core tool.
 
 Rule: every ``@model_validator(mode="before")`` method that mutates its input
 parameter (subscript assignment, ``.pop()``, ``.update()``, ``.setdefault()``,
@@ -137,7 +140,9 @@ def test_no_unsafe_before_validator_mutation():
         "defensive copy first -- pydantic-core hands list-item dicts to "
         "before-validators BY REFERENCE, so this can corrupt a dict the caller "
         "still holds (traced production bug: A2A list_creatives format_id). Add "
-        "`values = values.copy()` before any mutation. Violations:\n  " + "\n  ".join(violations)
+        "`values = copy_before_mutating(values)` before any mutation -- the shared "
+        "helper, not a raw `.copy()`, so the rationale lives in one place. "
+        "Violations:\n  " + "\n  ".join(violations)
     )
 
 

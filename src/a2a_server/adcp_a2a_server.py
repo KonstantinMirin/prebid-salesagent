@@ -488,84 +488,6 @@ class AdCPRequestHandler(RequestHandler):
             # Don't fail the task if webhook fails
             logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
 
-    def _reconstruct_response_object(self, skill_name: str, data: dict) -> Any:
-        """Reconstruct a response object from skill result data to call __str__().
-
-        Args:
-            skill_name: Name of the skill that produced the result
-            data: Dictionary containing the response data
-
-        Returns:
-            Reconstructed response object, or None if reconstruction fails
-        """
-        try:
-            # Import response classes - for union types, import the concrete variants
-            from src.core.schemas import (
-                CreateMediaBuyError,
-                CreateMediaBuySuccess,
-                GetMediaBuyDeliveryResponse,
-                GetMediaBuysResponse,
-                GetProductsResponse,
-                ListAccountsResponse,
-                ListAuthorizedPropertiesResponse,
-                ListCreativeFormatsResponse,
-                ListCreativesResponse,
-                SyncAccountsResponse,
-                SyncCreativesResponse,
-                UpdateMediaBuyError,
-                UpdateMediaBuySubmitted,
-                UpdateMediaBuySuccess,
-            )
-
-            # For union types (CreateMediaBuyResponse, UpdateMediaBuyResponse),
-            # determine which concrete class based on data content
-            if skill_name == "create_media_buy":
-                # Success responses have media_buy_id, error responses have errors.
-                # No CreateMediaBuySubmitted branch on purpose: submitted results
-                # take the status=="submitted" early-return in on_message_send
-                # (Task state=SUBMITTED, no artifacts) BEFORE artifact/text
-                # reconstruction, so a submitted body can never reach here —
-                # same control-flow fact as update_media_buy (PR #1567 round-2 follow-up).
-                if "media_buy_id" in data:
-                    return CreateMediaBuySuccess(**data)
-                else:
-                    return CreateMediaBuyError(**data)
-            elif skill_name == "update_media_buy":
-                # Submitted (pending-approval) responses carry status="submitted" + task_id
-                # and no applied media_buy_id; success responses have media_buy_id; error
-                # responses have errors. Check submitted first — a submitted envelope must not
-                # be mis-reconstructed as UpdateMediaBuySuccess (whose status is Literal completed).
-                # NB: on the normal path a submitted result takes the status=="submitted"
-                # early-return in on_message_send (Task state=SUBMITTED, no artifacts) BEFORE
-                # artifact/text reconstruction reaches here (PR #1567 round-2); this branch is a
-                # defensive backstop guarded by test_a2a_update_media_buy_submitted_guard.py.
-                if data.get("status") == "submitted":
-                    return UpdateMediaBuySubmitted(**data)
-                elif "media_buy_id" in data:
-                    return UpdateMediaBuySuccess(**data)
-                else:
-                    return UpdateMediaBuyError(**data)
-
-            # Non-union response types - use the concrete class directly
-            response_map: dict[str, type] = {
-                "get_media_buy_delivery": GetMediaBuyDeliveryResponse,
-                "get_media_buys": GetMediaBuysResponse,
-                "get_products": GetProductsResponse,
-                "list_accounts": ListAccountsResponse,
-                "sync_accounts": SyncAccountsResponse,
-                "list_authorized_properties": ListAuthorizedPropertiesResponse,
-                "list_creative_formats": ListCreativeFormatsResponse,
-                "list_creatives": ListCreativesResponse,
-                "sync_creatives": SyncCreativesResponse,
-            }
-
-            response_class = response_map.get(skill_name)
-            if response_class:
-                return response_class(**data)
-        except Exception as e:
-            logger.debug("Could not reconstruct response object for %s: %s", skill_name, e)
-        return None
-
     async def on_message_send(
         self,
         params: SendMessageRequest,
@@ -784,14 +706,18 @@ class AdCPRequestHandler(RequestHandler):
 
                     # Generate human-readable text from response __str__()
                     # Per A2A spec, use TextPart + DataPart pattern (not description field)
+                    #
+                    # The text is READ from the payload, never re-derived from it:
+                    # _stamp_a2a_protocol_fields already stamped str(response) onto
+                    # artifact_data["message"] at serialization time. An outbound
+                    # payload is finished — feeding it back through Model(**data)
+                    # to recover the same string handed pydantic before-validators
+                    # a reference to the dict about to go on the wire, and one of
+                    # them mutated it in place (the list_creatives format_id
+                    # bare-string defect). Nothing rebuilds an outbound payload.
                     text_message = None
                     if res["success"] and isinstance(artifact_data, dict):
-                        try:
-                            response_obj = self._reconstruct_response_object(res["skill"], artifact_data)
-                            if response_obj and hasattr(response_obj, "__str__"):
-                                text_message = str(response_obj)
-                        except Exception:
-                            logger.debug("Response reconstruction failed, skipping text part", exc_info=True)
+                        text_message = artifact_data.get("message")
 
                     # Build parts list per A2A spec: optional text Part + required data Part
                     parts = []

@@ -324,17 +324,17 @@ class TestA2AAdCPCompliance:
 
         list_creatives was tried here too and pulled back out: its format_id
         serialized as a bare string over the A2A wire instead of the spec's
-        {agent_url, id} object. Root-caused and fixed: the A2A success path's
-        _reconstruct_response_object(skill, artifact_data) reconstructs a typed
-        response FROM the same dict about to be sent on the wire (purely to
-        generate the human-readable text part), and Creative.validate_format_id's
-        @model_validator(mode="before") mutated its input dict in place —
-        pydantic-core hands list-item dicts to before-validators by reference, so
-        this corrupted artifact_data itself, and _dict_to_value's
-        json.dumps(default=str) fallback then silently stringified the resulting
-        live FormatId object. Fixed by making the validator (and 3 sibling
-        validators with the same in-place-mutation hazard) defensively copy their
-        input before mutating.
+        {agent_url, id} object. Root-caused and fixed: the A2A success path used
+        to reconstruct a typed response FROM the same dict about to be sent on
+        the wire (purely to generate the human-readable text part), and
+        Creative.validate_format_id's @model_validator(mode="before") mutated its
+        input dict in place — pydantic-core hands list-item dicts to
+        before-validators by reference, so this corrupted artifact_data itself,
+        and _dict_to_value's json.dumps(default=str) fallback then silently
+        stringified the resulting live FormatId object. Fixed on both sides: the
+        validator (and 3 siblings with the same hazard) defensively copy their
+        input, and the outbound round trip was deleted — the TextPart is now read
+        from the payload's already-stamped ``message``.
         """
         # Note: signals skills removed - should come from dedicated signals agents
         skill_tests = [

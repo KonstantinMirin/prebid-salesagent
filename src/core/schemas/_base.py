@@ -227,14 +227,23 @@ def copy_before_mutating(values: dict) -> dict:
     without a defensive copy. A validator that mutates that dict in place
     therefore corrupts whatever dict the caller still holds a reference to.
 
-    Traced production bug: ``src/a2a_server/adcp_a2a_server.py``'s
-    ``_reconstruct_response_object`` reconstructs a typed response FROM the
-    same dict about to be sent on the A2A wire (purely to build a
-    human-readable text part). ``Creative.validate_format_id`` mutated its
-    input dict in place, silently replacing a spec-compliant
-    ``{agent_url, id}`` nested dict with a live ``FormatId`` Python object in
-    the caller's dict -- which the wire serializer's
-    ``json.dumps(default=str)`` fallback then silently stringified.
+    Live inbound hazard this protects: the A2A server validates a request
+    payload and then forwards the SAME raw dicts onward --
+    ``_handle_create_media_buy_skill`` runs
+    ``CreateMediaBuyRequest.model_validate(params)`` and passes
+    ``packages=params["packages"]`` into the core tool
+    (``src/a2a_server/adcp_a2a_server.py``). Without the copy,
+    ``_upgrade_legacy_format_ids`` writes live ``FormatId`` objects into the
+    very dicts the handler goes on to forward.
+
+    Historical: the first traced instance was OUTBOUND, not inbound -- the A2A
+    server used to rebuild a typed response from the dict it was about to send
+    on the wire, purely to regenerate a human-readable text part, and
+    ``Creative.validate_format_id`` mutated that shared dict in place,
+    replacing a spec-compliant ``{agent_url, id}`` with a live ``FormatId``
+    that the wire serializer's ``json.dumps(default=str)`` fallback then
+    stringified. That round trip has been deleted; nothing rebuilds an
+    outbound payload any more.
     """
     return values.copy()
 
