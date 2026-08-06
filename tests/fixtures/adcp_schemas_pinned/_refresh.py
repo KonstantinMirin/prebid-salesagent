@@ -28,6 +28,27 @@ migrated (it only reads the ``enum`` code list, not enumMetadata content).
 This fixture directory no longer vendors any schema-shape files, only this
 one enum, kept only for its suggestion-text divergence.
 
+``$id`` convention (GH #1881)
+----------------------------
+Vendored files keep upstream's ``$id`` **verbatim**: the site-rooted,
+VERSION-FREE form ``/schemas/<category>/<name>.json`` (so
+``/schemas/enums/error-code.json``, never ``/schemas/3.1.1/enums/...``).
+``main()`` refuses to write a file whose fetched ``$id`` is anything else.
+
+Two reasons this is the decision rather than a versioned ``$id``:
+
+- The point of this directory is to preserve ONE frozen upstream artifact for
+  byte-comparison. Any field _refresh.py rewrote would no longer be evidence of
+  what upstream said.
+- The pin here is a SHA, not a spec version. Stamping a version into ``$id``
+  would assert a spec identity the commit does not carry — 04f59d2d5 predates
+  3.1.1, and the number would silently go stale the moment the SHA advances.
+
+Nothing resolves ``$ref``s against this tree (it holds exactly one leaf enum, and
+every ``$ref``-resolving consumer reads the SDK tree via
+tests/helpers/pinned_schema.py), so the ``$id`` here is provenance, not routing.
+Enforced offline by tests/unit/test_pinned_fixture_id_convention.py.
+
 To refresh (e.g. to advance the pinned commit — a deliberate, reviewed change
 that must also re-check the recovery/suggestion divergence against the SDK):
     uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
@@ -76,6 +97,29 @@ def fetch(ref: str) -> str:
     return _read_local(rel) or _read_github(rel)
 
 
+class IdConventionError(RuntimeError):
+    """A fetched schema's ``$id`` does not follow the vendoring convention."""
+
+
+def check_id_convention(ref: str, schema: dict) -> None:
+    """Raise unless *schema*'s ``$id`` is the version-free ``ref`` it was fetched as.
+
+    See the module docstring's "$id convention" section. Called before writing,
+    so a refresh that would change the vendored ``$id`` aborts loudly instead of
+    silently regressing the file and being caught (if at all) by a downstream
+    reader much later.
+    """
+    actual = schema.get("$id")
+    if actual != ref:
+        raise IdConventionError(
+            f"{ref}: upstream $id is {actual!r}, expected {ref!r}. Vendored fixtures keep "
+            f"upstream's version-free /schemas/<category>/<name>.json form verbatim (GH #1881). "
+            f"If upstream deliberately changed its $id convention, update this script's "
+            f"docstring and tests/unit/test_pinned_fixture_id_convention.py in the same "
+            f"reviewed change — do not vendor the new form silently."
+        )
+
+
 def main() -> None:
     seen: set[str] = set()
     stack = list(ROOTS)
@@ -86,9 +130,11 @@ def main() -> None:
             continue
         seen.add(ref)
         body = fetch(ref)
+        schema = json.loads(body)
+        check_id_convention(ref, schema)
         out = FIXTURE_DIR / ref[len("/schemas/") :]
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(json.loads(body), indent=2) + "\n")
+        out.write_text(json.dumps(schema, indent=2) + "\n")
         written += 1
         stack.extend(re.findall(r'"\$ref"\s*:\s*"([^"]+)"', body))
     print(f"vendored {written} schema files from {REPO}@{PINNED_SHA[:9]} into {FIXTURE_DIR}")
