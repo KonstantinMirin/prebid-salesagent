@@ -20,7 +20,7 @@ B. **No reconstructed-only error assertion** (assertion-side). An error
    contract.
 
 C. **No hand-rolled envelope/error parsing** (assertion-side, PR #1721 review round 2
-   F6 / salesagent-2bpt.6). An error ``@then`` step must go through
+   #1721 review round 2, F6). An error ``@then`` step must go through
    ``ctx['result'].assert_wire_error(...)`` (or the ``_wire_code``/``_wire_suggestion``
    helpers) rather than either (a) a bare ``getattr(<error>, "error_code", ...)`` on a
    reconstructed exception object, or (b) hand-rolled dict access on
@@ -306,7 +306,7 @@ def _find_hand_rolled_envelope_parsing() -> set[str]:
 
 
 def test_no_hand_rolled_envelope_parsing() -> None:
-    """salesagent-2bpt.6 (F6): error @then steps must use assert_wire_error(...),
+    """#1721 review round 2 (F6): error @then steps must use assert_wire_error(...),
     never a bare getattr(error, 'error_code') or ctx.get('wire_error_envelope')/
     ctx.get('synthesized_error_envelope') hand-roll.
     """
