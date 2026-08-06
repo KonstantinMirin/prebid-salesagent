@@ -209,7 +209,7 @@ class Creative(LibraryCreative):
         """Get agent URL string from FormatId object."""
         return str(self.format_id.agent_url) if self.format_id else None
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
         """AdCP-compliant dump. ``assets`` is an untyped dict[str, Any] (the DB
         stores arbitrary asset shapes), so Pydantic's exclude_none=True default
         never sees inside it — a None field on a stored asset survives as a

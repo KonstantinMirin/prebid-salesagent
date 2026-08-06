@@ -50,8 +50,8 @@ from a2a.types import (
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
+from adcp.types.base import AdCPBaseModel
 from google.protobuf import json_format, struct_pb2
-from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import AUTH_REQUIRED_SUGGESTION
@@ -1347,7 +1347,7 @@ class AdCPRequestHandler(RequestHandler):
         raise UnsupportedOperationError(message="Extended agent card not supported")
 
     @staticmethod
-    def _stamp_a2a_protocol_fields(response: BaseModel) -> dict:
+    def _stamp_a2a_protocol_fields(response: AdCPBaseModel) -> dict[str, Any]:
         """Dump a Pydantic response and stamp the A2A protocol fields onto it.
 
         ``message`` and ``success`` are not spec fields on any response
@@ -1383,7 +1383,7 @@ class AdCPRequestHandler(RequestHandler):
         return response_data
 
     @staticmethod
-    def _serialize_for_a2a(response: BaseModel | dict) -> dict:
+    def _serialize_for_a2a(response: AdCPBaseModel | dict) -> dict[str, Any]:
         """Serialize a handler response for A2A protocol at the framework boundary.
 
         Single serialization point for all explicit-skill A2A responses.

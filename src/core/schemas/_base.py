@@ -218,7 +218,7 @@ def strip_none_deep(value: Any) -> Any:
     return value
 
 
-def copy_before_mutating(values: dict) -> dict:
+def copy_before_mutating(values: dict[str, Any]) -> dict[str, Any]:
     """Defensive copy for a ``mode="before"`` validator about to mutate its input.
 
     pydantic-core hands a ``mode="before"`` validator its input dict BY
