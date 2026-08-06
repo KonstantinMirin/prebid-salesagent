@@ -20,7 +20,17 @@ from adcp.types.generated_poc.core.postal_area_support import (
 from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.pricing_model import PricingModel
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
-    Account,
+    # Aliased: three distinct types in src/ are named Account -- the ORM row
+    # (imported as DBAccount in accounts.py), the domain schema
+    # (src/core/schemas/account.py, imported BARE by accounts.py), and this
+    # capabilities block. Two sibling modules in one package binding the same bare
+    # name to different types is a rename waiting to go wrong. Mirrors this file's
+    # own Measurement -> LibraryMeasurementDeclaration precedent; deliberately NOT
+    # Library*-prefixed, since that prefix signals a schema-inheritance obligation
+    # this tools-module alias does not carry.
+    Account as AccountCapabilities,
+)
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     CreativeApprovalMode,
     Execution,
@@ -108,7 +118,7 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     )
 
 
-def _build_adcp_block(tenant: Mapping | None) -> Adcp:
+def _build_adcp_block(tenant: Mapping[str, object] | None) -> Adcp:
     """Build the top-level adcp.* envelope -- single source for both the
     no-tenant minimal response and the tenant-resolved full response
     (salesagent-rldj DRY fix; the two literal Adcp(...) constructions this
@@ -133,7 +143,7 @@ def _build_adcp_block(tenant: Mapping | None) -> Adcp:
     )
 
 
-def _build_account_block(tenant: Mapping) -> Account:
+def _build_account_block(tenant: Mapping[str, object]) -> AccountCapabilities:
     """Build the account block from real tenant config -- never fabricated.
 
     supported_billing derives from resolve_supported_billing (src/core/billing_policy.py),
@@ -145,7 +155,7 @@ def _build_account_block(tenant: Mapping) -> Account:
     aspirational capability the platform doesn't back yet, not an honest one
     (salesagent-3s5a Core Invariant).
     """
-    return Account(
+    return AccountCapabilities(
         supported_billing=[BillingParty(v) for v in resolve_supported_billing(tenant)],
         require_operator_auth=False,
         sandbox=tenant.get("account_sandbox", True),

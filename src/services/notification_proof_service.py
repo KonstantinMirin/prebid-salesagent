@@ -34,6 +34,7 @@ policy that means we also declare no signing capability -- see FIXME(#1291).
 import logging
 
 import httpx
+from adcp.types import NotificationConfig
 
 from src.core.security.url_validator import check_url_ssrf, is_reserved_tld_host
 
@@ -48,14 +49,14 @@ CHALLENGE_TIMEOUT_SECONDS = 2.0
 class NotificationProofService:
     """Performs the proof-of-control challenge for a notification subscriber."""
 
-    async def prove(self, account_id: str, config: object) -> bool:
+    async def prove(self, account_id: str, config: NotificationConfig) -> bool:
         """Whether endpoint control over ``config.url`` is proven. Fail-closed.
 
         Returns False -- never raises -- so a proof failure becomes a per-account
         rejection inside a transport-level success, which is what the spec asks
         for, rather than a transport error.
         """
-        url = str(getattr(config, "url", "") or "")
+        url = str(config.url or "")
         if not url:
             return False
 
@@ -93,7 +94,7 @@ class NotificationProofService:
                     json={
                         "type": "adcp.notification.proof_of_control",
                         "account_id": account_id,
-                        "subscriber_id": getattr(config, "subscriber_id", None),
+                        "subscriber_id": config.subscriber_id,
                     },
                 )
         except Exception as exc:

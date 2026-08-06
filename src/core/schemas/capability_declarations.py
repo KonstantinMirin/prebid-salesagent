@@ -20,7 +20,7 @@ model whose ``validate_backing()`` raises ``AdCPConfigurationError`` rather than
 silently clamping or emitting a non-conformant response.
 """
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from typing import Any
 
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
@@ -116,9 +116,14 @@ _BACKED_SPECIALISMS: dict[AdcpSpecialism, SupportedProtocol] = {
 }
 
 
-def _reject_unbacked(
-    claimed: Iterable[Any],
-    backed: Iterable[Any],
+# The type parameter is VALUE-restricted (not bounded), which is what makes mixing the two
+# arms a type error: passing protocols against the specialism backing map now fails with
+# `Value of type variable "_Declared" cannot be "StrEnum"`, which `Iterable[Any]` silently
+# accepted. Restricting here also means mypy.ini needs no new disallow_any_explicit entry
+# for this module (#1721 review F7).
+def _reject_unbacked[Declared: (SupportedProtocol, AdcpSpecialism)](
+    claimed: Iterable[Declared],
+    backed: Collection[Declared],
     *,
     field: str,
     noun: str,

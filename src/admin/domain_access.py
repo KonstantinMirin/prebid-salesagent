@@ -6,12 +6,18 @@ Simple email domain extraction approach - no complex OAuth hd claims needed.
 
 import json
 import logging
+from typing import Literal
 
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User
+from src.core.database.repositories.tenant_config import (
+    AddOutcome,
+    AuthorizedListColumn,
+    RemoveOutcome,
+)
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.domain_config import get_super_admin_domain
 
@@ -258,7 +264,12 @@ def get_user_tenant_access(email: str) -> dict:
     return result
 
 
-def _mutate_authorized_list(op, column, tenant_id: str, value: str) -> bool:
+#: The two mutations this helper multiplexes. A named alias rather than an inline Literal,
+#: matching the convention in src/core/exceptions.py and src/core/protocol_envelope.py.
+AuthorizedListOp = Literal["add", "remove"]
+
+
+def _mutate_authorized_list(op: AuthorizedListOp, column: AuthorizedListColumn, tenant_id: str, value: str) -> bool:
     """Shared atomic add/remove on a tenant authorized list.
 
     Both mutations go through TenantConfigRepository's single-statement
@@ -268,7 +279,7 @@ def _mutate_authorized_list(op, column, tenant_id: str, value: str) -> bool:
     write errors.
     """
     try:
-        outcome: str
+        outcome: AddOutcome | RemoveOutcome
         with TenantConfigUoW(tenant_id) as uow:
             assert uow.tenant_config is not None
             if op == "add":

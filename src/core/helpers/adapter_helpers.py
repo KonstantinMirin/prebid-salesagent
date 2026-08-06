@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:
     from adcp import AgentConfig
@@ -92,6 +92,7 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
+from src.core.exceptions import RecoveryHint
 from src.core.schemas import Principal
 
 
@@ -158,7 +159,25 @@ def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
     return selected_adapter or "mock"
 
 
-def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> dict:
+class MockTestBehavior(TypedDict, total=False):
+    """The mock adapter's fault-injection config, as its two consumers read it.
+
+    Shape taken from the consumers below (:214-222 and :240-247) rather than left as a
+    bare ``dict``, so the keys are checked at their use sites. ``recovery`` reuses
+    ``RecoveryHint`` from src/core/exceptions.py -- which is what makes
+    ``AdCPAdapterError(recovery=behavior.get("recovery", "transient"))`` an actually
+    verified argument instead of an unchecked string. ``total=False``: every key is
+    optional, matching the FormatParameters precedent in this package
+    (src/core/helpers/creative_helpers.py:27).
+    """
+
+    unavailable: bool
+    error_message: str
+    recovery: RecoveryHint
+    targeting_capabilities: dict[str, bool]
+
+
+def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> MockTestBehavior:
     """Read the per-tenant mock-adapter ``test_behavior`` fault-injection config.
 
     Single seam (salesagent-689e Core Invariant) for reading
@@ -181,7 +200,7 @@ def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> dict:
     if row and isinstance(row.config_json, dict):
         behavior = row.config_json.get("test_behavior", {})
         if isinstance(behavior, dict):
-            return behavior
+            return cast(MockTestBehavior, behavior)
     return {}
 
 
