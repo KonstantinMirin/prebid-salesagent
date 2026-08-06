@@ -34,19 +34,12 @@ Ships with ZERO violations; no allowlist (repo hard rule: allowlists never grow)
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.unit._architecture_helpers import REPO_ROOT, iter_module_trees
+
 SCHEMAS_DIR = REPO_ROOT / "src" / "core" / "schemas"
 
 _MUTATING_METHODS = {"pop", "update", "setdefault", "clear", "popitem"}
-
-
-def _parse(path: Path) -> ast.AST | None:
-    try:
-        return ast.parse(path.read_text(), filename=str(path))
-    except SyntaxError:
-        return None
 
 
 def _is_before_validator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -133,7 +126,7 @@ def find_unsafe_before_validators(src_files: dict[str, ast.AST]) -> list[str]:
 
 
 def test_no_unsafe_before_validator_mutation():
-    src_files = {str(p.relative_to(REPO_ROOT)): t for p in sorted(SCHEMAS_DIR.rglob("*.py")) if (t := _parse(p))}
+    src_files = {path: tree for tree, path in iter_module_trees([SCHEMAS_DIR])}
     violations = find_unsafe_before_validators(src_files)
     assert not violations, (
         '@model_validator(mode="before") mutates its input dict without a '

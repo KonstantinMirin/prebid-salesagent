@@ -32,17 +32,10 @@ Ships with ZERO violations; no allowlist (repo hard rule: allowlists never grow)
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from tests.unit._architecture_helpers import REPO_ROOT, iter_module_trees
+
 SRC_ROOT = REPO_ROOT / "src"
-
-
-def _parse(path: Path) -> ast.AST | None:
-    try:
-        return ast.parse(path.read_text(), filename=str(path))
-    except SyntaxError:
-        return None
 
 
 def find_structured_content_calls_outside_helper(src_files: dict[str, ast.AST]) -> list[str]:
@@ -65,7 +58,7 @@ def find_structured_content_calls_outside_helper(src_files: dict[str, ast.AST]) 
 
 
 def test_no_toolresult_structured_content_outside_helper():
-    src_files = {str(p.relative_to(REPO_ROOT)): t for p in sorted(SRC_ROOT.rglob("*.py")) if (t := _parse(p))}
+    src_files = {path: tree for tree, path in iter_module_trees([SRC_ROOT])}
     violations = find_structured_content_calls_outside_helper(src_files)
     assert not violations, (
         "ToolResult(structured_content=...) must only be constructed by "

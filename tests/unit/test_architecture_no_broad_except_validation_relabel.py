@@ -39,10 +39,16 @@ GH #1843, #1868
 from __future__ import annotations
 
 import ast
+from functools import cache
 
 import pytest
 
-from tests.unit._architecture_helpers import REPO_ROOT, assert_violations_match_allowlist, safe_parse
+from tests.unit._architecture_helpers import (
+    REPO_ROOT,
+    assert_violations_match_allowlist,
+    iter_module_trees,
+    walk_with_enclosing_function,
+)
 
 _SCAN_DIRS = ("src", "tests", "scripts")
 
@@ -101,34 +107,23 @@ def _relabelled_validation_types(handler: ast.ExceptHandler) -> list[str]:
 
 def _scan_tree(tree: ast.Module, rel_path: str) -> list[tuple[str, str, str]]:
     """Violations in one parsed module, as (path, enclosing function, raised type)."""
-    violations: list[tuple[str, str, str]] = []
-
-    def visit(node: ast.AST, enclosing: str) -> None:
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            enclosing = node.name
-        if isinstance(node, ast.ExceptHandler) and _is_broad_handler(node):
-            for raised in _relabelled_validation_types(node):
-                violations.append((rel_path, enclosing, raised))
-        for child in ast.iter_child_nodes(node):
-            visit(child, enclosing)
-
-    visit(tree, "<module>")
-    return violations
+    return [
+        (rel_path, enclosing, raised)
+        for node, enclosing in walk_with_enclosing_function(tree)
+        if isinstance(node, ast.ExceptHandler) and _is_broad_handler(node)
+        for raised in _relabelled_validation_types(node)
+    ]
 
 
-def _scan_repo() -> set[tuple[str, str, str]]:
-    found: set[tuple[str, str, str]] = set()
-    for scan_dir in _SCAN_DIRS:
-        root = REPO_ROOT / scan_dir
-        if not root.exists():
-            continue
-        for py_file in sorted(root.rglob("*.py")):
-            if "__pycache__" in str(py_file):
-                continue
-            tree = safe_parse(py_file)
-            if tree is not None:
-                found.update(_scan_tree(tree, str(py_file.relative_to(REPO_ROOT))))
-    return found
+@cache
+def _scan_repo() -> frozenset[tuple[str, str, str]]:
+    """Every violation in the tree. Memoized — both callers scan the same
+    src/ + tests/ + scripts/, and re-parsing all of it twice per run is pure waste."""
+    return frozenset(
+        violation
+        for tree, rel_path in iter_module_trees([REPO_ROOT / scan_dir for scan_dir in _SCAN_DIRS])
+        for violation in _scan_tree(tree, rel_path)
+    )
 
 
 @pytest.mark.arch_guard
