@@ -38,15 +38,13 @@ SDK resolver end to end, where no private CA is in the way.
 
 from __future__ import annotations
 
-from typing import Any
-
 import httpx
 import pytest
 
 from tests.e2e._signing_e2e import (
     ca_verified_ssl_context,
-    declaring_tenant_provisioner,
     fetch_capabilities,
+    keyless_declaring_tenant_fixture,
     netloc,
     provision_signing_key_via_admin,
     tls_base_url,
@@ -66,38 +64,12 @@ _DECLARED_OPERATION = "get_products"
 _ALG = "ed25519"
 _EXPECTED_JWK_ALG = "EdDSA"
 
-
-def _signing_declarations(tenant: Any) -> dict[str, Any]:
-    """The capability declaration that makes an ``identity`` block owed.
-
-    ``identity`` is emitted only when ``requires_trust_root`` fires, which a
-    NON-EMPTY ``request_signing`` bucket does. ``brand_json_url`` is DERIVED from
-    the tenant rather than literalled because the capabilities read path
-    cross-checks the declared pointer against the one it actually serves
-    (``validate_signing_platform_backing``) and refuses a mismatch.
-    """
-    from src.core.agent_identity import brand_json_url
-
-    return {
-        # ``supported`` is a required member of the block; the non-empty bucket
-        # beside it is what actually fires the trigger.
-        "request_signing": {"supported": True, "supported_for": [_DECLARED_OPERATION]},
-        "identity": {"brand_json_url": brand_json_url(tenant)},
-    }
-
-
-@pytest.fixture
-def keyless_declaring_tenant(live_server):
-    """A tenant that DECLARES a signing posture and owns NO key, at a caller-supplied netloc.
-
-    ``mint_key=False`` (fixed inside :func:`declaring_tenant_provisioner`) is the point of
-    this module's first phase: the key must arrive later, through a production transport,
-    or the test grades its own fixture.
-    """
-    with declaring_tenant_provisioner(
-        live_server, tenant_id=_TENANT_ID, slug=_SLUG, declarations_from_tenant=_signing_declarations
-    ) as provision:
-        yield provision
+#: A tenant that DECLARES a signing posture and owns NO key, at a caller-supplied
+#: netloc — the key must arrive later, through a production transport, or the
+#: test grades its own fixture. See :func:`keyless_declaring_tenant_fixture`.
+keyless_declaring_tenant = keyless_declaring_tenant_fixture(
+    tenant_id=_TENANT_ID, slug=_SLUG, operation=_DECLARED_OPERATION
+)
 
 
 @pytest.mark.asyncio

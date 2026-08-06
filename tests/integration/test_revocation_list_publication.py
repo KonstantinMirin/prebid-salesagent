@@ -54,7 +54,6 @@ Why the assertions are written the way they are:
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -62,7 +61,14 @@ import pytest
 from adcp.signing.crypto import b64url_decode
 
 from tests.harness._base import BareIntegrationEnv
-from tests.helpers.signing import deployment_kek, get_trust_root_document, provision_key, signing_key_repo
+from tests.helpers.signing import (
+    b64url_json,
+    deployment_kek,
+    get_trust_root_document,
+    jws_parts,
+    provision_key,
+    signing_key_repo,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -93,43 +99,12 @@ def _interval_seconds() -> int:
     return int(SigningConfig().revocation_interval_seconds)
 
 
-def _b64url_json(segment: str) -> dict[str, Any]:
-    """Decode one base64url JWS segment as JSON.
-
-    Uses the SDK's own ``b64url_decode`` (padding-tolerant) rather than a
-    second repadding implementation — the same primitive production's
-    ``sign_revocation_list`` uses on the encode side.
-    """
-    decoded = json.loads(b64url_decode(segment))
-    assert isinstance(decoded, dict), f"JWS segment must decode to a JSON object; got {type(decoded).__name__}"
-    return decoded
-
-
-def _jws_parts(document: dict[str, Any]) -> tuple[str, str, bytes]:
-    """Assert the general-JSON JWS envelope and return (protected, payload, signature).
-
-    Production emits GENERAL JSON serialization, which is what
-    ``adcp.signing.jws.parse_general_json_jws`` — and therefore
-    ``CachingRevocationChecker`` — reads. The envelope is checked here by
-    EQUALITY on its member sets so a compact-JWS string, a multi-signature
-    document, or an extra top-level member is a named failure rather than a
-    ``KeyError`` further down.
-    """
-    assert set(document) == {"payload", "signatures"}, (
-        "the served revocation list must be a JWS general JSON serialization with exactly "
-        f"'payload' and 'signatures'; got {sorted(document)}"
-    )
-    signatures = document["signatures"]
-    assert isinstance(signatures, list) and len(signatures) == 1, (
-        "this profile is signed by ONE operator key, so signatures[] must hold exactly one "
-        f"entry (parse_general_json_jws rejects more); got {signatures!r}"
-    )
-    entry = signatures[0]
-    assert set(entry) == {"protected", "signature"}, (
-        f"the signature entry carries exactly 'protected' and 'signature'; got {sorted(entry)}"
-    )
-    signature = b64url_decode(entry["signature"])
-    return entry["protected"], document["payload"], signature
+#: #1291 mp53.6 promoted the JWS envelope helpers to tests/helpers/signing.py so
+#: this suite and the e2e key-lifecycle module read the same served JWS through
+#: ONE decoder rather than two. Aliased locally (not re-defined) so every call
+#: site below keeps its established name.
+_b64url_json = b64url_json
+_jws_parts = jws_parts
 
 
 def _seed(env: BareIntegrationEnv, slug: str) -> tuple[Any, str, str]:

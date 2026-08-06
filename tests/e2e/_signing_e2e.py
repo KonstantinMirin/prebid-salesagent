@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from sqlalchemy import delete
 
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
@@ -60,6 +61,10 @@ _ADMIN_PREFIX = "/admin"
 #: it is what the ROUTE reported; the list table's ``kid`` is a subsequent DB
 #: re-read wearing the route's clothes.
 _SUCCESS_FLASH = re.compile(r"Signing key ([A-Za-z0-9._:-]+) provisioned and published\.")
+
+#: What the revoke route FLASHES on success (src/admin/blueprints/signing_keys.py
+#: :137-139) — the kid the row's OWN revoke() call reported, not a re-read.
+_REVOKE_SUCCESS_FLASH = re.compile(r"Signing key ([A-Za-z0-9._:-]+) revoked\.")
 
 
 def netloc(url: str) -> str:
@@ -386,6 +391,62 @@ async def fetch_capabilities(client: httpx.AsyncClient, path: str = "/api/v1/cap
     return response.json()
 
 
+def _admin_post_expecting_flash(
+    base_url: str,
+    *,
+    tenant_id: str,
+    path: str,
+    data: dict[str, str],
+    pattern: re.Pattern[str],
+    not_found_hint: str = "",
+) -> str:
+    """Authenticate, POST one admin form, and return the flash's captured group.
+
+    The shared shape behind every signing-key admin-route driver in this module
+    (#1291 mp53.6, architect review MEDIUM-6): authenticate as the e2e
+    super-admin, POST *path* with *data* and follow the redirect (Flask renders
+    the flash on the destination page), assert 200, then extract *pattern*'s
+    first captured group. Extracting only the auth block and leaving the
+    POST/assert/extract steps duplicated per driver would be the same defect
+    one layer down, so this is the unit that gets shared.
+    """
+    import requests
+
+    with requests.Session() as session:
+        session.verify = ca_bundle()
+        auth = session.post(
+            f"{base_url}{_ADMIN_PREFIX}/test/auth",
+            data={"email": E2E_ADMIN_EMAIL, "password": E2E_ADMIN_PASSWORD, "tenant_id": tenant_id},
+            allow_redirects=False,
+            timeout=30,
+        )
+        assert auth.status_code in (200, 302), (
+            f"admin test auth must succeed before {path!r} can be driven through the admin route; POST "
+            f"{_ADMIN_PREFIX}/test/auth returned HTTP {auth.status_code}. A 404 here means "
+            f"ADCP_AUTH_TEST_MODE is off, the tenant's auth_setup_mode is off, or the tenant_id form "
+            f"field never arrived — it is not a routing problem. Body: {auth.text[:300]!r}"
+        )
+
+        response = session.post(
+            f"{base_url}{path}",
+            data=data,
+            allow_redirects=True,
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"the admin route {path!r} must succeed; got HTTP {response.status_code} for tenant "
+            f"{tenant_id!r}. Body: {response.text[:300]!r}"
+        )
+
+    match = pattern.search(response.text)
+    assert match is not None, (
+        f"the admin route {path!r} must report its outcome in a success flash matching "
+        f"{pattern.pattern!r}; the rendered page carries no such message for tenant {tenant_id!r}. "
+        f"{not_found_hint}Page: {response.text[:600]!r}"
+    )
+    return match.group(1)
+
+
 def provision_signing_key_via_admin(base_url: str, *, tenant_id: str, alg: str = "ed25519") -> str:
     """Mint one signing key through the PRODUCTION admin route, over real HTTP.
 
@@ -399,39 +460,87 @@ def provision_signing_key_via_admin(base_url: str, *, tenant_id: str, alg: str =
     inside the server container, so the key is one the server can actually open
     later.
     """
-    import requests
-
-    with requests.Session() as session:
-        session.verify = ca_bundle()
-        auth = session.post(
-            f"{base_url}{_ADMIN_PREFIX}/test/auth",
-            data={"email": E2E_ADMIN_EMAIL, "password": E2E_ADMIN_PASSWORD, "tenant_id": tenant_id},
-            allow_redirects=False,
-            timeout=30,
-        )
-        assert auth.status_code in (200, 302), (
-            f"admin test auth must succeed before the signing key can be provisioned through the admin "
-            f"route; POST {_ADMIN_PREFIX}/test/auth returned HTTP {auth.status_code}. A 404 here means "
-            f"ADCP_AUTH_TEST_MODE is off, the tenant's auth_setup_mode is off, or the tenant_id form "
-            f"field never arrived — it is not a routing problem. Body: {auth.text[:300]!r}"
-        )
-
-        created = session.post(
-            f"{base_url}{_ADMIN_PREFIX}/tenant/{tenant_id}/signing-keys/create",
-            data={"alg": alg, "ref_scheme": "db"},
-            allow_redirects=True,
-            timeout=30,
-        )
-        assert created.status_code == 200, (
-            f"the admin signing-key create route must succeed; got HTTP {created.status_code} for tenant "
-            f"{tenant_id!r}. Body: {created.text[:300]!r}"
-        )
-
-    match = _SUCCESS_FLASH.search(created.text)
-    assert match is not None, (
-        "the admin create route must report the kid it provisioned in its success flash; the rendered "
-        f"page carries no 'Signing key <kid> provisioned and published.' message for tenant {tenant_id!r}. "
-        "If a 'Could not provision a signing key' flash is present instead, the container's signing KEK "
-        f"(ADCP_SIGNING_DEV_KEK) is missing. Page: {created.text[:600]!r}"
+    return _admin_post_expecting_flash(
+        base_url,
+        tenant_id=tenant_id,
+        path=f"{_ADMIN_PREFIX}/tenant/{tenant_id}/signing-keys/create",
+        data={"alg": alg, "ref_scheme": "db"},
+        pattern=_SUCCESS_FLASH,
+        not_found_hint=(
+            "If a 'Could not provision a signing key' flash is present instead, the container's signing "
+            "KEK (ADCP_SIGNING_DEV_KEK) is missing. "
+        ),
     )
-    return match.group(1)
+
+
+def revoke_signing_key_via_admin(base_url: str, *, tenant_id: str, kid: str) -> str:
+    """Revoke one signing key through the PRODUCTION admin route, over real HTTP.
+
+    Returns the ``kid`` **the route reported revoking**, read out of its
+    success flash (the row's own ``revoke()`` call, not a subsequent re-read) —
+    the same shape as :func:`provision_signing_key_via_admin`, through the
+    shared :func:`_admin_post_expecting_flash`.
+    """
+    return _admin_post_expecting_flash(
+        base_url,
+        tenant_id=tenant_id,
+        path=f"{_ADMIN_PREFIX}/tenant/{tenant_id}/signing-keys/{kid}/revoke",
+        data={},
+        pattern=_REVOKE_SUCCESS_FLASH,
+        not_found_hint=f"If a 'No signing key {kid} for this tenant.' flash is present instead, {kid!r} was never provisioned for this tenant, or was already revoked under a different kid. ",
+    )
+
+
+def signing_declarations(operation: str) -> Callable[[Any], dict[str, Any]]:
+    """A ``declarations_from_tenant`` callback declaring *operation* as ``supported_for``.
+
+    Generalizes ``test_jwks_publication_e2e.py``'s former module-private
+    ``_signing_declarations`` (#1291 mp53.6) into a reusable factory: every
+    signing e2e module that needs "declare a request_signing posture, own no
+    key yet" wants the SAME shape with a different operation name.
+    ``brand_json_url`` is DERIVED from the tenant rather than literalled
+    because the capabilities read path cross-checks the declared pointer
+    against the one it actually serves (``validate_signing_platform_backing``)
+    and refuses a mismatch.
+    """
+
+    def _declarations(tenant: Any) -> dict[str, Any]:
+        from src.core.agent_identity import brand_json_url
+
+        return {
+            # ``supported`` is a required member of the block; the non-empty
+            # bucket beside it is what actually fires ``requires_trust_root``.
+            "request_signing": {"supported": True, "supported_for": [operation]},
+            "identity": {"brand_json_url": brand_json_url(tenant)},
+        }
+
+    return _declarations
+
+
+def keyless_declaring_tenant_fixture(*, tenant_id: str, slug: str, operation: str) -> Callable[..., Iterator[tuple]]:
+    """Build a ``keyless_declaring_tenant`` pytest fixture for *tenant_id*/*slug*.
+
+    Every signing e2e module wants the SAME wrapper around
+    :func:`declaring_tenant_provisioner` + :func:`signing_declarations` — "a
+    tenant that DECLARES a signing posture and owns NO key, at a
+    caller-supplied netloc" — varying only the tenant/slug/operation
+    (#1291 mp53.6, pylint R0801). Assign the return value directly to a
+    module-level ``keyless_declaring_tenant`` name; pytest fixture-collects it
+    the same as a ``@pytest.fixture``-decorated function::
+
+        keyless_declaring_tenant = keyless_declaring_tenant_fixture(
+            tenant_id=_TENANT_ID, slug=_SLUG, operation=_DECLARED_OPERATION
+        )
+    """
+
+    @pytest.fixture
+    def _keyless_declaring_tenant(live_server: dict) -> Iterator[Callable[[str], tuple]]:
+        with declaring_tenant_provisioner(
+            live_server,
+            tenant_id=tenant_id,
+            slug=slug,
+            declarations_from_tenant=signing_declarations(operation),
+        ) as provision:
+            yield provision
+
+    return _keyless_declaring_tenant

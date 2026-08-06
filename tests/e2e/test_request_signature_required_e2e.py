@@ -53,9 +53,16 @@ leaked by a crashed teardown surfaces here as an ``IntegrityError`` in THIS
 module's fixture setup.
 
 **Mutations verified by hand (both restored after verification).** Run this
-module via ``saci run e2e -- -k <test name>`` (goes through tox's
-``[testenv:e2e]``) — NOT ``saci run ci <file>``, which resolves the wrong
-database (``adcp_test`` instead of the live server's ``adcp``) for this suite.
+module via ``saci run e2e`` (the WHOLE e2e suite via tox's ``[testenv:e2e]``,
+against the live server's ``adcp`` database) — NOT ``saci run ci <file>``,
+which bypasses tox and resolves the wrong database (``adcp_test``) for this
+suite, AND NOT ``saci run e2e -- -k <test name>``, which the current
+``run_all_tests.sh`` argument contract treats as an explicit suite list —
+``e2e`` is captured, everything after it is silently discarded, so the
+``-k`` filter never reaches pytest (confirmed against ``run_all_tests.sh``
+and ``run_all_tests_host.sh`` source, #1291 mp53.6). There is currently no
+supported way to target a single e2e file/test while keeping the correct
+database; running the full suite is the only correct option today.
 
 1. Disabled the ``bucket == "required" and not context.authenticated`` branch in
    ``RequestSignatureMiddleware._handle_unsigned``

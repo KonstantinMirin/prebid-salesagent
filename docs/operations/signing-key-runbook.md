@@ -129,17 +129,24 @@ so a verifier whose cache has not refreshed still finds it and can evaluate the 
 JWKS entry without the marker is indistinguishable from a live key, which is why we carry
 it rather than dropping the key.
 
-### How counterparties learn — state of play, including the gap
+### How counterparties learn
 
-**We do not publish our own revocation list.** A counterparty learns that one of our keys
-is revoked in one of two ways today:
+We publish a combined revocation list at our brand.json origin
+(`/.well-known/governance-revocations.json`, salesagent-z6nr.27) — a JWS general-JSON
+document signed by the tenant's currently ACTIVE request-signing key, whose payload
+carries `revoked_kids`: the PERMANENT record of every key we have ever revoked, unbounded
+by the publication grace window. A counterparty learns that one of our keys is revoked
+through any of:
 
 - the revocation marker on the key, while it is still inside the grace window;
-- the key's absence from our JWKS, after the grace window has elapsed.
+- the key's absence from our JWKS, after the grace window has elapsed;
+- the `revoked_kids` entry in the governance-revocations list, which never ages out.
 
-That is it. Publishing a combined revocation list at our brand.json origin is tracked and
-not yet built. Plan rotations on the grace window, and do not assume a counterparty can
-be told about a compromised key faster than their cache refresh.
+The list itself is withdrawn (404) once no active request-signing key remains to sign it
+— a tenant with no live key cannot vouch for its own revocation history, so it fails
+closed rather than serving a list signed by a dead key. Plan rotations on the grace
+window, and do not assume a counterparty can be told about a compromised key faster than
+their cache refresh.
 
 ### Propagation latency for keys we CONSUME
 

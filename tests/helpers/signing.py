@@ -218,6 +218,53 @@ def published_kids(entries: list[dict[str, Any]]) -> set[str]:
     return {entry["kid"] for entry in entries}
 
 
+def b64url_json(segment: str) -> dict[str, Any]:
+    """Decode one base64url JWS segment as JSON.
+
+    Uses the SDK's own ``b64url_decode`` (padding-tolerant) rather than a second
+    repadding implementation — the same primitive production's
+    ``sign_revocation_list`` uses on the encode side. Promoted from
+    ``tests/integration/test_revocation_list_publication.py`` (#1291 mp53.6) so
+    the e2e suite reads the same served JWS through the ONE decoder rather than a
+    second hand-rolled one.
+    """
+    from adcp.signing.crypto import b64url_decode
+
+    decoded = json.loads(b64url_decode(segment))
+    assert isinstance(decoded, dict), f"JWS segment must decode to a JSON object; got {type(decoded).__name__}"
+    return decoded
+
+
+def jws_parts(document: dict[str, Any]) -> tuple[str, str, bytes]:
+    """Assert the general-JSON JWS envelope and return (protected, payload, signature).
+
+    Production emits GENERAL JSON serialization, which is what
+    ``adcp.signing.jws.parse_general_json_jws`` — and therefore
+    ``CachingRevocationChecker`` — reads. The envelope is checked here by
+    EQUALITY on its member sets so a compact-JWS string, a multi-signature
+    document, or an extra top-level member is a named failure rather than a
+    ``KeyError`` further down. Promoted alongside :func:`b64url_json` (#1291
+    mp53.6) — one envelope check, not one per suite.
+    """
+    from adcp.signing.crypto import b64url_decode
+
+    assert set(document) == {"payload", "signatures"}, (
+        "the served revocation list must be a JWS general JSON serialization with exactly "
+        f"'payload' and 'signatures'; got {sorted(document)}"
+    )
+    signatures = document["signatures"]
+    assert isinstance(signatures, list) and len(signatures) == 1, (
+        "this profile is signed by ONE operator key, so signatures[] must hold exactly one "
+        f"entry (parse_general_json_jws rejects more); got {signatures!r}"
+    )
+    entry = signatures[0]
+    assert set(entry) == {"protected", "signature"}, (
+        f"the signature entry carries exactly 'protected' and 'signature'; got {sorted(entry)}"
+    )
+    signature = b64url_decode(entry["signature"])
+    return entry["protected"], document["payload"], signature
+
+
 def resolve_provider(
     repo: Any,
     tenant_id: str,
