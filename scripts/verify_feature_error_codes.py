@@ -74,11 +74,12 @@ BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):
 def load_enum() -> set[str]:
     try:
         return set(pinned_schema.load("error-code.json")["enum"])
-    except (AssertionError, RuntimeError, KeyError, ModuleNotFoundError) as e:
-        # AssertionError: pinned_schema ref not found. RuntimeError:
-        # sdk_schema_root() SDK layout change. KeyError: schema has no
+    except (AssertionError, KeyError, ModuleNotFoundError) as e:
+        # AssertionError: pinned_schema ref not found, OR sdk_schema_root() hit
+        # an SDK layout change -- it raises AssertionError for that too, which
+        # is why no RuntimeError arm is listed here. KeyError: schema has no
         # top-level "enum". ModuleNotFoundError: bare `import adcp` failure.
-        # All 4 are instrument failures, not "findings exist" -- must exit 2
+        # All 3 are instrument failures, not "findings exist" -- must exit 2
         # (this script's diagnostic code), not fall through to an uncaught
         # traceback, which exits 1, the SAME code this script uses for
         # "findings exist" and which gates make quality (R3-29, salesagent-1zq3.29).
