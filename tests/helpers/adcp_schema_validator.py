@@ -13,9 +13,7 @@ tests/unit/test_adcp_spec_version.py.
 
 Lives in tests/helpers/ (not tests/e2e/) because it's a cross-tier consumer:
 tests/unit, tests/integration, and tests/e2e all import it, and importing an
-e2e-tier module from unit/integration is backwards layering (see
-tests/helpers/sdk_schema_root.py for the same rationale applied earlier to
-this module's own schema-root lookup).
+e2e-tier module from unit/integration is backwards layering.
 
 Schema loading and $ref resolution delegate to ``tests.helpers.pinned_schema``
 — the single source of truth every pinned-schema consumer in this repo reads
@@ -44,14 +42,14 @@ import referencing.exceptions
 from jsonschema.validators import Draft7Validator
 
 from tests.helpers import pinned_schema
-from tests.helpers.sdk_schema_root import sdk_schema_root as _sdk_schema_root
+from tests.helpers.pinned_schema import PinnedSchemaError
 
 _T = TypeVar("_T")
 
 # Failures of the validation INSTRUMENT rather than of the payload: the schema
 # is not valid draft-07, a $ref cannot be resolved or retrieved, or a schema
 # file on disk is not JSON. These map to this module's SchemaError, alongside
-# the AssertionError that _resolve_pinned translates. Anything NOT in this
+# the PinnedSchemaError that _wrap_pinned translates. Anything NOT in this
 # tuple is a bug in this module and propagates unwrapped — see
 # _validate_against_schema.
 #
@@ -61,7 +59,7 @@ _T = TypeVar("_T")
 # Unretrievable and NoSuchResource subclass KeyError instead. Unretrievable is
 # the one this repo actually produces at runtime — referencing wraps any
 # exception out of a registry retrieve callable, and pinned_schema._retrieve
-# raises AssertionError for a schema outside the pinned tree.
+# raises PinnedSchemaError for a schema outside the pinned tree.
 _INSTRUMENT_FAILURES = (
     jsonschema.exceptions.SchemaError,
     referencing.exceptions.Unresolvable,
@@ -91,7 +89,7 @@ class AdCPSchemaValidator:
     """
 
     def __init__(self) -> None:
-        self.schema_root = self._resolve_pinned(_sdk_schema_root)
+        self.schema_root = self._wrap_pinned(pinned_schema.schema_root)
 
         # Compiled-validator cache, keyed by normalized ref.
         self._schema_registry: dict[str, dict[str, Any]] = {}
@@ -111,26 +109,13 @@ class AdCPSchemaValidator:
             return json.load(f)
 
     def _normalize_ref(self, schema_ref: str) -> str:
-        """Map any historical $ref form to a path relative to the version root.
+        """Normalize via ``pinned_schema.normalize_ref``, in this module's error type.
 
-        Accepts absolute URLs (``https://adcontextprotocol.org/schemas/latest/…``),
-        site-rooted paths (``/schemas/v1/…``, ``/schemas/3.1.1/…``), and paths
-        already relative to the version root (``media-buy/get-products-request.json``,
-        the form the SDK index uses). The version segment is discarded — the
-        installed SDK's tree IS the pinned version. The normalized form is also
-        exactly what ``tests.helpers.pinned_schema`` expects (a category-qualified,
-        version-root-relative ref).
+        The rules live in ``pinned_schema`` so there is exactly one of them;
+        this only translates the failure into ``SchemaError``, which is what
+        this module's callers branch on.
         """
-        ref = schema_ref
-        if ref.startswith(("http://", "https://")):
-            host_and_path = ref.split("://", 1)[1]
-            ref = "/" + host_and_path.split("/", 1)[1] if "/" in host_and_path else ""
-        if ref.startswith("/schemas/"):
-            parts = ref.split("/", 3)  # ['', 'schemas', '<version>', '<relative path>']
-            ref = parts[3] if len(parts) == 4 else ""
-        if not ref or ref.startswith(("/", "..")):
-            raise SchemaError(f"Cannot resolve schema reference {schema_ref!r} against the pinned SDK schema tree")
-        return ref
+        return self._wrap_pinned(lambda: pinned_schema.normalize_ref(schema_ref))
 
     async def get_schema_index(self) -> dict[str, Any]:
         """Get the pinned schema index."""
@@ -144,7 +129,7 @@ class AdCPSchemaValidator:
         which ``pinned_schema`` resolver function it uses."""
         normalized = self._normalize_ref(schema_ref)
         if normalized not in cache:
-            cache[normalized] = self._resolve_pinned(lambda: resolver(normalized))
+            cache[normalized] = self._wrap_pinned(lambda: resolver(normalized))
         return cache[normalized]
 
     async def get_schema(self, schema_ref: str) -> dict[str, Any]:
@@ -161,15 +146,15 @@ class AdCPSchemaValidator:
         return self._cached(self._compiled_validators, schema_ref, pinned_schema.validator_for)
 
     @staticmethod
-    def _resolve_pinned(fn: Callable[[], _T]) -> _T:
-        """Call a zero-arg resolver, translating its ``AssertionError``
+    def _wrap_pinned(fn: Callable[[], _T]) -> _T:
+        """Call a zero-arg resolver, translating its ``PinnedSchemaError``
         (missing schema, a ref that escapes the schema tree, or a missing SDK
         schema tree) into ``SchemaError`` — the type this module's callers
         branch on to mean "resolution failed", distinct from
         ``SchemaValidationError`` (payload violates the contract)."""
         try:
             return fn()
-        except AssertionError as e:
+        except PinnedSchemaError as e:
             raise SchemaError(str(e)) from e
 
     async def _find_schema_ref_for_task(self, task_name: str, request_or_response: str) -> str | None:

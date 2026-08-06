@@ -12,13 +12,12 @@ This script is BOTH:
   * the Phase-1 reconciliation worklist generator (lists what to fix), and
   * the Phase-4 Guard A engine (``--strict``-style: exit 1 on any finding).
 
-Canonical source: the installed adcp SDK's own error-code.json enum (read via
-tests.helpers.pinned_schema, offline — no ~/projects/adcp clone needed). This
-script only reads the ``enum`` code LIST (not ``enumMetadata`` recovery/
-suggestion content, which stays on the separately-pinned vendored fixture —
-see docs/adcp-spec-version.md "Pinned schema sources"), so it grades against
-the SDK's full, current vocabulary rather than an independently-pinned
-snapshot that may lag behind it.
+Canonical source: ``adcp.ErrorCode``, the installed SDK's own generated enum
+(offline — no ~/projects/adcp clone needed). The SDK generates that enum from
+the very schema file this script used to re-read itself, so reading the enum
+directly means there is no second copy to drift. Only the code LIST; the
+``enumMetadata`` recovery/suggestion content stays on the separately-pinned
+vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources".
 
 Usage:
     # Worklist for specific use cases
@@ -41,9 +40,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FEATURES_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
-
-sys.path.insert(0, str(PROJECT_ROOT))
-from tests.helpers import pinned_schema  # noqa: E402
 
 # A code-shaped token: ALL_CAPS_SNAKE (e.g. INVALID_REQUEST) or a lowercase
 # *_error token (e.g. authentication_error). This excludes placeholders like
@@ -73,18 +69,15 @@ BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):
 
 def load_enum() -> set[str]:
     try:
-        return set(pinned_schema.load("error-code.json")["enum"])
-    except (AssertionError, KeyError, ModuleNotFoundError) as e:
-        # AssertionError: pinned_schema ref not found, OR sdk_schema_root() hit
-        # an SDK layout change -- it raises AssertionError for that too, which
-        # is why no RuntimeError arm is listed here. KeyError: schema has no
-        # top-level "enum". ModuleNotFoundError: bare `import adcp` failure.
-        # All 3 are instrument failures, not "findings exist" -- must exit 2
-        # (this script's diagnostic code), not fall through to an uncaught
+        import adcp
+    except ModuleNotFoundError as e:
+        # An instrument failure, not "findings exist" -- must exit 2 (this
+        # script's diagnostic code) rather than fall through to an uncaught
         # traceback, which exits 1, the SAME code this script uses for
-        # "findings exist" and which gates make quality (R3-29, salesagent-1zq3.29).
+        # "findings exist" and which gates make quality.
         print(f"ERROR: pinned enum not found: {e}", file=sys.stderr)
         sys.exit(2)
+    return {code.value for code in adcp.ErrorCode}
 
 
 def _iter_blocks(lines: list[str]):

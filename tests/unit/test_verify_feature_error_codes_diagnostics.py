@@ -5,21 +5,17 @@ The script uses exit 1 for "non-canonical error codes found" and that code gates
 all) must not fall through to an uncaught traceback, which also exits 1 and would
 read as "findings exist" — an empty worklist reported as a real result.
 
-``load_enum()`` therefore catches a NAMED tuple and calls ``sys.exit(2)``.
-This module pins both halves of that tuple:
-
-- every listed type is caught and produces exit 2, and
-- ``RuntimeError`` is NOT in it. The arm used to be there, attributed by comment
-  to ``sdk_schema_root()``, but that function raises ``AssertionError`` for the
-  SDK-layout condition (tests/helpers/sdk_schema_root.py) — nothing on
-  ``load_enum()``'s call chain raises ``RuntimeError``. Re-adding the arm would
-  silently re-broaden the instrument-failure net, and nothing graded that.
+``load_enum()`` now reads ``adcp.ErrorCode`` directly, so the only way the
+instrument can fail is the SDK not being importable at all. This module pins
+that single contract plus the happy path, without which every exit-2 assertion
+would still pass against a ``load_enum()`` gutted to raise unconditionally.
 
 GH #1868
 """
 
 from __future__ import annotations
 
+import builtins
 import importlib.util
 
 import pytest
@@ -41,57 +37,47 @@ def _load_script_module():
 _script = _load_script_module()
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        pytest.param(AssertionError("Pinned schema not found"), id="AssertionError"),
-        pytest.param(KeyError("enum"), id="KeyError"),
-        pytest.param(ModuleNotFoundError("No module named 'adcp'"), id="ModuleNotFoundError"),
-    ],
-)
-def test_instrument_failure_exits_2(monkeypatch, capsys, failure):
-    """Each caught type produces the diagnostic exit code, never the findings one."""
+def test_missing_sdk_exits_2(monkeypatch, capsys):
+    """An unimportable adcp SDK produces the diagnostic exit code, never the findings one."""
+    real_import = builtins.__import__
 
-    def _boom(_ref):
-        raise failure
+    def _no_adcp(name, *args, **kwargs):
+        if name == "adcp":
+            raise ModuleNotFoundError("No module named 'adcp'")
+        return real_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(_script.pinned_schema, "load", _boom)
+    monkeypatch.setattr(builtins, "__import__", _no_adcp)
 
     with pytest.raises(SystemExit) as exc_info:
         _script.load_enum()
 
     assert exc_info.value.code == 2, (
-        f"{type(failure).__name__} produced exit {exc_info.value.code}, expected 2. Exit 1 means "
+        f"a missing SDK produced exit {exc_info.value.code}, expected 2. Exit 1 means "
         "'non-canonical codes found' and gates make quality — an instrument failure reported "
         "that way is a silent false result."
     )
     assert "pinned enum not found" in capsys.readouterr().err
 
 
-def test_runtime_error_is_not_swallowed(monkeypatch):
-    """RuntimeError propagates: the dead arm attributed to sdk_schema_root() is gone.
+def test_unrelated_import_error_is_not_swallowed(monkeypatch):
+    """Only the SDK's absence is relabelled — an unrelated failure propagates.
 
-    sdk_schema_root() raises AssertionError for the missing-SDK-schema-tree
-    condition the removed arm's comment described, so a RuntimeError reaching
-    here would be an unrelated bug and must not be relabelled "pinned enum not
-    found" and turned into exit 2.
+    The catch is deliberately one type around one import. Broadening it (an
+    earlier version caught three types around a JSON read) turns any bug on the
+    load path into a quiet exit 2 that reads as a clean instrument failure.
     """
 
-    def _boom(_ref):
+    def _boom(name, *args, **kwargs):
         raise RuntimeError("an unrelated bug")
 
-    monkeypatch.setattr(_script.pinned_schema, "load", _boom)
+    monkeypatch.setattr(builtins, "__import__", _boom)
 
     with pytest.raises(RuntimeError, match="an unrelated bug"):
         _script.load_enum()
 
 
-def test_load_enum_reads_the_pinned_enum():
-    """Negative control: the happy path still returns the real vocabulary.
-
-    Without this, every assertion above would still pass if load_enum() were
-    gutted to raise unconditionally.
-    """
+def test_load_enum_reads_the_sdk_enum():
+    """Negative control: the happy path returns the SDK's real vocabulary."""
     codes = _script.load_enum()
     assert "VALIDATION_ERROR" in codes
     assert len(codes) >= 90, f"expected the SDK's current ~92-code enum, got {len(codes)}"

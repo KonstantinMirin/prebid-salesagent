@@ -25,8 +25,7 @@ import json
 
 import adcp
 
-from tests.helpers.pinned_schema import _resolve_filename
-from tests.helpers.sdk_schema_root import sdk_schema_root
+from tests.helpers.pinned_schema import _resolve_filename, schema_root
 
 
 class TestPinnedSchemaTracksSDKVersion:
@@ -35,7 +34,7 @@ class TestPinnedSchemaTracksSDKVersion:
         adcp package, not a separately committed/vendored fixture tree."""
         import tests.helpers.pinned_schema as pinned_schema_module
 
-        schema_dir = pinned_schema_module._schema_root().resolve()
+        schema_dir = pinned_schema_module.schema_root().resolve()
         sdk_root = adcp.__file__
         import pathlib
 
@@ -79,11 +78,11 @@ class TestPinnedSchemaTracksSDKVersion:
         )
 
     def test_resolved_tree_version_equals_installed_sdk_pin(self):
-        """sdk_schema_root()'s resolved tree must equal the installed SDK's own
+        """schema_root()'s resolved tree must equal the installed SDK's own
         version claim (R3-19, salesagent-1zq3.19).
 
         The three tests above grade content FLOORS (property presence, code
-        count >= 90) — a future spec bump that leaves sdk_schema_root()
+        count >= 90) — a future spec bump that leaves schema_root()
         pointing at a stale tree (e.g. major_minor hardcoded, derivation
         severed) would still satisfy every floor and go green. This asserts
         EQUALITY between the resolved tree's own index.json["adcp_version"]
@@ -92,9 +91,9 @@ class TestPinnedSchemaTracksSDKVersion:
         installed adcp SDK is pinned to"), not just a shape that happens to
         still satisfy today.
         """
-        index = json.loads((sdk_schema_root() / "index.json").read_text())
+        index = json.loads((schema_root() / "index.json").read_text())
         assert index["adcp_version"] == adcp.get_adcp_spec_version(), (
-            f"sdk_schema_root()'s resolved tree carries adcp_version={index['adcp_version']!r}, "
+            f"schema_root()'s resolved tree carries adcp_version={index['adcp_version']!r}, "
             f"but the installed SDK is pinned to {adcp.get_adcp_spec_version()!r} — the "
             "derivation from the SDK's pin to the resolved schema tree is severed."
         )

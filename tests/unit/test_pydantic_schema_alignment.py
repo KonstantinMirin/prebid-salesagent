@@ -54,24 +54,25 @@ from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_
 # previously lived here, pinned at adcontextprotocol/adcp@04f59d2d5, a full
 # spec-minor behind the SDK's).
 #
-# Ref strings in this file keep the "/schemas/<rest>" prefix as an internal
-# convention (unchanged from before) — load_json_schema() strips it and
-# resolves the rest against the SDK's tree.
+# Ref strings in this file are the one form the whole repo uses: a
+# category-qualified path relative to the version root, exactly as the SDK's
+# own index writes it. This file used to carry a "/schemas/" prefix of its own
+# and strip it here, which made a SECOND ref normalizer with rules that
+# disagreed with the shared one.
 
-# Map AdCP schema refs to Pydantic model classes. Keys are the pinned schema `$id`
-# namespace (`/schemas/<category>/<file>.json`). At 04f59d2d5, sync/list-creatives
+# Map AdCP schema refs to Pydantic model classes. At 04f59d2d5, sync/list-creatives
 # live under `creative/` (relocated from `media-buy/` earlier in 3.x).
 #
 # NOTE: CreateMediaBuyRequest is temporarily excluded due to AdCP spec evolution.
 # The spec now requires brand_card, but we maintain backward compatibility
 # via brand_manifest. Full brand_card implementation will be added in a separate PR.
 SCHEMA_TO_MODEL_MAP = {
-    "/schemas/media-buy/get-products-request.json": GetProductsRequest,
-    # "/schemas/media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
-    "/schemas/media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
-    "/schemas/media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
-    "/schemas/creative/sync-creatives-request.json": SyncCreativesRequest,
-    "/schemas/creative/list-creatives-request.json": ListCreativesRequest,
+    "media-buy/get-products-request.json": GetProductsRequest,
+    # "media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
+    "media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
+    "media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
+    "creative/sync-creatives-request.json": SyncCreativesRequest,
+    "creative/list-creatives-request.json": ListCreativesRequest,
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
@@ -116,38 +117,30 @@ _PROTOCOL_ENVELOPE_FIELDS: frozenset[str] = frozenset(
 # Fields the SDK's current schema tree defines but the local model does not yet
 # model. These are spec-vs-library mismatches, not bugs in our code.
 #
-# Keys MUST use the pinned schema namespace (`/schemas/media-buy/...`,
-# `/schemas/creative/...`) to match the `schema_ref` values in SCHEMA_TO_MODEL_MAP;
+# Keys MUST match the `schema_ref` values in SCHEMA_TO_MODEL_MAP verbatim;
 # `KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())` lookups silently fall back
 # to an empty set otherwise.
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
-    "/schemas/media-buy/get-products-request.json": set(),
-    "/schemas/media-buy/update-media-buy-request.json": set(),
-    "/schemas/media-buy/get-media-buy-delivery-request.json": set(),
-    "/schemas/creative/sync-creatives-request.json": set(),
-    "/schemas/creative/list-creatives-request.json": set(),
+    "media-buy/get-products-request.json": set(),
+    "media-buy/update-media-buy-request.json": set(),
+    "media-buy/get-media-buy-delivery-request.json": set(),
+    "creative/sync-creatives-request.json": set(),
+    "creative/list-creatives-request.json": set(),
 }
 
 
 def load_json_schema(schema_ref: str) -> dict[str, Any]:
     """Load an AdCP schema from the installed adcp SDK's pinned tree.
 
-    ``schema_ref`` carries this file's internal ``/schemas/<rest>`` prefix
-    convention for the top-level request schemas
-    (``SCHEMA_TO_MODEL_MAP``/``KNOWN_SCHEMA_LIBRARY_MISMATCHES`` keys) — that
-    prefix is stripped before delegating to ``tests.helpers.pinned_schema``,
-    the single source of truth for resolving pinned AdCP schemas. Every
-    ``$ref`` inside the returned dict is canonicalized to root-relative form
-    (``pinned_schema.load_canonicalized``, no ``/schemas/`` prefix), so a
-    ``$ref`` value found while walking the returned schema is ALSO a valid
-    input here without re-adding that prefix — this function accepts both
-    forms. A missing file is a HARD FAILURE (the pin moved, or a ``$ref`` is
-    outside the resolvable tree), never a silent skip.
+    Normalization is ``pinned_schema.normalize_ref`` — the single shared rule,
+    not a second one local to this file. Every ``$ref`` inside the returned
+    dict is canonicalized to root-relative form
+    (``pinned_schema.load_canonicalized``), so a ``$ref`` found while walking
+    the returned schema is itself a valid input here. A missing file is a HARD
+    FAILURE (the pin moved, or a ``$ref`` is outside the resolvable tree),
+    never a silent skip.
     """
-    rel = schema_ref.split("#")[0]
-    if rel.startswith("/schemas/"):
-        rel = rel[len("/schemas/") :]
-    return pinned_schema.load_canonicalized(rel)
+    return pinned_schema.load_canonicalized(pinned_schema.normalize_ref(schema_ref))
 
 
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
@@ -788,12 +781,12 @@ class _RegistryRow:
 # success arms and are excluded.
 _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
     _RegistryRow(
-        schema_ref="/schemas/media-buy/get-products-response.json",
+        schema_ref="media-buy/get-products-response.json",
         selector="products",
         model=GetProductsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/media-buy/create-media-buy-response.json",
+        schema_ref="media-buy/create-media-buy-response.json",
         selector="media_buy_id",
         model=CreateMediaBuySuccess,
         # packages requires the local package shape; synthesize is not reliable.
@@ -802,12 +795,12 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         declared_fields_override=frozenset({"valid_actions", "context"}),
     ),
     _RegistryRow(
-        schema_ref="/schemas/media-buy/update-media-buy-response.json",
+        schema_ref="media-buy/update-media-buy-response.json",
         selector="media_buy_id",
         model=UpdateMediaBuySuccess,
     ),
     _RegistryRow(
-        schema_ref="/schemas/media-buy/get-media-buy-delivery-response.json",
+        schema_ref="media-buy/get-media-buy-delivery-response.json",
         selector="media_buy_deliveries",
         model=GetMediaBuyDeliveryResponse,
         sample_override={
@@ -818,7 +811,7 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         },
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/get-creative-delivery-response.json",
+        schema_ref="creative/get-creative-delivery-response.json",
         selector="creatives",
         model=GetCreativeDeliveryResponse,
         sample_override={
@@ -828,22 +821,22 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         },
     ),
     _RegistryRow(
-        schema_ref="/schemas/account/list-accounts-response.json",
+        schema_ref="account/list-accounts-response.json",
         selector="accounts",
         model=ListAccountsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/account/sync-accounts-response.json",
+        schema_ref="account/sync-accounts-response.json",
         selector="accounts",
         model=SyncAccountsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/sync-creatives-response.json",
+        schema_ref="creative/sync-creatives-response.json",
         selector="creatives",
         model=SyncCreativesResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/list-creatives-response.json",
+        schema_ref="creative/list-creatives-response.json",
         selector="creatives",
         model=ListCreativesResponse,
         sample_override={
@@ -853,12 +846,12 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         },
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/list-creative-formats-response.json",
+        schema_ref="creative/list-creative-formats-response.json",
         selector="formats",
         model=ListCreativeFormatsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/signals/get-signals-response.json",
+        schema_ref="signals/get-signals-response.json",
         selector="signals",
         model=GetSignalsResponse,
     ),
@@ -990,14 +983,14 @@ def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[Response
 # (F5, PR #1388) is not lost when the envelope list is machine-generated.
 _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
     ResponseAlignment(
-        schema_ref="/schemas/account/sync-accounts-response.json",
+        schema_ref="account/sync-accounts-response.json",
         selector="accounts",
         item_key="accounts",
         model=SyncResponseAccount,
         sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
     ),
     ResponseAlignment(
-        schema_ref="/schemas/media-buy/get-products-response.json",
+        schema_ref="media-buy/get-products-response.json",
         selector="products",
         item_key="products",
         model=Product,

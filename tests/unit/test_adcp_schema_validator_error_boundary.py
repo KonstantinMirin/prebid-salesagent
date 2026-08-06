@@ -14,16 +14,15 @@ to eliminate: an AttributeError in the validator reading as "your payload is
 not spec-compliant" sends the reader hunting a contract violation that does
 not exist.
 
-Regression for the PR #1868 review: tests/helpers/sdk_schema_root.py used to
-raise a bare RuntimeError when the installed adcp SDK has no bundled schema
-tree for the pinned spec version. Every other pinned-schema failure point
-raises AssertionError, which AdCPSchemaValidator._resolve_pinned translates
-into the public SchemaError -- "the type this module's callers branch on"
-per its own docstring. AdCPSchemaValidator.__init__ calls sdk_schema_root()
-directly (via _resolve_pinned, not in a bare try/except) on every
-instantiation, so a caller written to the documented `except SchemaError:`
-contract would not catch an SDK-layout failure one step earlier in the same
-chain.
+Regression for the PR #1868 review: the schema-root lookup used to raise a
+bare RuntimeError when the installed adcp SDK has no schema tree for the
+pinned spec version, while every other pinned-schema failure point raised
+AssertionError. Both are now one type -- pinned_schema.PinnedSchemaError --
+which AdCPSchemaValidator._wrap_pinned translates into the public SchemaError,
+"the type this module's callers branch on" per its own docstring.
+AdCPSchemaValidator.__init__ resolves the schema root through _wrap_pinned on
+every instantiation, so a caller written to the documented `except
+SchemaError:` contract catches an SDK-layout failure too.
 
 No test previously simulated a missing SDK schema tree; existing SchemaError
 tests (tests/e2e/test_schema_validation_standalone.py) cover bad refs only.
@@ -85,9 +84,9 @@ async def test_validator_bug_propagates_unwrapped():
         pytest.param(
             referencing.exceptions.PointerToNowhere(ref="#/nope", resource=_DRAFT7_RESOURCE), id="unresolvable-pointer"
         ),
-        pytest.param(referencing.exceptions.Unretrievable(ref="https://adcp.internal/schemas/gone.json"), id="bad-ref"),
+        pytest.param(referencing.exceptions.Unretrievable(ref="file:///pinned/schemas/gone.json"), id="bad-ref"),
         pytest.param(
-            referencing.exceptions.NoSuchResource(ref="https://adcp.internal/schemas/absent.json"), id="absent-resource"
+            referencing.exceptions.NoSuchResource(ref="file:///pinned/schemas/absent.json"), id="absent-resource"
         ),
         pytest.param(json.JSONDecodeError("Expecting value", "{", 0), id="corrupt-schema-file"),
     ],
@@ -113,12 +112,12 @@ async def test_instrument_failures_surface_as_schema_error(instrument_failure):
 def test_missing_sdk_schema_tree_raises_schema_error(monkeypatch):
     import adcp
 
-    # sdk_schema_root() imports adcp at call time and derives the schema
-    # directory from get_adcp_spec_version(); a nonexistent version makes
+    # pinned_schema.schema_root() imports adcp at call time and derives the
+    # schema directory from get_adcp_spec_version(); a nonexistent version makes
     # the directory-existence check fail, exercising the failure branch.
     monkeypatch.setattr(adcp, "get_adcp_spec_version", lambda: "0.0.0")
 
-    # SchemaError subclasses neither RuntimeError nor AssertionError, so this
-    # raises-check alone proves the boundary translation happened.
+    # SchemaError subclasses neither PinnedSchemaError nor AssertionError, so
+    # this raises-check alone proves the boundary translation happened.
     with pytest.raises(SchemaError):
         AdCPSchemaValidator()

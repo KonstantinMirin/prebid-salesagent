@@ -112,8 +112,13 @@ only physically ships 8 of the SDK's 16 top-level categories (no `account/`,
 `enums/`, `governance/`, etc.), so validating a task in a missing category
 against `bundled/` alone would raise "not found" even though the schema
 exists. `pinned_schema.py` resolves the plain tree's relative `$ref`s
-(`../core/x.json`) via a synthetic `$id` injected into every loaded schema,
-wired through a `referencing.Registry`.
+(`../core/x.json`) by stamping each loaded schema with its own `file://` URI
+(`path.as_uri()`) as its `$id`, wired through a `referencing.Registry`. It also
+owns the single ref-normalization rule (`normalize_ref`): the only accepted
+form is the category-qualified, version-root-relative one the SDK index itself
+uses. An absolute URL or a `/schemas/<version>/…` path raises rather than being
+rewritten onto the pin — a ref naming a version means the caller believes it is
+grading something other than the pin, and quietly redirecting it hides that.
 
 A second, DELIBERATELY separate and independent pin remains for exactly one
 thing: error-code **enumMetadata `suggestion` text**, read from the vendored
@@ -127,11 +132,12 @@ divergences; 30 `AdCPError` subclasses graded, unchanged before/after).
 Reproduce the fixture's code count: `uv run python3 -c "import json;
 print(len(json.load(open('tests/fixtures/adcp_schemas_pinned/enums/error-code.json'))['enum']))"`
 -> 64 (65 `enumMetadata` keys, one of which is `$comment`). So
-every OTHER error-code reader (`tests/harness/transport.py`,
-`tests/unit/test_architecture_error_recovery_enum_conformance.py`, and
-`scripts/verify_feature_error_codes.py`, which only reads the `enum` code
-list) migrated onto `tests/helpers/pinned_schema.py` alongside the
-schema-shape consumers above. Only `suggestion` wording diverges (4 codes:
+every OTHER error-code reader migrated off the fixture:
+`tests/harness/transport.py` and
+`tests/unit/test_architecture_error_recovery_enum_conformance.py` read through
+`tests/helpers/pinned_schema.py` alongside the schema-shape consumers above,
+and `scripts/verify_feature_error_codes.py`, which needs only the code list,
+reads `adcp.ErrorCode` — the SDK's own generated enum — directly. Only `suggestion` wording diverges (4 codes:
 `CREDENTIAL_IN_ARGS`, `MEDIA_BUY_NOT_FOUND`, `PACKAGE_NOT_FOUND`,
 `REQUOTE_REQUIRED`) — moving the one remaining reader onto the SDK tree
 requires first reconciling that divergence (tracked as

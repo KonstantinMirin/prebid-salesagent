@@ -132,8 +132,8 @@ async def test_pinned_sdk_schema_source(monkeypatch):
 
     async with AdCPSchemaValidator() as validator:
         # The schema source is the SDK's _schemas/<major.minor> tree — asserted
-        # on the validator's OWN root (not recomputed here), so a wrong tree in
-        # _sdk_schema_root() fails this test.
+        # on the validator's OWN root (not recomputed here), so a wrong tree out
+        # of pinned_schema.schema_root() fails this test.
         assert validator.schema_root.parent.name == "_schemas"
         assert validator.schema_root.parent.parent == Path(adcp.__file__).parent, (
             f"validator loads schemas from {validator.schema_root}, expected the adcp SDK's _schemas tree"
@@ -151,16 +151,14 @@ async def test_pinned_sdk_schema_source(monkeypatch):
 @pytest.mark.parametrize(
     ("ref", "expected"),
     [
-        # The absolute-URL form upstream #6133 introduced — the outage's trigger.
-        ("https://adcontextprotocol.org/schemas/latest/core/version-envelope.json", "core/version-envelope.json"),
-        ("/schemas/v1/media-buy/get-products-request.json", "media-buy/get-products-request.json"),
-        ("/schemas/3.1.1/core/format-id.json", "core/format-id.json"),
-        # Version-root-relative, the form the SDK index uses — passes through.
+        # Version-root-relative, the form the SDK index uses — the ONLY form.
         ("media-buy/get-products-request.json", "media-buy/get-products-request.json"),
+        # A #fragment is stripped; the file part still has to be the one form.
+        ("core/format-id.json#/definitions/x", "core/format-id.json"),
     ],
 )
 def test_normalize_ref_accepted_forms(ref, expected):
-    """Every historical $ref form maps onto the pinned version root."""
+    """The one accepted ref form resolves against the pinned version root."""
     validator = AdCPSchemaValidator()
     assert validator._normalize_ref(ref) == expected
 
@@ -168,14 +166,22 @@ def test_normalize_ref_accepted_forms(ref, expected):
 @pytest.mark.parametrize(
     "ref",
     [
-        "/schemas/",  # no relative path after the version segment
+        # The absolute-URL form upstream #6133 introduced — the outage's trigger.
+        # Silently rewriting it onto the pin hid that "latest" was never honoured.
+        "https://adcontextprotocol.org/schemas/latest/core/version-envelope.json",
+        # Site-rooted, version-bearing: the version segment used to be discarded,
+        # so a ref naming ANY version quietly graded against the pin instead.
+        "/schemas/v1/media-buy/get-products-request.json",
+        "/schemas/3.1.1/core/format-id.json",
+        "/schemas/",  # nothing after the prefix
         "/other/x.json",  # site-rooted but not under /schemas/
         "../x.json",  # traversal out of the version root
-        "https://evil.example.com/x.json",  # foreign host, non-/schemas/ path
+        "https://evil.example.com/x.json",  # foreign host
+        "",  # empty
     ],
 )
 def test_normalize_ref_rejected_forms(ref):
-    """Malformed or escaping refs raise instead of resolving to a file probe."""
+    """Anything but the one form raises instead of being rewritten or probed."""
     validator = AdCPSchemaValidator()
     with pytest.raises(SchemaError):
         validator._normalize_ref(ref)
