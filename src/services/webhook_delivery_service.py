@@ -478,6 +478,15 @@ class WebhookDeliveryService:
         # deliver_signed_webhook below -- it serializes, signs and stamps the
         # timestamp as one decision, so this function never holds a signature
         # and a body serialization as two independent things to keep in sync.
+        # FIXME(#1894): this sender still resolves auth inline instead of through
+        # src.core.security.webhook_egress.webhook_auth_for, and does it wrong four
+        # ways: reads webhook_secret (a column with no writers in src/), signs
+        # ungated by authentication_type, silently downgrades a weak secret to an
+        # UNSIGNED delivery, and compares "bearer" in a case no writer produces.
+        # It is the sole debt entry in the
+        # test_architecture_no_inline_webhook_auth_resolution allowlist; closing
+        # #1894 removes that entry. Fixing these in place would make this the
+        # fourth divergent copy -- converge on the resolver instead.
         webhook_secret = getattr(config, "webhook_secret", None)
         if webhook_secret and not self._verify_secret_strength(webhook_secret):
             logger.warning(

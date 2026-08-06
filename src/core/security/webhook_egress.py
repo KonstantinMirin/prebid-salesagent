@@ -37,11 +37,99 @@ first.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from adcp import sign_legacy_webhook
 
 from src.core.security.outbound_http import OutboundResult, asend, send
+
+
+@dataclass(frozen=True, slots=True)
+class SignWithSecret:
+    """Sign the body with ``secret`` (AdCP ``HMAC-SHA256``)."""
+
+    secret: str
+
+
+@dataclass(frozen=True, slots=True)
+class BearerToken:
+    """Send ``Authorization: Bearer <token>``. Header credential, no signature."""
+
+    token: str
+
+
+@dataclass(frozen=True, slots=True)
+class BasicCredentials:
+    """Send ``Authorization: Basic <token>``.
+
+    Not an AdCP scheme. Preserved because ``order_approval_service`` honours it
+    today and the A2A push-config endpoint stores a free-form protobuf string,
+    so a stored ``basic`` row is one a real buyer can have created. Dropping it
+    while unifying would silently stop sending a header those buyers rely on.
+    """
+
+    token: str
+
+
+@dataclass(frozen=True, slots=True)
+class Unauthenticated:
+    """Deliver plain. The buyer selected no scheme, so there is nothing to apply."""
+
+
+@dataclass(frozen=True, slots=True)
+class HmacSecretMissing:
+    """``HMAC-SHA256`` was requested but no credential is stored.
+
+    Deliberately NOT :class:`Unauthenticated`: that one means "send it plain",
+    this one means "the buyer asked for a signature this sender cannot produce".
+    Collapsing the two into a single ``None`` is what let a sender deliver
+    unsigned to a receiver that will reject it, with no error anywhere.
+    """
+
+
+WebhookAuth = SignWithSecret | BearerToken | BasicCredentials | Unauthenticated | HmacSecretMissing
+
+_HMAC_SCHEME = "hmac-sha256"
+_BEARER_SCHEME = "bearer"
+_BASIC_SCHEME = "basic"
+
+
+def webhook_auth_for(scheme: str | None, credentials: str | None) -> WebhookAuth:
+    """Turn a stored ``(authentication_type, authentication_token)`` pair into ONE decision.
+
+    Three senders used to answer this question inline and gave three different
+    answers — differing in both the FIELD they read and the VALUE spelling they
+    compared — so a buyer's HMAC row signed on one path, silently delivered
+    unsigned on another, and never matched at all on a third.
+
+    Takes PRIMITIVES, not a ``PushNotificationConfig``: this package holds no
+    edge into ``src.core.database.models`` and must not grow one, and three call
+    sites build detached/transient configs that a model-shaped resolver would
+    serve only by accident.
+
+    Comparison is CASE-INSENSITIVE. The A2A ``setTaskPushNotificationConfig``
+    handler stores ``params.authentication.scheme`` verbatim from a free-form
+    protobuf string — no enum guards that path — so lowercase rows exist in
+    production. Comparing exactly against the pinned enum
+    (``AuthenticationScheme = ["Bearer", "HMAC-SHA256"]``) would stop
+    authenticating rows that are authenticated today: a regression, not a
+    tightening.
+
+    An unrecognised scheme resolves to :class:`Unauthenticated`, matching what
+    every sender does with it today. It must not widen into
+    :class:`HmacSecretMissing`, which means specifically "HMAC was asked for".
+    """
+    normalized = (scheme or "").strip().lower()
+    if not normalized:
+        return Unauthenticated()
+    if normalized == _HMAC_SCHEME:
+        return SignWithSecret(credentials) if credentials else HmacSecretMissing()
+    if normalized == _BEARER_SCHEME:
+        return BearerToken(credentials) if credentials else Unauthenticated()
+    if normalized == _BASIC_SCHEME:
+        return BasicCredentials(credentials) if credentials else Unauthenticated()
+    return Unauthenticated()
 
 
 def _canonical_body(payload: dict[str, Any]) -> bytes:

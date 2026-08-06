@@ -34,7 +34,12 @@ from src.core.security.outbound_http import (
     asend,
     terminal_client_error_status,
 )
-from src.core.security.webhook_egress import prepare_signed_request
+from src.core.security.webhook_egress import (
+    BearerToken,
+    SignWithSecret,
+    prepare_signed_request,
+    webhook_auth_for,
+)
 from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -236,16 +241,26 @@ class ProtocolWebhookService:
         # signer computing one serialization while something else transmits
         # another. Bearer is a header-only credential, not a body signature,
         # so it stays outside that seam.
-        if push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
-            headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
-            secret = None
-        elif (
-            push_notification_config.authentication_type == "HMAC-SHA256"
-            and push_notification_config.authentication_token
-        ):
-            secret = push_notification_config.authentication_token
-        else:
-            secret = None
+        auth = webhook_auth_for(
+            push_notification_config.authentication_type,
+            push_notification_config.authentication_token,
+        )
+        secret = None
+        if isinstance(auth, BearerToken):
+            headers["Authorization"] = f"Bearer {auth.token}"
+        elif isinstance(auth, SignWithSecret):
+            secret = auth.secret
+        # BasicCredentials, Unauthenticated and HmacSecretMissing all fall through
+        # to an unsigned delivery, which is exactly what this sender does today --
+        # the migration to webhook_auth_for deletes the spelling divergence, it
+        # does not change this sender's outcomes.
+        #
+        # HmacSecretMissing reaching an unsigned send IS a defect (the buyer asked
+        # for a signature and gets none), but it is a different sender's refusal
+        # decision than the one salesagent-47n9.20 was scoped to make, and no
+        # scenario grades it yet.
+        # FIXME(#1893): refuse HmacSecretMissing here too, matching
+        # order_approval_service's fail-closed backstop.
 
         # prepare_signed_request is called exactly once per delivery here —
         # its returned body_bytes are the exact bytes that must reach the

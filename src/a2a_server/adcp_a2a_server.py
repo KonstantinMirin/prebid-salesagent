@@ -113,6 +113,7 @@ from src.core.validation_helpers import (
 )
 from src.core.version import get_version
 from src.core.webhook_validator import (
+    reject_invalid_webhook_registration,
     reject_unsafe_webhook_registration_url,
     webhook_ssrf_suggestion,
     webhook_url_for_log,
@@ -152,6 +153,27 @@ def _reject_unsafe_a2a_webhook_url(url: str) -> None:
     """
     try:
         reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
+    except AdCPValidationError as e:
+        raise _invalid_params_from_ssrf_error(e) from e
+
+
+def _reject_invalid_a2a_push_config(url: str, scheme: str | None, credentials: str | None) -> None:
+    """Both push-config registration preconditions, as A2A ``InvalidParamsError``.
+
+    Delegates to the shared :func:`reject_invalid_webhook_registration` so this
+    transport cannot drift from the tool path on either precondition. The
+    translation below preserves the raised ``AdCPValidationError`` verbatim
+    (see :func:`_invalid_params_from_ssrf_error`'s isinstance branch), which is
+    what keeps a credential refusal naming the credentials field instead of
+    being re-labelled as a URL problem.
+    """
+    try:
+        reject_invalid_webhook_registration(
+            url=url,
+            scheme=scheme,
+            credentials=credentials,
+            field_prefix="push_notification_config",
+        )
     except AdCPValidationError as e:
         raise _invalid_params_from_ssrf_error(e) from e
 
@@ -1199,6 +1221,12 @@ class AdCPRequestHandler(RequestHandler):
                 response_id = config.id
                 response_url = config.url
                 response_validation_token = config.validation_token or ""
+                # Read-BACK, not sender-side auth resolution: this echoes the
+                # buyer's own registration to them. webhook_auth_for has nothing
+                # to offer here — there is no outbound request being
+                # authenticated — so this file is a justified false positive in
+                # test_architecture_no_inline_webhook_auth_resolution's allowlist,
+                # not deferred debt. Deliberately no FIXME.
                 auth_scheme = config.authentication_type
                 auth_credentials = config.authentication_token
 
@@ -1255,13 +1283,19 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
-            _reject_unsafe_a2a_webhook_url(url)
-
             auth_type = None
             auth_token_value = None
             if params.HasField("authentication"):
                 auth_type = params.authentication.scheme or None
                 auth_token_value = params.authentication.credentials or None
+
+            # Both registration preconditions, BEFORE the try. The except below
+            # funnels every ValueError into _invalid_params_from_ssrf_error, which
+            # manufactures field="push_notification_config.url" plus the https SSRF
+            # wording for a non-AdCP error -- so a credential refusal raised from
+            # inside the repository would reach the buyer as "fix your URL" about a
+            # URL that is fine (salesagent-47n9.20).
+            _reject_invalid_a2a_push_config(url, auth_type, auth_token_value)
 
             try:
                 with PushNotificationConfigUoW(tool_context.tenant_id) as uow:

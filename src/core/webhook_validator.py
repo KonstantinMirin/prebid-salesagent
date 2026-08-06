@@ -50,6 +50,7 @@ from src.core.exceptions import AdCPValidationError
 # recognise a scheme refusal without re-implementing the scheme rule, or the
 # two copies can drift.
 from src.core.security.url_validator import _scheme_error, check_url_ssrf
+from src.core.security.webhook_egress import HmacSecretMissing, webhook_auth_for
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
@@ -146,6 +147,51 @@ def reject_unsafe_webhook_registration_url(
             f"Invalid {field}: {error_msg}",
             field=field,
             suggestion=webhook_ssrf_suggestion(),
+            recovery="correctable",
+            context=context,
+        )
+
+
+def reject_invalid_webhook_registration(
+    *,
+    url: str | None,
+    scheme: str | None,
+    credentials: str | None,
+    field_prefix: str,
+    context: ContextObject | dict[str, Any] | None = None,
+) -> None:
+    """Run BOTH registration preconditions for one webhook config, in one call.
+
+    One entry point rather than two gates side by side. The URL gate alone is
+    already copy-pasted at six call sites; a parallel credential gate beside
+    each would make twelve, and a future registration surface could adopt one
+    and forget the other -- which is precisely the failure mode this ticket
+    exists to close (salesagent-47n9.20).
+
+    The credential precondition delegates to
+    :func:`~src.core.security.webhook_egress.webhook_auth_for`, the same
+    resolver the SENDERS use. So "asked for HMAC-SHA256 but supplied nothing
+    usable" means exactly one thing across ingest and delivery, by construction
+    rather than by two definitions that agree today.
+
+    Raises :class:`AdCPValidationError` (wire ``VALIDATION_ERROR``,
+    ``recovery="correctable"``) matching the sibling URL gate. Correctable
+    because the buyer is the only party who can supply the secret, and
+    supplying it makes the identical request succeed.
+    """
+    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
+
+    if isinstance(webhook_auth_for(scheme, credentials), HmacSecretMissing):
+        field = f"{field_prefix}.authentication.credentials"
+        raise AdCPValidationError(
+            f"Invalid {field}: authentication scheme {scheme!r} requires a shared secret, "
+            f"but no credentials were supplied. A webhook registered for HMAC-SHA256 with no "
+            f"secret can never be delivered -- the receiver would reject every unsigned request.",
+            field=field,
+            suggestion=(
+                "Supply the shared secret in authentication.credentials, or remove the "
+                "authentication block to receive unsigned webhooks."
+            ),
             recovery="correctable",
             context=context,
         )

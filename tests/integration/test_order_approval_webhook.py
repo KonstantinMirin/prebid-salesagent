@@ -50,13 +50,22 @@ def _bearer_config(env: OrderApprovalWebhookEnv, token: str = "test_token") -> N
     so the URL has to be the origin that is really listening — a row pointing
     anywhere else is invisible to the code under test and would make an
     "Authorization header" assertion grade nothing.
+
+    ``authentication_type`` is the SPEC spelling (``AuthenticationScheme =
+    ["Bearer", "HMAC-SHA256"]`` @ pinned AdCP 3.1.1), which is what every writer
+    in ``src/`` actually stores — ``media_buy_create`` persists ``schemes[0]``
+    verbatim. The fixture used to say lowercase ``"bearer"`` because that is
+    what ``order_approval_service`` compares against, so it graded the sender's
+    private spelling instead of the rows the sender really receives
+    (salesagent-47n9.20). RED until the sender resolves the scheme through
+    ``webhook_auth_for``, which compares case-insensitively.
     """
     tenant, principal = env.setup_default_data()
     PushNotificationConfigFactory(
         tenant=tenant,
         principal=principal,
         url=env.webhook_url,
-        authentication_type="bearer",
+        authentication_type="Bearer",
         authentication_token=token,
         is_active=True,
     )
@@ -142,8 +151,16 @@ class TestHmacSigning:
     branches but no HMAC-SHA256 branch at all, and ``_post_approval_webhook``
     hardcodes ``secret=None`` on every call -- so a config that ASKS for
     HMAC-SHA256 signing gets silent unsigned delivery instead, with no error.
-    RED until the send path reads ``PushNotificationConfig.webhook_secret``
-    for this scheme and threads it into ``deliver_signed_webhook``.
+
+    salesagent-47n9.20 moves the secret to the column a real row actually
+    carries. AdCP 3.1.1 puts the shared secret in
+    ``push_notification_config.authentication.credentials``, which every writer
+    in ``src/`` persists to ``authentication_token``; ``webhook_secret`` has
+    zero writers anywhere in ``src/``. The fixture used to populate
+    ``webhook_secret`` because that is the column the sender reads, so it
+    graded a row no buyer can create -- while every row a buyer CAN create took
+    the sender's "no secret stored" refusal branch. RED until the sender takes
+    its secret from ``authentication_token`` through ``webhook_auth_for``.
     """
 
     def test_hmac_sha256_config_signs_the_wire_body(self, integration_db):
@@ -160,7 +177,7 @@ class TestHmacSigning:
                 principal=principal,
                 url=env.webhook_url,
                 authentication_type="HMAC-SHA256",
-                webhook_secret=secret,
+                authentication_token=secret,
                 is_active=True,
             )
             env.set_http_status(200)
