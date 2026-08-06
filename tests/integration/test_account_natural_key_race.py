@@ -52,19 +52,19 @@ def _competitor_commits_mid_create(tenant_id: str, winner_id: str, *, brand: dic
     """Let a competing writer COMMIT the natural key between a caller's pre-check and its insert.
 
     The single-threaded equivalent of the barrier above, for exercising ONE
-    caller's recovery: the caller's own ``_require_natural_key_free`` runs for
+    caller's recovery: the caller's own ``_find_natural_key_conflict`` runs for
     real and finds nothing, then this hook commits the winner through the real
     repository in its own transaction, so the caller's insert hits the real
     unique index. Fires exactly once, so the winner's own create is not recursed
     into.
     """
-    real_check = AccountRepository._require_natural_key_free
+    real_check = AccountRepository._find_natural_key_conflict
     fired = threading.Event()
 
     def check_then_let_the_competitor_win(self, account):
-        real_check(self, account)
-        if fired.is_set():
-            return
+        occupant = real_check(self, account)
+        if fired.is_set() or occupant is not None:
+            return occupant
         fired.set()
         with AccountUoW(tenant_id) as uow:
             assert uow.accounts is not None
@@ -80,7 +80,7 @@ def _competitor_commits_mid_create(tenant_id: str, winner_id: str, *, brand: dic
                 )
             )
 
-    with patch.object(AccountRepository, "_require_natural_key_free", check_then_let_the_competitor_win):
+    with patch.object(AccountRepository, "_find_natural_key_conflict", check_then_let_the_competitor_win):
         yield fired
 
 
@@ -92,13 +92,14 @@ def _race_two_creates(tenant_id: str, account_ids: tuple[str, str]) -> dict[str,
     """
     outcomes: dict[str, BaseException | None] = {}
     barrier = threading.Barrier(len(account_ids), timeout=30)
-    real_check = AccountRepository._require_natural_key_free
+    real_check = AccountRepository._find_natural_key_conflict
 
     def synchronized_check(self, account):
         # The real check runs for real; the barrier only guarantees that BOTH
         # have passed it before either reaches the flush.
-        real_check(self, account)
+        occupant = real_check(self, account)
         barrier.wait()
+        return occupant
 
     def attempt(account_id: str) -> None:
         try:
@@ -119,7 +120,7 @@ def _race_two_creates(tenant_id: str, account_ids: tuple[str, str]) -> dict[str,
         except BaseException as exc:  # noqa: BLE001 — the whole point is what escapes
             outcomes[account_id] = exc
 
-    with patch.object(AccountRepository, "_require_natural_key_free", synchronized_check):
+    with patch.object(AccountRepository, "_find_natural_key_conflict", synchronized_check):
         threads = [threading.Thread(target=attempt, args=(aid,)) for aid in account_ids]
         for thread in threads:
             thread.start()
@@ -161,7 +162,7 @@ class TestConcurrentCreateOnOneNaturalKey:
             "the create that lost the uq_accounts_natural_key race raised a raw IntegrityError: "
             f"{ {aid: str(exc)[:200] for aid, exc in integrity_errors.items()} }. "
             "The admin blueprint catches only ValueError, so this reaches the operator as a 500 "
-            "for the very condition _require_natural_key_free explains politely when it wins."
+            "for the very condition _find_natural_key_conflict explains politely when it wins."
         )
 
     def test_exactly_one_account_survives_the_race(self, integration_db):
@@ -210,7 +211,7 @@ class TestAdminCreateLosingTheRace:
 
             assert response.status_code < 500, (
                 f"the losing admin create returned {response.status_code} — the operator gets a 500 for "
-                "the very condition _require_natural_key_free explains politely when it wins"
+                "the very condition _find_natural_key_conflict explains politely when it wins"
             )
 
             on_key = admin.accounts_on_natural_key(domain=_DOMAIN, operator=_OPERATOR)

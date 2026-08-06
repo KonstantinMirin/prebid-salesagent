@@ -9,14 +9,13 @@ beads: salesagent-m44
 from __future__ import annotations
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.core.database.integrity import is_constraint_violation
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Account, AgentAccountAccess
 from src.core.helpers.brand_key import brand_key_parts
 
-#: The index that IS the natural-key invariant. ``_require_natural_key_free`` is
+#: The index that IS the natural-key invariant. ``_find_natural_key_conflict`` is
 #: only the fast path in front of it.
 NATURAL_KEY_INDEX = "uq_accounts_natural_key"
 
@@ -309,27 +308,29 @@ class AccountRepository:
                 f"Tenant mismatch: repository is scoped to '{self._tenant_id}' "
                 f"but account has tenant_id='{account.tenant_id}'"
             )
-        self._require_natural_key_free(account)
-        try:
-            with self._session.begin_nested():
-                self._session.add(account)
-                self._session.flush()
-        except IntegrityError as exc:
-            if not is_constraint_violation(exc, NATURAL_KEY_INDEX):
-                raise
-            # The winner committed between our pre-check and our insert. Re-running
-            # the pre-check now finds it and raises the SAME conflict the caller
-            # would have got a microsecond earlier — one message, one query, defined
-            # in one place.
-            self._require_natural_key_free(account)
-            # Unreachable in practice: the only way the key is free again is the
-            # winner rolling back after beating us. Re-raise rather than invent a
-            # cause we cannot attribute — a retry of the create will now succeed.
-            raise
+
+        def write() -> None:
+            self._session.add(account)
+            self._session.flush()
+
+        occupant = resolve_or_write(
+            self._session,
+            conflict=lambda: self._find_natural_key_conflict(account),
+            write=write,
+            constraint=NATURAL_KEY_INDEX,
+        )
+        if occupant is not None:
+            raise self._natural_key_conflict(account, occupant)
         return account
 
-    def _require_natural_key_free(self, account: Account) -> None:
-        """Refuse a create whose natural key already resolves to an account.
+    def _find_natural_key_conflict(self, account: Account) -> Account | None:
+        """The account already occupying *account*'s natural key, or ``None``.
+
+        RETURNS rather than raises so it can serve as ``resolve_or_write``'s ``conflict``
+        callback, which distinguishes "occupied" from "free" by ``None``. ``create()``
+        translates a non-``None`` answer into :class:`NaturalKeyConflict` at its one call
+        site — the same raise-to-return adaptation ``push_notification_config.py``'s
+        ``register_admin_webhook`` already makes.
 
         The other half of salesagent-8sfr. That bug closed the UPDATE path by
         making the key components immutable; a second CREATE reached the same
@@ -361,7 +362,7 @@ class AccountRepository:
             # lookup supplies a domain), so there is no ambiguity to prevent.
             # Matches the partial `uq_accounts_natural_key` index — a check
             # stricter than its own index would refuse rows the DB accepts.
-            return
+            return None
 
         existing = self._session.scalars(
             select(Account).where(
@@ -375,15 +376,23 @@ class AccountRepository:
             )
         ).first()
 
-        if existing is not None:
-            raise NaturalKeyConflict(
-                f"Natural key already in use: account '{existing.account_id}' already exists for "
-                f"operator={account.operator!r}, brand.domain={brand_domain!r}, "
-                f"brand.brand_id={brand_id!r}, sandbox={bool(account.sandbox)!r}. "
-                "Edit that account instead — a second account on one natural key makes the "
-                "buyer's sync_accounts entry unresolvable, and they cannot repair it.",
-                existing_account_id=existing.account_id,
-            )
+        return existing
+
+    def _natural_key_conflict(self, account: Account, existing: Account) -> NaturalKeyConflict:
+        """The one conflict message, whether the pre-check or the index caught it.
+
+        Built here rather than at the raise site so the buyer sees identical wording
+        regardless of which of the two detected the collision.
+        """
+        brand_domain, brand_id = brand_key_parts(account.brand)
+        return NaturalKeyConflict(
+            f"Natural key already in use: account '{existing.account_id}' already exists for "
+            f"operator={account.operator!r}, brand.domain={brand_domain!r}, "
+            f"brand.brand_id={brand_id!r}, sandbox={bool(account.sandbox)!r}. "
+            "Edit that account instead — a second account on one natural key makes the "
+            "buyer's sync_accounts entry unresolvable, and they cannot repair it.",
+            existing_account_id=existing.account_id,
+        )
 
     def update_status(self, account_id: str, status: str) -> Account | None:
         """Update an account's status. Returns None if not found."""

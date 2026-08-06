@@ -341,7 +341,7 @@ class AdminAccountEnv:
         Goes through ``AccountUoW`` -> ``AccountRepository.create()`` rather than a
         raw ``session.add``, so a harness-seeded row obeys the same invariants a
         production-created one does — above all the natural-key collision refusal in
-        ``_require_natural_key_free``. Seeding straight into the table would leave
+        ``_find_natural_key_conflict``. Seeding straight into the table would leave
         this helper as the one seam through which a test could establish a state
         production forbids (two accounts on one natural key), and a test that asserts
         on an impossible state proves nothing.
