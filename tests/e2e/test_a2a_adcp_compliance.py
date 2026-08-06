@@ -23,8 +23,8 @@ import pytest
 
 from tests.e2e._compliance_report import ComplianceReportBase
 from tests.e2e.adcp_request_builder import build_a2a_message_send
-from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
-from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
+from tests.helpers.a2a_adcp_validation import validate_a2a_skill_payload
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 
 from .conftest import e2e_host
 
@@ -121,14 +121,9 @@ class A2AAdCPComplianceClient:
             "payload_extracted": False,
         }
 
-        schema_task = SKILL_TO_ADCP_TASK.get(skill_name)
-        if not schema_task:
-            result["warnings"].append(f"No AdCP schema mapping for skill '{skill_name}'")
-            return result
-
-        result["schema_tested"] = schema_task
-
-        # Extract AdCP payload
+        # Extraction is the only transport-specific step (JSON-RPC dict here,
+        # protobuf artifact in the in-process validator); everything after it
+        # is the shared helper, so the two cannot drift again.
         adcp_payload = self.extract_adcp_payload_from_a2a_response(a2a_response)
         if not adcp_payload:
             result["errors"].append("Could not extract AdCP payload from A2A response")
@@ -137,25 +132,15 @@ class A2AAdCPComplianceClient:
 
         result["payload_extracted"] = True
 
-        # Validate against schema
-        if self.schema_validator:
-            try:
-                await self.schema_validator.validate_response(schema_task, adcp_payload)
-                result["warnings"].append("AdCP schema validation passed")
-            except SchemaValidationError as e:
-                # str(e) is just the top-level message ("Schema validation
-                # failed for X response") — the actual field-level errors
-                # live on e.validation_errors and were silently dropped here,
-                # which made a real production bug take much longer to
-                # diagnose than it should have.
-                detail = "; ".join(e.validation_errors)
-                result["errors"].append(f"AdCP schema validation failed: {detail}")
-                result["valid"] = False
-            except Exception as e:
-                result["errors"].append(f"Validation error: {e}")
-                result["valid"] = False
-        else:
+        if not self.schema_validator:
             result["warnings"].append("Schema validator not available")
+            return result
+
+        outcome = await validate_a2a_skill_payload(self.schema_validator, skill_name, adcp_payload)
+        result["valid"] = outcome["valid"]
+        result["errors"] = outcome["errors"]
+        result["warnings"] = outcome["warnings"]
+        result["schema_tested"] = outcome["schema_tested"]
 
         return result
 

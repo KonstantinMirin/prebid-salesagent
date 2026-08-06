@@ -4,9 +4,9 @@ Regression for #1710 (PR #1868 review, salesagent-w02n.2): one of the 4
 zero-BDD-coverage sites named in the PR review, with no live-dispatch wire
 grading at all previously.
 
-No pinned schema validates this response: update_performance_index is not in
-SKILL_TO_ADCP_TASK (tests/helpers/skill_to_adcp_task.py) and has no
-corresponding task in the pinned AdCP 3.1 schema tree. The pinned
+No pinned schema validates this response: update_performance_index is listed
+in ``_KNOWN_MISSING_SCHEMA_SKILLS`` (tests/e2e/test_a2a_protocol_compliance.py)
+because no task for it resolves in the pinned AdCP 3.1 schema tree. The pinned
 media-buy/provide-performance-feedback-response.json is a DIFFERENT task
 (oneOf success[required]/errors[required] discriminated union) -- validating
 against it would always fail on structural grounds unrelated to null-omission,

@@ -6,9 +6,10 @@ audit logger. Requires an existing MediaBuy owned by the calling principal
 ``require_auth``).
 
 Note: ``update_performance_index`` has no corresponding task in the pinned
-AdCP 3.1 schema tree (not in ``SKILL_TO_ADCP_TASK``; the pinned
+AdCP 3.1 schema tree — it is listed in ``_KNOWN_MISSING_SCHEMA_SKILLS``
+(tests/e2e/test_a2a_protocol_compliance.py); the pinned
 ``provide-performance-feedback-response.json`` is a structurally different,
-unrelated task). Tests using this env can assert field ABSENCE on the wire
+unrelated task. Tests using this env can assert field ABSENCE on the wire
 but must not validate against a pinned response schema for this tool.
 
 Requires: integration_db fixture.

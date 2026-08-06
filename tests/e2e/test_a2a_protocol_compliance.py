@@ -19,8 +19,8 @@ our control.
 
 import pytest
 
+from src.a2a_server.adcp_a2a_server import create_agent_card
 from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
-from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
 
 
 class TestA2AProtocolCompliance:
@@ -55,55 +55,64 @@ class TestA2AProtocolCompliance:
     # Real schema conformance is covered by tests/unit/test_adcp_contract.py against
     # the pinned adcp library version. See PR #1186 notes.
 
-    # Skills mapped to None in SKILL_TO_ADCP_TASK (no task in the pinned
-    # index yet) that we still actively watch for a newly-added schema.
+    # Skills this agent ships for which the pinned index has no task at all.
     # Shrink-only: when the spec adds a schema for one of these, remove it
-    # here — do not add new entries (add the skill to SKILL_TO_ADCP_TASK
-    # with its real task name instead).
-    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset(skill for skill, task in SKILL_TO_ADCP_TASK.items() if task is None)
+    # here — never add an entry. A newly-added skill with no schema is a real
+    # failure, not something to allowlist.
+    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset(
+        {
+            "approve_creative",
+            "get_media_buy_status",
+            "optimize_media_buy",
+            "list_authorized_properties",
+            "update_performance_index",
+        }
+    )
 
     @pytest.mark.asyncio
     async def test_all_adcp_skills_have_schemas(self):
         """
-        Verify that all AdCP-compliant skills have corresponding schemas.
+        Every skill this agent advertises resolves to a pinned request AND response schema.
 
-        This prevents regressions where we add new skills but forget to:
-        1. Add them to the schema validation map
-        2. Create tests for them
-        3. Validate their request/response formats
+        The roster comes from ``create_agent_card().skills`` — production's own
+        and only skill declaration — so a skill added there is graded the same
+        day with no test edit. The previous version iterated a hand-maintained
+        test-side map, which had already gone stale in both directions: it
+        listed a skill production had deleted and omitted five it ships, four
+        of which have resolvable schemas that nothing was checking.
 
-        Skills and their canonical task names both come from
-        SKILL_TO_ADCP_TASK (tests/helpers/skill_to_adcp_task.py) — the single
-        shared source, not a locally hand-typed skill set combined with a
-        skill.replace("_", "-") derivation (R3-28, salesagent-1zq3.28: that
-        third derivation had already diverged from the shared map on 6
-        entries). Uses AdCPSchemaValidator._find_schema_ref_for_task
-        (searches every index section) rather than a hardcoded 'media-buy/'
-        path, so a skill whose schema lives outside media-buy (e.g.
-        sync_creatives, under creative/) is correctly found instead of
-        silently treated as missing.
+        The task name is derived (``_`` -> ``-``) at use rather than stored.
+        Uses ``_find_schema_ref_for_task`` (searches every index section)
+        rather than a hardcoded 'media-buy/' path, so a skill whose schema
+        lives elsewhere (e.g. sync_creatives, under creative/) is found rather
+        than silently treated as missing.
         """
         async with AdCPSchemaValidator() as validator:
             missing_schemas = []
             newly_resolved = []
 
-            for skill, mapped_task_name in SKILL_TO_ADCP_TASK.items():
-                task_name = mapped_task_name or skill.replace("_", "-")
-                schema_ref = await validator._find_schema_ref_for_task(task_name, "request")
+            for skill in sorted(s.id for s in create_agent_card().skills):
+                task_name = skill.replace("_", "-")
+                refs = {
+                    direction: await validator._find_schema_ref_for_task(task_name, direction)
+                    for direction in ("request", "response")
+                }
 
                 if skill in self._KNOWN_MISSING_SCHEMA_SKILLS:
-                    if schema_ref is not None:
+                    if any(ref is not None for ref in refs.values()):
                         newly_resolved.append(skill)
                     continue
 
-                if schema_ref is None:
-                    missing_schemas.append(skill)
-                else:
-                    schema = await validator.get_schema(schema_ref)
-                    assert schema is not None, f"Schema resolved but failed to load for {skill}"
+                for direction, ref in refs.items():
+                    if ref is None:
+                        missing_schemas.append(f"{skill} ({direction})")
+                    else:
+                        assert await validator.get_schema(ref) is not None, (
+                            f"{direction} schema resolved but failed to load for {skill}"
+                        )
 
             assert not missing_schemas, (
-                f"AdCP skill(s) have no request schema anywhere in the pinned index: {missing_schemas}"
+                f"Advertised skill(s) have no schema anywhere in the pinned index: {missing_schemas}"
             )
             assert not newly_resolved, (
                 f"Skill(s) in _KNOWN_MISSING_SCHEMA_SKILLS now HAVE a schema — shrink the allowlist: {newly_resolved}"

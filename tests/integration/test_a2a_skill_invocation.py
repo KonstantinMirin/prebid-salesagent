@@ -16,7 +16,7 @@ from adcp.types import AccountReference as LibraryAccountReference
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.helpers.skill_to_adcp_task import SKILL_TO_ADCP_TASK
+from tests.helpers.a2a_adcp_validation import validate_a2a_skill_payload
 from tests.utils.a2a_helpers import (
     assert_delivery_forwarded_account,
     create_a2a_message_with_skill,
@@ -42,9 +42,6 @@ logger = logging.getLogger(__name__)
 
 class A2AAdCPValidator:
     """Helper class to validate A2A responses against AdCP schemas."""
-
-    # Single source of truth for skill-name -> AdCP-task-name resolution.
-    SKILL_TO_SCHEMA_MAP = SKILL_TO_ADCP_TASK
 
     def __init__(self):
         self.validator = None
@@ -97,37 +94,26 @@ class A2AAdCPValidator:
             warnings.append("Schema validation not available - skipping")
             return result
 
-        # Check if skill has corresponding AdCP schema
-        schema_task = self.SKILL_TO_SCHEMA_MAP.get(skill_name)
-        if not schema_task:
-            warnings.append(f"No AdCP schema mapping for skill '{skill_name}' - skipping")
-            return result
-
-        result["schema_tested"] = schema_task
-
         # Extract AdCP payload from A2A artifacts
         if not task_result.artifacts:
             errors.append("No artifacts found in A2A task result")
             result["valid"] = False
             return result
 
-        # Validate each artifact (skills can return multiple artifacts)
+        # Validate each artifact (skills can return multiple artifacts).
+        # Extraction is transport-specific and stays here; everything after it
+        # is the shared helper, so this and the e2e client cannot drift.
         for i, artifact in enumerate(task_result.artifacts):
-            try:
-                adcp_payload = self.extract_adcp_payload_from_a2a_artifact(artifact)
-                if not adcp_payload:
-                    warnings.append(f"Artifact {i}: No AdCP payload found")
-                    continue
+            adcp_payload = self.extract_adcp_payload_from_a2a_artifact(artifact)
+            if not adcp_payload:
+                warnings.append(f"Artifact {i}: No AdCP payload found")
+                continue
 
-                # Validate against AdCP schema
-                await self.validator.validate_response(schema_task, adcp_payload)
-                warnings.append(f"Artifact {i}: AdCP schema validation passed")
-
-            except SchemaValidationError as e:
-                errors.append(f"Artifact {i}: AdCP schema validation failed: {e}")
-                result["valid"] = False
-            except Exception as e:
-                errors.append(f"Artifact {i}: Validation error: {e}")
+            outcome = await validate_a2a_skill_payload(self.validator, skill_name, adcp_payload)
+            result["schema_tested"] = outcome["schema_tested"]
+            errors.extend(f"Artifact {i}: {msg}" for msg in outcome["errors"])
+            warnings.extend(f"Artifact {i}: {msg}" for msg in outcome["warnings"])
+            if not outcome["valid"]:
                 result["valid"] = False
 
         return result
