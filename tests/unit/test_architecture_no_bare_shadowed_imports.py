@@ -9,12 +9,13 @@ under either name, so both raised ``ModuleNotFoundError`` on first real call.
 CLAUDE.md mandates absolute ``src.*`` imports; this is the shape that
 violation takes when it silently breaks rather than merely looking wrong.
 
-Scoped to ``src/adapters/`` — this bug's actual location, and the layer this
-fix touches. A whole-``src/`` sweep (salesagent-47n9.11's disease-scan atom)
-found 4 more live instances in ``src/admin/sync_api.py`` (bare
-``gam_orders_service`` imports), tracked and fixed separately as
-salesagent-vwbj; widening this guard's scope to all of ``src/`` is part of
-that follow-up, once its own fix lands with an allowlist entry it can cite.
+A whole-``src/`` sweep (salesagent-47n9.11's disease-scan atom) found 4 more
+live instances in ``src/admin/sync_api.py`` (bare ``gam_orders_service``
+imports), tracked and fixed separately as salesagent-vwbj. This guard was
+originally scoped to ``src/adapters/`` only, with its own docstring
+committing to widen to all of ``src/`` once vwbj's fix landed — done here:
+vwbj's disease-scan and sweep-verify re-scans both found zero violations
+repo-wide post-fix, so the widened scope needs no allowlist entry.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 
 from tests.unit._architecture_helpers import repo_root
 
-_ADAPTERS_DIR = repo_root() / "src" / "adapters"
+_SRC_DIR = repo_root() / "src"
 
 
 def _real_src_basenames(repo: Path) -> set[str]:
@@ -59,11 +60,11 @@ def find_bare_shadowed_imports(tree: ast.Module, basenames: set[str]) -> list[tu
 ALLOWLIST: frozenset[tuple[str, int]] = frozenset()
 
 
-class TestNoBareShadowedImportsInAdapters:
+class TestNoBareShadowedImportsInSrc:
     def test_no_bare_shadowed_imports(self) -> None:
         basenames = _real_src_basenames(repo_root())
         violations: list[str] = []
-        for path in sorted(_ADAPTERS_DIR.rglob("*.py")):
+        for path in sorted(_SRC_DIR.rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             rel = str(path.relative_to(repo_root()))
             for lineno, module in find_bare_shadowed_imports(tree, basenames):
