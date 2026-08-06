@@ -66,16 +66,12 @@ def _list_creatives_via_a2a(count: int, *, assets: dict | None = None):
     return wire
 
 
-def test_a2a_wire_format_id_is_object_not_string(integration_db):
-    """Every creative's format_id on the real A2A wire is a {agent_url, id} object.
+def _assert_format_ids_are_objects(creatives) -> None:
+    """Every creative's format_id is a full ``{agent_url, id}`` object, not a bare string.
 
-    Mutation check: revert the ``Creative.validate_format_id`` defensive-copy fix
-    (make it mutate its input ``values`` dict again) -> this test goes red, with
-    format_id observed as a bare string.
+    One implementation for every creative count: a strengthening here lands on
+    all of them at once, which a hand-rolled copy per count does not guarantee.
     """
-    wire = _list_creatives_via_a2a(count=1)
-    creatives = wire.get("creatives")
-    assert isinstance(creatives, list) and creatives, f"A2A wire must carry the creatives array, got {creatives!r}"
     for i, item in enumerate(creatives):
         format_id = item.get("format_id")
         assert isinstance(format_id, dict), (
@@ -88,17 +84,24 @@ def test_a2a_wire_format_id_is_object_not_string(integration_db):
         )
 
 
-def test_a2a_wire_format_id_object_survives_with_many_creatives(integration_db):
-    """Same assertion at a larger creative count -- the original report's reproduction scale."""
-    wire = _list_creatives_via_a2a(count=15)
+@pytest.mark.parametrize("count", [1, 15])
+def test_a2a_wire_format_id_is_object_not_string(integration_db, count):
+    """Every creative's format_id on the real A2A wire is a {agent_url, id} object.
+
+    Graded at both counts: the mechanism is not scale-dependent (count=1 is the
+    minimal deterministic reproduction), but count=15 is the scale the original
+    report used, so a scale-sensitive regression stays covered.
+
+    Mutation check: revert the ``Creative.validate_format_id`` defensive-copy fix
+    (make it mutate its input ``values`` dict again) -> this test goes red, with
+    format_id observed as a bare string.
+    """
+    wire = _list_creatives_via_a2a(count=count)
     creatives = wire.get("creatives")
-    assert isinstance(creatives, list) and len(creatives) == 15
-    for i, item in enumerate(creatives):
-        format_id = item.get("format_id")
-        assert isinstance(format_id, dict), (
-            f"creatives[{i}].format_id must be a {{agent_url, id}} object, got {format_id!r} "
-            f"(type {type(format_id).__name__})"
-        )
+    assert isinstance(creatives, list) and len(creatives) == count, (
+        f"A2A wire must carry {count} creative(s), got {creatives!r}"
+    )
+    _assert_format_ids_are_objects(creatives)
 
 
 @pytest.mark.parametrize("null_field", ["alt_text", "provenance"])
