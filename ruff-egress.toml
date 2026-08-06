@@ -40,3 +40,9 @@ select = ["TID251"]
 "adcp.client.ADCPClient".msg = "Constructing an adcp client dials un-pinned (no transport injection point in adcp 6.6.0). Sanctioned sites carry a line-scoped noqa; see tests/unit/test_ruff_egress_bans.py (GH #1589)."
 "adcp.ADCPMultiAgentClient".msg = "Constructing an adcp client dials un-pinned (no transport injection point in adcp 6.6.0). Sanctioned sites carry a line-scoped noqa; see tests/unit/test_ruff_egress_bans.py (GH #1589)."
 "adcp.client.ADCPMultiAgentClient".msg = "Constructing an adcp client dials un-pinned (no transport injection point in adcp 6.6.0). Sanctioned sites carry a line-scoped noqa; see tests/unit/test_ruff_egress_bans.py (GH #1589)."
+
+# --- adcp SDK signer footgun: discards the body bytes it signs, so its own
+# docstring's recommended usage reintroduces the signed-bytes-vs-wire-bytes
+# divergence bug (GH #1802 / salesagent-47n9.1) ---
+"adcp.webhooks.get_adcp_signed_headers_for_webhook".msg = "Discards the signed body bytes -- its own docstring example re-sends json=payload separately, reintroducing the signed-bytes-vs-wire-bytes divergence bug (GH #1802). Sign and send via src/core/security/outbound_http.py's send/asend with the signed byte string, not this helper."
+"adcp.get_adcp_signed_headers_for_webhook".msg = "Discards the signed body bytes -- its own docstring example re-sends json=payload separately, reintroducing the signed-bytes-vs-wire-bytes divergence bug (GH #1802). Sign and send via src/core/security/outbound_http.py's send/asend with the signed byte string, not this helper."

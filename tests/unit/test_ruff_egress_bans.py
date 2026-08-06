@@ -96,6 +96,7 @@ _SYMBOL_BAN_PATHS: dict[str, tuple[str, ...]] = {
     ),
     "ADCPClient": ("adcp", "adcp.client"),
     "ADCPMultiAgentClient": ("adcp", "adcp.client"),
+    "get_adcp_signed_headers_for_webhook": ("adcp.webhooks", "adcp"),
 }
 
 
