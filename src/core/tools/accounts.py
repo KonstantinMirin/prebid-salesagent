@@ -43,6 +43,11 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.account import AccountRepository, NaturalKeyConflict
+from src.core.database.repositories.account_serialization import (
+    serialize_business_entity,
+    serialize_governance_agents,
+    serialize_notification_configs,
+)
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -373,49 +378,6 @@ def _enum_to_str(val: object) -> str | None:
     return enum_value(val)
 
 
-def _serialize_typed_list(
-    items: Iterable[BaseModel | Mapping[str, object]] | None, model: type[BaseModel]
-) -> list[dict[str, object]] | None:
-    """Normalize a list of typed models (or dicts) to JSON-serializable dicts.
-
-    Both dict and model inputs go through ``model_dump(mode="json")`` so that
-    comparison is type-stable — without it ``AnyUrl != str`` and an unchanged
-    field reads as changed on every sync.
-
-    ``None`` and ``[]`` are preserved as distinct results: for
-    ``notification_configs`` they mean "never configured" and "explicitly
-    cleared", which the wire must tell apart.
-    """
-    if items is None:
-        return None
-    result: list[dict[str, object]] = []
-    for item in items:
-        if isinstance(item, dict):
-            # Validate through the model to normalize types (AnyUrl -> str, etc.)
-            result.append(model.model_validate(item).model_dump(mode="json"))
-        elif hasattr(item, "model_dump"):
-            result.append(item.model_dump(mode="json"))
-        else:
-            result.append(dict(item))
-    return result
-
-
-def _serialize_governance_agents(
-    agents: Iterable[BaseModel | Mapping[str, object]] | None,
-) -> list[dict[str, object]] | None:
-    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage."""
-    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
-
-    return _serialize_typed_list(agents, GovernanceAgent)
-
-
-def _serialize_notification_configs(
-    configs: Iterable[BaseModel | Mapping[str, object]] | None,
-) -> list[dict[str, object]] | None:
-    """Convert NotificationConfig models to JSON-serializable dicts for DB storage."""
-    return _serialize_typed_list(configs, NotificationConfig)
-
-
 def _scrub_notification_credentials(
     configs: Iterable[BaseModel | Mapping[str, object]] | None,
 ) -> list[NotificationConfig] | None:
@@ -443,15 +405,6 @@ def _scrub_notification_credentials(
     return scrubbed
 
 
-def _serialize_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> dict[str, object] | None:
-    """Normalize a ``billing_entity`` (model or dict) to a JSON-serializable dict."""
-    if entity is None:
-        return None
-    if hasattr(entity, "model_dump"):
-        return entity.model_dump(mode="json", exclude_none=True)
-    return dict(entity)
-
-
 def _scrub_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> BusinessEntity | None:
     """Strip write-only ``bank`` from an echoed ``billing_entity``.
 
@@ -476,11 +429,11 @@ def _persisted_value(db_account: DBAccount, field: str) -> object:
     """The persisted value of ``field``, serialized to compare against a resolved one."""
     current = getattr(db_account, field, None)
     if field == "notification_configs":
-        return _serialize_notification_configs(current)
+        return serialize_notification_configs(current)
     if field == "governance_agents":
-        return _serialize_governance_agents(current)
+        return serialize_governance_agents(current)
     if field == "billing_entity":
-        return _serialize_business_entity(current)
+        return serialize_business_entity(current)
     return current
 
 
@@ -490,7 +443,7 @@ def _resolve_notification_configs(
     """Apply declarative-replace semantics for ``notification_configs``.
 
     Unlike its sibling resolvers, ``persisted`` is the field's ALREADY-SERIALIZED
-    value (the caller wires it via ``_serialize_notification_configs(getattr(
+    value (the caller wires it via ``serialize_notification_configs(getattr(
     existing, "notification_configs", None))``), not the whole ``DBAccount`` --
     the wiring lambda in ``_FIELD_POLICY`` does that adaptation.
 
@@ -508,7 +461,7 @@ def _resolve_notification_configs(
     submitted = getattr(entry, "notification_configs", None)
     if submitted is None:
         return False, persisted
-    return True, _serialize_notification_configs(submitted) or []
+    return True, serialize_notification_configs(submitted) or []
 
 
 def _resolve_scalar(entry: SyncEntry, existing: DBAccount | None, field: str) -> tuple[bool, object]:
@@ -541,8 +494,8 @@ def _resolve_governance_agents(
     """
     submitted = getattr(entry, "governance_agents", None)
     if submitted is None:
-        return False, _serialize_governance_agents(getattr(existing, "governance_agents", None))
-    return True, _serialize_governance_agents(submitted)
+        return False, serialize_governance_agents(getattr(existing, "governance_agents", None))
+    return True, serialize_governance_agents(submitted)
 
 
 def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, dict[str, object] | None]:
@@ -558,10 +511,10 @@ def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tup
 
     submitted = getattr(entry, "billing_entity", None)
     if submitted is None:
-        return False, _serialize_business_entity(getattr(existing, "billing_entity", None))
+        return False, serialize_business_entity(getattr(existing, "billing_entity", None))
     if isinstance(submitted, dict):
         submitted = BusinessEntity.model_validate(submitted)
-    return True, _serialize_business_entity(submitted)
+    return True, serialize_business_entity(submitted)
 
 
 def _resolve_sandbox(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, bool | None]:
@@ -659,7 +612,7 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
         provisioning=_APPLIED,
         settings_update=_APPLIED,
         resolve=lambda entry, existing: _resolve_notification_configs(
-            entry, _serialize_notification_configs(getattr(existing, "notification_configs", None))
+            entry, serialize_notification_configs(getattr(existing, "notification_configs", None))
         ),
     ),
     "billing_entity": _FieldPolicy(
