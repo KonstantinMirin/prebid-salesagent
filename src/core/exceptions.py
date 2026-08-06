@@ -45,8 +45,8 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # Recovery: correctable") vs AUTH_INVALID ("Credentials were presented but
 # rejected ... Recovery: terminal") — see salesagent-mkso. adcp 6.6.0 has not
 # implemented the split yet (SDK is a cross-check, not authoritative). The
-# remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same
-# treatment in #1602.
+# remaining demoted spec code, BILLING_NOT_SUPPORTED, was promoted here too --
+# closing the #1602 half tracked at this site (see its entry below).
 _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
     "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
