@@ -144,15 +144,6 @@ def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt:
     return default_dt, False
 
 
-# Advisory normalization moved to src/core/exceptions.normalize_advisory_errors
-# (salesagent-3xmz B5): capabilities emits advisories too, and a tool importing an
-# advisory normalizer from a SIBLING tool module is a layering inversion. The hoisted
-# version additionally populates `recovery`, which this local copy omitted — the
-# core/error.json `recovery` description is normative ("Senders SHOULD populate
-# recovery on every error from 3.1 onward"), so the omission was under-conformant.
-_normalize_advisory_errors = normalize_advisory_errors
-
-
 def _is_circuit_breaker_open(tenant_id: str) -> bool:
     """Check if any circuit breaker is OPEN for the given tenant.
 
@@ -656,9 +647,8 @@ def _get_media_buy_delivery_impl(
             total_spend / total_conversions if total_conversions is not None and total_conversions > 0 else None
         )
 
-        # Normalize advisory error codes to guaranteed-standard wire codes
-        # (see _normalize_advisory_errors for why this can't leak an internal code).
-        advisory_errors = _normalize_advisory_errors(not_found_errors + adapter_errors)
+        # Normalize advisory error codes to guaranteed-standard wire codes.
+        advisory_errors = normalize_advisory_errors(not_found_errors + adapter_errors)
 
         # Create AdCP-compliant response
         context_val = req.context

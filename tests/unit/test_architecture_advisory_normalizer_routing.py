@@ -163,11 +163,14 @@ def test_meta_does_not_flag_module_that_routes_through_normalizer_by_name():
 
 
 def test_meta_recognizes_module_level_alias_call_not_just_the_literal_name():
-    """Would-be-missed case: media_buy_delivery.py's real pattern is an ALIAS call
-    (``_normalize_advisory_errors = normalize_advisory_errors`` then
-    ``_normalize_advisory_errors(...)``), never the literal name at the call site.
-    A guard that only pattern-matches the literal ``normalize_advisory_errors(``
-    call would false-positive on this file; the alias-tracking in
+    """Would-be-missed case: a module that calls the normalizer through a
+    module-level ALIAS (``_normalize_advisory_errors = normalize_advisory_errors``
+    then ``_normalize_advisory_errors(...)``) rather than the literal name at
+    the call site. media_buy_delivery.py used exactly this pattern until the
+    alias was inlined away (PR #1721 review round 2, F7); kept as a synthetic
+    regex-slip meta-test so a guard that only pattern-matches the literal
+    ``normalize_advisory_errors(`` call can't quietly regress on the next
+    module that reaches for an alias -- the alias-tracking in
     ``_normalizer_aliases`` is what prevents that.
     """
     tree, lines = _parse(
