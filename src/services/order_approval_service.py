@@ -355,6 +355,7 @@ def _post_approval_webhook(
     webhook_url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
+    secret: str | None = None,
 ) -> None:
     """POST the approval payload through the egress seam.
 
@@ -371,13 +372,8 @@ def _post_approval_webhook(
     """
     safe_url = webhook_url_for_log(webhook_url)
     try:
-        # secret=None here: no PushNotificationConfig field currently carries an
-        # HMAC secret for this path (salesagent-47n9.15 tracks wiring one for
-        # authentication_type == "HMAC-SHA256"). Routing through
-        # deliver_signed_webhook now, even unsigned, means that once a secret is
-        # wired the send call itself needs no change.
         result = deliver_signed_webhook(
-            webhook_url, payload, secret=None, headers=headers, timeout=10.0, max_attempts=3
+            webhook_url, payload, secret=secret, headers=headers, timeout=10.0, max_attempts=3
         )
     except OutboundRequestBlocked:
         # The URL never left the process. Deliberately opaque: the seam has
@@ -444,6 +440,23 @@ def _send_approval_webhook(
             )
             config = db.scalars(stmt).first()
 
+        secret: str | None = None
+        if config and config.authentication_type == "HMAC-SHA256":
+            if not config.webhook_secret:
+                # Config asked for HMAC-SHA256 but has no secret stored -- refusing to
+                # deliver unsigned (CLAUDE.md "No Quiet Failures") rather than silently
+                # falling through to the unsigned branch below (salesagent-47n9.15).
+                safe_url = webhook_url_for_log(webhook_url)
+                logger.error(
+                    "Approval webhook to %s is configured for HMAC-SHA256 but has no "
+                    "webhook_secret stored -- refusing to send unsigned (tenant=%s, principal=%s)",
+                    safe_url,
+                    tenant_id,
+                    principal_id,
+                )
+                return
+            secret = config.webhook_secret
+
         # The egress seam validates the URL as part of sending it, so there is no
         # separate SSRF pre-flight here: one refusal path, raised as
         # OutboundRequestBlocked before any connection is attempted.
@@ -451,6 +464,7 @@ def _send_approval_webhook(
             webhook_url,
             payload,
             _approval_webhook_headers(config),
+            secret,
         )
 
     except Exception as e:

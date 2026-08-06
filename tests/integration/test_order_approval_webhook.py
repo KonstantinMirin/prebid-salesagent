@@ -33,6 +33,7 @@ import pytest
 
 from tests.factories import PushNotificationConfigFactory
 from tests.harness.order_approval_webhook import OrderApprovalWebhookEnv
+from tests.helpers import assert_signature_verifies_over_wire_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -132,6 +133,42 @@ class TestStoredCredential:
 
             assert env.delivery_attempts == 1
             assert "Authorization" not in env.last_delivery.headers
+
+
+class TestHmacSigning:
+    """A ``HMAC-SHA256``-configured row must sign the webhook it sends.
+
+    salesagent-47n9.15: ``_approval_webhook_headers`` has bearer/basic/token
+    branches but no HMAC-SHA256 branch at all, and ``_post_approval_webhook``
+    hardcodes ``secret=None`` on every call -- so a config that ASKS for
+    HMAC-SHA256 signing gets silent unsigned delivery instead, with no error.
+    RED until the send path reads ``PushNotificationConfig.webhook_secret``
+    for this scheme and threads it into ``deliver_signed_webhook``.
+    """
+
+    def test_hmac_sha256_config_signs_the_wire_body(self, integration_db):
+        """A stored HMAC-SHA256 row produces a verifiable signature over the
+        exact bytes that crossed the socket -- not a re-serialization of the
+        payload dict, per the wire-byte pattern salesagent-47n9.2 established.
+        """
+        secret = "s" * 32  # Meets the 32-char minimum every HMAC secret in this suite uses.
+
+        with OrderApprovalWebhookEnv() as env:
+            tenant, principal = env.setup_default_data()
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                url=env.webhook_url,
+                authentication_type="HMAC-SHA256",
+                webhook_secret=secret,
+                is_active=True,
+            )
+            env.set_http_status(200)
+
+            env.call_send_approval_webhook(status="approved")
+
+            assert env.delivery_attempts == 1
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
 
 class TestRetryClassification:
