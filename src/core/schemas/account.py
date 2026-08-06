@@ -25,10 +25,10 @@ from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
 from adcp.types.generated_poc.core.business_entity import BusinessEntity as LibraryBusinessEntity
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel
+from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel, validate_idempotency_key_shape
 
 # ---------------------------------------------------------------------------
 # Core domain Account (used in ListAccountsResponse.accounts)
@@ -88,9 +88,23 @@ class SyncAccountsRequest(LibrarySyncAccountsRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes idempotency_key required.  Override as optional —
-    # generated at the transport boundary when not supplied by the caller.
+    # sync-accounts-request.json 3.1.1 lists idempotency_key in /required.  Override as
+    # optional: every existing keyless caller would otherwise break, and the field is inert
+    # until sync_accounts consumes it through the idempotency-attempt machinery.  Tightening
+    # to required belongs with that work, not here.  What is NOT optional is the shape --
+    # when a buyer does supply a key, it must satisfy the spec constraint on every transport.
     idempotency_key: str | None = None  # type: ignore[assignment]
+
+    @model_validator(mode="after")
+    def _check_idempotency_key(self):
+        """Reject a malformed idempotency_key with VALIDATION_ERROR (AdCP 16-255).
+
+        Same duty as the media-buy requests (_base.py) -- validating on the model is what
+        makes every transport reject an out-of-spec key identically, instead of each
+        wrapper deciding for itself.
+        """
+        validate_idempotency_key_shape(self.idempotency_key)
+        return self
 
 
 # ---------------------------------------------------------------------------

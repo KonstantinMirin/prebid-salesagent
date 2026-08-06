@@ -69,7 +69,12 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
+from src.core.schema_helpers import (
+    coerce_creative_filters,
+    select_request_fields,
+    to_account_reference,
+    to_brand_reference,
+)
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -1904,6 +1909,10 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with optional parameters (fixing original validation bug)
         response = core_list_creatives_tool(
             media_buy_id=parameters.get("media_buy_id"),
+            # media_buy_ids (AdCP 2.5) and the four projection flags below are accepted on
+            # MCP and REST; this handler used to enumerate around them, so an A2A buyer's
+            # filters were silently ignored (salesagent-e8wt.1 scan row 11).
+            media_buy_ids=parameters.get("media_buy_ids"),
             status=parameters.get("status"),
             format=parameters.get("format"),
             tags=parameters.get("tags", []),
@@ -1911,6 +1920,10 @@ class AdCPRequestHandler(RequestHandler):
             created_before=parameters.get("created_before"),
             search=parameters.get("search"),
             filters=filters,
+            fields=parameters.get("fields"),
+            include_performance=parameters.get("include_performance", False),
+            include_assignments=parameters.get("include_assignments", False),
+            include_sub_assets=parameters.get("include_sub_assets", False),
             page=parameters.get("page", 1),
             limit=parameters.get("limit", 50),
             sort_by=parameters.get("sort_by", "created_date"),
@@ -2047,6 +2060,8 @@ class AdCPRequestHandler(RequestHandler):
                 max_width=parameters.get("max_width"),
                 min_height=parameters.get("min_height"),
                 max_height=parameters.get("max_height"),
+                disclosure_positions=parameters.get("disclosure_positions"),
+                disclosure_persistence=parameters.get("disclosure_persistence"),
                 context=parameters.get("context"),
             )
 
@@ -2062,18 +2077,11 @@ class AdCPRequestHandler(RequestHandler):
         return an empty account list.
         """
         from src.core.schemas.account import ListAccountsRequest
+        from src.core.tools.accounts import build_list_accounts_request
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_accounts request"):
-            request = ListAccountsRequest(
-                account=parameters.get("account"),
-                status=parameters.get("status"),
-                pagination=parameters.get("pagination"),
-                sandbox=parameters.get("sandbox"),
-                idempotency_key=parameters.get("idempotency_key"),
-                ext=parameters.get("ext"),
-                context=parameters.get("context"),
-            )
+            request = build_list_accounts_request(**select_request_fields(ListAccountsRequest, parameters))
         return core_list_accounts_tool(req=request, identity=identity)
 
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
@@ -2082,15 +2090,11 @@ class AdCPRequestHandler(RequestHandler):
         Authentication is REQUIRED per BR-RULE-055.
         """
         from src.core.schemas.account import SyncAccountsRequest
+        from src.core.tools.accounts import build_sync_accounts_request
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="sync_accounts request"):
-            request = SyncAccountsRequest(
-                accounts=parameters.get("accounts", []),
-                delete_missing=parameters.get("delete_missing", False),
-                dry_run=parameters.get("dry_run", False),
-                context=parameters.get("context"),
-            )
+            request = build_sync_accounts_request(**select_request_fields(SyncAccountsRequest, parameters))
         return await core_sync_accounts_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
@@ -2118,7 +2122,9 @@ class AdCPRequestHandler(RequestHandler):
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_authorized_properties request"):
-            request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
+            request = ListAuthorizedPropertiesRequest.model_validate(
+                select_request_fields(ListAuthorizedPropertiesRequest, parameters)
+            )
 
         # Call core function with identity
         response = core_list_authorized_properties_tool(req=request, identity=identity)

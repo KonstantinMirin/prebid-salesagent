@@ -1063,13 +1063,19 @@ def _parse_sync_table(datatable: Any) -> list[dict[str, Any]]:
     return accounts
 
 
-def _dispatch_sync_table(ctx: dict, datatable: Any) -> None:
+def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | None = None) -> None:
     """Parse a Gherkin sync_accounts data table and dispatch it on the wire.
 
     pytest-bdd datatable: list of lists. First row = headers, rest = data rows.
     Handles force_identity (unauthenticated) and force_internal_error contexts.
-    Shared by the plain ``with:`` table When and the ``with idempotency_key … and:``
+    Shared by the plain ``with:`` table When and the ``carrying idempotency_key … and:``
     variant so the two paths cannot drift (DRY invariant).
+
+    ``idempotency_key``, when given, is sent as a FLAT wire parameter rather than
+    through a locally-constructed ``SyncAccountsRequest``. Constructing the request
+    in the step would run the buyer-side model validation here, in the test process,
+    and mask what each transport actually does with the field — which is precisely
+    the behavior these scenarios grade.
     """
     from src.core.schemas.account import SyncAccountsRequest
 
@@ -1098,8 +1104,11 @@ def _dispatch_sync_table(ctx: dict, datatable: Any) -> None:
         return
 
     try:
-        req = SyncAccountsRequest(accounts=accounts)
-        dispatch_request(ctx, req=req, **kwargs)
+        if idempotency_key is not None:
+            dispatch_request(ctx, accounts=accounts, idempotency_key=idempotency_key, **kwargs)
+        else:
+            req = SyncAccountsRequest(accounts=accounts)
+            dispatch_request(ctx, req=req, **kwargs)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1122,6 +1131,20 @@ def when_sync_accounts_with_key_and_table(ctx: dict, key: str, datatable: Any) -
     """
     ctx["sync_idempotency_key"] = key
     _dispatch_sync_table(ctx, datatable)
+
+
+@when(parsers.re(r'the Buyer Agent sends a sync_accounts request carrying idempotency_key "(?P<key>[^"]+)" and:'))
+def when_sync_accounts_carrying_key_and_table(ctx: dict, key: str, datatable: Any) -> None:
+    """Send sync_accounts with the buyer's idempotency_key actually ON the wire.
+
+    Distinct from the ``with idempotency_key … and:`` step above, which retains the
+    key on ctx for narrative purposes only. Here the key is a real wire parameter,
+    so each transport's handling of the spec-required, client-generated field is
+    what gets graded (sync-accounts-request.json 3.1.1, /required +
+    /properties/idempotency_key).
+    """
+    ctx["sync_idempotency_key"] = key
+    _dispatch_sync_table(ctx, datatable, idempotency_key=key)
 
 
 @when(parsers.parse('the Buyer Agent sends a sync_accounts request with governance_agents for brand "{domain}"'))

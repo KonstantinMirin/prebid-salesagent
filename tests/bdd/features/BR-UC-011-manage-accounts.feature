@@ -283,6 +283,41 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "unchanged"
 
+  @T-UC-011-sync-idempotency-envelope @sync @idempotency @v3-1 @partition
+  Scenario: sync_accounts accepts the buyer's client-generated idempotency_key
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request carrying idempotency_key "buyer-sync-key-000001" and:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the account for brand domain "acme-corp.com" has action "created"
+    # sync-accounts-request.json 3.1.1 lists idempotency_key in /required and describes it
+    # as "Client-generated" — the buyer mints it, the seller accepts it. A transport that
+    # rejects the field as an unknown input (REST body model, MCP tool signature) or drops
+    # it (A2A skill handler) is non-conformant on a field the spec makes mandatory.
+    # Storyboard: dist/compliance/3.1.1 has no account domain — this obligation is UNGRADED
+    # by the conformance storyboard; the schema is the sole authority.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/idempotency_key
+
+  @T-UC-011-sync-idempotency-malformed @sync @idempotency @validation @v3-1 @partition @boundary
+  Scenario Outline: sync_accounts rejects a malformed idempotency_key -- <partition_name>
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request carrying idempotency_key "<key>" and:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    # The value production validates MUST be the buyer's. A seller that substitutes a
+    # server-minted uuid4 (or drops the field) would let both rows below succeed, so this
+    # outline is what distinguishes "threads the buyer's key" from "fabricates its own".
+    # @bva idempotency_key: 15 chars (one below minLength 16); disallowed charset
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/idempotency_key
+
+    Examples:
+      | key                  | partition_name  | boundary_point                    |
+      | fifteen-chars-x      | below_min_length | length = 15 (minLength 16 - 1)   |
+      | buyer sync key 0001! | bad_charset      | space and ! outside allowed set  |
+
   @T-UC-011-sync-billing-enum @sync @billing @post-s7 @partition @boundary
   Scenario Outline: Sync with billing model <billing> -- <partition_name>
     Given the Buyer Agent has an authenticated connection

@@ -236,6 +236,47 @@ def _list_accounts_impl(
 
 
 # ---------------------------------------------------------------------------
+# Shared request builder
+# ---------------------------------------------------------------------------
+
+
+def build_list_accounts_request(
+    *,
+    account: LibraryAccountReference | None = None,
+    status: AccountStatus | None = None,
+    pagination: PaginationRequest | None = None,
+    sandbox: bool | None = None,
+    idempotency_key: str | None = None,
+    ext: dict | None = None,
+    context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
+) -> ListAccountsRequest:
+    """Build the shared list_accounts request for transport wrappers.
+
+    Mirrors build_get_adcp_capabilities_request (capabilities.py:160) -- the single
+    seam every transport constructs the typed request through, so a future request
+    field lands here once instead of in wrapper lockstep.
+
+    ``idempotency_key`` is threaded verbatim and never generated: on a read tool it is
+    tolerance (list-accounts-request.json 3.1.1 declares no such property and
+    ``additionalProperties: true``), so the only correct handling is to accept whatever
+    the buyer sent and let it have no effect.
+    """
+    return ListAccountsRequest(
+        account=account,
+        status=status,
+        pagination=pagination,
+        sandbox=sandbox,
+        idempotency_key=idempotency_key,
+        ext=ext,
+        context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
+    )
+
+
+# ---------------------------------------------------------------------------
 # MCP wrapper
 # ---------------------------------------------------------------------------
 
@@ -271,7 +312,7 @@ async def list_accounts(
         ToolResult with human-readable text and structured data.
     """
     with adcp_validation_boundary(context="list_accounts request"):
-        req = ListAccountsRequest(
+        req = build_list_accounts_request(
             account=account,
             status=status,
             pagination=pagination,
@@ -1615,7 +1656,10 @@ async def _sync_accounts_impl(
         SyncAccountsResponse with per-account action results.
     """
     if req is None:
-        req = SyncAccountsRequest(accounts=[], idempotency_key=str(uuid.uuid4()))
+        # No key is minted for the caller: idempotency_key is client-generated
+        # (sync-accounts-request.json 3.1.1). A keyless request stays keyless -- it then
+        # fails the empty-accounts check below, which is the honest outcome.
+        req = SyncAccountsRequest(accounts=[])
 
     # BR-RULE-055: sync requires auth (consistent with list_accounts). require_principal_id
     # first so the canonical auth message surfaces for a missing/anonymous token; require_identity
@@ -1932,6 +1976,48 @@ async def _sync_accounts_impl(
 
 
 # ---------------------------------------------------------------------------
+# sync_accounts shared request builder
+# ---------------------------------------------------------------------------
+
+
+def build_sync_accounts_request(
+    *,
+    accounts: list[SyncAccountInput | SettingsUpdateAccountInput] | None = None,
+    delete_missing: bool | None = None,
+    dry_run: bool | None = None,
+    idempotency_key: str | None = None,
+    push_notification_config: dict | None = None,
+    ext: dict | None = None,
+    context: ContextObject | None = None,
+    adcp_version: str | None = None,
+    adcp_major_version: int | None = None,
+) -> SyncAccountsRequest:
+    """Build the shared sync_accounts request for transport wrappers.
+
+    Mirrors build_list_accounts_request and build_get_adcp_capabilities_request.
+
+    ``idempotency_key`` is threaded VERBATIM and is never generated here. Per
+    sync-accounts-request.json 3.1.1 the field is client-generated ("MUST be unique per
+    (seller, request) pair. Use a fresh UUID v4 for each request") -- a seller that mints
+    its own key on every call can never recognise a retry, which defeats the only thing
+    the field exists for. Its shape is validated once, on the model
+    (SyncAccountsRequest._check_idempotency_key), so every transport rejects a malformed
+    key identically.
+    """
+    return SyncAccountsRequest(
+        accounts=accounts or [],
+        delete_missing=delete_missing,
+        dry_run=dry_run,
+        idempotency_key=idempotency_key,
+        push_notification_config=push_notification_config,
+        ext=ext,
+        context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
+    )
+
+
+# ---------------------------------------------------------------------------
 # sync_accounts MCP wrapper
 # ---------------------------------------------------------------------------
 
@@ -1942,6 +2028,14 @@ async def sync_accounts(
         bool | None, Field(description="Deactivate accounts not present in the sync list")
     ] = None,
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
+    idempotency_key: Annotated[
+        str | None,
+        Field(description="Client-generated key for at-most-once execution (16-255 chars, [A-Za-z0-9_.:-])"),
+    ] = None,
+    push_notification_config: Annotated[
+        dict | None, Field(description="Webhook configuration for asynchronous sync notifications")
+    ] = None,
+    ext: Annotated[dict | None, Field(description="AdCP extension object")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ) -> ToolResult:
@@ -1954,6 +2048,9 @@ async def sync_accounts(
         accounts: List of accounts to upsert.
         delete_missing: Deactivate accounts not in the list.
         dry_run: Preview changes without persisting.
+        idempotency_key: Client-generated at-most-once key (sync-accounts-request.json 3.1.1).
+        push_notification_config: Webhook configuration for async sync notifications.
+        ext: AdCP extension object.
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
 
@@ -1961,12 +2058,14 @@ async def sync_accounts(
         ToolResult with human-readable text and structured data.
     """
     with adcp_validation_boundary(context="sync_accounts request"):
-        req = SyncAccountsRequest(
-            accounts=accounts or [],
+        req = build_sync_accounts_request(
+            accounts=accounts,
             delete_missing=delete_missing,
             dry_run=dry_run,
+            idempotency_key=idempotency_key,
+            push_notification_config=push_notification_config,
+            ext=ext,
             context=context,
-            idempotency_key=str(uuid.uuid4()),
         )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)

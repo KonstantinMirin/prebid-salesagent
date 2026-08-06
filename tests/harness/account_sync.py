@@ -269,6 +269,21 @@ class AccountSyncEnv(IntegrationEnv):
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
 
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Serialize flat sync_accounts kwargs into the REST request body.
+
+        The base implementation understands a ``req`` model and returns ``{}`` for
+        anything else — so a caller dispatching flat parameters would POST an empty
+        body and grade nothing (the route would reject on ``accounts`` being empty,
+        which looks like a production failure but is a harness artifact). Scenarios
+        that must observe how the REST route itself treats a wire field — rather than
+        how a locally-constructed request model treats it — dispatch flat, so the
+        flat form needs a faithful body here.
+        """
+        if kwargs.get("req") is not None:
+            return super().build_rest_body(**kwargs)
+        return {key: value for key, value in kwargs.items() if value is not None}
+
     def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
         """Parse REST JSON into SyncAccountsResponse."""
         return SyncAccountsResponse(**data)
