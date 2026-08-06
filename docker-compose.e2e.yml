@@ -164,6 +164,12 @@ services:
         # --network-alias — so they carry a dotted CONTAINER NAME instead.)
         aliases:
           - proxy.adcp.test
+          # The e2e webhook-capture origin (salesagent-mp53.9). An ALIAS on the
+          # existing front, never a second `listen ... ssl` service: one
+          # terminator, one certificate, one place to keep in step. SNI decides
+          # which upstream a connection reaches — see the $ssl_server_name map in
+          # config/nginx/nginx-tls-test.conf.template.
+          - webhooks.adcp-e2e.dev
     healthcheck:
       test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://proxy.adcp.test:8443/health"]
       interval: 10s
@@ -182,10 +188,41 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
+    # Runs as sacirunner:ci (host uid:gid), not the image's default root --
+    # Dockerfile.test has no USER directive, so without this the container
+    # writes test-results/.tox/schemas/logs into the bind-mounted /app as
+    # literal root (no userns-remap on this host, so container root IS host
+    # root). host uid 1003 = sacirunner, gid 1001 = ci -- matches the shared
+    # group every other identity on the box (sacirunner, claudeuser) already
+    # writes /srv/sa-runs and /srv/sa-tests through.
+    user: "1003:1001"
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
+      # Non-root (user: above) has no /etc/passwd entry for a raw numeric
+      # UID, so HOME defaults to "/" and Dockerfile.test's baked
+      # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
+      # unreachable -- uv fails with "Permission denied" trying to even
+      # create its cache dir, surfacing as a confusing "could not find
+      # python interpreter" error from tox. Redirect both to a
+      # container-local writable path (not the bind mount -- this is a
+      # throwaway per-run cache, no reason to fight over its ownership too).
+      HOME: /tmp
+      UV_CACHE_DIR: /tmp/uv-cache
+      # Same problem, third path found (Aug 2026): PLAYWRIGHT_BROWSERS_PATH
+      # is baked to /ms-playwright in the image -- root:root, chromium
+      # already installed there at build time. Non-root can't write into it,
+      # so `playwright install chromium` silently hangs trying to verify/
+      # write a lock file there instead of erroring cleanly. Redirecting
+      # here means chromium gets reinstalled fresh into a writable path
+      # every run (a real, unavoidable cost with this fix -- the baked-in
+      # copy at /ms-playwright is wasted). The complete fix is giving
+      # Dockerfile.test a real non-root USER with these paths pre-chowned
+      # at build time, which was explicitly deferred in favor of
+      # compose-only overrides -- worth reconsidering given this is the
+      # third path this pattern has hit.
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/ms-playwright
       # Fixed in-network DB address — never a host port, never collides. This is
       # the SUITE database used by unit(skip)/integration/bdd/admin.
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
@@ -209,6 +246,14 @@ services:
       # very file the generator wrote on the host.
       E2E_TLS_BASE_URL: ${E2E_TLS_BASE_URL:-https://proxy.adcp.test:8443}
       E2E_CA_BUNDLE: /app/.test-tls/ca.pem
+      # The slice the allocator handed this stack (salesagent-mp53.9). The host
+      # side uses it to CREATE the network; the runner needs it to ASSERT on it —
+      # tests/e2e/test_webhook_capture_egress_gate_e2e.py checks that the capture
+      # hostname resolves INTO this stack's own subnet, which is what
+      # distinguishes "the gate accepted a genuinely non-private address" from
+      # "something answered". Without this line the value exists on the host and
+      # is invisible in here, and that assertion cannot run at all.
+      E2E_NETWORK_SUBNET: ${E2E_NETWORK_SUBNET:-}
       # Suites that hit the running server reach it in-network (no host port).
       ADCP_SERVER_URL: http://proxy:8000
       ADCP_SALES_PORT: "8000"
@@ -224,8 +269,12 @@ services:
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
-      # Playwright chromium is pre-installed in Dockerfile.test at this path.
-      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # PLAYWRIGHT_BROWSERS_PATH moved UP in this same environment block (Aug 2026)
+      # when the runner stopped running as root. The duplicate key that briefly
+      # existed here was not merely redundant: YAML last-wins meant this stale
+      # entry silently overrode the new one, so the fix looked applied and was not
+      # — and newer `docker compose` rejects the file outright with
+      # "mapping key PLAYWRIGHT_BROWSERS_PATH already defined".
       # bdd runs truly serial in-network: -n0 (no xdist subprocess). Two reasons:
       # (1) all bdd workers share ONE live Postgres in e2e mode -> xdist races; and
       # (2) under xdist BDD_E2E_ENABLED doesn't reach the worker's collection, so
@@ -290,7 +339,15 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
-      - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
+      # tox_data named volume removed (Aug 2026): it's destroyed+recreated
+      # fresh every run (cleanup's `dc down -v`), so nothing ever persisted
+      # across runs anyway, and a fresh named volume's mountpoint is created
+      # root:root regardless of the `user:` override above (volume dir
+      # creation happens at the Docker daemon level, before the container
+      # process starts) -- permanently EACCES-blocking the non-root tests
+      # user from `mkdir .tox/<env>` every single run. .tox now lives on the
+      # bind mount instead, same as test-results, which already works
+      # correctly under the `user:` override.
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
     # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
@@ -349,6 +406,82 @@ services:
       retries: 18
       start_period: 30s
 
+  # Long-lived webhook receiver for the e2e stack (salesagent-mp53.9). Runs the
+  # stdlib-only capture service on a BARE python image: Dockerfile.test bakes a
+  # multi-minute playwright/chromium install this service has no use for, and
+  # tests/e2e/webhook_capture_service.py is deliberately import-free of
+  # tests.helpers.* so a bare image can run it (that package's __init__ pulls in
+  # factory-boy, which is not installed here).
+  #
+  # It speaks PLAINTEXT and is never dialled directly by the server: deliveries
+  # arrive through the shared tls-proxy front at https://webhooks.adcp-e2e.dev:8443,
+  # which terminates TLS and forwards here by SNI. That is the whole point of the
+  # ticket — the server reaches a real HTTPS origin on a NON-PRIVATE address, so
+  # production's SSRF gate accepts it on its own terms with nothing patched.
+  webhook-capture:
+    image: python:3.12-slim
+    working_dir: /app
+    command: ["python", "-m", "tests.e2e.webhook_capture_service"]
+    environment:
+      PORT: "8080"
+      # Reported by GET /health so a readback client can prove it is talking to
+      # its OWN stack rather than a cross-wired sibling on the same host port.
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
+    volumes:
+      - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/health',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  # Declaring the network is what makes production's SSRF gate PASSABLE rather
+  # than something the stack has to be exempted from. Docker's default bridge
+  # hands out 172.16/12 addresses, which check_url_ssrf refuses outright
+  # (url_validator.py BLOCKED_NETWORKS) — so no hostname, alias or certificate
+  # could ever make an in-stack receiver reachable while the gate stayed armed.
+  #
+  # TEMPLATED, never a literal: `docker network create --subnet 192.88.99.0/24`
+  # succeeds once and the SECOND stack on the box fails with "Pool overlaps with
+  # other one on this address space" — even for a /28 inside the held /24. This
+  # repo runs stacks concurrently BY DESIGN (scripts/test-stack.sh sets
+  # COMPOSE_PROJECT_NAME="adcp-test-$$"), so the allocator hands each stack a
+  # DISJOINT slice the same way it hands out host ports.
+  #
+  # SIZED FROM THE PEAK CONTAINER COUNT, not guessed. A full run is NOT the 8
+  # services below: run_all_tests.sh provisions per-worker stacks when
+  # E2E_WORKERS>0, and salesagent-remote-run defaults it to 8 on the CI box. Each
+  # worker adds TWO containers (`-server-gwN` and `-tls-gwN.adcp.test`), so peak
+  # is 8 + 2*8 = 24 containers plus the gateway.
+  #   /28 -> 13 usable  — TOO SMALL, fails partway into a full run
+  #   /27 -> 29 usable  — fits 24, only 5 spare
+  #   /26 -> 61 usable  — fits with headroom; 4 concurrent stacks per /24
+  # /26 is the default because a stack that dies at container 14 of a 20-minute
+  # run costs far more than the concurrency. Raise E2E_WORKERS and this must be
+  # re-sized: the failure mode is an address-exhaustion error from Docker, not a
+  # test failure.
+  #
+  # 192.88.99.0/24 is IANA-allocated 6to4 relay anycast space, DEPRECATED by
+  # RFC 7526 and no longer routed for its original purpose. Squatting it is
+  # confined to this container network namespace and reaches no real host. It is
+  # the least-bad choice available: every documentation range (192.0.2/24,
+  # 198.51.100/24, 203.0.113/24), 240/4 and the RFC 2544 benchmarking range all
+  # report is_private=True in Python's ipaddress and would be refused by the very
+  # gate this exists to satisfy.
+  #
+  # KNOWN AND ACCEPTED COST: with the network non-private, other in-stack
+  # services (postgres:5432, tests:8080) also become addresses the gate accepts,
+  # so this stack does NOT grade "a webhook aimed at another service on my own
+  # network is refused". That loss is bounded to this one slice. The alternative
+  # considered and rejected was an ADCP_OUTBOUND_ALLOW_PRIVATE env hatch, which
+  # would open 127.0.0.1, 169.254.169.254, host.docker.internal and all of
+  # RFC1918 in every deployment that set it — unbounded, and the exact shape
+  # tests/unit/test_architecture_no_private_destinations.py exists to catch.
+  default:
+    ipam:
+      config:
+        - subnet: ${E2E_NETWORK_SUBNET:-192.88.99.0/26}
+
 volumes:
-  tox_data:
   creative_pg_data:

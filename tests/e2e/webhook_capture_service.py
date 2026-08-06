@@ -1,0 +1,267 @@
+"""Long-lived webhook-capture compose service (salesagent-mp53.9).
+
+Ported from ``feat/secure-outbound-fetch`` @ ``b22ec6f9d`` (salesagent-amht.3),
+EXTENDED here to record the wire — headers and raw body bytes — not just the
+parsed payload. The upstream service stored ``store.append(key, parsed_json)``
+and dropped everything else; this branch's RFC 9421 work cannot use that, because
+``content-digest`` covers the body BYTES and ``Signature``/``Signature-Input``
+are the artifacts under test (see ``tests/e2e/test_webhook_signature_e2e.py``).
+Porting it verbatim would have silently gutted the signing e2e suite.
+
+Turns the old per-test, ephemeral-port, in-process receiver into a real network
+service: fixed name, fixed port, fronted by the shared ``tls-proxy`` at
+``webhooks.adcp-e2e.dev``. That is what a webhook receiver is in production —
+and it is what lets ``check_url_ssrf`` accept the destination on its own terms
+instead of the stack relaxing the gate to reach a plaintext private address.
+
+Two traffic patterns, never conflated:
+
+* DELIVERY — ``adcp-server`` (or any sender) POSTs to ``/webhook/<key>``. This
+  is the path the shared TLS front terminates.
+* READBACK — the test process reads/drains a key's captures over
+  ``GET``/``DELETE /webhook/<key>``. Test control-plane, plain HTTP, never
+  routed through the TLS front.
+
+Storage is keyed by an opaque per-test token (never a single global list) — the
+isolation mechanism concurrent e2e modules under xdist depend on.
+``ThreadingHTTPServer`` serves each request on its own thread, so the store
+guards every read/write with an explicit ``threading.Lock`` rather than relying
+on GIL atomicity, and ``DELETE`` drains-and-returns in one atomic round trip
+(never read-then-clear as two calls) so a capture landing between the two can
+never be silently lost.
+
+``GET /health`` reports this instance's own ``COMPOSE_PROJECT_NAME`` so a
+readback client can assert it is talking to its own stack, not a cross-wired
+sibling on the same host port.
+
+Runs on a bare ``python:3.12-slim`` image — no project dependencies, no build
+step. That constraint is why the thread-serving bootstrap below is INLINED
+rather than imported from ``tests.helpers.local_http_origin.serve_in_thread``,
+the otherwise-obvious reuse target: importing anything under ``tests.helpers``
+runs its package ``__init__.py``, which transitively imports ``tests.factories``
+(``factory-boy`` et al.) — dev-only dependencies a bare stdlib image does not
+have. Upstream confirmed this the hard way: the container exited on import
+before ever binding a socket. Keep this module stdlib-only.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import contextlib
+import json
+import os
+import re
+import socket
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+_WEBHOOK_PATH_RE = re.compile(r"^/webhook/(?P<key>[^/]+)/?$")
+
+
+@contextlib.contextmanager
+def _serve_in_thread(
+    handler_class: type[BaseHTTPRequestHandler], *, host: str, port: int, server_attrs: dict[str, object]
+) -> Iterator[ThreadingHTTPServer]:
+    """Bind, serve on a daemon thread, tear down.
+
+    ``request_queue_size`` overrides ``socketserver``'s default backlog of 5 —
+    too small for this service's real concurrency (many xdist workers under
+    ``run_all_tests.sh`` all posting/reading at once). Upstream confirmed the
+    hard way: a burst of 20 concurrent writers reliably produced
+    ``ConnectionResetError`` on a many-core box (fine on a quieter machine,
+    which is exactly how a backlog-too-small bug hides until it doesn't).
+    """
+    family = socket.getaddrinfo(host, None)[0][0]
+    server_class = type("_Server", (ThreadingHTTPServer,), {"address_family": family, "request_queue_size": 128})
+    server = server_class((host, port), handler_class)
+    for name, value in server_attrs.items():
+        setattr(server, name, value)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _CaptureStore:
+    """Thread-safe per-key storage of BOTH the parsed payload and the raw wire.
+
+    The two are kept in step deliberately: a body that fails to parse still
+    records a wire entry, so ``received_raw`` is the complete record of what
+    arrived and ``received`` is only the subset that was valid JSON. A caller
+    verifying a signature reads the raw side; a caller asserting on fields reads
+    the parsed side.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._parsed: dict[str, list[dict]] = {}
+        self._raw: dict[str, list[dict]] = {}
+
+    def append(self, key: str, *, wire: dict, payload: dict | None) -> None:
+        """Record one delivery: always its wire entry, and its payload if it parsed."""
+        with self._lock:
+            self._raw.setdefault(key, []).append(wire)
+            if payload is not None:
+                self._parsed.setdefault(key, []).append(payload)
+
+    def get(self, key: str) -> dict[str, list[dict]]:
+        with self._lock:
+            return {
+                "received": list(self._parsed.get(key, [])),
+                "received_raw": list(self._raw.get(key, [])),
+            }
+
+    def drain(self, key: str) -> dict[str, list[dict]]:
+        """Atomically read-and-clear both sides of ``key`` in one round trip."""
+        with self._lock:
+            return {
+                "received": self._parsed.pop(key, []),
+                "received_raw": self._raw.pop(key, []),
+            }
+
+
+class _CaptureRequestHandler(BaseHTTPRequestHandler):
+    """Route ``/health`` and ``/webhook/<key>`` against ``self.server``'s store."""
+
+    protocol_version = "HTTP/1.1"
+
+    def _write_json(self, status: int, body: dict) -> None:
+        data = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _read_raw_body(self) -> bytes:
+        content_length = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(content_length) if content_length else b""
+
+    def _wire_entry(self, raw: bytes) -> dict:
+        """The exact request as it arrived: path, headers verbatim, body base64.
+
+        Header names are kept as sent rather than lower-cased — readers do a
+        case-insensitive lookup, and normalizing here would destroy evidence
+        about what the sender actually emitted. The body is base64 so bytes that
+        are not valid UTF-8 survive the JSON readback hop intact.
+        """
+        return {
+            "path": self.path,
+            "headers": dict(self.headers.items()),
+            "body_b64": base64.b64encode(raw).decode("ascii"),
+        }
+
+    def _handle_health(self) -> None:
+        self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
+
+    def _handle_webhook(self, method: str) -> None:
+        match = _WEBHOOK_PATH_RE.match(self.path)
+        if not match:
+            self._write_json(404, {"error": f"no key in path {self.path!r}"})
+            return
+        key = match.group("key")
+        store: _CaptureStore = self.server.store  # type: ignore[attr-defined]
+
+        if method == "POST":
+            self._handle_delivery(key, store)
+        elif method == "GET":
+            self._write_json(200, store.get(key))
+        elif method == "DELETE":
+            self._write_json(200, store.drain(key))
+
+    def _handle_delivery(self, key: str, store: _CaptureStore) -> None:
+        """Capture the wire unconditionally; answer 400 if the body was not JSON.
+
+        The capture happens BEFORE the parse decision so an unparseable delivery
+        is still evidence — that is what lets a test assert on the bytes a
+        malformed sender produced. The error response is deliberate: answering a
+        quiet 200 to a body we could not read would let a sender's corruption
+        pass as a successful delivery, which is the failure this service exists
+        to make visible.
+        """
+        raw = self._read_raw_body()
+        wire = self._wire_entry(raw)
+        try:
+            payload = json.loads(raw) if raw else {}
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            store.append(key, wire=wire, payload=None)
+            self._write_json(400, {"error": f"body is not valid JSON: {exc}", **store.get(key)})
+            return
+        store.append(key, wire=wire, payload=payload)
+        self._write_json(200, store.get(key))
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler name
+        if self.path == "/health":
+            self._handle_health()
+        else:
+            self._handle_webhook("GET")
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler name
+        self._handle_webhook("POST")
+
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler name
+        self._handle_webhook("DELETE")
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - stdlib signature
+        """Suppress HTTP server logs during tests."""
+
+
+def decode_body(entry: dict) -> bytes:
+    """The raw request bytes from a ``received_raw`` entry.
+
+    Exported so readback callers verifying an RFC 9421 ``content-digest`` do not
+    each re-derive the base64 hop this service uses to carry non-UTF-8 bytes
+    through JSON.
+    """
+    try:
+        return base64.b64decode(entry["body_b64"], validate=True)
+    except (KeyError, binascii.Error) as exc:
+        raise ValueError(f"capture entry has no decodable body_b64: {entry!r}") from exc
+
+
+def header_value(entry: dict, name: str) -> str | None:
+    """Case-insensitive header lookup on a ``received_raw`` entry.
+
+    Header names are stored as the sender emitted them; every HTTP client treats
+    them case-insensitively, so readers must too.
+    """
+    lowered = name.lower()
+    for key, value in entry.get("headers", {}).items():
+        if key.lower() == lowered:
+            return value
+    return None
+
+
+@contextlib.contextmanager
+def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[str]:
+    """Run the webhook-capture service, yielding its base URL (``http://host:port``).
+
+    Reads ``COMPOSE_PROJECT_NAME`` once at start so ``GET /health`` can report
+    which compose stack this instance belongs to.
+    """
+    compose_project_name = os.environ.get("COMPOSE_PROJECT_NAME", "")
+    with _serve_in_thread(
+        _CaptureRequestHandler,
+        host=host,
+        port=port,
+        server_attrs={"store": _CaptureStore(), "compose_project_name": compose_project_name},
+    ) as server:
+        actual_port = server.server_address[1]
+        yield f"http://{host}:{actual_port}"
+
+
+def main() -> None:
+    """Entry point for ``python -m tests.e2e.webhook_capture_service`` inside the compose service."""
+    port = int(os.environ.get("PORT", "8080"))
+    with run_capture_service(host="0.0.0.0", port=port):
+        threading.Event().wait()
+
+
+if __name__ == "__main__":
+    main()

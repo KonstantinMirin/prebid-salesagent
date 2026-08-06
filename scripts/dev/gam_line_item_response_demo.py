@@ -1,11 +1,27 @@
 #!/usr/bin/env python3
-"""Mock response showing what the GAM line item viewer API returns."""
+"""Mock response showing what the GAM line item viewer API returns.
+
+Reference material, not a test. It lived at ``tests/integration/test_mock_adapter.py``
+until 2026-08-06 (salesagent-og9k.11) where its ``test_`` name made pytest collect
+it every integration run despite it defining ZERO test functions — so its module
+body (a wall of ``print()`` plus a file write) executed at COLLECTION time. That
+write went to the process CWD and hard-failed the moment the runner stopped
+running as root:
+
+    ERROR collecting tests/integration/test_mock_adapter.py
+    PermissionError: [Errno 13] Permission denied: 'line_item_7047822666_response.json'
+
+It had been hit before and papered over with a ``.gitignore`` entry
+(``line_item_*_response.json``) rather than fixed, which hid the design problem.
+
+Run it directly to see the shape; pass ``--save`` to write the JSON, which is now
+an explicit opt-in rather than an import side effect::
+
+    uv run python scripts/dev/gam_line_item_response_demo.py [--save]
+"""
 
 import json
-
-import pytest
-
-pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+import sys
 
 # This is what the API endpoint /api/tenant/{tenant_id}/gam/line-item/7047822666 would return
 mock_response = {
@@ -232,8 +248,13 @@ Access via:
 """
 )
 
-# Save the response to a file for reference
-with open("line_item_7047822666_response.json", "w") as f:
-    json.dump(mock_response, f, indent=2)
-
-print("\n✓ Full response saved to: line_item_7047822666_response.json")
+# Writing is OPT-IN. As an unconditional module-level side effect this wrote into
+# whatever the CWD happened to be, on every pytest collection, and failed outright
+# for a non-root runner (salesagent-og9k.11).
+if "--save" in sys.argv:
+    out = "line_item_7047822666_response.json"
+    with open(out, "w") as f:
+        json.dump(mock_response, f, indent=2)
+    print(f"\n✓ Full response saved to: {out}")
+else:
+    print("\n(pass --save to write line_item_7047822666_response.json)")

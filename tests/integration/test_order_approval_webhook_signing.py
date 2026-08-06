@@ -50,11 +50,17 @@ the only thing stubbed, so the headers and ``.content`` are exactly what the
 client would have put on the socket. GAM is mocked at the adapter boundary — it
 is a true external.
 
-NOTE (plumbing gap, deliberately not worked around): the shared e2e receiver
-``tests/e2e/_webhook_capture.py::WebhookCaptureHandler`` DISCARDS both the
-request headers and the raw body bytes (it only appends ``json.loads(body)``),
-so it cannot grade either defect. Teaching it to record headers + raw bytes is a
-prerequisite for moving this coverage onto a real socket.
+NOTE (plumbing gap — the stated prerequisite is now MET, the migration is not):
+this used to record that the shared e2e receiver discarded headers and raw body
+bytes, so it could not grade either defect. Two receivers now can:
+``tests/e2e/_webhook_capture.py``'s ``record_raw`` (#1291 C1) and the
+TLS-fronted ``tests/e2e/webhook_capture_service.py`` (salesagent-mp53.9), which
+stores ``{path, headers, body_b64}`` per delivery.
+
+So the blocker on moving this coverage onto a real socket is gone; the move
+itself is tracked as salesagent-og9k.12 and deliberately NOT smuggled in here.
+Leaving the old claim in place would have invited the next author to re-derive a
+bespoke capture that already exists twice over.
 """
 
 from __future__ import annotations

@@ -114,6 +114,16 @@ cmd_up() {
     # already serving it are undisturbed.
     scripts/dev/ensure-test-tls.sh
 
+    # Allocate this stack's network slice the same way its ports are allocated
+    # (salesagent-mp53.9). The e2e network is pinned to a NON-PRIVATE range so
+    # the server reaches its webhook receiver at an address production's SSRF
+    # gate accepts unpatched; a fixed value means the second concurrent stack
+    # fails with "Pool overlaps with other one on this address space".
+    if [ -z "${E2E_NETWORK_SUBNET:-}" ]; then
+        eval "export $(scripts/dev/alloc-e2e-subnet.sh)"
+        echo "  e2e network slice: $E2E_NETWORK_SUBNET"
+    fi
+
     # Bounded retry on port-collision: a sibling worktree can still grab a
     # probed port in the TOCTOU window before `docker up` publishes it.
     # Re-allocate (PID scatter keeps the next attempt diverging) instead of
