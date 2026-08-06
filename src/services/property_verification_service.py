@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty
+from src.services.adagents_error_messages import describe_adagents_error
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +85,20 @@ class PropertyVerificationService:
                     logger.info("✅ Successfully fetched and validated adagents.json")
 
                 except AdagentsNotFoundError as e:
-                    error_msg = f"adagents.json not found (404): {str(e)}"
-                    logger.error(f"❌ {error_msg}")
+                    logger.error(f"❌ adagents.json not found (404): {e}")
+                    error_msg = describe_adagents_error(e)
                     self._update_verification_status(session, property_obj, "failed", error_msg)
                     return False, error_msg
 
                 except AdagentsTimeoutError as e:
-                    error_msg = f"Timeout fetching adagents.json: {str(e)}"
-                    logger.error(f"❌ {error_msg}")
+                    logger.error(f"❌ Timeout fetching adagents.json: {e}")
+                    error_msg = describe_adagents_error(e)
                     self._update_verification_status(session, property_obj, "failed", error_msg)
                     return False, error_msg
 
                 except AdagentsValidationError as e:
-                    error_msg = f"Invalid adagents.json format: {str(e)}"
-                    logger.error(f"❌ {error_msg}")
+                    logger.error(f"❌ Invalid adagents.json: {e}")
+                    error_msg = describe_adagents_error(e)
                     self._update_verification_status(session, property_obj, "failed", error_msg)
                     return False, error_msg
 
