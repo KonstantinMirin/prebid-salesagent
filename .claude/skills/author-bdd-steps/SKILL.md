@@ -112,6 +112,58 @@ Sub-second wall time, or a `StepDefinitionNotFoundError` / "No harness wired"
 reason, means the scenario never ran — it auto-xfailed at fixture setup. A
 green run that took no time is not a pass.
 
+### Three ways to be ungraded, not one
+
+Auto-xfail at fixture setup is only the first. All three produce the same
+outcome — the scenario does not grade the behavior on that transport — and the
+aggregate count looks identical for all three:
+
+1. **Auto-xfail at fixture setup.** Covered above.
+
+2. **Excluded from a transport's parametrization.** A tag set consulted in
+   `pytest_generate_tests` (`tests/bdd/conftest.py`) can drop a transport from
+   the parametrize list *before collection*. The scenario is then not xfailed,
+   not ledgered, and not in any allowlist — it simply has no `[e2e_rest]` test
+   id, and neither escape-hatch detector in
+   `test_architecture_e2e_rest_escape_hatches.py` can see it (detector 1 walks
+   `pytest_collection_modifyitems` xfail conditions; detector 2 walks
+   `tests/harness/` `E2EUnsupportedSetup` sites).
+
+   **Exclusion from parametrization is exactly as ungraded as an xfail.** Both
+   are banned. Real case: `_NO_E2E_REST_TAGS` carried a comment correctly
+   noting that xfailing the scenario on `e2e_rest` would be a false-green,
+   while the exclusion it implemented produced the identical outcome by another
+   mechanism (GH #1892). The only accepted fixes are to re-express the
+   assertion on a transport-observable signal, or — when the sub-claim
+   genuinely has no wire surface — declare it via `E2EUnsupportedSetup` so it
+   lands in `EXPECTED_UNSUPPORTED_DECLARATIONS` as a reviewed, pinned
+   declaration instead of an invisible one.
+
+   Check it directly rather than trusting the tag set:
+
+   ```bash
+   BDD_E2E_ENABLED=true uv run pytest <module> --collect-only -q -o addopts= -n0 \
+     | grep "<test_name>"      # every sibling's transports should appear here too
+   ```
+
+3. **Xfailed against the wrong issue.** A dormancy or xfail reason that cites a
+   plausible-but-unrelated issue is worse than an uncited one: it reads as
+   tracked work and nobody re-checks it. Real case: a `webhook_signing` /
+   `request_signing` dormancy cited #1855, whose actual scope is `media_buy`
+   presence-object sections and never mentions signing; the real tracking issue
+   was #1291.
+
+   **Before citing an issue number in a dormancy or xfail message, open it and
+   confirm its body actually covers the dormant behavior:**
+
+   ```bash
+   gh issue view <n> --repo prebid/salesagent
+   ```
+
+   Never cite from memory, and never pattern-match on a nearby issue that
+   sounds right. Cite a GitHub issue, never a local beads id — beads ids do not
+   resolve for outside contributors.
+
 ## 6. Antipattern ↔ guard map
 
 Each antipattern below names the guard that's supposed to catch it. If your
@@ -128,6 +180,9 @@ treat the pass as clean.
 | `ctx.get("env")` / `hasattr(env, ...)` silent-env checks | `test_architecture_bdd_no_silent_env.py` |
 | `_get_error_code`/`_get_error_dict` called with no wire reference | `test_architecture_bdd_wire_discipline.py` (Check B — currently name-matched, not pattern-matched; a step with its own local `_get_error`-style helper is not yet caught) |
 | A `TRANSPORT-BYPASS`/allowlisted direct-`_impl` call | `test_architecture_bdd_no_direct_call_impl.py` |
+| Scenario dropped from a transport's parametrize list in `pytest_generate_tests` | **no guard yet** — neither escape-hatch detector sees a parametrize-time exclusion (GH #1892). Prove it by collection, §5.2 |
+| Dormancy/xfail reason citing an issue that doesn't cover the behavior | **no guard** — `gh issue view` it, §5.3 |
+| Dormancy/xfail reason citing a local beads id instead of a GitHub issue | `.pre-commit-hooks/check_fixme_citation_count.py` (ratcheting; only matches the `FIXME(...)`/`TODO(...)` spelling — a bare id used as an allowlist tuple value is not yet caught) |
 
 For the deeper semantic question — "does this Then actually verify what its
 text claims?" — run `/inspect-bdd-steps` after writing.
