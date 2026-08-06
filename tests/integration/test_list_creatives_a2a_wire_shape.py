@@ -38,6 +38,7 @@ import pytest
 
 from tests.factories.core import TenantFactory
 from tests.factories.creative import CreativeFactory
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.harness.creative_list import CreativeListEnv
 from tests.harness.transport import Transport
@@ -46,12 +47,18 @@ from tests.helpers.pinned_schema import validate_against_pinned_schema
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def _list_creatives_via_a2a(count: int):
+def _list_creatives_via_a2a(count: int, *, assets: dict | None = None):
+    """Store *count* creatives and return the real A2A artifact DataPart wire.
+
+    ``assets`` overrides each stored creative's ``data["assets"]`` slot map — pass
+    ``build_assets(...)`` output so asset shapes stay declared through AssetSpec.
+    """
+    extra = {"data": {"assets": assets}} if assets is not None else {}
     with CreativeListEnv() as env:
         tenant = TenantFactory(tenant_id="test_tenant")
         principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
         for i in range(count):
-            CreativeFactory(tenant=tenant, principal=principal, creative_id=f"cr_a2a_wire_{i:03d}")
+            CreativeFactory(tenant=tenant, principal=principal, creative_id=f"cr_a2a_wire_{i:03d}", **extra)
         result = env.call_via(Transport.A2A, limit=50)
     assert result.is_success, f"Expected success but got error: {result.error}"
     wire = result.wire_response
@@ -92,6 +99,42 @@ def test_a2a_wire_format_id_object_survives_with_many_creatives(integration_db):
             f"creatives[{i}].format_id must be a {{agent_url, id}} object, got {format_id!r} "
             f"(type {type(format_id).__name__})"
         )
+
+
+@pytest.mark.parametrize("null_field", ["alt_text", "provenance"])
+def test_a2a_wire_omits_null_asset_fields(integration_db, null_field):
+    """A stored asset's unset optional field is ABSENT from the wire, never null.
+
+    ``Creative.assets`` is an untyped ``dict[str, Any]``, so Pydantic's
+    ``exclude_none=True`` default never reaches inside it — without
+    ``Creative.model_dump()``'s ``strip_none_deep`` pass the stored ``None``
+    rides all the way out as a literal wire ``null``, which the pinned AdCP
+    asset schemas do not accept.
+
+    This is the wire-level oracle for that fix; the fast unit-level sibling is
+    ``tests/unit/test_creative_response_serialization.py::test_creative_model_dump_omits_null_fields_inside_assets``.
+    Mutation check: delete the ``strip_none_deep`` call in
+    ``src/core/schemas/creative.py`` -> this goes red.
+    """
+    wire = _list_creatives_via_a2a(
+        count=1,
+        assets=build_assets(image_spec("banner").with_fields(**{null_field: None})),
+    )
+    creatives = wire.get("creatives")
+    assert isinstance(creatives, list) and creatives, f"A2A wire must carry the creatives array, got {creatives!r}"
+
+    banner = creatives[0].get("assets", {}).get("banner")
+    assert isinstance(banner, dict), (
+        f"the stored banner asset must reach the wire as an object so its null-omission is "
+        f"observable, got {banner!r} — if assets stopped being emitted, this test is vacuous"
+    )
+    assert null_field not in banner, (
+        f"creatives[0].assets.banner.{null_field} was stored as None and must be omitted from "
+        f"the A2A wire, got {banner[null_field]!r}. Full asset: {banner!r}"
+    )
+    # Negative control: the pass must strip only the nulls, not the asset itself.
+    assert banner["asset_type"] == "image"
+    assert banner["url"] == "https://example.com/banner.png"
 
 
 def test_a2a_wire_validates_against_pinned_response_schema(integration_db):
