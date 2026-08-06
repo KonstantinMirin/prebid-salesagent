@@ -408,6 +408,10 @@ async def _get_products_impl(
             )
         except AdCPError:
             raise
+        # FIXME(#1888): broad catch relabels implementation bugs (AttributeError,
+        # TypeError) as VALIDATION_ERROR — the buyer reads "your request is
+        # malformed" for a server-side fault. Allowlisted in
+        # tests/unit/test_architecture_no_broad_except_validation_relabel.py.
         except Exception as e:
             logger.error(f"Property list resolution failed: {e}")
             raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e

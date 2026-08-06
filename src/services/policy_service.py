@@ -142,6 +142,9 @@ class PolicyService:
                         "currency_code": f"Invalid currency code: {currency_code}. Please use a valid ISO 4217 currency code."
                     }
                 )
+        # FIXME(#1889): broad catch reports a babel locale-data failure (an
+        # environment problem) as "your currency_code is invalid". Allowlisted in
+        # tests/unit/test_architecture_no_broad_except_validation_relabel.py.
         except Exception as e:
             raise ValidationError({"currency_code": f"Error validating currency code: {str(e)}"}) from e
 

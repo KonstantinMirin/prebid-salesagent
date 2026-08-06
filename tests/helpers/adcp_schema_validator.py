@@ -39,12 +39,36 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
+import jsonschema.exceptions
+import referencing.exceptions
 from jsonschema.validators import Draft7Validator
 
 from tests.helpers import pinned_schema
 from tests.helpers.sdk_schema_root import sdk_schema_root as _sdk_schema_root
 
 _T = TypeVar("_T")
+
+# Failures of the validation INSTRUMENT rather than of the payload: the schema
+# is not valid draft-07, a $ref cannot be resolved or retrieved, or a schema
+# file on disk is not JSON. These map to this module's SchemaError, alongside
+# the AssertionError that _resolve_pinned translates. Anything NOT in this
+# tuple is a bug in this module and propagates unwrapped — see
+# _validate_against_schema.
+#
+# All three referencing types are listed because they do NOT share a base:
+# Unresolvable covers PointerToNowhere/NoSuchAnchor/InvalidAnchor (and
+# jsonschema's own _WrappedReferencingError, which subclasses it), but
+# Unretrievable and NoSuchResource subclass KeyError instead. Unretrievable is
+# the one this repo actually produces at runtime — referencing wraps any
+# exception out of a registry retrieve callable, and pinned_schema._retrieve
+# raises AssertionError for a schema outside the pinned tree.
+_INSTRUMENT_FAILURES = (
+    jsonschema.exceptions.SchemaError,
+    referencing.exceptions.Unresolvable,
+    referencing.exceptions.Unretrievable,
+    referencing.exceptions.NoSuchResource,
+    json.JSONDecodeError,
+)
 
 
 class SchemaError(Exception):
@@ -288,5 +312,16 @@ class AdCPSchemaValidator:
             # mean "the payload violates the contract". Subclass arm above,
             # base-class arm here — order matters.
             raise
-        except Exception as e:
-            raise SchemaValidationError(f"Unexpected error validating {context}: {e}", [str(e)])
+        except _INSTRUMENT_FAILURES as e:
+            # The INSTRUMENT is broken, not the payload: the schema itself is
+            # not valid draft-07, a $ref cannot be retrieved, or a schema file
+            # on disk is corrupt. Same class as the AssertionError that
+            # _resolve_pinned already maps here, so it gets the same type.
+            #
+            # There is deliberately no `except Exception` arm after this one.
+            # A bug in this validator (an AttributeError, a TypeError) must
+            # propagate unwrapped: relabelling it SchemaValidationError tells
+            # the reader "your payload violates the AdCP contract" and sends
+            # them hunting a spec violation that does not exist — the exact
+            # confusion #1843 exists to eliminate.
+            raise SchemaError(f"Schema instrument failure validating {context}: {e}") from e
