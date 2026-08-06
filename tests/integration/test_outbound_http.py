@@ -28,6 +28,17 @@ import logging
 from typing import Any
 
 import pytest
+from adcp.signing.canonical import build_signature_base, parse_signature_input_header
+from adcp.signing.crypto import (
+    alg_for_jwk,
+    extract_signature_bytes,
+    load_private_key_pem,
+    public_key_from_jwk,
+    verify_signature,
+)
+from adcp.signing.digest import content_digest_matches
+from adcp.signing.keygen import generate_signing_keypair
+from adcp.webhook_auth import JwkSignerStrategy
 
 from src.core.exceptions import build_two_layer_error_envelope
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
@@ -1494,3 +1505,355 @@ def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypat
 
     assert error.last_status is None
     assert _terminal_client_error_status()(error) is None
+
+
+# ---------------------------------------------------------------------------
+# Per-attempt signing (salesagent-47n9.22)
+#
+# The seam owns retry, so a signature computed once ABOVE the loop is replayed
+# on every attempt. That is valid for a legacy HMAC (body + timestamp, replay-
+# valid inside its window) and invalid for RFC 9421, whose ``nonce`` a
+# conformant receiver MUST reject on replay (adcp's own conformance suite ships
+# ``negative/016-replayed-nonce.json``). The hook exists so a signing caller can
+# stay on this seam's pinned transport instead of bringing its own client.
+# ---------------------------------------------------------------------------
+
+
+def _counting_signer() -> tuple[Any, list[tuple[str, str, bytes]]]:
+    """A signer that records what it was asked to sign and never repeats itself.
+
+    The header value embeds the call index, standing in for RFC 9421's nonce:
+    two attempts carrying the same value is exactly the defect this hook exists
+    to prevent, and an index makes that visible on the wire.
+
+    Keyword-only, because that is the shape the real consumer has
+    (``adcp.webhook_auth.WebhookAuthStrategy.build_auth_headers``). A stand-in
+    spelled differently from every actual signer would grade a calling
+    convention nobody uses — which is how the mismatch stayed invisible.
+    """
+    seen: list[tuple[str, str, bytes]] = []
+
+    def sign(*, method: str, url: str, body: bytes) -> dict[str, str]:
+        seen.append((method, url, body))
+        return {"Signature-Input": f'sig1=();nonce="n{len(seen)}"', "Signature": f"sig1=:s{len(seen)}:"}
+
+    return sign, seen
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_each_retry_carries_a_distinct_signature_on_the_wire(seam_call, monkeypatch, local_origin_tls):
+    """Three attempts produce three DIFFERENT signatures at the origin.
+
+    Asserted on what the origin received, not on how many times the callback
+    ran: a signer invoked per attempt whose headers were merged once would still
+    replay, and only the wire shows the difference.
+    """
+    set_flags(monkeypatch, private=True)
+    fast_backoff(monkeypatch)
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
+    sign, seen = _counting_signer()
+
+    assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", json={"a": 1}, max_attempts=3, sign=sign)
+
+    assert local_origin_tls.hits == 3
+    assert len(seen) == 3
+    on_wire = [r.headers["Signature"] for r in local_origin_tls.requests]
+    assert len(set(on_wire)) == 3, f"a signature was replayed across retries: {on_wire}"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_the_signer_is_given_the_exact_bytes_that_go_on_the_wire(seam_call, monkeypatch, local_origin_tls):
+    """Signed bytes and transmitted bytes are one object, not two that agree.
+
+    This is the same invariant salesagent-47n9.1 established for the webhook
+    body: a signer handed the pre-serialization payload would be trusting httpx
+    to serialize it the same way, which is how #1441 happened.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(200)
+    sign, seen = _counting_signer()
+
+    call_seam(
+        seam_call,
+        f"{local_origin_tls.base_url}/webhook",
+        json={"z": 1, "a": 2},
+        max_attempts=1,
+        sign=sign,
+    )
+
+    signed_method, signed_url, signed_body = seen[0]
+    received = local_origin_tls.requests[0]
+    assert signed_body == received.body
+    assert signed_method == "POST"
+    assert signed_url == f"{local_origin_tls.base_url}/webhook"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_the_signer_sees_the_target_uri_after_params_are_applied(seam_call, monkeypatch, local_origin_tls):
+    """RFC 9421 covers @target-uri, so the signer must see the FINAL URL.
+
+    Signing the pre-params URL would produce a signature over a URI the origin
+    never sees, which no receiver can verify.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(200)
+    sign, seen = _counting_signer()
+
+    call_seam(
+        seam_call,
+        f"{local_origin_tls.base_url}/webhook",
+        json={"a": 1},
+        params={"tenant": "acme"},
+        max_attempts=1,
+        sign=sign,
+    )
+
+    _, signed_url, _ = seen[0]
+    assert signed_url.endswith("/webhook?tenant=acme")
+    assert local_origin_tls.requests[0].path.endswith("/webhook?tenant=acme")
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_omitting_the_signer_changes_nothing(seam_call, monkeypatch, local_origin_tls):
+    """The hook is opt-in: an unsigned send carries no signature headers."""
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(200)
+
+    call_seam(seam_call, f"{local_origin_tls.base_url}/webhook", json={"a": 1}, max_attempts=1)
+
+    headers = local_origin_tls.requests[0].headers
+    assert "Signature" not in headers
+    assert "Signature-Input" not in headers
+
+
+# ---------------------------------------------------------------------------
+# The REAL consumer shape (salesagent-47n9.22)
+#
+# Everything above drives a hand-rolled signer, which grades the seam's
+# mechanics but cannot grade the thing this hook exists for: that an ACTUAL
+# ``adcp`` signer can be handed to the seam and produce a delivery a conformant
+# receiver accepts. The acceptance criterion is "no caller needs to supply its
+# own httpx client to sign" — a caller forced to hand-write a positional-to-
+# keyword shim around ``build_auth_headers`` has not been served, so these cases
+# pass ``sign=strategy.build_auth_headers`` with NO adapter of any kind.
+#
+# They also assert VERIFIABILITY, not presence. A ``Signature`` header that is
+# on the wire but whose base no receiver can rebuild is the exact failure the
+# Content-Type case below pins, and a presence check is blind to it.
+# ---------------------------------------------------------------------------
+
+# The receiver's own scheme. A receiver knows what it is listening on; it does
+# not learn it from the request. The origin fixture serves real TLS, so https.
+_RECEIVER_SCHEME = "https"
+
+
+def _adcp_webhook_signer() -> tuple[JwkSignerStrategy, dict[str, Any]]:
+    """A real RFC 9421 webhook signer from the installed SDK, and its public JWK.
+
+    ``purpose="webhook-signing"`` is not decoration: the webhook verifier
+    enforces the JWK's ``adcp_use`` claim, so a request-signing key would
+    produce a signature a conformant receiver refuses for a reason that has
+    nothing to do with this seam.
+    """
+    pem, jwk = generate_signing_keypair(alg="ed25519", kid="seam-test-key", purpose="webhook-signing")
+    strategy = JwkSignerStrategy(
+        private_key=load_private_key_pem(pem),
+        key_id=jwk["kid"],
+        alg=alg_for_jwk(jwk),
+    )
+    return strategy, jwk
+
+
+def _rebuild_signature_base(received) -> str:
+    """Rebuild the RFC 9421 signature base the way the RECEIVER does.
+
+    From the wire headers and the effective request URI reconstructed out of
+    ``Host`` and the request target — never from anything the sender kept on its
+    own side. That is the whole point: a signature is only worth something if it
+    can be reconstructed from what actually crossed the socket.
+
+    Raises ``ValueError`` when ``Signature-Input`` covers a component the wire
+    does not carry — which is how a missing ``Content-Type`` surfaces.
+    """
+    url = f"{_RECEIVER_SCHEME}://{received.headers['Host']}{received.path}"
+    parsed = parse_signature_input_header(received.headers["Signature-Input"])["sig1"]
+    return build_signature_base(received.method, url, received.headers, parsed)
+
+
+def assert_receiver_can_verify(received, jwk: dict[str, Any]) -> None:
+    """Assert a conformant receiver accepts ``received`` — base, signature, digest.
+
+    Three separate obligations, all graded on wire bytes: the base rebuilds from
+    the headers that arrived, the signature validates against the published
+    public key over that base, and the covered ``Content-Digest`` matches the
+    body the origin actually read off the socket.
+    """
+    base = _rebuild_signature_base(received)
+    assert verify_signature(
+        alg=alg_for_jwk(jwk),
+        public_key=public_key_from_jwk(jwk),
+        signature_base=base.encode(),
+        signature=extract_signature_bytes(received.headers["Signature"]),
+    ), f"the signature does not verify over the base rebuilt from the wire:\n{base}"
+    assert content_digest_matches(received.headers["Content-Digest"], received.body), (
+        "Content-Digest does not cover the body the origin received"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_an_adcp_signer_is_accepted_with_no_adapter_and_the_receiver_verifies(seam_call, monkeypatch, local_origin_tls):
+    """``sign=strategy.build_auth_headers``, passed straight through, verifies.
+
+    This one case is the ticket's acceptance criterion. ``build_auth_headers``
+    is keyword-only (``*, method, url, body``) in adcp==6.6.0, so the seam's
+    callback type has to BE that shape rather than restate it positionally —
+    otherwise every signing caller writes a shim, and a caller writing a shim is
+    a caller the hook did not serve.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(200)
+    strategy, jwk = _adcp_webhook_signer()
+
+    call_seam(
+        seam_call,
+        f"{local_origin_tls.base_url}/webhook",
+        json={"event": "delivery"},
+        max_attempts=1,
+        sign=strategy.build_auth_headers,
+    )
+
+    assert local_origin_tls.hits == 1
+    assert_receiver_can_verify(local_origin_tls.requests[0], jwk)
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_every_retry_of_an_adcp_signed_send_is_independently_verifiable(seam_call, monkeypatch, local_origin_tls):
+    """Three attempts, three signatures, each one verifiable on its own.
+
+    The distinct-nonce assertion is the ticket's reason for existing (adcp ships
+    ``negative/016-replayed-nonce.json``; a conformant receiver MUST reject a
+    replay), and verifying each attempt separately is what proves the freshness
+    did not come at the cost of a signature that no longer matches its request —
+    a per-attempt nonce over a stale base would still be dead on arrival.
+    """
+    set_flags(monkeypatch, private=True)
+    fast_backoff(monkeypatch)
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
+    strategy, jwk = _adcp_webhook_signer()
+
+    assert_delivery_failed(
+        seam_call,
+        f"{local_origin_tls.base_url}/webhook",
+        json={"event": "delivery"},
+        max_attempts=3,
+        sign=strategy.build_auth_headers,
+    )
+
+    assert local_origin_tls.hits == 3
+    for received in local_origin_tls.requests:
+        assert_receiver_can_verify(received, jwk)
+    nonces = [
+        parse_signature_input_header(r.headers["Signature-Input"])["sig1"].params["nonce"]
+        for r in local_origin_tls.requests
+    ]
+    assert len(set(nonces)) == 3, f"a nonce was replayed across retries: {nonces}"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_content_body_verifies_when_the_caller_declares_its_content_type(seam_call, monkeypatch, local_origin_tls):
+    """``content=`` works — provided the caller says what the bytes are.
+
+    ``JwkSignerStrategy`` covers ``content-type`` unconditionally in its base,
+    and httpx sets that header on the ``json=`` path but NOT on ``content=``.
+    So a ``content=`` caller owes the seam an explicit ``Content-Type``. That is
+    a PAYLOAD-layer decision, which is exactly why the seam must not invent one
+    on the caller's behalf — the same reason ``webhook_egress`` does its own
+    ``setdefault("Content-Type", "application/json")`` at the payload layer.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(200)
+    strategy, jwk = _adcp_webhook_signer()
+    payload = json.dumps({"event": "delivery"}).encode()
+
+    call_seam(
+        seam_call,
+        f"{local_origin_tls.base_url}/webhook",
+        content=payload,
+        headers={"Content-Type": "application/json"},
+        max_attempts=1,
+        sign=strategy.build_auth_headers,
+    )
+
+    received = local_origin_tls.requests[0]
+    assert received.body == payload
+    assert_receiver_can_verify(received, jwk)
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_content_body_without_a_content_type_signs_a_header_that_never_ships(
+    seam_call, monkeypatch, local_origin_tls
+):
+    """The trap, pinned: the signature ships, and no receiver can rebuild it.
+
+    ``content=`` without an explicit ``Content-Type`` leaves the header off the
+    wire while the signer has already covered it, so the delivery LOOKS signed
+    and is undeliverable. Pinned as an executable obligation rather than left as
+    prose in a docstring, because a presence check on ``Signature`` — the
+    obvious assertion to reach for — passes here.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(200)
+    strategy, _ = _adcp_webhook_signer()
+
+    call_seam(
+        seam_call,
+        f"{local_origin_tls.base_url}/webhook",
+        content=json.dumps({"event": "delivery"}).encode(),
+        max_attempts=1,
+        sign=strategy.build_auth_headers,
+    )
+
+    received = local_origin_tls.requests[0]
+    assert "Signature" in received.headers
+    assert "Content-Type" not in received.headers
+    with pytest.raises(ValueError, match="missing header for covered component: content-type"):
+        _rebuild_signature_base(received)
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_signer_returning_a_reserved_header_cannot_desync_the_body(seam_call, monkeypatch, local_origin_tls):
+    """A signer's headers may not re-frame the message (salesagent-47n9.22, ADJUST 4).
+
+    ``Transfer-Encoding: chunked`` merged verbatim next to the ``Content-Length``
+    httpx computed makes the origin read the chunk-size line as body: it receives
+    ``b'8\\r\\n{"eve'`` instead of the bytes that were signed. That is the CL.TE
+    shape, produced here by a signer rather than an attacker — and the seam is
+    the only layer that sees both the framing headers and the signer's mapping.
+
+    The framing headers are the transport's, not the signer's: adcp's own
+    ``WebhookAuthStrategy`` declares ``content-length``/``content-type``/``host``
+    reserved for precisely this reason. The assertion is on the OUTCOME (the
+    origin reads the signed bytes) rather than on a mechanism, so filtering the
+    reserved names and refusing the send both satisfy it — but silently merging
+    them does not.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_with(200)
+    strategy, jwk = _adcp_webhook_signer()
+    payload = json.dumps({"event": "delivery"}).encode()
+
+    def sign_and_reframe(*, method: str, url: str, body: bytes) -> dict[str, str]:
+        return {**strategy.build_auth_headers(method=method, url=url, body=body), "Transfer-Encoding": "chunked"}
+
+    call_seam(
+        seam_call,
+        f"{local_origin_tls.base_url}/webhook",
+        content=payload,
+        headers={"Content-Type": "application/json"},
+        max_attempts=1,
+        sign=sign_and_reframe,
+    )
+
+    received = local_origin_tls.requests[0]
+    assert received.body == payload, "a signer's header re-framed the body the origin read"
+    assert_receiver_can_verify(received, jwk)

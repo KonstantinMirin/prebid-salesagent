@@ -47,6 +47,47 @@ without archaeology through a PR description:
   constants dialled under operator credentials. Banning them would be noqa
   ceremony with no threat behind it.
 
+**RFC 9421 signers do NOT need their own client** (salesagent-47n9.22). A signer
+whose signature cannot be replayed — RFC 9421 covers a ``nonce`` a conformant
+receiver must reject twice — used to have a reason to open its own
+``httpx.AsyncClient``: this seam owns retry, so a signature computed once above
+the loop ships unchanged on attempts 2 and 3. That reason is gone. ``send``/
+``asend`` take a :class:`SignAttempt` callback invoked once PER ATTEMPT, inside
+the retry loop. Injection, not detection — the caller never receives a client it
+could point somewhere else, exactly like :func:`guarded_client_factory`.
+
+Two properties of that hook are load-bearing, and neither is evident from the
+parameter name:
+
+* It is invoked AFTER ``client.build_request``, so the signer is handed
+  ``request.content`` — the exact bytes httpx will transmit — and the
+  post-params ``request.url``. That is what removes the re-serialization hazard
+  (#1441 / salesagent-47n9.1) in which a signer signed one serialization of a
+  payload while httpx independently produced another. For a ``sign=`` caller
+  BOTH ``json=`` and ``content=`` are therefore sound. (The ``json=`` ban in
+  ``tests/unit/test_architecture_no_signed_webhook_json_send.py`` is about
+  sign-ONCE callers holding an ``X-*-Signature`` key; it does not match RFC
+  9421's header names, and on this path those names are minted inside
+  ``adcp``'s ``SignedHeaders.as_dict()`` and never appear in ``src/`` at all.
+  Do not cite it as a reason to prefer one body form here.)
+* What is NOT free is ``Content-Type``. httpx sets it on the ``json=`` path and
+  not on ``content=``, while ``adcp``'s ``JwkSignerStrategy`` covers
+  ``content-type`` unconditionally — so a ``sign=`` caller using ``content=``
+  must pass ``headers={"Content-Type": "application/json"}`` or it signs a
+  header that never ships and no receiver can rebuild the base. Content-Type is
+  decided at the payload layer, which is why this seam does not inject it; see
+  :func:`~src.core.security.webhook_egress.prepare_signed_request`, which
+  ``setdefault``\\ s it for the legacy path.
+
+Cost of matching the SDK's shape, recorded once so it does not have to be
+rediscovered: at the injection point the seam holds the request's FULL headers,
+but ``WebhookAuthStrategy.build_auth_headers`` accepts only method/url/body. The
+signer therefore cannot see headers it may be covering, which is precisely why
+the Content-Type obligation above lands on the caller. Reusing the SDK protocol
+verbatim is still right — it is what lets ``sign=strategy.build_auth_headers``
+work with no adapter — but the trade is real, and widening the callback later
+means diverging from the SDK.
+
 Spec grounding: AdCP 3.1.1, ``building/by-layer/L1/security.mdx``, "Webhook URL
 validation (SSRF)". Before any outbound fetch to a counterparty-controlled URL a
 fetcher MUST (1) reject non-HTTPS in production, (2) reject reserved ranges,
@@ -99,9 +140,9 @@ import logging
 import os
 import random
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
 import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
 from adcp.signing import (
@@ -120,6 +161,45 @@ logger = logging.getLogger(__name__)
 # (https-only) has NO escape hatch (salesagent-e6h0): the outbound origins
 # that used to need one are all TLS-fronted now (salesagent-40qh).
 _ALLOW_PRIVATE_ENV = "ADCP_OUTBOUND_ALLOW_PRIVATE"
+
+
+class SignAttempt(Protocol):
+    """Signs ONE attempt: ``(method, url, body) -> headers to merge``.
+
+    The seam owns retry, so a signature computed once above the loop would be
+    replayed on every attempt. That is fine for a legacy HMAC (it covers body +
+    timestamp, and replay inside the window verifies) and WRONG for RFC 9421,
+    whose ``nonce`` a conformant receiver must reject on replay. Passing a
+    callback instead of a client is what lets a signing caller keep the seam's
+    pinned transport: the caller never gets something it can point elsewhere.
+
+    KEYWORD-ONLY, structurally identical to
+    ``adcp.webhook_auth.WebhookAuthStrategy.build_auth_headers``. That is not a
+    style choice — it is the whole point of the parameter. A signing caller
+    passes ``sign=strategy.build_auth_headers`` with no adapter; restated
+    positionally, every caller would have to hand-write a shim, which is exactly
+    the friction that made callers open their own client instead.
+    """
+
+    def __call__(self, *, method: str, url: str, body: bytes) -> Mapping[str, str]: ...
+
+
+#: Headers a signer may not set, because they describe the FRAMING of the body
+#: rather than authenticating it.
+#:
+#: Measured, not theorised (httpx 0.28.1 against a real origin): a signer
+#: returning ``Transfer-Encoding: chunked`` alongside the ``Content-Length``
+#: httpx already computed makes the origin read the chunk-size line as part of
+#: the body — it received ``b'15\r\n{"event": "delive'`` where ``b'{"event":
+#: "delivery"}'`` was signed, and answered 200. That is the CL.TE
+#: request-smuggling shape, arrived at through a signer rather than an attacker,
+#: and it breaks this seam's core promise that the bytes signed are the bytes
+#: transmitted.
+#:
+#: Dropped rather than refused: a signer returning these is confused, not
+#: hostile, and the correct request is the one httpx already framed. Refusing
+#: would turn a harmless over-broad signer into a delivery outage.
+_SIGNER_RESERVED_HEADERS = frozenset({"content-length", "transfer-encoding", "host"})
 
 # Response bodies are accumulated, so an unbounded counterparty response is a
 # memory-exhaustion vector. httpx applies no default limit (spec point 5).
@@ -521,8 +601,9 @@ def _build_request(
     params: Any,
     headers: Any,
     content: Any,
+    sign: SignAttempt | None = None,
 ) -> httpx.Request:
-    return client.build_request(
+    request = client.build_request(
         method.upper(),
         url,
         json=json_body,
@@ -530,6 +611,21 @@ def _build_request(
         headers=headers,
         content=content,
     )
+    if sign is not None:
+        # ``request.content`` is what httpx will transmit, and ``request.url`` is
+        # post-params — so the signer signs the exact bytes and the exact target
+        # URI that go on the wire. Same invariant as the webhook egress helper:
+        # signed bytes and wire bytes are one object, not two that agree.
+        signed = sign(method=request.method, url=str(request.url), body=request.content)
+        for name, value in signed.items():
+            if name.lower() in _SIGNER_RESERVED_HEADERS:
+                # See _SIGNER_RESERVED_HEADERS: letting a signer re-frame the body
+                # would let it desync the bytes it just signed from the bytes the
+                # receiver reads.
+                logger.warning("Signer returned reserved header %r; dropped (body framing is httpx's)", name)
+                continue
+            request.headers[name] = value
+    return request
 
 
 def _over_cap(size: int) -> bool:
@@ -673,6 +769,7 @@ def send(
     timeout: float = 10.0,
     max_attempts: int = 3,
     field: str | None = None,
+    sign: SignAttempt | None = None,
 ) -> OutboundResult:
     """Send one outbound HTTP request through the seam.
 
@@ -686,6 +783,22 @@ def send(
     URL came from the caller's request document: an operator-configured endpoint
     has no such path, and neither does a URL read back out of storage. See the
     module docstring — this is carried, not decided.
+
+    ``sign`` is a :class:`SignAttempt` callback invoked once PER ATTEMPT, with
+    the exact method, target URI and body bytes of that attempt, returning the
+    headers to merge. It exists so a signing caller does not have to bring its
+    own client — and therefore does not have to leave this seam's pinned
+    transport — to satisfy a scheme whose signature cannot be replayed across
+    retries (RFC 9421's ``nonce``). A caller signing a legacy HMAC needs none of
+    this: that signature is replay-valid inside its window, so passing
+    ``headers=`` once is correct and remains so.
+
+    Two obligations on a ``sign`` caller, both spelled out in the module
+    docstring: pass an explicit ``Content-Type`` if you use ``content=`` (httpx
+    sets none there, and RFC 9421 signers cover it), and do not return framing
+    headers — ``Content-Length``, ``Transfer-Encoding`` and ``Host`` are dropped
+    with a warning, because a signer that re-frames the body can desync the
+    bytes it just signed from the bytes the receiver reads.
 
     Raises :class:`OutboundRequestBlocked` if the scheme or the address is
     refused (before any connection is attempted), or
@@ -711,6 +824,7 @@ def send(
                 params=params,
                 headers=headers,
                 content=content,
+                sign=sign,
             )
             try:
                 response = client.send(request, stream=True)
@@ -754,6 +868,7 @@ async def asend(
     timeout: float = 10.0,
     max_attempts: int = 3,
     field: str | None = None,
+    sign: SignAttempt | None = None,
 ) -> OutboundResult:
     """Async twin of :func:`send` — same policy, same failure modes.
 
@@ -777,6 +892,7 @@ async def asend(
                 params=params,
                 headers=headers,
                 content=content,
+                sign=sign,
             )
             try:
                 response = await client.send(request, stream=True)
