@@ -136,9 +136,7 @@ def find_e2e_rest_parametrize_gate(tree: ast.Module) -> str | None:
     guard should surface via the pin comparison, not by vacuously passing).
     """
     hooks = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "pytest_generate_tests"
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "pytest_generate_tests"
     ]
     for hook in hooks:
         for node in ast.walk(hook):

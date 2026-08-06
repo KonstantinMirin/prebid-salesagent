@@ -298,8 +298,7 @@ class XandrAdapter(AdServerAdapter):
         """Create a task for human approval."""
         import uuid
 
-        from database_session import get_db_session
-
+        from src.core.database.database_session import get_db_session
         from src.core.database.models import Tenant
 
         task_id = f"task_{uuid.uuid4().hex[:8]}"
@@ -317,7 +316,7 @@ class XandrAdapter(AdServerAdapter):
 
             if tenant and tenant.slack_webhook_url:
                 # Send Slack notification
-                from slack_notifier import get_slack_notifier
+                from src.services.slack_notifier import get_slack_notifier
 
                 # Build config for Slack notifier
                 tenant_config = {"features": {"slack_webhook_url": tenant.slack_webhook_url}}
@@ -326,8 +325,7 @@ class XandrAdapter(AdServerAdapter):
                 slack.notify_new_task(
                     task_id=task_id,
                     task_type=operation,
-                    title=f"Xandr: {operation.replace('_', ' ').title()}",
-                    description=f"Manual approval required for {self.principal.name}",
+                    principal_name=self.principal.name,
                     media_buy_id=details.get("media_buy_id", "N/A"),
                 )
 
