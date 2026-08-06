@@ -15,13 +15,22 @@ import hashlib
 import hmac
 from typing import Any
 
+# The two header names AdCP 3.1.1 pins for the legacy HMAC-SHA256 fallback
+# (``dist/docs/3.1.0/building/by-layer/L3/webhooks.mdx:404-418``). Named
+# constants rather than inline defaults because tests that grade the ABSENCE of
+# a signature need the same name this module verifies against: a second string
+# literal spelled somewhere else would keep passing after a header rename, which
+# is precisely the regression an absence assertion exists to catch.
+SIGNATURE_HEADER = "X-AdCP-Signature"
+TIMESTAMP_HEADER = "X-AdCP-Timestamp"
+
 
 def assert_signature_verifies_over_wire_body(
     request: Any,
     secret: str,
     *,
-    signature_header: str = "X-AdCP-Signature",
-    timestamp_header: str = "X-AdCP-Timestamp",
+    signature_header: str = SIGNATURE_HEADER,
+    timestamp_header: str = TIMESTAMP_HEADER,
 ) -> None:
     """Assert ``request``'s HMAC signature verifies against ``request.body``.
 

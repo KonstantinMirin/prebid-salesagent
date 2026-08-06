@@ -25,6 +25,22 @@ Today's hand-rolled loop retries every non-2xx, so it costs three. The seam
 classifies retryable as ``{429, 500, 502, 503, 504}`` and treats everything else
 — every other 4xx, every 3xx — as terminal, so adopting it is what turns that
 case green. That behaviour change is named in the PR, not smuggled.
+
+Why the signing obligations are graded HERE and not in BDD (salesagent-47n9.21):
+``_send_approval_webhook`` has exactly one production trigger — the GAM adapter
+body at ``src/adapters/google_ad_manager.py:757``, reached only when the
+synchronous ``approve_order`` returns False — and that trigger fires it on a
+daemon thread, long after ``create_media_buy`` already returned its response to
+the buyer. No request/response cycle is in flight at webhook time, so there is
+no wire envelope for a BDD ``Then`` step to assert on; and every media-buy BDD
+env mocks ``get_adapter``
+(``MediaBuyCreateEnv.EXTERNAL_PATCHES["adapter"]``), so the sole caller never
+executes there at all. The identical rationale is already written down for the
+sibling delivery-time refusal at
+``tests/bdd/features/local-egress-ssrf-refusal.feature:45-51`` — "no
+request/response cycle, so no envelope to grade" — and this module is the
+integration locus that precedent points at. Do not re-open the question by
+adding a scenario that would have to fake the trigger to reach the behaviour.
 """
 
 from __future__ import annotations
@@ -33,7 +49,7 @@ import pytest
 
 from tests.factories import PushNotificationConfigFactory
 from tests.harness.order_approval_webhook import OrderApprovalWebhookEnv
-from tests.helpers import assert_signature_verifies_over_wire_body
+from tests.helpers import SIGNATURE_HEADER, assert_signature_verifies_over_wire_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -43,7 +59,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 MAX_ATTEMPTS = 3
 
 
-def _bearer_config(env: OrderApprovalWebhookEnv, token: str = "test_token") -> None:
+def _bearer_config(env: OrderApprovalWebhookEnv, token: str = "test_token", *, scheme: str = "Bearer") -> None:
     """Store a bearer-auth ``PushNotificationConfig`` for the env's own endpoint.
 
     Production looks the row up by ``(tenant_id, principal_id, url, is_active)``,
@@ -51,24 +67,70 @@ def _bearer_config(env: OrderApprovalWebhookEnv, token: str = "test_token") -> N
     anywhere else is invisible to the code under test and would make an
     "Authorization header" assertion grade nothing.
 
-    ``authentication_type`` is the SPEC spelling (``AuthenticationScheme =
+    ``scheme`` defaults to the SPEC spelling (``AuthenticationScheme =
     ["Bearer", "HMAC-SHA256"]`` @ pinned AdCP 3.1.1), which is what every writer
     in ``src/`` actually stores — ``media_buy_create`` persists ``schemes[0]``
     verbatim. The fixture used to say lowercase ``"bearer"`` because that is
     what ``order_approval_service`` compares against, so it graded the sender's
     private spelling instead of the rows the sender really receives
-    (salesagent-47n9.20). RED until the sender resolves the scheme through
-    ``webhook_auth_for``, which compares case-insensitively.
+    (salesagent-47n9.20). It is a PARAMETER rather than a constant because both
+    spellings are rows a real buyer can produce and both must authenticate —
+    see ``test_a_lowercase_scheme_still_authenticates``.
     """
     tenant, principal = env.setup_default_data()
     PushNotificationConfigFactory(
         tenant=tenant,
         principal=principal,
         url=env.webhook_url,
-        authentication_type="Bearer",
+        authentication_type=scheme,
         authentication_token=token,
         is_active=True,
     )
+
+
+def _hmac_config(env: OrderApprovalWebhookEnv, *, secret: str | None = None) -> None:
+    """Store an ``HMAC-SHA256`` ``PushNotificationConfig`` for the env's own endpoint.
+
+    The twin of :func:`_bearer_config`, and for the same reason: the URL must be
+    the origin that is really listening or production's lookup misses the row.
+
+    ``secret`` is the AdCP ``push_notification_config.authentication.credentials``
+    value and lands in ``authentication_token`` — the column every writer in
+    ``src/`` populates, and the one ``order_approval_service`` reads since
+    salesagent-47n9.20. ``secret=None`` leaves the credential genuinely absent
+    (``PushNotificationConfigFactory`` declares no default for it), which is the
+    row a buyer who selected HMAC-SHA256 without supplying a secret produces.
+
+    Both the signing case and the refusal case go through here because they
+    differ in exactly one value; a second inlined factory block would be the
+    parameter-substitution duplication CLAUDE.md treats as a defect.
+    """
+    tenant, principal = env.setup_default_data()
+    PushNotificationConfigFactory(
+        tenant=tenant,
+        principal=principal,
+        url=env.webhook_url,
+        authentication_type="HMAC-SHA256",
+        authentication_token=secret,
+        is_active=True,
+    )
+
+
+def _assert_delivered_without_a_signature(env: OrderApprovalWebhookEnv) -> None:
+    """Assert one request arrived and it carries no HMAC signature header.
+
+    The header NAME is ``SIGNATURE_HEADER`` — the same constant
+    ``assert_signature_verifies_over_wire_body`` verifies against — rather than
+    a second string literal. A rename that moved the positive case to a new
+    header would otherwise leave every absence assertion here trivially true,
+    which is the one way an absence assertion silently stops grading.
+
+    The ``delivery_attempts == 1`` half is not decoration: "no signature header"
+    is vacuously true of a request that never happened, so the count is what
+    makes the header claim a claim about a real delivery.
+    """
+    assert env.delivery_attempts == 1
+    assert SIGNATURE_HEADER not in env.last_delivery.headers
 
 
 class TestDeliveredPayload:
@@ -127,6 +189,29 @@ class TestStoredCredential:
             assert env.delivery_attempts == 1
             assert env.last_delivery.headers["Authorization"] == "Bearer test_token"
 
+    def test_a_lowercase_scheme_still_authenticates(self, integration_db):
+        """A row storing ``"bearer"`` gets the same ``Authorization`` header as ``"Bearer"``.
+
+        Lowercase rows are not hypothetical: the A2A
+        ``setTaskPushNotificationConfig`` handler stores
+        ``params.authentication.scheme`` verbatim from a free-form protobuf
+        string with no enum guarding that path, so a real buyer creates them.
+        ``webhook_auth_for`` therefore compares case-insensitively
+        (salesagent-47n9.20), and this is the only test holding that decision in
+        place — tightening the resolver to an exact match against the pinned
+        ``AuthenticationScheme`` enum would stop sending ``Authorization`` for
+        rows that are authenticated today, which is a regression wearing the
+        clothes of a tidy-up.
+        """
+        with OrderApprovalWebhookEnv() as env:
+            _bearer_config(env, token="test_token", scheme="bearer")
+            env.set_http_status(200)
+
+            env.call_send_approval_webhook(status="approved")
+
+            assert env.delivery_attempts == 1
+            assert env.last_delivery.headers["Authorization"] == "Bearer test_token"
+
     def test_no_stored_config_sends_no_authorization_header(self, integration_db):
         """With no active row the request still goes out — unauthenticated.
 
@@ -159,8 +244,14 @@ class TestHmacSigning:
     zero writers anywhere in ``src/``. The fixture used to populate
     ``webhook_secret`` because that is the column the sender reads, so it
     graded a row no buyer can create -- while every row a buyer CAN create took
-    the sender's "no secret stored" refusal branch. RED until the sender takes
-    its secret from ``authentication_token`` through ``webhook_auth_for``.
+    the sender's "no secret stored" refusal branch. Since 47n9.20 the sender
+    takes its secret from ``authentication_token`` through ``webhook_auth_for``.
+
+    Both halves of the invariant are graded here (salesagent-47n9.21): a
+    HMAC-SHA256 row either goes out carrying a signature that verifies over the
+    exact bytes that crossed the socket, or it does not go out. There is no
+    third outcome in which an unsigned request reaches a receiver that asked to
+    be able to verify it.
     """
 
     def test_hmac_sha256_config_signs_the_wire_body(self, integration_db):
@@ -171,21 +262,81 @@ class TestHmacSigning:
         secret = "s" * 32  # Meets the 32-char minimum every HMAC secret in this suite uses.
 
         with OrderApprovalWebhookEnv() as env:
-            tenant, principal = env.setup_default_data()
-            PushNotificationConfigFactory(
-                tenant=tenant,
-                principal=principal,
-                url=env.webhook_url,
-                authentication_type="HMAC-SHA256",
-                authentication_token=secret,
-                is_active=True,
-            )
+            _hmac_config(env, secret=secret)
             env.set_http_status(200)
 
             env.call_send_approval_webhook(status="approved")
 
             assert env.delivery_attempts == 1
             assert_signature_verifies_over_wire_body(env.last_delivery, secret)
+
+    def test_hmac_sha256_without_credentials_delivers_nothing(self, integration_db):
+        """A row asking for HMAC-SHA256 with no credential stored sends NOTHING.
+
+        The origin answers 200 deliberately. A destination that would have
+        ACCEPTED the delivery is what makes zero hits mean "the sender refused",
+        rather than "the request went out and failed on arrival" — the reading
+        an origin programmed to reject would leave open.
+
+        Zero is discriminating, not merely small. When the
+        ``PushNotificationConfig`` lookup in ``_send_approval_webhook`` finds no
+        row at all, production falls through to ``Unauthenticated`` and
+        DELIVERS, which costs exactly one hit
+        (``TestStoredCredential::test_no_stored_config_sends_no_authorization_header``
+        pins that count). So 0 separates "refused because the delivery would
+        have had to go unsigned" from "the row was never found" — without that
+        distinction this assertion would pass just as happily against a lookup
+        that silently missed, and would be grading nothing.
+
+        The obligation itself: a buyer who asked for HMAC-SHA256 will reject an
+        unsigned POST, so sending one is strictly worse than sending none — it
+        is an unauthenticated request to a third-party endpoint that no receiver
+        can attribute to us (salesagent-47n9.15/47n9.20).
+        """
+        with OrderApprovalWebhookEnv() as env:
+            _hmac_config(env, secret=None)
+            env.set_http_status(200)
+
+            env.call_send_approval_webhook(status="approved")
+
+            assert env.delivery_attempts == 0
+
+
+class TestSigningIsGatedByTheScheme:
+    """Only a row that ASKED for HMAC-SHA256 gets a signature.
+
+    The sibling sender ``webhook_delivery_service`` shows what the other answer
+    costs (salesagent-ywzz): signing driven by "is a credential present" rather
+    than "is the scheme HMAC-SHA256" starts signing rows that stored a bearer
+    token, and a receiver expecting a plain bearer POST sees headers it did not
+    ask for. Both non-HMAC paths are graded, because a regression in the gate
+    would show up on whichever one the change happened to touch.
+    """
+
+    def test_a_bearer_row_is_delivered_unsigned(self, integration_db):
+        """A stored bearer credential must not be pressed into service as a signing key."""
+        with OrderApprovalWebhookEnv() as env:
+            _bearer_config(env, token="test_token")
+            env.set_http_status(200)
+
+            env.call_send_approval_webhook(status="approved")
+
+            _assert_delivered_without_a_signature(env)
+
+    def test_a_row_less_delivery_is_unsigned(self, integration_db):
+        """With no config row at all there is no scheme, so there is nothing to sign with.
+
+        The companion in ``TestStoredCredential`` grades that this same request
+        carries no ``Authorization``; this grades the other header a signing
+        regression would add to it.
+        """
+        with OrderApprovalWebhookEnv() as env:
+            env.setup_default_data()
+            env.set_http_status(200)
+
+            env.call_send_approval_webhook(status="approved")
+
+            _assert_delivered_without_a_signature(env)
 
 
 class TestRetryClassification:

@@ -78,7 +78,11 @@ from tests.helpers.adcp_factories import (
 )
 from tests.helpers.backoff_assertions import assert_backoff_schedule
 from tests.helpers.envelope_assertions import assert_envelope_shape, assert_no_raw_validation_leak
-from tests.helpers.hmac_assertions import assert_signature_verifies_over_wire_body
+from tests.helpers.hmac_assertions import (
+    SIGNATURE_HEADER,
+    TIMESTAMP_HEADER,
+    assert_signature_verifies_over_wire_body,
+)
 from tests.helpers.idempotency_seeds import (
     make_active_cached_success,
     seed_cached_success,
@@ -95,6 +99,8 @@ __all__ = [
     "assert_envelope_shape",
     "assert_no_raw_validation_leak",
     # HMAC signature assertions
+    "SIGNATURE_HEADER",
+    "TIMESTAMP_HEADER",
     "assert_signature_verifies_over_wire_body",
     # Idempotency cache seeding
     "make_active_cached_success",
