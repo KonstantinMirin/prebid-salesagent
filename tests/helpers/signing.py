@@ -792,16 +792,22 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
 
     *signed* is one outbound POST as the receiving socket saw it — the ``url`` a
     receiver reconstructs from its own wire, the headers it received, the bytes it
-    read. Two graders need exactly this call: the C2 proof-of-control challenge
-    (in-process, ``tests/integration/test_notification_proof_challenge.py``) and the
-    E2E-3 delivery webhook (``tests/e2e/test_webhook_signature_e2e.py``). One
-    definition, here — a verifier that drifted between them would let one surface be
-    graded more weakly than the other.
+    read. Three graders need exactly this call: the C2 proof-of-control challenge
+    (in-process, ``tests/integration/test_notification_proof_challenge.py``), the
+    E2E-3 delivery webhook (``tests/e2e/test_webhook_signature_e2e.py``), and the
+    BR-UC-004 9421 sibling scenario (``tests/bdd/steps/domain/uc004_delivery.py``,
+    #1291 z6nr.31). One definition, here — a verifier that drifted between them would
+    let one surface be graded more weakly than the other.
 
     ``verify_webhook_signature`` is the SDK's webhook entry point and it is the right
     machinery — the whole checklist, the tag pin, the required components, the digest
-    policy, the alg allowlist. It is called here through the request verifier with exactly
-    ONE substitution, because the SDK diverges from the pin on that one value:
+    policy, the alg allowlist, the step-6 component precheck, and the request->webhook
+    error retag. It is called here through the request verifier plus the SAME two
+    private helpers ``verify_webhook_signature`` itself calls
+    (``adcp.signing.webhook_verifier._precheck_webhook_has_required_components``,
+    ``._retag_to_webhook``) rather than a hand-copied reimplementation, because the SDK
+    diverges from the pin on exactly ONE value and ``WebhookVerifyOptions`` gives no way
+    to override it:
 
     security.mdx @ v3.1.1 :1426 — *"Webhooks are signed with the agent's ``adcp_use:
     "request-signing"`` key; there is no separate webhook key purpose. Domain separation
@@ -810,47 +816,85 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
     repeats it ("webhooks do not need their own purpose"), and :1438 makes
     ``"webhook-signing"`` DEPRECATED — verifiers "MUST still accept it for backward
     compatibility", while "new signers SHOULD publish and sign with ``"request-signing"``
-    keys only".
+    keys only". Step 8 (:1478) and the taxonomy row (:1560) both say the accept-set is
+    exactly ``{"request-signing", "webhook-signing"}`` — never a single value in either
+    direction.
 
     The SDK inverts that: ``verify_webhook_signature`` builds its options with
     ``expected_adcp_use=ADCP_USE_WEBHOOK``, so it accepts ONLY the deprecated value and
     REJECTS the one the spec mandates for new signers
-    (``webhook_signature_key_purpose_invalid``). Verifying through the substituted options
-    is therefore what a CONFORMANT receiver does; the divergence itself is pinned by
+    (``webhook_signature_key_purpose_invalid``). Filed upstream:
+    https://github.com/adcontextprotocol/adcp-client-python/issues/1018 (FIXME(#1291)).
+    The divergence itself is also pinned locally by
     ``TestChallengeIsSignedAndVerifiable.test_the_sdk_webhook_verifier_diverges_from_the_pin``
-    so it becomes a loud failure the moment the SDK is fixed and this substitution can go.
+    so it becomes a loud failure the moment the SDK is fixed and this substitution can go;
+    the accept-SET breadth graded here (``tests/unit/test_conformant_receiver_key_purpose.py``)
+    is a SEPARATE, longer-lived obligation that outlives that fix — the spec's requirement,
+    not a note about the SDK's bug.
 
-    Everything except ``expected_adcp_use`` is copied from the SDK's own construction, so
+    Verifying with the accept-set is therefore what a CONFORMANT receiver does: attempt
+    ``"request-signing"`` first (:1426's canonical value); on a refusal caused SPECIFICALLY
+    by the ``adcp_use`` mismatch, retry ONCE with ``"webhook-signing"``. Any other step-8
+    refusal (``use``, ``key_ops``, or algorithm) is reported as itself, never blurred into
+    a purpose complaint by a retry that re-runs the whole check under a second purpose —
+    the SDK's ``_check_key_purpose`` gives no code finer than
+    ``request_signature_key_purpose_invalid`` for any of its four conditions, so the
+    ``"adcp_use"`` substring in the exception's own message is the only signal available to
+    tell them apart.
+
+    Everything except the widened accept-set is copied from the SDK's own construction, so
     this cannot drift into a weaker check than the SDK performs.
 
     Nothing here reaches into ``src``: the decision is made by SDK code over the wire
     bytes and a JWKS document, which is what lets an e2e caller claim its VERIFY path
     holds no production import.
     """
+    from adcp.signing.constants import ADCP_USE_REQUEST, ADCP_USE_WEBHOOK
+    from adcp.signing.errors import REQUEST_SIGNATURE_KEY_PURPOSE_INVALID, SignatureVerificationError
     from adcp.signing.jwks import StaticJwksResolver
     from adcp.signing.verifier import VerifierCapability, VerifyOptions, verify_request_signature
     from adcp.signing.webhook_signer import WEBHOOK_TAG as _TAG
+    from adcp.signing.webhook_verifier import _precheck_webhook_has_required_components, _retag_to_webhook
 
-    return verify_request_signature(
-        method="POST",
-        url=signed.url,
-        headers=dict(signed.headers),
-        body=signed.content,
-        options=VerifyOptions(
-            now=time.time(),
-            capability=VerifierCapability(
-                supported=True, covers_content_digest="required", required_for=frozenset({"webhook"})
+    headers = dict(signed.headers)
+    _precheck_webhook_has_required_components(headers)
+
+    # FIXME(#1291): the retry below exists only because adcp-client-python's webhook
+    # verifier pins expected_adcp_use to the deprecated "webhook-signing" value and
+    # gives no way to widen it (WebhookVerifyOptions has no expected_adcp_use field).
+    # Delete this retry and call verify_webhook_signature directly once
+    # https://github.com/adcontextprotocol/adcp-client-python/issues/1018 lands.
+    def _attempt(expected_adcp_use: str) -> Any:
+        return verify_request_signature(
+            method="POST",
+            url=signed.url,
+            headers=headers,
+            body=signed.content,
+            options=VerifyOptions(
+                now=time.time(),
+                capability=VerifierCapability(
+                    supported=True, covers_content_digest="required", required_for=frozenset({"webhook"})
+                ),
+                operation="webhook",
+                # The SDK's own resolver over OUR published document: a JwksResolver maps a
+                # keyid to ONE JWK, so handing it the whole JWKS wrapper would have the
+                # verifier read `use` off the envelope and fail for a reason that is the
+                # test's, not production's.
+                jwks_resolver=StaticJwksResolver(jwks),
+                expected_tag=_TAG,
+                expected_adcp_use=expected_adcp_use,
             ),
-            operation="webhook",
-            # The SDK's own resolver over OUR published document: a JwksResolver maps a
-            # keyid to ONE JWK, so handing it the whole JWKS wrapper would have the
-            # verifier read `use` off the envelope and fail for a reason that is the
-            # test's, not production's.
-            jwks_resolver=StaticJwksResolver(jwks),
-            expected_tag=_TAG,
-            expected_adcp_use="request-signing",
-        ),
-    )
+        )
+
+    try:
+        return _attempt(ADCP_USE_REQUEST)
+    except SignatureVerificationError as exc:
+        if exc.code != REQUEST_SIGNATURE_KEY_PURPOSE_INVALID or "adcp_use" not in str(exc):
+            raise _retag_to_webhook(exc) from exc
+        try:
+            return _attempt(ADCP_USE_WEBHOOK)
+        except SignatureVerificationError as retried:
+            raise _retag_to_webhook(retried) from retried
 
 
 def just_after_provisioning() -> datetime:

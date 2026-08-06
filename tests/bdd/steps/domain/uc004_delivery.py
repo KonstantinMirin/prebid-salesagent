@@ -15,12 +15,15 @@ import json
 import re
 from typing import Any
 
+import httpx
 import pytest
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.helpers.signing import verify_as_conformant_receiver
+from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label, signature_input_params
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -53,21 +56,48 @@ def _sent_payload(call: Any) -> dict[str, Any]:
     return json.loads(content)
 
 
-def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
-    """Extract the JSON payload from the most recent webhook POST call."""
+def _last_delivery_call(ctx: dict) -> Any:
+    """The most recent outbound webhook POST as the socket recorded it.
+
+    One accessor for the three readings the delivery Thens make of it — payload,
+    headers, and the whole captured request — so "the last delivery" cannot come to
+    mean a different call in one of them.
+    """
     mock_post = ctx["env"].mock["post"]
     assert mock_post.called, "No webhook POST was made"
-    payload = _sent_payload(mock_post.call_args_list[-1])
-    assert payload, f"Webhook POST had no JSON payload: {mock_post.call_args_list[-1]}"
+    return mock_post.call_args_list[-1]
+
+
+def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
+    """Extract the JSON payload from the most recent webhook POST call."""
+    call = _last_delivery_call(ctx)
+    payload = _sent_payload(call)
+    assert payload, f"Webhook POST had no JSON payload: {call}"
     return payload
 
 
 def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
     """Extract headers from the most recent webhook POST call."""
-    mock_post = ctx["env"].mock["post"]
-    assert mock_post.called, "No webhook POST was made"
-    call_kwargs = mock_post.call_args_list[-1][1]
-    return call_kwargs.get("headers", {})
+    return _last_delivery_call(ctx)[1].get("headers", {})
+
+
+def _captured_delivery(ctx: dict) -> CapturedWebhook:
+    """The last delivery as a :class:`CapturedWebhook` — url, headers, BYTES.
+
+    The shape every RFC 9421 grader in this repo consumes
+    (``tests/helpers/webhook_wire.py``), so the signature assertions below run against
+    the same object ``tests/e2e/test_webhook_signature_e2e.py`` and
+    ``tests/integration/test_notification_proof_challenge.py`` verify — a signature
+    covers ``@target-uri`` and the body bytes, so a grader that reconstructed either
+    would be verifying a message that never went out.
+    """
+    args, kwargs = _last_delivery_call(ctx)
+    url = args[0] if args else kwargs.get("url", "")
+    return CapturedWebhook(
+        url=str(url),
+        headers=httpx.Headers(kwargs.get("headers") or {}),
+        content=kwargs.get("content") or b"",
+    )
 
 
 def _collect_all_packages(resp: Any) -> list[Any]:
@@ -497,6 +527,70 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
+
+
+@given("the reporting_webhook registers no authentication block")
+def given_webhook_no_authentication(ctx: dict) -> None:
+    """The RFC 9421 selector: :1424 makes the ABSENCE of the block the mode switch.
+
+    Stated rather than assumed. The registration this scenario needs is not "some
+    webhook" but specifically one carrying NEITHER ``authentication_type`` NOR
+    ``authentication_token`` — with either set, ``build_webhook_sender`` takes the
+    legacy arm and the whole scenario grades HMAC while claiming to grade 9421. So the
+    persisted row is read back and checked, which also makes this Given fail loudly if
+    a preceding Given ever starts seeding a default credential.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import PushNotificationConfig
+
+    configs = ctx.get("webhook_config", {})
+    assert configs, "a preceding Given must have registered a reporting_webhook"
+    for cfg in configs.values():
+        cfg.pop("auth_scheme", None)
+    ctx.pop("webhook_secret", None)
+    ctx.pop("webhook_bearer_token", None)
+
+    env = ctx["env"]
+    session = getattr(env, "_session", None)
+    assert session is not None, "the 9421 arm reads the persisted registration, so it needs the integration env"
+    _persist_webhook_config_if_needed(ctx, env)
+    row = session.scalars(
+        select(PushNotificationConfig).where(
+            PushNotificationConfig.tenant_id == env._tenant_id,
+            PushNotificationConfig.principal_id == env._principal_id,
+            PushNotificationConfig.url == _WEBHOOK_URL,
+        )
+    ).first()
+    assert row is not None, f"no PushNotificationConfig was registered for {_WEBHOOK_URL}"
+    assert (row.authentication_type, row.authentication_token) == (None, None), (
+        "this registration must carry no authentication block — it is the ABSENCE that selects "
+        f"RFC 9421 (:1424) — but it carries type={row.authentication_type!r} token set: "
+        f"{row.authentication_token is not None}"
+    )
+
+
+@given("the tenant publishes an RFC 9421 webhook signing key")
+def given_tenant_publishes_signing_key(ctx: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt IN to signing material for THIS scenario.
+
+    Deliberately a per-scenario step and not an env default: every other UC-004 webhook
+    scenario must keep its current posture byte-for-byte, and
+    ``@T-UC-004-webhook-notification-type`` asserts exactly that by requiring no
+    ``Signature`` header on a delivery where this step never ran.
+
+    Both halves matter and the env owns both: an ACTIVE key row, and an origin the key
+    can be PUBLISHED from. Without the publishable origin ``origin_is_publishable``
+    is false, ``_rfc9421_sender`` drops the arm, the delivery goes out unsigned — and a
+    sibling that skipped this would pass vacuously on headers that were simply absent.
+
+    *monkeypatch* is requested like any other fixture — pytest-bdd step functions can
+    depend on additional fixtures beyond ``ctx`` — and threaded through to the env's
+    provisioner, which needs it to configure the deployment KEK
+    (``provision_signing_key`` refuses to mint without one).
+    """
+    env = ctx["env"]
+    ctx["webhook_signing_kid"] = env.provision_webhook_signing_key(monkeypatch)
 
 
 @given("the shared secret is a valid 32+ character string")
@@ -1970,6 +2064,109 @@ def then_hmac_computation(ctx: dict) -> None:
     message = f"{timestamp}.".encode() + body
     expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
     assert signature == expected, f"HMAC signature mismatch: got {signature!r}, expected {expected!r}"
+
+
+# ── RFC 9421 delivery-signature assertions ────────────────────────
+
+
+@then(parsers.parse('the request should include header "{header}"'))
+def then_header_present(ctx: dict, header: str) -> None:
+    """The named header reached the socket, with a non-empty value.
+
+    Case-insensitively, through :class:`httpx.Headers`: HTTP header names are
+    case-insensitive and the sender is free to change its casing, so a case-sensitive
+    dict lookup would grade the sender's formatting rather than the wire contract.
+    """
+    captured = _captured_delivery(ctx)
+    assert header in captured.headers, (
+        f"expected header {header!r} on the outbound delivery; the wire carried {sorted(captured.headers.keys())}"
+    )
+    assert captured.headers[header].strip(), f"header {header!r} was sent empty, so it carries no contract"
+
+
+@then(parsers.parse('the request should not include header "{header}"'))
+def then_header_absent(ctx: dict, header: str) -> None:
+    """The named header did NOT reach the socket.
+
+    security.mdx @ v3.1.1 :1425 — *"Sellers MUST NOT sign the same webhook both ways."*
+    The mode switch is exclusive, so on the 9421 arm the legacy HMAC headers are not
+    merely unnecessary, they are forbidden; and on an arm with no key material the 9421
+    headers must be absent rather than present-but-unresolvable.
+    """
+    captured = _captured_delivery(ctx)
+    assert header not in captured.headers, (
+        f"header {header!r} was sent with value {captured.headers[header]!r}; this delivery's "
+        "authentication mode forbids it"
+    )
+
+
+@then("the Signature-Input tag should equal the advertised webhook_signing profile")
+def then_signature_tag_matches_advertised_profile(ctx: dict) -> None:
+    """The ``tag=`` on the wire is the profile our capabilities document advertises.
+
+    Two things a receiver does statically: read ``webhook_signing.profile`` off our
+    capabilities and compare it against the ``tag=`` parameter of the delivery it
+    receives (the ``profile`` field's own contract — "MUST match the ``tag=``
+    parameter … so receivers can statically validate the declared profile against the
+    on-wire signature"). Comparing the wire against the ADVERTISEMENT rather than
+    against an SDK constant is what makes this one decision instead of two: a literal
+    here would stay green while the two sides drifted apart.
+    """
+    captured = _captured_delivery(ctx)
+    advertised = ctx["env"].advertised_webhook_signing()
+    assert advertised.profile is not None, (
+        "this tenant advertises no webhook_signing.profile, so a receiver has nothing to validate "
+        "the tag against — the delivery's signature is unverifiable by static comparison"
+    )
+    tag = signature_input_params(captured).get("tag")
+    assert tag == advertised.profile, (
+        f"the delivery is signed under tag {tag!r} while we advertise profile "
+        f"{advertised.profile!r}; a receiver validating one against the other rejects every delivery"
+    )
+
+
+@then(parsers.parse('the covered components should include "{component}"'))
+def then_covered_components_include(ctx: dict, component: str) -> None:
+    """*component* is in the signature's covered-component list, not merely in a header.
+
+    Parsed as a structured field rather than substring-matched: ``Content-Digest`` can
+    be present as a header while the signature does not COVER it, and that is precisely
+    the shape where the body is unprotected — the digest is then an unsigned claim an
+    attacker rewrites alongside the body.
+    """
+    captured = _captured_delivery(ctx)
+    covered = signature_input_label(captured).components
+    assert component in covered, (
+        f"the signature covers {list(covered)}, which does not include {component!r} — the "
+        "signature does not protect what this scenario says it protects"
+    )
+
+
+@then("the signature should verify against the tenant's published JWKS")
+def then_signature_verifies_against_published_jwks(ctx: dict) -> None:
+    """A conformant receiver, given only what we publish, accepts this delivery.
+
+    The one shared verifier (``tests/helpers/signing.py::verify_as_conformant_receiver``,
+    the single legal home per
+    ``tests/unit/test_guards_no_duplicate_conformant_receiver_verifier.py``) run over the
+    JWKS the tenant PUBLISHES — not over the key row we minted. Verifying against the
+    row would still pass if the publication hop were broken, and a signature only
+    verifiable against a key we never published is not verifiable at all.
+
+    The signer identity is compared to the kid the Given provisioned, so a delivery
+    signed under some other key cannot pass by merely being well-formed.
+    """
+    captured = _captured_delivery(ctx)
+    env = ctx["env"]
+    expected_kid = ctx.get("webhook_signing_kid")
+    assert expected_kid, "the signing-key Given must record the kid it provisioned"
+
+    verified = verify_as_conformant_receiver(captured, env.published_jwks())
+
+    assert verified.key_id == expected_kid, (
+        f"the delivery verified under key {verified.key_id!r}, but this tenant publishes and "
+        f"should have signed with {expected_kid!r}"
+    )
 
 
 @then(parsers.parse('the request should include header "{header}" with the bearer token'))

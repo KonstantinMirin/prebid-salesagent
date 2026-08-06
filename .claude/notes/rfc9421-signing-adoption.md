@@ -47,11 +47,12 @@ already produced wrong conclusions on this codebase.
 - **The vector count is 40, not 28** — see §6.
 - **The verifier checklist is 15 checks, not 14** — see §8.
 
-### The seven SDK divergences already found
+### The eight SDK divergences already found
 
 Concrete instances, not a boilerplate disclaimer. All get filed upstream; all get implemented per
 the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`; #6 and #7 by B3,
-`salesagent-z6nr.14`, by RUNNING the shipped conformance data against `adcp==6.6.0`.)
+`salesagent-z6nr.14`, by RUNNING the shipped conformance data against `adcp==6.6.0`; #8 by
+`salesagent-z6nr.31`.)
 
 | # | Divergence | Consequence |
 |---|---|---|
@@ -62,6 +63,7 @@ the schema on our side. (#4 and #5 were found by A3, `salesagent-z6nr.9`; #6 and
 | 5 | `adcp.signing.brand_jwks._pick_agent` (brand_jwks.py:824-869) selects the `agents[]` entry by `type` plus an optional `agent_id` and **never compares `url` to the agent URL `A`** — so it raises `agent_ambiguous` for the shape the schema explicitly blesses (`#/definitions/agents`: "Multiple entries with the same type are permitted when they have distinct url values, such as one endpoint URL per tenant or property scope"), while security.mdx:1104 step 5 defines the match as byte-equality on `url`. | We publish one `agents[]` entry PER ENDPOINT we serve (`/mcp/`, `/a2a`) with distinct `id`s, per the schema — an origin-only `url` would byte-equal nothing any counterparty ever invoked. Our own resolver calls must pass `agent_id`. Do not "resolve" this by collapsing to one entry. |
 | 6 | **Canonicalization.** `adcp.signing.canonical._canon_authority` (canonical.py:128-150) never calls the SDK's OWN `adcp.signing._idna_canonicalize.canonicalize_host` (four sibling SDK modules do), performs **no** malformed-authority rejection, and `canonicalize_target_uri` drops a trailing empty query. MEASURED: **8 of the 31 shipped `canonicalization.json` cases fail** against `adcp==6.6.0` — the 2 IDN cases, `trailing-empty-query-preserved`, and all 6 `reject: true` cases (5 accepted outright, `malformed-ipv6-missing-closing-bracket` refused with a bare `ValueError` carrying no code). The same root cause makes the SDK answer request vector `negative/026` with `request_signature_invalid` instead of `request_signature_header_malformed`. | `src/core/signing/canonical.py` is the thin seam: it DELEGATES every canonical form to the SDK and adds ONLY the spec's rejection set (url-canonicalization.mdx steps 2-3), so we never carry a second canonicalizer. 28 of 31 cases run as conformance through it; the 2 IDN mapping cases and `trailing-empty-query-preserved` are **not implementable at a verifier boundary** (the first are signer-side — a comparer MUST reject, not re-normalize; the third is destroyed by ASGI, which hands `query_string=b""` for both `/p` and `/p?`) and run as named our-obligation tests. **0 skipped, 0 xfailed.** |
 | 7 | **`request_target_uri_malformed` is graded by data, and no SDK constant exists for it.** `canonicalization.json`'s 6 `reject: true` cases expect exactly this string, grounded at url-canonicalization.mdx ("Malformed authorities are rejected with `request_target_uri_malformed` on the signing path"). NOTE the vector README's worked example is **stale** and shows `request_signature_header_malformed`; the shipped DATA wins. | Defined in our layer as `src.core.signing.canonical.REQUEST_TARGET_URI_MALFORMED`, per #2's own instruction. **Keep it apart from `request_signature_header_malformed`**: request vector `negative/026` legitimately expects the latter (a checklist step-1 wire rejection), the canonicalization reject set expects the former. Collapsing the two loses a graded artifact in each direction. |
+| 8 | **`adcp.signing.webhook_verifier`'s `VerifyOptions.expected_adcp_use` is pinned to `ADCP_USE_WEBHOOK` (webhook_verifier.py:152), so `_check_key_purpose` (verifier.py:607-621) accepts ONLY the deprecated `"webhook-signing"` JWK purpose and rejects `"request-signing"` — the exact inverse of security.mdx step 8 / the taxonomy row, which mandate the accept-set `{"request-signing", "webhook-signing"}` in EITHER direction (`:1438`: `"webhook-signing"` is deprecated, new signers SHOULD use `"request-signing"` only, but verifiers MUST still accept both). Found by B4/#1291 z6nr.31 widening `tests/helpers/signing.py::verify_as_conformant_receiver` to grade our own request-signing-purpose keys correctly. | Our test-side conformant-receiver shim attempts `"request-signing"` first and retries once with `"webhook-signing"` only on `REQUEST_SIGNATURE_KEY_PURPOSE_INVALID`, rather than mirroring the SDK's single-value pin. Production is unaffected (we sign with and publish `request-signing` keys only), but any grader importing the SDK's webhook verifier directly inherits the bug. |
 
 **Upstream filing status (B3, `salesagent-z6nr.14`) — FILED, as four issues, not one.**
 
@@ -74,6 +76,7 @@ than bundled. All four are OPEN and UNFIXED:
 | [#977](https://github.com/adcontextprotocol/adcp-client-python/issues/977) | No IDNA A-label conversion; raw U-labels not rejected — #6's 2 IDN cases |
 | [#978](https://github.com/adcontextprotocol/adcp-client-python/issues/978) | Five malformed authority shapes accepted; `request_target_uri_malformed` unimplemented — #6's reject set **and** #7 |
 | [#979](https://github.com/adcontextprotocol/adcp-client-python/issues/979) | Trailing empty query dropped, so `/p?` and `/p` produce the same signature base — #6 |
+| [#1018](https://github.com/adcontextprotocol/adcp-client-python/issues/1018) | Webhook verifier's `expected_adcp_use` pin accepts only the deprecated `"webhook-signing"` purpose, rejecting the spec-mandated `"request-signing"` — #8 |
 
 Related, same repo: [#975](https://github.com/adcontextprotocol/adcp-client-python/issues/975)
 (vendored vectors incomplete and the loaders cannot detect it) with PR #980 approved — the SAME

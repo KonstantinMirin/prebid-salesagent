@@ -46,7 +46,7 @@ def _calls_name(node: ast.AST, name: str) -> bool:
 def _verify_call_with_adcp_use_substitution(node: ast.AST) -> bool:
     """True if *node* is a verify_request_signature(...) call carrying the
     expected_adcp_use= keyword -- the SDK-divergence substitution unique to the
-    conformant-receiver shape (tests/helpers/signing.py:553)."""
+    conformant-receiver shape (tests/helpers/signing.py:790 verify_as_conformant_receiver)."""
     return _calls_name(node, "verify_request_signature") and any(
         kw.arg == "expected_adcp_use" for kw in getattr(node, "keywords", [])
     )

@@ -14,6 +14,7 @@ from contextlib import ExitStack
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 from src.adapters.mock_ad_server import simulate_breakdowns
 from src.core.schemas import (
@@ -400,6 +401,91 @@ class CircuitBreakerMixin:
         if secret:
             return "HMAC-SHA256", secret
         return auth_type, auth_token
+
+    def provision_webhook_signing_key(self, monkeypatch: Any, *, alg: str = "ed25519") -> str:
+        """Opt this scenario's tenant into RFC 9421 webhook signing. Returns the ``kid``.
+
+        Per-scenario opt-in, never an env default (#1291 z6nr.31): every other UC-004
+        webhook scenario must keep its current unsigned/HMAC posture byte-for-byte, and
+        ``@T-UC-004-webhook-notification-type`` asserts exactly that.
+
+        Both halves are prerequisites for :func:`src.core.signing.posture.origin_is_publishable`
+        and neither alone is enough: an ACTIVE ``SigningKey`` row (through the SAME
+        production provisioner ``tests/e2e/_signing_e2e.py`` uses,
+        :func:`tests.helpers.signing.provision_key`, never a hand-built row) plus a
+        PUBLISHABLE origin (a dotted ``virtual_host`` — ``_get_protocol_for_domain``
+        derives ``http`` for a single-label host, which ``origin_is_publishable`` then
+        refuses). Without the origin half, ``_rfc9421_sender`` drops the arm and the
+        delivery goes out UNSIGNED — a sibling that skipped this would pass vacuously on
+        headers that were simply never sent.
+
+        *monkeypatch* is the caller's own fixture (a step function can request it like
+        any other), threaded through to :func:`tests.helpers.signing.deployment_kek` —
+        ``provision_signing_key`` refuses to mint without a configured KEK, and
+        ``deployment_kek`` has no teardown of its own; it relies entirely on
+        ``monkeypatch``'s automatic per-test undo, so the env stays scoped to this one
+        scenario.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+        from tests.helpers.signing import deployment_kek, provision_key, signing_key_repo
+
+        session = self._session  # type: ignore[attr-defined]
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()  # type: ignore[attr-defined]
+        assert tenant is not None, (
+            f"no tenant row for {self._tenant_id!r} — provision the tenant before the signing key"  # type: ignore[attr-defined]
+        )
+        if "." not in (tenant.virtual_host or ""):
+            tenant.virtual_host = f"{self._tenant_id}.example.com"  # type: ignore[attr-defined]
+
+        repo = signing_key_repo(self, self._tenant_id)  # type: ignore[attr-defined]
+        # A random suffix, not a deterministic one: this scenario runs once PER
+        # TRANSPORT (a2a/mcp/rest) against the SAME tenant_id, and
+        # resolve_signing_provider (provider.py) caches resolved key material for
+        # 60s keyed by (tenant_id, kid) — a deterministic kid would let one
+        # transport's run resolve a STALE PEM cached under another transport's
+        # identical kid, verifying against the wrong key entirely.
+        kid = f"{self._tenant_id}-webhook-signing-{uuid4().hex[:8]}"  # type: ignore[attr-defined]
+        with deployment_kek(monkeypatch):
+            row = provision_key(repo, self._tenant_id, kid, alg=alg)  # type: ignore[attr-defined]
+        self._commit_factory_data()  # type: ignore[attr-defined]
+        return row.kid
+
+    def published_jwks(self) -> dict[str, Any]:
+        """The JWKS this tenant PUBLISHES right now — the publication hop, not the row minted.
+
+        Built from :meth:`SigningKeyRepository.publishable_at`, the SAME selector
+        ``/.well-known/jwks.json`` reads through (``src/routes/well_known.py``), so a
+        verifier that resolves against this dict is verifying against what a real
+        receiver would fetch — never against a row that skipped publication.
+        """
+        from src.core.config import SigningConfig
+        from src.core.signing.trust_root import build_jwks
+        from tests.helpers.signing import signing_key_repo
+
+        repo = signing_key_repo(self, self._tenant_id)  # type: ignore[attr-defined]
+        keys = repo.publishable_at(now=datetime.now(UTC), grace_seconds=SigningConfig().grace_seconds)
+        return build_jwks(keys)
+
+    def advertised_webhook_signing(self) -> Any:
+        """This tenant's CURRENT ``webhook_signing`` posture — the same object ``_rfc9421_sender`` reads.
+
+        Derived through production's own :func:`src.core.signing.posture.webhook_signing_posture`
+        rather than re-typed here, so the Then step compares the wire against the SAME
+        advertisement production would compute — a literal profile string would stay
+        green while the two sides drifted apart.
+        """
+        from src.core.agent_identity import canonical_agent_url
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
+        from src.core.signing.posture import webhook_signing_posture
+        from tests.helpers.signing import signing_key_repo
+
+        repo = signing_key_repo(self, self._tenant_id)  # type: ignore[attr-defined]
+        tenant = TenantConfigRepository(repo.session, self._tenant_id).get_tenant()  # type: ignore[attr-defined]
+        assert tenant is not None, f"no tenant row for {self._tenant_id!r}"  # type: ignore[attr-defined]
+        origin = canonical_agent_url(tenant)
+        return webhook_signing_posture(repo, now=datetime.now(UTC), origin=origin)
 
     def get_service(self) -> WebhookDeliveryService:
         """Return a WebhookDeliveryService instance (cached per env)."""
