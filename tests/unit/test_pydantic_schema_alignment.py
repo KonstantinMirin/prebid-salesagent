@@ -752,17 +752,6 @@ class ResponseAlignment:
     model: type
     declared_fields: frozenset[str] = frozenset()  # fields that MUST be declared on the model
     sample: dict[str, Any] = dataclass_field(default_factory=dict)  # valid kwargs for required-enforcement
-    # Schema-required fields the model deliberately does NOT enforce at
-    # construction time — a documented builder-pattern override (e.g.
-    # Product.reporting_capabilities: "our product builder sets it when
-    # available from the adapter", product.py) where an upstream caller,
-    # not the Pydantic constructor, guarantees the value before the primary
-    # emission path. test_required_fields_enforced skips the
-    # omission/model-default check for these; test_declared_fields_present_in_schema_and_model
-    # still grades them via the model_dump() presence check, so a
-    # regression that drops the field from SERIALIZATION output (rather
-    # than construction) is still caught.
-    constructor_optional_fields: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -1012,12 +1001,12 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
         selector="products",
         item_key="products",
         model=Product,
-        # core/product.json's own required[] — reporting_capabilities included,
-        # even though Product overrides it Optional (builder backfills it before
-        # the primary emission path; see product.py's model_dump() docstring).
-        # Present here so test_declared_fields_present_in_schema_and_model grades
-        # it as a real, present-in-model_dump() field (R3-8, salesagent-1zq3.8) —
-        # not so test_required_fields_enforced treats an omission as a violation.
+        # core/product.json's own required[] — reporting_capabilities included.
+        # Product carries a validated default_factory for it, so omitting it from
+        # the sample is graded by the model_defaulted branch of
+        # test_required_fields_enforced (the attribute must come out non-None),
+        # and by test_declared_fields_present_in_schema_and_model's model_dump()
+        # presence check (R3-8, salesagent-1zq3.8).
         declared_fields=frozenset(
             {
                 "product_id",
@@ -1029,12 +1018,6 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
                 "reporting_capabilities",
             }
         ),
-        # reporting_capabilities has no non-None model default (the field's
-        # own None default IS the value left when omitted) — the model
-        # intentionally does not self-guarantee it at construction time
-        # (see the class-level comment above). Still graded for real by the
-        # model_dump() presence check above.
-        constructor_optional_fields=frozenset({"reporting_capabilities"}),
         sample={
             "product_id": "align_test_product",
             "name": "Alignment Test Product",
@@ -1042,7 +1025,14 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
             "publisher_properties": [create_test_publisher_properties_by_tag()],
             "delivery_type": "guaranteed",
             "pricing_options": [create_test_cpm_pricing_option()],
-            "reporting_capabilities": {"metrics": ["impressions", "clicks"]},
+            "reporting_capabilities": {
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": False,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": "date_range",
+            },
         },
     ),
 ]
@@ -1162,7 +1152,7 @@ class TestResponseModelAlignment:
         )
         # The complete required set constructs cleanly.
         assert alignment.model(**alignment.sample) is not None
-        for fname in required - alignment.constructor_optional_fields:
+        for fname in required:
             partial = {k: v for k, v in alignment.sample.items() if k != fname}
             if fname in model_defaulted:
                 # Model-defaulted: omission must NOT raise, and the default must
@@ -1176,25 +1166,6 @@ class TestResponseModelAlignment:
                 # No model default: the model itself must reject an incomplete construction.
                 with pytest.raises(ValidationError):
                     alignment.model(**partial)
-
-        # constructor_optional_fields fields are excluded from the raise/default-value
-        # check above entirely (the model neither rejects their omission nor leaves a
-        # non-None attribute) -- WITHOUT this, nothing at the alignment-suite level ever
-        # exercises what happens when one is actually omitted. That gap is exactly how
-        # Product.reporting_capabilities shipped omitted from model_dump() output
-        # (salesagent-00pl.1): the model's own None default is the value left when
-        # omitted, so the requiredness invariant can only be enforced by model_dump()
-        # itself backfilling a real default -- assert that here, generically, for any
-        # current or future field using this escape hatch.
-        for fname in required & alignment.constructor_optional_fields:
-            partial = {k: v for k, v in alignment.sample.items() if k != fname}
-            instance = alignment.model(**partial)
-            dumped = instance.model_dump(mode="json")
-            assert dumped.get(fname) is not None, (
-                f"{alignment.model.__name__}.{fname} is schema-required and excluded from "
-                f"constructor-time enforcement (constructor_optional_fields) -- model_dump() "
-                f"must still guarantee a non-null value for it when omitted from construction."
-            )
 
 
 def _enumerate_grounded_response_models() -> set[type]:

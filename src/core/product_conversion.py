@@ -481,7 +481,7 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         ]
     if product_model.reporting_capabilities:
         product_data["reporting_capabilities"] = product_model.reporting_capabilities
-    # else: leave unset — Product.model_dump() backfills DEFAULT_REPORTING_CAPABILITIES
+    # else: leave unset — the Product field's default_factory supplies the validated default
 
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False

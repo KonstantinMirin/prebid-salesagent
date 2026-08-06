@@ -14,6 +14,7 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
+from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -25,18 +26,23 @@ from src.core.schemas._base import (
     strip_none_deep,
 )
 
-# core/product.json requires reporting_capabilities unconditionally. Minimal
-# default for callers that haven't populated it yet — single source of
-# truth for both Product.model_dump() and product_conversion.py's primary
-# ORM->schema path (which just leaves the field unset and lets this apply).
-DEFAULT_REPORTING_CAPABILITIES: dict[str, Any] = {
-    "available_reporting_frequencies": ["daily"],
-    "expected_delay_minutes": 1440,
-    "timezone": "UTC",
-    "supports_webhooks": False,
-    "available_metrics": ["impressions"],
-    "date_range_support": "date_range",
-}
+
+def _default_reporting_capabilities() -> LibraryReportingCapabilities:
+    """Minimal reporting_capabilities for callers that haven't populated it yet.
+
+    core/product.json requires the field unconditionally, so Product supplies a
+    validated default rather than leaving the attribute None and fabricating a
+    value at serialization time. Returns a fresh instance per call — the field's
+    default_factory — so no lists are shared between products.
+    """
+    return LibraryReportingCapabilities(
+        available_reporting_frequencies=["daily"],
+        expected_delay_minutes=1440,
+        timezone="UTC",
+        supports_webhooks=False,
+        available_metrics=["impressions"],
+        date_range_support="date_range",
+    )
 
 
 class ProductCard(LibraryProductCard):
@@ -91,11 +97,10 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
-    # adcp 4.3 makes reporting_capabilities required. Override as optional at
-    # construction time — not every caller knows it yet — but model_dump()
-    # below backfills DEFAULT_REPORTING_CAPABILITIES when unset, so the
-    # pinned schema's unconditional requirement is always satisfied on output.
-    reporting_capabilities: Any | None = None  # type: ignore[assignment]
+    # adcp 4.3 makes reporting_capabilities required. Callers that don't know it
+    # yet get a validated default from the factory below, so the attribute, the
+    # wire and the persisted row always agree and None is unconstructible.
+    reporting_capabilities: LibraryReportingCapabilities = Field(default_factory=_default_reporting_capabilities)
 
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
@@ -184,12 +189,6 @@ class Product(LibraryProduct):
         # (R3-8, salesagent-1zq3.8). When actually unset, it must be OMITTED
         # like any other optional field — it is only required via anyOf with
         # format_options, not unconditionally.
-        #
-        # reporting_capabilities is different: the pinned schema's top-level
-        # required array lists it unconditionally, so omitting it is ALSO
-        # schema-invalid. It is not listed in core_fields (that would force
-        # in a raw None); instead it gets a real default backfilled below,
-        # after this loop, when still unset.
         core_fields = {
             "product_id",
             "name",
@@ -215,11 +214,6 @@ class Product(LibraryProduct):
             # Include empty pricing_options explicitly (required per AdCP schema)
             elif key == "pricing_options" and value == []:
                 adcp_data[key] = []
-
-        # reporting_capabilities is unconditionally schema-required (unlike
-        # format_ids) — never omit it, even when unset on the model.
-        if adcp_data.get("reporting_capabilities") is None:
-            adcp_data["reporting_capabilities"] = dict(DEFAULT_REPORTING_CAPABILITIES)
 
         return adcp_data
 

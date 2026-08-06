@@ -139,7 +139,6 @@ class TestCoreFieldsDoNotForceInvalidNull:
             format_ids=None,
             delivery_type="guaranteed",
             pricing_options=[create_test_cpm_pricing_option()],
-            reporting_capabilities={"metrics": ["impressions"]},
         )
         data = product.model_dump()
 
@@ -151,31 +150,57 @@ class TestCoreFieldsDoNotForceInvalidNull:
 
 class TestReportingCapabilitiesAlwaysPresent:
     """reporting_capabilities is unconditionally required by the pinned
-    core/product.json's top-level required array (salesagent-00pl.1) —
-    unlike format_ids (only required via anyOf with format_options),
-    Product.model_dump() must never omit it, even when unset on the model.
-    When unset, model_dump() backfills the same minimal default
-    product_conversion.py's primary path already provides, now from one
-    shared source of truth instead of two.
+    core/product.json's top-level required array — unlike format_ids (only
+    required via anyOf with format_options), it must never be absent from
+    model_dump(). The field carries a validated default_factory, so the
+    attribute, the dump and the persisted row always agree; nothing is
+    fabricated at serialization time.
     """
 
     def test_present_and_non_null_when_unset(self):
-        """reporting_capabilities=None must still appear, backfilled with a default."""
-        product = create_test_product(reporting_capabilities=None)
-        data = product.model_dump()
+        """Omitting the kwarg leaves a real default on the attribute AND in the dump."""
+        product = create_test_product()
 
+        assert product.reporting_capabilities is not None, (
+            "the field's default_factory must populate the attribute, not just the dump"
+        )
+        assert product.reporting_capabilities.expected_delay_minutes == 1440
+
+        data = product.model_dump()
         assert "reporting_capabilities" in data, (
             "reporting_capabilities is schema-required and must never be omitted, even when unset on the model"
         )
-        assert data["reporting_capabilities"] is not None
+        assert data["reporting_capabilities"]["expected_delay_minutes"] == 1440
 
     def test_preserves_explicit_value_when_set(self):
         """An explicitly-set reporting_capabilities is not overwritten by the default."""
-        rc = {"available_metrics": ["impressions"], "expected_delay_minutes": 30}
+        rc = {
+            "available_reporting_frequencies": ["hourly"],
+            "expected_delay_minutes": 30,
+            "timezone": "America/New_York",
+            "supports_webhooks": True,
+            "available_metrics": ["impressions", "clicks"],
+            "date_range_support": "date_range",
+        }
         product = create_test_product(reporting_capabilities=rc)
         data = product.model_dump()
 
         assert data["reporting_capabilities"]["expected_delay_minutes"] == 30
+        assert data["reporting_capabilities"]["timezone"] == "America/New_York"
+
+    def test_none_is_unconstructible(self):
+        """reporting_capabilities=None has no representation — the model rejects it.
+
+        The former behavior (accept None on the model, fabricate a value inside
+        model_dump()) let the attribute, the wire and the DB row disagree.
+        """
+        with pytest.raises(ValidationError):
+            create_test_product(reporting_capabilities=None)
+
+    def test_partial_shape_is_unconstructible(self):
+        """A dict missing required subfields is rejected at the construction site."""
+        with pytest.raises(ValidationError):
+            create_test_product(reporting_capabilities={"metrics": ["impressions"]})
 
 
 class TestOptionalFieldsOmittedWhenUnset:
@@ -202,7 +227,6 @@ class TestOptionalFieldsOmittedWhenUnset:
             format_ids=[create_test_format_id("display_300x250")],
             delivery_type="guaranteed",
             pricing_options=[create_test_cpm_pricing_option()],
-            reporting_capabilities={"metrics": ["impressions"]},
             delivery_measurement=None,
         )
         data = product.model_dump()
