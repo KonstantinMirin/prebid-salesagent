@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 
@@ -73,7 +73,7 @@ class WireOmissionCase:
     narrowed_because: str | None = None
     # A response key that must be non-empty, so a schema-valid EMPTY body cannot
     # pass as coverage.
-    must_be_non_empty: str | None = field(default=None)
+    must_be_non_empty: str | None = None
 
     def __post_init__(self) -> None:
         if self.schema is None and not self.absent_paths:
