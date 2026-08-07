@@ -44,6 +44,7 @@ from tests.factories.core import TenantFactory
 from tests.factories.creative import CreativeFactory
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
+from tests.harness.assertions import assert_omits_paths
 from tests.harness.creative_list import CreativeListEnv
 from tests.harness.transport import Transport
 from tests.helpers.pinned_schema import validate_against_pinned_schema
@@ -135,10 +136,7 @@ def test_a2a_wire_omits_null_asset_fields(integration_db, null_field):
         f"the stored banner asset must reach the wire as an object so its null-omission is "
         f"observable, got {banner!r} — if assets stopped being emitted, this test is vacuous"
     )
-    assert null_field not in banner, (
-        f"creatives[0].assets.banner.{null_field} was stored as None and must be omitted from "
-        f"the A2A wire, got {banner[null_field]!r}. Full asset: {banner!r}"
-    )
+    assert_omits_paths(banner, [null_field], context=f"A2A creatives[0].assets.banner (full asset: {banner!r})")
     # Negative control: the pass must strip only the nulls, not the asset itself.
     assert banner["asset_type"] == "image"
     assert banner["url"] == "https://example.com/banner.png"

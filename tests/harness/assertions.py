@@ -153,19 +153,30 @@ def assert_wire_omits_unset(
 
         validate_against_pinned_schema(schema, wire)
 
+    assert_omits_paths(wire, absent_paths, context=str(transport))
+
+
+def assert_omits_paths(payload: dict, absent_paths: Sequence[str], *, context: str) -> None:
+    """Assert every dotted path in *absent_paths* is ABSENT from *payload*.
+
+    The dict-level core of the omission check, split out so callers holding a
+    plain dict rather than a ``TransportResult`` -- a nested asset off a wire
+    body, say -- use the same traversal instead of hand-rolling ``x not in y``
+    and losing the intermediate-segment guard below.
+
+    Stricter than "not null": each intermediate segment must resolve to a dict,
+    so a typo'd path is a hard failure rather than a vacuous pass.
+    """
     for path in absent_paths:
         segments = path.split(".")
-        node = wire
+        node = payload
         for segment in segments[:-1]:
             assert isinstance(node, dict) and segment in node, (
-                f"{transport}: cannot check '{path}' absence -- '{segment}' missing from wire at this level: {node!r}"
+                f"{context}: cannot check '{path}' absence -- '{segment}' missing at this level: {node!r}"
             )
             node = node[segment]
         leaf = segments[-1]
-        assert isinstance(node, dict), (
-            f"{transport}: cannot check '{path}' absence -- parent is not an object: {node!r}"
-        )
+        assert isinstance(node, dict), f"{context}: cannot check '{path}' absence -- parent is not an object: {node!r}"
         assert leaf not in node, (
-            f"{transport}: expected '{path}' absent from wire (unset optional field must be omitted, "
-            f"not null), got {node[leaf]!r}"
+            f"{context}: expected '{path}' absent (unset optional field must be omitted, not null), got {node[leaf]!r}"
         )

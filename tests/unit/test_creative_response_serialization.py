@@ -29,6 +29,7 @@ from src.core.schemas import (
     SyncCreativesResponse,
 )
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.harness.assertions import assert_omits_paths
 from tests.helpers.creative_test_helpers import (
     assert_listing_creative_fields,
     make_test_creative,
@@ -113,10 +114,10 @@ def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
 
     banner = creative.model_dump()["assets"]["banner"]
 
-    assert null_field not in banner, (
-        f"assets.banner.{null_field} was None and must be omitted from model_dump(), "
-        f"got {banner.get(null_field)!r} — a null here is not valid against the pinned "
-        f"AdCP asset schema. Full asset: {banner!r}"
+    assert_omits_paths(
+        banner,
+        [null_field],
+        context=f"model_dump() assets.banner (a null here is invalid against the pinned AdCP asset schema; {banner!r})",
     )
     # Negative control: stripping must not eat the asset's real fields.
     assert banner["asset_type"] == "image"
