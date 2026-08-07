@@ -571,7 +571,7 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     # at 64KB; once server logging fills it, the server blocks on a log write
     # INSIDE a request handler and the calling test awaits forever — this wedged
     # every full CI run at integration's quiet tail until the >1h run reaper
-    # killed it (salesagent-cu12). Files keep the error-path diagnostics below
+    # killed it (#1868 review). Files keep the error-path diagnostics below
     # without needing a drainer thread.
     output_dir = Path(tempfile.mkdtemp(prefix=f"mcp-server-{port}-"))
     stdout_path = output_dir / "stdout.log"

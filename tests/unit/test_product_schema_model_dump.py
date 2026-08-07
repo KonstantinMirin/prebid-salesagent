@@ -115,7 +115,7 @@ class TestEmptyPricingOptionsInModelDump:
 
 class TestCoreFieldsDoNotForceInvalidNull:
     """core_fields must never force-include a field the pinned schema types
-    non-nullable (R3-8, salesagent-1zq3.8).
+    non-nullable (#1868 review).
 
     Per the pinned core/product.json: format_ids is typed "array", which
     rejects null. The comment directly above core_fields already says

@@ -79,7 +79,7 @@ class TestPinnedSchemaTracksSDKVersion:
 
     def test_resolved_tree_version_equals_installed_sdk_pin(self):
         """schema_root()'s resolved tree must equal the installed SDK's own
-        version claim (R3-19, salesagent-1zq3.19).
+        version claim (#1868 review).
 
         The three tests above grade content FLOORS (property presence, code
         count >= 90) — a future spec bump that leaves schema_root()

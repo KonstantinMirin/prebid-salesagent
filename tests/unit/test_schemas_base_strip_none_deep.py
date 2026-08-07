@@ -1,4 +1,4 @@
-"""Unit tests for src.core.schemas._base.strip_none_deep (R3-9, salesagent-1zq3.9).
+"""Unit tests for src.core.schemas._base.strip_none_deep (#1868 review).
 
 strip_none_deep's docstring says it "recursively drop[s] None values from
 nested dicts/lists". The dict branch does (``if v is not None``); the list
@@ -8,7 +8,7 @@ branch didn't -- it recursed into each element but never filtered a bare
 
 No test previously called this function directly -- the only prior match
 under tests/ was an AST name matcher in a structural guard, not a behavioral
-test (per the R3-9 finding).
+test (per the #1868 review finding).
 """
 
 from __future__ import annotations
@@ -27,13 +27,13 @@ class TestStripNoneDeepDict:
 
 
 class TestStripNoneDeepList:
-    """List branch: R3-9 bug -- bare None list elements must be dropped too."""
+    """List branch: bare None list elements must be dropped too (#1868 review)."""
 
     def test_drops_bare_none_list_elements(self):
         assert strip_none_deep([1, None, 2]) == [1, 2]
 
     def test_drops_none_elements_in_list_of_dicts(self):
-        """Exact reproduction from the R3-9 finding."""
+        """Exact reproduction from the #1868 review finding."""
         result = strip_none_deep({"a": [None, {"x": None, "y": 2}]})
         assert result == {"a": [{"y": 2}]}
 

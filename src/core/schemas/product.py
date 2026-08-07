@@ -186,7 +186,7 @@ class Product(LibraryProduct):
         # it is Optional here (see the field override above) and the pinned
         # product.json schema types it "array", which rejects null, so
         # force-including it as None would emit schema-invalid output
-        # (R3-8, salesagent-1zq3.8). When actually unset, it must be OMITTED
+        # (#1868 review). When actually unset, it must be OMITTED
         # like any other optional field — it is only required via anyOf with
         # format_options, not unconditionally.
         core_fields = {

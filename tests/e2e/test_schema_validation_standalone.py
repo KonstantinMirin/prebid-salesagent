@@ -35,7 +35,7 @@ async def test_schema_validator_initialization():
 # pinned adcp library version. Removed rather than skipped to satisfy the smoke-test
 # TestNoSkippedTests guard.
 
-# tests/e2e/debug_validation.py removed (salesagent-05se.5):
+# tests/e2e/debug_validation.py removed (#1838 review):
 # A manual, non-pytest-collected debug script (run via `uv run python
 # tests/e2e/debug_validation.py`) that hand-rolled an if/elif dispatch on
 # get-products required-field names to build a synthetic minimal product --
@@ -251,7 +251,7 @@ async def test_task_name_mapping():
 async def test_find_schema_ref_searches_every_index_section():
     """The resolver must search every task-bearing section of the pinned index, not just media-buy/signals.
 
-    salesagent-667l: _find_schema_ref_for_task only checked the media-buy and
+    #1843: _find_schema_ref_for_task only checked the media-buy and
     signals sections. The pinned 3.1.1 index carries tasks in 10 sections;
     sync-creatives and list-creatives live under "creative", get-task-status
     lives under "protocol" — none of them resolvable before this fix, so any
@@ -286,8 +286,7 @@ def _iter_index_schema_refs(node: object) -> list[str]:
     ``supporting-schemas``, ...) silently misses refs under a name it didn't
     anticipate — including a future one the next spec bump adds. Walking
     every ``$ref`` regardless of its container name is the only way to
-    actually cover "every schema ref the pinned index names" (R3-23,
-    salesagent-1zq3.23).
+    actually cover "every schema ref the pinned index names" (#1868 review).
     """
     refs: list[str] = []
     if isinstance(node, dict):
@@ -340,7 +339,7 @@ async def test_every_indexed_schema_ref_loads():
 async def test_unresolvable_task_name_raises_instead_of_silently_skipping():
     """An unresolvable task name must raise, not warn-and-return.
 
-    salesagent-667l: validate_request/validate_response printed a warning and
+    #1843: validate_request/validate_response printed a warning and
     returned on a resolver miss, so the caller observed success having graded
     nothing — a quiet failure (CLAUDE.md "No Quiet Failures").
     """

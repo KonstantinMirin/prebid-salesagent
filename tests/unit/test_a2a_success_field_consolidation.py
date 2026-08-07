@@ -1,4 +1,4 @@
-"""A2A 'success' field: single derivation, not 3 duplicated inline copies (R3-10, salesagent-1zq3.10).
+"""A2A 'success' field: single derivation, not 3 duplicated inline copies (#1868 review).
 
 Three sites independently stamped response_data["success"] onto the A2A wire:
 _serialize_for_a2a (the declared "single serialization point", which correctly

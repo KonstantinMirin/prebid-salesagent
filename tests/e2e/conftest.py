@@ -360,7 +360,7 @@ def docker_services_e2e(request):
     # its own postgres inside the container) stays empty. setdefault() only
     # fills the gap when E2E_DATABASE_URL is genuinely absent (this leak
     # case) — a real in-network run that already sets it (compose service
-    # name, not a published port) is left untouched (salesagent-1q8d.4).
+    # name, not a published port) is left untouched (#1838 review).
     os.environ.setdefault(
         "E2E_DATABASE_URL", f"postgresql://adcp_user:secure_password_change_me@localhost:{postgres_port}/adcp"
     )

@@ -202,7 +202,7 @@ async def compliance_client(a2a_url, auth_token):
     # Check if A2A server is available by testing the agent card endpoint.
     # src/app.py registers /.well-known/agent-card.json (hyphenated) — NOT
     # agent.json — so probing the wrong path always 404s and silently skips
-    # every test in this module (salesagent-1q8d.4).
+    # every test in this module (#1838 review).
     try:
         async with httpx.AsyncClient(timeout=2.0) as test_client:
             response = await test_client.get(f"{a2a_url.replace('/a2a', '')}/.well-known/agent-card.json")
@@ -243,7 +243,7 @@ class TestA2AAdCPCompliance:
         # Deliberately no assertion here: collect results for reporting only.
         # validate_skill_response sets "skill" on every return path, so
         # `assert "skill" in validation_result` was always-true dead weight
-        # (R3-34, salesagent-1zq3.33), not a real check.
+        # (#1868 review), not a real check.
         compliance_report.add_result(validation_result)
 
     @pytest.mark.asyncio
@@ -267,7 +267,7 @@ class TestA2AAdCPCompliance:
         assert payload and payload.get("context") == {"e2e": "get_products"}
         # Must be a real product listing, not an error envelope masquerading
         # as a payload (an AUTH_REQUIRED error also echoes context and would
-        # otherwise pass this assertion silently — salesagent-1q8d.4).
+        # otherwise pass this assertion silently — #1838 review).
         assert "adcp_error" not in payload, f"Expected products, got an error envelope: {payload}"
         assert "products" in payload
 
@@ -309,7 +309,7 @@ class TestA2AAdCPCompliance:
         shape (product_ids/total_budget/flight_start_date, and a skill name
         that no longer exists in the A2A dispatch table) that could never
         pass schema validation — masked entirely by the assertion below only
-        checking that SOME results were collected (salesagent-1q8d.15).
+        checking that SOME results were collected (#1838 review).
 
         list_creatives was tried here too and pulled back out: its format_id
         serialized as a bare string over the A2A wire instead of the spec's

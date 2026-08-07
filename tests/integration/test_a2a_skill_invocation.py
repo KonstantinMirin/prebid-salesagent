@@ -593,14 +593,14 @@ class TestA2ASkillInvocation:
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
     # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 
-    # test_adcp_schema_validation_integration removed (salesagent-1q8d.3): it built a
+    # test_adcp_schema_validation_integration removed (#1838 review): it built a
     # hand-rolled mock A2A Task/Artifact instead of exercising the real production path
     # — pure mocking in a file whose whole point is DB-backed integration coverage — and
     # its "assert valid or errors or warnings" could never fail regardless of outcome.
     # test_natural_language_get_products and test_explicit_skill_get_products below
     # already cover skill->schema resolution + validator invocation through the real
     # handler and a real database-backed product, which is strictly better coverage of
-    # the same concept. (salesagent-1q8d.16: their assertions were non-vacuous
+    # the same concept. (#1838 review: their assertions were non-vacuous
     # placeholders here too; production's get_products response is now AdCP
     # schema-valid, so `assert validation_result["valid"] is True` below actually
     # grades the response — not just "or errors or warnings".)

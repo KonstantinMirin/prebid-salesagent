@@ -1,6 +1,6 @@
 """list_authorized_properties' wire response omits unset optional fields.
 
-Regression for #1710 (PR #1868 review, salesagent-w02n.2): one of the 4
+Regression for #1710 (PR #1868 review): one of the 4
 zero-BDD-coverage sites named in the PR review, with no live-dispatch wire
 grading at all previously.
 

@@ -1,7 +1,7 @@
 """get_adcp_capabilities' wire response omits unset optional fields and validates
 against the pinned protocol/get-adcp-capabilities-response.json schema.
 
-Regression for #1710 (PR #1868 review, salesagent-w02n.2): capabilities.py's
+Regression for #1710 (PR #1868 review): capabilities.py's
 media_buy field is built via ``MediaBuy(portfolio=..., features=..., execution=...)``
 (src/core/tools/capabilities.py:250-254), leaving ``supported_pricing_models``
 (and the sibling ``buying_modes``/``reporting_delivery_methods`` declarations)

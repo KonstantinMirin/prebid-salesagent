@@ -1,6 +1,6 @@
 """get_signals / activate_signal responses omit unset optional fields.
 
-Regression for #1710 (PR #1868 review, salesagent-w02n.2). IMPORTANT FINDING:
+Regression for #1710 (PR #1868 review). IMPORTANT FINDING:
 get_signals and activate_signal are NOT registered as MCP tools
 (src/core/main.py's _register_tool() calls have no entry for either), A2A
 intentionally excludes signals (src/a2a_server/adcp_a2a_server.py:89,
@@ -9,9 +9,12 @@ tests/integration/test_tool_registration.py:8), and no REST route exists.
 Both functions are therefore unreachable on EVERY transport in production
 today -- there is no live wire for a buyer to ever observe, and no
 "live-dispatch" coverage is possible for this site (unlike the other 3
-zero-BDD-coverage sites, which DO have a real wire). See salesagent-w02n.2
-notes and the follow-up beads issue for whether this dead code should be
-removed or wired to a transport.
+zero-BDD-coverage sites, which DO have a real wire). Whether this dead code
+should be removed or wired to a transport is tracked at
+https://github.com/prebid/salesagent/issues/1353 ("register or remove dead
+get_signals and activate_signal _raw functions"). This module is the sweep's
+single documented exemption from live-dispatch wire grading, and #1353 is the
+issue that retires the exemption either way.
 
 These tests grade the typed model_dump() directly (same rationale as
 test_get_products_wire_schema.py's IMPL-only test) as defense-in-depth at the

@@ -1354,7 +1354,7 @@ class AdCPRequestHandler(RequestHandler):
         model — they are A2A transport-envelope markers (like MCP's
         ``task_id``/``adcp_version``; see
         ``tests/integration/test_harness_wire_response.py::ENVELOPE_MARKERS``),
-        a deliberate A2A-binding deviation (R3-10, salesagent-1zq3.10).
+        a deliberate A2A-binding deviation (#1868 review).
         ``success`` is derived from ``errors`` so a response carrying
         per-item errors reports ``success=False`` uniformly, regardless of
         which caller stamped it.

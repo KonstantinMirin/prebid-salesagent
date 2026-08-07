@@ -1,4 +1,4 @@
-"""mcp_server fixture must not leak its temp log directory on a setup-failure path (SF8, salesagent-1zq3.55).
+"""mcp_server fixture must not leak its temp log directory on a setup-failure path (#1868 review).
 
 tests/integration/conftest.py::mcp_server creates output_dir via
 tempfile.mkdtemp() and cleans it up with shutil.rmtree() -- but that cleanup

@@ -999,7 +999,7 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
         # the sample is graded by the model_defaulted branch of
         # test_required_fields_enforced (the attribute must come out non-None),
         # and by test_declared_fields_present_in_schema_and_model's model_dump()
-        # presence check (R3-8, salesagent-1zq3.8).
+        # presence check (#1868 review).
         declared_fields=frozenset(
             {
                 "product_id",
@@ -1091,8 +1091,8 @@ class TestResponseModelAlignment:
         # A field can be declared on the model (above) yet still be silently
         # dropped by a custom model_dump() override (e.g. an over-broad
         # exclude set, or a "strip None" pass that also strips populated
-        # values) — the exact bug class this suite exists to catch (R3-8,
-        # salesagent-1zq3.8). Construct with a real, populated value for
+        # values) — the exact bug class this suite exists to catch
+        # (#1868 review). Construct with a real, populated value for
         # every declared field and confirm each survives serialization.
         if alignment.sample:
             instance = alignment.model(**alignment.sample)
