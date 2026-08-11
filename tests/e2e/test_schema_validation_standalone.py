@@ -166,7 +166,7 @@ def test_normalize_ref_accepted_forms(ref, expected):
 @pytest.mark.parametrize(
     "ref",
     [
-        # The absolute-URL form upstream #6133 introduced — the outage's trigger.
+        # The absolute-URL form upstream adcp#6133 introduced — the outage's trigger.
         # Silently rewriting it onto the pin hid that "latest" was never honoured.
         "https://adcontextprotocol.org/schemas/latest/core/version-envelope.json",
         # Site-rooted, version-bearing: the version segment used to be discarded,
