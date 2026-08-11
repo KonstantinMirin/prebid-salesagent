@@ -14,9 +14,16 @@ mode 644, and every other uid then died at pytest COLLECTION with
 taking entire suites down before a single test ran, and looking like flakiness
 because which container won the race varied.
 
-Scope is ``src/`` and ``scripts/`` with NO allowlist: production code has zero
-instances and must keep it that way. Deferring the work to first use is always
-available -- open on demand, not on import.
+Test modules are in scope for the same reason, and the failure there is if
+anything more insidious: pytest imports every test module during COLLECTION, so
+a module-level write runs before any test does -- even for ``--collect-only``, or
+a run filtered down to one unrelated test. ``tests/integration/test_mock_adapter.py``
+did exactly that, dropping a JSON file into the CWD on every integration run
+while containing no tests at all.
+
+Scope is ``src/``, ``scripts/`` and ``tests/`` with NO allowlist: the tree has
+zero instances and must keep it that way. Deferring the work to first use is
+always available -- open on demand, not on import.
 """
 
 from __future__ import annotations
@@ -55,10 +62,10 @@ _KNOWN_GOOD_SNIPPETS = {
 
 
 @pytest.mark.arch_guard
-def test_no_import_time_filesystem_io_in_production_code() -> None:
+def test_no_import_time_filesystem_io_anywhere_in_the_tree() -> None:
     repo = repo_root()
     violations: list[str] = []
-    for tree, rel_path in iter_module_trees([repo / "src", repo / "scripts"]):
+    for tree, rel_path in iter_module_trees([repo / "src", repo / "scripts", repo / "tests"]):
         for lineno in find_import_time_fs_io_violations(tree):
             violations.append(f"{rel_path}:{lineno} — filesystem I/O runs at import time")
 

@@ -111,9 +111,6 @@ conductor_ports.json
 conductor_ports.lock
 
 
-# Test response files
-line_item_*_response.json
-
 # Generated compliance report (tests/e2e/test_adcp_schema_compliance.py::test_save_compliance_report
 # writes to Path(__file__).parent / "schemas" / "compliance_report.json")
 tests/e2e/schemas/
