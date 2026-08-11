@@ -169,8 +169,10 @@ class Product(LibraryProduct):
         if isinstance(kwargs["exclude"], set):
             kwargs["exclude"].update({"implementation_config", "expires_at"})
 
-        # Override exclude_none so we can handle core-field None values ourselves
-        # (AdCPBaseModel defaults exclude_none=True which would strip required fields)
+        # Turn off AdCPBaseModel's exclude_none=True default and do the null
+        # stripping here instead: it has to run AFTER the formats -> format_ids
+        # rename below, and it has to go deep through nested models whose own
+        # model_dump() overrides the parent's flags don't reach (strip_none_deep).
         kwargs["exclude_none"] = False
         data = super().model_dump(**kwargs)
 
@@ -178,44 +180,29 @@ class Product(LibraryProduct):
         if "formats" in data:
             data["format_ids"] = data.pop("formats")
 
-        # Remove null fields per AdCP spec
-        # Only fields the Pydantic model guarantees are never None belong here.
-        # product_id/name/description/delivery_type are required (non-Optional)
-        # fields on the library base, so they can never actually be null —
-        # listing them is a no-op safety net. format_ids must NOT be listed:
-        # it is Optional here (see the field override above) and the pinned
-        # product.json schema types it "array", which rejects null, so
-        # force-including it as None would emit schema-invalid output
-        # (#1868 review). When actually unset, it must be OMITTED
-        # like any other optional field — it is only required via anyOf with
-        # format_options, not unconditionally.
-        core_fields = {
-            "product_id",
-            "name",
-            "description",
-            "delivery_type",
-        }
-
         # Nested optional fields (format_ids[].width, pricing_options[].floor_price,
         # placements[].*, delivery_measurement.vendors, publisher_properties[].
         # publisher_domains, ...) are typed by the pinned schema and reject null.
-        # Strip those before the top-level inclusion decision below, which must
-        # keep operating on this level's own None/non-None (a core field forced
-        # in as null here must stay null, not be stripped by the same pass).
+        # Strip those first, then decide inclusion at this level: strip_none_deep
+        # reaches INTO values, so a top-level key whose value is itself None has
+        # to survive it and be judged by the pass below.
         data = {key: strip_none_deep(value) for key, value in data.items()}
 
-        adcp_data = {}
-        for key, value in data.items():
-            # Include core fields always, and non-null optional fields
-            # Note: pricing_options=[] is valid for anonymous users (no pricing shown)
-            # Per AdCP spec, pricing_options is required but can be empty array
-            if key in core_fields or value is not None:
-                adcp_data[key] = value
-            # Include empty pricing_options explicitly (required per AdCP schema)
-            elif key == "pricing_options" and value == []:
-                adcp_data[key] = []
-
-        return adcp_data
+        # Drop null fields per AdCP spec, and only null ones. Every field the
+        # pinned core/product.json requires unconditionally is non-nullable on
+        # the model, so this cannot drop a required field — pinned by
+        # test_required_fields_are_non_nullable. Falsy-but-present values are
+        # kept deliberately: pricing_options=[] is the anonymous-user shape (no
+        # pricing shown), which the spec requires as an empty array, not an
+        # omission.
+        #
+        # format_ids is the case that makes "null" and "absent" different here:
+        # it is Optional on this model (see the field override above) while the
+        # pinned schema types it "array", which rejects null. An unset
+        # format_ids must therefore be OMITTED, never emitted as null — it is
+        # required only via anyOf with format_options, not unconditionally
+        # (#1868 review).
+        return {key: value for key, value in data.items() if value is not None}
 
     def model_dump_internal(self, **kwargs):
         """Return internal model dump including all fields for database operations."""
