@@ -59,7 +59,7 @@ from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name
 #: service, the nginx SNI map and this module cannot drift apart silently: every
 #: absolute URL this origin publishes about ITSELF must be the name the server
 #: dials, not the container-internal address it happens to bind.
-PUBLIC_ORIGIN = os.environ.get("COUNTERPARTY_PUBLIC_ORIGIN", "https://counterparty.adcp.test:8443")
+PUBLIC_ORIGIN = os.environ.get("COUNTERPARTY_PUBLIC_ORIGIN", "https://counterparty.adcp-e2e.dev:8443")
 
 LISTED_AGENT_PATH = "/agent/listed"
 UNLISTED_AGENT_PATH = "/agent/unlisted"
@@ -185,7 +185,7 @@ def run_counterparty_origin(*, host: str = "0.0.0.0", port: int = 8080) -> Itera
     """Run the counterparty origin, yielding its base URL (``http://host:port``).
 
     Plaintext by design: TLS is terminated by the shared ``tls-proxy`` front,
-    which routes ``counterparty.adcp.test`` here by SNI. The origin never holds a
+    which routes ``counterparty.adcp-e2e.dev`` here by SNI. The origin never holds a
     certificate — one terminator, one leaf, one place to keep in step.
     """
     server = serve_forever_in_thread(

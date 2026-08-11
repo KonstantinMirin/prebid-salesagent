@@ -76,20 +76,32 @@ CLOCK_SKEW = dt.timedelta(hours=1)
 # reserves ``.localhost`` for loopback, so it resolves with no DNS and no
 # /etc/hosts edit, and it has a dot — which is what makes the predicate answer
 # https for it without being told to.
-# ``webhooks.adcp-e2e.dev`` is the e2e webhook-capture origin (salesagent-mp53.9,
-# OWNER DECISION 4). It cannot live under ``*.adcp.test`` like every other origin
-# here: AdCP 3.1.1 lists ``.test`` among the RFC 6761 special-use names a seller
-# MUST refuse, and this branch's proof-of-control prover enforces that
-# unconditionally (``notification_proof_service.py`` -> ``is_reserved_tld_host``)
-# BEFORE the SSRF check. A receiver under ``.test`` is therefore refused before a
-# socket opens, which is correct production behaviour and not something to relax.
-# ``.dev`` is a normal delegable gTLD and not a special-use name, so the gate
-# accepts it on its own terms. The name is deliberately UNREGISTERED and resolves
-# only via the compose network alias — nothing is ever published to real DNS.
+# ``*.adcp-e2e.dev`` covers every e2e origin the SERVER dials OUTBOUND: the
+# webhook receiver (salesagent-mp53.9) and the counterparty identity origin
+# (salesagent-mp53.8). A wildcard rather than a growing literal list — each new
+# origin is one label under it and costs no certificate change.
+#
+# Neither can live under ``*.adcp.test``, and they are barred for DIFFERENT
+# reasons, which is worth writing down because the first one does not imply the
+# second:
+#   * the webhook receiver — AdCP 3.1.1 lists ``.test`` among the RFC 6761
+#     special-use names a seller MUST refuse, and the proof-of-control prover
+#     enforces that unconditionally (``notification_proof_service`` ->
+#     ``is_reserved_tld_host``) BEFORE the SSRF check. A receiver under ``.test``
+#     is refused before a socket opens — correct production behaviour, not
+#     something to relax.
+#   * the counterparty origin — that reserved-TLD rule does NOT reach the inbound
+#     walk (it is gated by IP arithmetic alone). ``.test`` fails there for an
+#     unrelated reason: Tier 3 brand authorization matches agent url to brand
+#     domain by eTLD+1, and ``.test`` is not in the public suffix list, so
+#     ``registrable_domain()`` returns None and the check refuses with
+#     ``brand_domain_invalid``.
+# Both names are deliberately UNREGISTERED and resolve only via the compose
+# network alias — nothing is ever published to real DNS.
 SAN_DNS_NAMES = (
     "adcp.test",
     "*.adcp.test",
-    "webhooks.adcp-e2e.dev",
+    "*.adcp-e2e.dev",
     "localhost",
     "agent.localhost",
     "*.localhost",

@@ -30,7 +30,7 @@ The five sites:
 3. the nginx SNI map row, routing that hostname to that service — the upstream
    half checked too, because a hostname routed to the WRONG service is wired
    everywhere a guard would look and still reaches the wrong origin.
-4. leaf-certificate coverage for the hostname. ``counterparty.adcp.test`` sits
+4. leaf-certificate coverage for the hostname. ``counterparty.adcp-e2e.dev`` sits
    under the EXISTING ``*.adcp.test`` wildcard, so this one passes today and is
    here as a regression guard: a future narrowing of ``SAN_DNS_NAMES`` would
    otherwise break the walk at certificate verification, which surfaces as
@@ -76,14 +76,21 @@ from tests.unit._architecture_helpers import (
     tls_front_aliases,
 )
 
-#: The counterparty's hostname. Under the EXISTING ``*.adcp.test`` wildcard SAN,
-#: so no certificate change is needed — and ``.test`` is safe on THIS path where
-#: it was not on the webhook path: the inbound verifier's walk is gated by the
-#: SDK's ``resolve_and_validate_host``, which applies IP arithmetic ONLY (no TLD
-#: rule), and ``src/core/signing/`` never calls ``is_reserved_tld_host`` or
-#: ``check_url_ssrf``. The reserved-TLD rule that forced ``.dev`` on the webhook
-#: receiver does not reach this origin.
-COUNTERPARTY_HOSTNAME = "counterparty.adcp.test"
+#: The counterparty's hostname, under the ``*.adcp-e2e.dev`` wildcard SAN.
+#:
+#: ``.test`` was tried first and is WRONG here, for a reason distinct from the one
+#: that ruled it out on the webhook path. The SSRF argument does hold — the
+#: inbound walk is gated by ``resolve_and_validate_host``, which applies IP
+#: arithmetic only, and ``src/core/signing/`` never calls
+#: ``is_reserved_tld_host``. But TIER 3 is a second gate that argument misses:
+#: brand authorization matches the agent url against the brand domain by
+#: eTLD+1 (``adcp.signing.etld.registrable_domain``), and ``.test`` is not in the
+#: public suffix list, so ``registrable_domain("counterparty.adcp.test")`` is
+#: ``None`` and the check refuses with ``brand_domain_invalid``. Measured
+#: in-network: the accepted leg came back 401
+#: ``request_signature_brand_json_malformed``. ``adcp-e2e.dev`` resolves to a real
+#: registrable domain, so the eTLD+1 match works.
+COUNTERPARTY_HOSTNAME = "counterparty.adcp-e2e.dev"
 
 #: The compose service serving the counterparty's three plain GETs. A SIBLING of
 #: ``webhook-capture``, on the same bare ``python:3.12-slim`` + ``.:/app`` shape.
@@ -263,7 +270,7 @@ def test_the_stdlib_only_detector_catches_a_real_import_and_ignores_prose(tmp_pa
 
 @pytest.mark.arch_guard
 def test_counterparty_hostname_is_an_alias_on_the_existing_tls_front() -> None:
-    """``counterparty.adcp.test`` resolves to the shared ``tls-proxy``, not a second terminator."""
+    """``counterparty.adcp-e2e.dev`` resolves to the shared ``tls-proxy``, not a second terminator."""
     aliases = tls_front_aliases(load_yaml(_BASE_COMPOSE))
 
     assert COUNTERPARTY_HOSTNAME in aliases, format_failure(
@@ -306,7 +313,7 @@ def test_nginx_sni_map_routes_the_counterparty_hostname_to_the_counterparty_serv
 
 @pytest.mark.arch_guard
 def test_test_certificate_covers_the_counterparty_hostname() -> None:
-    """The generated leaf's SANs cover ``counterparty.adcp.test``.
+    """The generated leaf's SANs cover ``counterparty.adcp-e2e.dev``.
 
     Satisfied today by the ``*.adcp.test`` wildcard — a regression guard, not a
     red one. A narrowed SAN list would break the walk at certificate

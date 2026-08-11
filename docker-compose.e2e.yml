@@ -195,7 +195,7 @@ services:
           # and the inbound counterparty walk is gated by SDK address arithmetic
           # alone (resolve_and_validate_host applies no TLD rule). So it needs no
           # new SAN — *.adcp.test already covers it.
-          - counterparty.adcp.test
+          - counterparty.adcp-e2e.dev
     healthcheck:
       test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://proxy.adcp.test:8443/health"]
       interval: 10s
@@ -491,7 +491,7 @@ services:
       # the SERVER dials, not the container-internal address it binds — a
       # mismatch here sends hop 2 or 3 somewhere unreachable and surfaces as an
       # unresolvable key three assertions later.
-      COUNTERPARTY_PUBLIC_ORIGIN: https://counterparty.adcp.test:8443
+      COUNTERPARTY_PUBLIC_ORIGIN: https://counterparty.adcp-e2e.dev:8443
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
     volumes:
       - .:/app

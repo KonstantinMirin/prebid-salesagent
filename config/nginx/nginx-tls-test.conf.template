@@ -38,7 +38,7 @@ map $ssl_server_name $tls_upstream_named {
     # The counterparty identity origin the INBOUND verifier walks
     # (salesagent-mp53.8). Plaintext behind this front by the same rule: one
     # terminator, one leaf, one place to keep in step.
-    counterparty.adcp.test  counterparty-origin:8080;
+    counterparty.adcp-e2e.dev  counterparty-origin:8080;
 }
 
 server {

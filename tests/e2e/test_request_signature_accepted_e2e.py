@@ -191,7 +191,7 @@ _OPERATION = "get_adcp_capabilities"
 #: is safe on THIS path because the inbound verifier's walk is gated by the SDK's
 #: ``resolve_and_validate_host`` (IP arithmetic only) and ``src/core/signing/`` never
 #: calls ``is_reserved_tld_host``.
-_COUNTERPARTY_ORIGIN = "https://counterparty.adcp.test:8443"
+_COUNTERPARTY_ORIGIN = "https://counterparty.adcp-e2e.dev:8443"
 
 #: Two agent URLs on that one origin, differing ONLY in which brand.json their
 #: capabilities document points at. ``AGENT_RESOLUTION_CACHE`` is keyed on the agent
