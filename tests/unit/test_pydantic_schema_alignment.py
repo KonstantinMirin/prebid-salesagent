@@ -97,11 +97,19 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 # this suite, and one tracked model gap:
 #
 #   1. the property walk in _resolve_response_item_schema merges allOf `required`
-#      but not allOf `properties`, so 6 of the registered models cannot be graded
+#      but not allOf `properties`, so 7 of the registered models cannot be graded
 #      on status correctly yet;
 #   2. the sample generator cannot synthesize a valid enum/Literal value, which
 #      turns 4 more into false failures; and
 #   3. SyncAccountsResponse genuinely does not declare status — GH #1900.
+#
+# Those counts are measured, not estimated: empty this frozenset and the suite
+# goes to 13 failures — 7 on test_declared_fields_present_in_schema_and_model
+# (limit 1), 4 on test_required_fields_enforced with input_value=
+# 'test_status_value' (limit 2), SyncAccountsResponse with a missing required
+# key (limit 3), and the meta-test below. Do not read 7+4+1 as a share of the
+# registry: limits 1 and 2 hit the same four models, so 8 distinct models are
+# affected, not 12.
 #
 # The other 10 of the 11 registered models already carry a spec-correct default
 # for status, inherited straight from their adcp library base, and would pass
