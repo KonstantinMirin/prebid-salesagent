@@ -22,6 +22,7 @@ from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value, log_tool_activity
+from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
@@ -157,8 +158,15 @@ def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> st
     out-of-band data defect — the drop warnings are otherwise per-field but per-*row* anonymous.
     Passed by the ``_list_creatives_impl`` row loop; the coercers default the suffix to empty so
     their pure-function unit tests stay attribution-free.
+
+    Each id is passed through :func:`log_safe` before interpolation: ``creative_id`` (buyer-supplied)
+    and the tenant/principal ids reach this log line, so an embedded CR/LF would forge log entries
+    (CodeQL ``py/log-injection``). Neutralizing CR/LF here — the single choke point every drop
+    warning routes through — closes the taint on all four drop sites at once.
     """
-    return f" (creative_id={creative_id} tenant_id={tenant_id} principal_id={principal_id})"
+    return (
+        f" (creative_id={log_safe(creative_id)} tenant_id={log_safe(tenant_id)} principal_id={log_safe(principal_id)})"
+    )
 
 
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
