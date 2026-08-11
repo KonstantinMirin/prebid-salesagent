@@ -2,10 +2,18 @@
 
 Grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner (never
 re-derived/inferred) as ordinary parametrized pytest tests, one per
-``(track, storyboard_id, step_id)`` — reusing the exact ledger/xfail/lock-test
-discipline ``tests/bdd/e2e_rest_known_failures.txt`` already established
-(``tests/storyboard/known_failures.txt`` + ``tests/storyboard/conftest.py``)
-instead of a second hand-rolled comparator system (Core Invariant).
+``(protocol, track, storyboard_id, step_id)`` — reusing the exact
+ledger/xfail/lock-test discipline ``tests/bdd/e2e_rest_known_failures.txt``
+already established (``tests/storyboard/known_failures.txt`` +
+``tests/storyboard/conftest.py``) instead of a second hand-rolled comparator
+system (Core Invariant).
+
+The runner is executed once per PROTOCOL. The agent serves both MCP and A2A and
+the compliance checks apply to both, so grading only MCP would let the A2A
+surface drift non-conformant with CI green. Each protocol gets its own agent
+URL, its own summary artifact, and its own ledger namespace (test ids are
+prefixed ``mcp::`` / ``a2a::``) — sharing any of the three would have the second
+run silently overwrite the first.
 
 Runner-reported skips (``missing_test_controller``, ``missing_tool``,
 ``prerequisite_failed``, ...) become native ``pytest.skip()`` calls — they are
@@ -32,12 +40,32 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
 _ADCP_BIN = _RUNNER_DIR / "node_modules" / ".bin" / "adcp"
-_SUMMARY_PATH = _RUNNER_DIR / "results" / "ci-summary.json"
+
+# Graded protocols, in ledger-namespace order. The runner's ``--protocol``
+# (aliased ``--transport``) selects which surface of the SAME agent is exercised.
+_PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
+
+# In-network defaults, both behind the compose `proxy` service.
+#
+# MCP takes its endpoint directly: `/mcp/`, trailing slash included (FastMCP
+# mounts it that way).
+#
+# A2A takes the agent's BASE url, NOT its JSON-RPC endpoint. A2A is card-first:
+# the SDK calls buildCardUrls(), which appends `/.well-known/agent.json` then
+# `/.well-known/agent-card.json` to the url verbatim — it does NOT strip a
+# transport suffix the way computeBaseUrl() does. Passing `http://proxy:8000/a2a`
+# therefore asks for `/a2a/.well-known/agent-card.json`, which 404s (verified live
+# against the e2e stack), and the runner reports the agent unreachable without
+# grading anything. From the base url the card is found at
+# `/.well-known/agent-card.json` and the RPC endpoint (`/a2a`) comes off the card.
+_DEFAULT_AGENT_URLS: dict[str, str] = {
+    "mcp": "http://proxy:8000/mcp/",
+    "a2a": "http://proxy:8000",
+}
 
 # Env vars the CI job (SB-4b Implementation Plan step 6) must set. No defaults
 # for the compliance/schema paths — those come from a pinned GitHub release
 # asset (sb1b-baseline-report.md Reproduce step 2), never guessed at.
-_AGENT_URL_ENV = "STORYBOARD_AGENT_URL"
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
@@ -52,6 +80,31 @@ _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
 _WEBHOOK_CALLBACK_HOST_ENV = "ADCP_WEBHOOK_HOST"
 _WEBHOOK_PORT_ENV = "STORYBOARD_WEBHOOK_PORT"
 _DEFAULT_WEBHOOK_PORT = "9998"
+
+
+def _agent_url_env(protocol: str) -> str:
+    """Per-protocol agent-URL override, e.g. ``STORYBOARD_AGENT_URL_A2A``."""
+    return f"STORYBOARD_AGENT_URL_{protocol.upper()}"
+
+
+def _summary_path(protocol: str) -> Path:
+    """Per-protocol summary artifact.
+
+    One shared path would have the second protocol's run overwrite the first's
+    summary, silently grading one protocol twice.
+    """
+    return _RUNNER_DIR / "results" / f"ci-summary-{protocol}.json"
+
+
+def _webhook_port(protocol: str) -> str:
+    """Per-protocol receiver port, offset from the base by protocol index.
+
+    The two runs are sequential, but giving each its own port removes any
+    bind/TIME_WAIT interaction between them entirely. In-network the receiver is
+    reached by compose alias, so any port is equally reachable.
+    """
+    base = int(os.environ.get(_WEBHOOK_PORT_ENV, _DEFAULT_WEBHOOK_PORT))
+    return str(base + _PROTOCOLS.index(protocol))
 
 
 def _missing_env() -> list[str]:
@@ -75,7 +128,7 @@ def _bundle_path(env_name: str) -> str:
     return str(raw if raw.is_absolute() else (_REPO_ROOT / raw).resolve())
 
 
-def _webhook_receiver_args() -> tuple[list[str], dict[str, str]]:
+def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     """CLI args + extra env that let the runner host a reachable webhook receiver.
 
     Two topologies, and the difference is which interface the receiver must listen on:
@@ -100,7 +153,7 @@ def _webhook_receiver_args() -> tuple[list[str], dict[str, str]]:
     if not callback_host:
         return [], {}
 
-    port = os.environ.get(_WEBHOOK_PORT_ENV, _DEFAULT_WEBHOOK_PORT)
+    port = _webhook_port(protocol)
     args = [
         "--webhook-receiver",
         "proxy",
@@ -112,20 +165,24 @@ def _webhook_receiver_args() -> tuple[list[str], dict[str, str]]:
     return args, {"ADCP_WEBHOOK_RECEIVER_HOST": "0.0.0.0"}
 
 
-def _run_storyboard_runner() -> dict[str, Any]:
+def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     """Shell out to the real @adcp/sdk storyboard runner once, return its summary JSON.
 
     Mirrors the invocation documented in sb1b-baseline-report.md's Reproduce
     step 5, pointed at the in-network agent instead of the host-port smoke
-    setup that report used.
+    setup that report used, and forced onto ``protocol`` so the SAME compliance
+    checks grade both of the agent's protocol surfaces.
     """
-    agent_url = os.environ.get(_AGENT_URL_ENV, "http://proxy:8000/mcp/")
+    agent_url = os.environ.get(_agent_url_env(protocol), _DEFAULT_AGENT_URLS[protocol])
     auth_token = os.environ.get(_AUTH_TOKEN_ENV, "ci-test-token")
+    summary_path = _summary_path(protocol)
     cmd = [
         str(_ADCP_BIN),
         "storyboard",
         "run",
         agent_url,
+        "--protocol",
+        protocol,
         "--auth",
         auth_token,
         "--allow-http",
@@ -139,10 +196,14 @@ def _run_storyboard_runner() -> dict[str, Any]:
         "600",
         "--json",
         "--summary-output",
-        str(_SUMMARY_PATH),
+        str(summary_path),
     ]
-    webhook_args, webhook_env = _webhook_receiver_args()
+    webhook_args, webhook_env = _webhook_receiver_args(protocol)
     cmd += webhook_args
+    # Grade only what THIS invocation measured. A summary left by an earlier run
+    # would otherwise be read as if it were fresh whenever the runner dies before
+    # writing one — inferred rather than measured, which is the Core Invariant.
+    summary_path.unlink(missing_ok=True)
     result = subprocess.run(  # noqa: S603
         cmd,
         cwd=_RUNNER_DIR,
@@ -151,27 +212,96 @@ def _run_storyboard_runner() -> dict[str, Any]:
         timeout=700,
         env={**os.environ, **webhook_env},
     )
-    if not _SUMMARY_PATH.exists():
+    if not summary_path.exists():
         pytest.fail(
-            f"storyboard runner did not produce a summary (exit={result.returncode}): "
+            f"storyboard runner ({protocol}) did not produce a summary (exit={result.returncode}): "
             f"stdout={result.stdout[-2000:]!r} stderr={result.stderr[-2000:]!r}"
         )
-    return json.loads(_SUMMARY_PATH.read_text())
+    return json.loads(summary_path.read_text())
 
 
-def _collect_checks() -> list[dict[str, Any]]:
-    """One entry per (track, storyboard_id, step_id): a failure or a skip.
+def _graded_total(summary: dict[str, Any]) -> int:
+    """How many checks the runner actually graded, passes included.
+
+    Not ``len(failures) + len(skip_causes)``: a protocol whose checks all PASS
+    also has an empty failures list, and must not be confused with one where the
+    runner never got far enough to grade anything.
+    """
+    return sum(int(summary.get(key, 0)) for key in ("passed", "failed", "skipped"))
+
+
+def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
+    """The one synthetic FAILING check for a protocol the runner graded nothing on.
+
+    A run that dies before grading (unreachable agent, rejected capability probe,
+    wrong url) contributes zero parametrized tests. Left silent, that protocol's
+    entire axis is vacuous while the job stays green — the precise false-green
+    this module exists to prevent, and worse than a large ledger because nothing
+    at all is being measured. So it becomes one ordinary failing check, ledgerable
+    and graduating like any other: the day the protocol becomes reachable this
+    entry xpasses and its real checks show up un-ledgered, failing CI until they
+    are triaged.
+
+    This is not a reclassification of runner-reported skips — those still map to
+    native ``pytest.skip()``. It covers the case where the runner reports nothing.
+    """
+    return {
+        "protocol": protocol,
+        "track": "_runner",
+        "storyboard_id": "agent_reachability",
+        "step_id": "graded_checks_produced",
+        "status": "fail",
+        "reason": (
+            f"runner graded 0 checks against {summary.get('agent_url')} "
+            f"(overall_status={summary.get('overall_status')})"
+        ),
+        "reason_kind": "no_graded_checks",
+    }
+
+
+def _assert_protocol_was_actually_graded(protocol: str, summary: dict[str, Any]) -> None:
+    """Fail loudly when a protocol pass graded NOTHING.
+
+    A protocol the runner could not reach reports ``overall_status: "unreachable"``
+    with zero failures, zero skips and zero executed storyboards — which flows
+    through collection as "this protocol contributed no checks" and leaves the
+    suite GREEN. Observed live on the first a2a run: 93 checks, all ``mcp::``, not
+    one ``a2a::``, and the job passed while the A2A surface had never been
+    contacted.
+
+    That is the silent-zero failure mode this module exists to prevent, so it is
+    an error rather than an absence. A protocol that is genuinely out of scope
+    belongs out of ``_PROTOCOLS``, stated in code — not represented as an empty
+    result that reads like success.
+    """
+    status = summary.get("overall_status")
+    executed = summary.get("storyboards_executed") or []
+    if status == "unreachable" or not executed:
+        pytest.fail(
+            f"storyboard runner graded NOTHING over {protocol!r}: "
+            f"overall_status={status!r}, storyboards_executed={len(executed)}, "
+            f"agent_url={summary.get('agent_url')!r}.\n"
+            "An unreachable or unselected protocol contributes zero checks, which would "
+            "otherwise pass silently and advertise conformance that was never measured. "
+            f"Fix the endpoint, or remove {protocol!r} from _PROTOCOLS deliberately."
+        )
+
+
+def _collect_checks(protocol: str) -> list[dict[str, Any]]:
+    """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
     Passed checks are not enumerated individually — the runner's summary
     reports a pass/fail/skip count, not a per-check pass record — so a
     passing check has no ledger identity to track; only failures and skips
     are gradeable per-check here.
     """
-    summary = _run_storyboard_runner()
+    summary = _run_storyboard_runner(protocol)
+    _assert_protocol_was_actually_graded(protocol, summary)
     checks: list[dict[str, Any]] = []
     for f in summary["failures"]:
         checks.append(
             {
+                "protocol": protocol,
                 "track": f["track"],
                 "storyboard_id": f["storyboard_id"],
                 "step_id": f["step_id"],
@@ -188,6 +318,7 @@ def _collect_checks() -> list[dict[str, Any]]:
             storyboard_id, _, step_id = affected.partition("/")
             checks.append(
                 {
+                    "protocol": protocol,
                     "track": None,
                     "storyboard_id": storyboard_id,
                     "step_id": step_id,
@@ -196,6 +327,8 @@ def _collect_checks() -> list[dict[str, Any]]:
                     "reason_kind": cause["cause"],
                 }
             )
+    if _graded_total(summary) == 0:
+        checks.append(_no_graded_checks(protocol, summary))
     return checks
 
 
@@ -210,21 +343,23 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             ids=["environment-not-configured"],
         )
         return
-    checks = _collect_checks()
-    ids = [f"{c['track']}::{c['storyboard_id']}::{c['step_id']}" for c in checks]
+    checks = [check for protocol in _PROTOCOLS for check in _collect_checks(protocol)]
+    ids = [f"{c['protocol']}::{c['track']}::{c['storyboard_id']}::{c['step_id']}" for c in checks]
     metafunc.parametrize("storyboard_check", checks, ids=ids)
 
 
 def test_storyboard_check(storyboard_check: dict[str, Any]) -> None:
-    """One assertion per measured (track, storyboard_id, step_id) check.
+    """One assertion per measured (protocol, track, storyboard_id, step_id) check.
 
     Known failures xfail(strict=False) via tests/storyboard/conftest.py's
     ledger loader (matched on this test's nodeid) — an un-ledgered failure is
-    the regression signal this job exists to catch.
+    the regression signal this job exists to catch. The protocol is part of the
+    ledger identity: an MCP-only fix must not silently graduate its A2A twin.
     """
     if storyboard_check["status"] == "skip":
         pytest.skip(f"{storyboard_check['reason_kind']}: {storyboard_check['reason']}")
     assert storyboard_check["status"] != "fail", (
-        f"storyboard check failed: {storyboard_check['track']}/{storyboard_check['storyboard_id']}/"
-        f"{storyboard_check['step_id']} ({storyboard_check['reason_kind']}) — {storyboard_check['reason']}"
+        f"storyboard check failed: {storyboard_check['protocol']}/{storyboard_check['track']}/"
+        f"{storyboard_check['storyboard_id']}/{storyboard_check['step_id']} "
+        f"({storyboard_check['reason_kind']}) — {storyboard_check['reason']}"
     )
