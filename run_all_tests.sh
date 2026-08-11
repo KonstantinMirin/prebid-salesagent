@@ -44,6 +44,17 @@ COMPOSE_FILE="docker-compose.e2e.yml"
 # concurrent runs never contend; the suffix just keeps container names distinct.
 # Compose rejects uppercase project names — lowercase whatever we're given.
 export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$$}" | tr '[:upper:]' '[:lower:]')"
+# The tests container runs as THIS user (docker-compose.e2e.yml `tests.user`), so
+# everything it writes into the bind-mounted repo -- test-results/, .tox/,
+# schemas/, logs -- is owned by whoever launched the run, on any host. Derived
+# here rather than written into compose: a literal uid is correct on exactly one
+# machine, and pinning the CI box's turned GitHub Actions red on `.tox`.
+#
+# Both are overridable. A host whose artifacts must stay writable by SEVERAL
+# identities (the CI box shares group `ci` across sacirunner and claudeuser)
+# exports TEST_GID to that shared group instead of taking the primary one.
+export TEST_UID="${TEST_UID:-$(id -u)}"
+export TEST_GID="${TEST_GID:-$(id -g)}"
 # The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
 # interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
