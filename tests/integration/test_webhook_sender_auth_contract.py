@@ -21,10 +21,10 @@ The contract, stated once, is the one ``order_approval_service`` already keeps
    string; ``media_buy_create`` stores the pinned enum spelling
    ``AuthenticationScheme = ["Bearer", "HMAC-SHA256"]`` @ AdCP 3.1.1).
 
-Every case here is RED until each sender routes its decision through
-``webhook_auth_for``. They must go green by CONVERGING on that resolver, not by
-repairing the inline copies — repairing them in place makes each the fourth
-divergent copy, which is the disease itself.
+Every case here was RED until each sender routed its decision through
+``webhook_auth_for`` (salesagent-47n9.24). They went green by CONVERGING on that
+resolver, not by repairing the inline copies — repairing them in place would have
+made each the fourth divergent copy, which is the disease itself.
 
 Why zero-hits is the discriminating assertion and not merely a small number:
 each origin below is programmed to answer 200. A destination that would have
@@ -83,19 +83,22 @@ def _assert_delivered_without_a_signature(env: CircuitBreakerEnv | ProtocolWebho
 
 
 class TestProtocolWebhookServiceRefusesUnsignedHmac:
-    """``protocol_webhook_service`` must refuse, not deliver unsigned (GH #1893).
+    """``protocol_webhook_service`` refuses rather than delivering unsigned (GH #1893).
 
-    ``send_notification`` already resolves through ``webhook_auth_for``, but an
-    ``HmacSecretMissing`` decision falls through to an unsigned delivery
-    (``src/services/protocol_webhook_service.py:253-263``): the buyer asked for
-    a signature and receives none, with no error on any surface.
+    ``send_notification`` always resolved through ``webhook_auth_for``, but an
+    ``HmacSecretMissing`` decision used to fall through to an unsigned delivery:
+    the buyer asked for a signature and received none, with no error on any
+    surface. That is the failure mode the sibling structural guard cannot see —
+    calling the resolver and then dropping one of its answers — which is why
+    ``test_architecture_resolved_webhook_auth_is_fully_handled`` exists and why
+    these two cases are the behavioural half of it.
     """
 
     async def test_hmac_without_credentials_delivers_nothing(self, integration_db):
         """An HMAC-SHA256 row with no credential stored sends NOTHING.
 
-        RED today: production resolves ``HmacSecretMissing`` and then proceeds
-        to ``prepare_signed_request(payload, None, headers)``, which serializes
+        Before the fix this resolved ``HmacSecretMissing`` and then proceeded to
+        ``prepare_signed_request(payload, None, headers)``, which serializes
         without signing and delivers — one hit, unsigned.
         """
         with ProtocolWebhookEnv() as env:
@@ -125,12 +128,14 @@ class TestProtocolWebhookServiceRefusesUnsignedHmac:
 
 
 class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
-    """``webhook_delivery_service`` resolves auth inline, four ways wrong (GH #1894).
+    """``webhook_delivery_service`` resolves auth through the resolver (GH #1894).
 
-    ``_deliver_with_backoff`` (``src/services/webhook_delivery_service.py:490-505``)
-    never calls ``webhook_auth_for``. It is the sole entry in
-    ``test_architecture_no_inline_webhook_auth_resolution``'s allowlist; each
-    case below grades one of the four defects that entry records.
+    ``_deliver_with_backoff`` used to resolve auth inline and got it wrong four
+    ways at once; it was the sole debt entry in
+    ``test_architecture_no_inline_webhook_auth_resolution``'s allowlist, and
+    closing #1894 removed that entry. Each case below grades one of the four
+    defects, so a regression on any single one fails on its own rather than
+    hiding behind the other three.
     """
 
     def test_hmac_row_signs_from_the_column_writers_populate(self, integration_db):
@@ -142,9 +147,8 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
         ``webhook_secret`` has ZERO writers anywhere in ``src/``, so today's
         signing branch is unreachable for any row a buyer can actually create.
 
-        RED today: ``getattr(config, "webhook_secret", None)`` is None for this
-        row, so the delivery goes out unsigned and the signature assertion
-        fails on a missing header.
+        Before the fix ``getattr(config, "webhook_secret", None)`` was None for
+        this row, so the delivery went out unsigned.
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
@@ -158,15 +162,19 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
             assert_signature_verifies_over_wire_body(env.last_delivery, STRONG_SECRET)
 
     def test_hmac_row_without_credentials_delivers_nothing(self, integration_db):
-        """Defect 1: a weak-or-absent secret must refuse, never downgrade to unsigned.
+        """Defect 1: an ABSENT secret refuses; it is never downgraded to unsigned.
 
-        Today a secret failing ``_verify_secret_strength`` is discarded at
-        WARNING level and delivery proceeds UNSIGNED — the same quiet failure
-        salesagent-47n9.20 refused to commit one file over. The ticket's
-        acceptance names the whole class: "an HMAC-configured delivery with no
-        USABLE secret refuses on every sender, never delivers unsigned".
+        This sender used to discard the secret and proceed UNSIGNED at WARNING
+        level — the same quiet failure salesagent-47n9.20 refused to commit one
+        file over, and the reason ``HmacSecretMissing`` is a distinct variant
+        rather than a ``None``.
 
-        RED today: one unsigned hit.
+        ABSENT, specifically — not "short". The 32-character strength check that
+        used to sit here is gone, and a short credential now SIGNS (graded at
+        ``test_delivery_service_behavioral.py::TestShortSecretStillSigns``,
+        which carries the full reasoning). Refusing on length would have taken
+        the A2A-registered rows that legitimately hold short credentials from
+        "delivered" to "not delivered at all".
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
@@ -209,7 +217,7 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
         protocol-registered config — those buyers get no ``Authorization``
         header at all.
 
-        RED today: no ``Authorization`` header on the wire.
+        Before the fix: no ``Authorization`` header on the wire at all.
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
@@ -225,10 +233,12 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
         """Case-insensitivity is a property of the resolver, and must reach this sender.
 
         The A2A ``setTaskPushNotificationConfig`` handler stores the scheme
-        verbatim from a free-form protobuf string with no enum guard, so
-        lowercase rows exist in production. Both spellings must authenticate;
-        this is the case a "just fix the casing to Bearer" repair would break,
-        which is why the fix is the resolver and not a re-spelling.
+                verbatim from a free-form protobuf string with no enum guard, so
+                lowercase rows exist in production. Both spellings must authenticate.
+
+                This case passed BEFORE the fix too, and that is the point: it is what a
+                "just fix the casing to Bearer" repair would have broken, which is why
+                the fix is the resolver and not a re-spelling.
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
