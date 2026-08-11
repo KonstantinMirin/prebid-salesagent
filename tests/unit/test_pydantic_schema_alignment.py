@@ -90,29 +90,40 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
-# Every AdCP response schema's Protocol Envelope arm (core/protocol-envelope.json,
-# shared via a top-level allOf) types these fields, and spec-requires "status" —
-# but they are populated by the PROTOCOL LAYER (_serialize_for_a2a et al) at the
-# transport boundary, not carried on the domain response model itself (same
-# distinction already established for message/context_id — see
-# test_a2a_response_compliance.py and tests/helpers/adcp_schema_validator.py). The
-# Pydantic response model is not the right layer to enforce them as required;
-# exclude from requiredness checks the same way _VERSION_FIELDS is excluded.
-_PROTOCOL_ENVELOPE_FIELDS: frozenset[str] = frozenset(
-    {
-        "status",
-        "task_id",
-        "context_id",
-        "context",
-        "message",
-        "timestamp",
-        "replayed",
-        "adcp_error",
-        "push_notification_config",
-        "governance_context",
-        "payload",
-    }
-)
+# Every AdCP response schema composes the same shared Protocol Envelope arm
+# (core/protocol-envelope.json) via a top-level allOf, and that arm spec-requires
+# exactly one field: "status". Excluding it from requiredness grading is NOT a
+# layering principle — it is a temporary concession to two mechanical limits of
+# this suite, and one tracked model gap:
+#
+#   1. the property walk in _resolve_response_item_schema merges allOf `required`
+#      but not allOf `properties`, so 6 of the registered models cannot be graded
+#      on status correctly yet;
+#   2. the sample generator cannot synthesize a valid enum/Literal value, which
+#      turns 4 more into false failures; and
+#   3. SyncAccountsResponse genuinely does not declare status — GH #1900.
+#
+# The other 10 of the 11 registered models already carry a spec-correct default
+# for status, inherited straight from their adcp library base, and would pass
+# through the model_defaulted branch of test_required_fields_enforced once (1)
+# and (2) are fixed. So the exclusion buys time for those three fixes; it does
+# not assert that the response model is the wrong layer for status.
+#
+# (For the record, the two claims this comment used to make are both false, and
+# citing them misled a reviewer: _serialize_for_a2a stamps only message/success,
+# never status — src/a2a_server/adcp_a2a_server.py:1350-1383 — and the
+# message/context_id precedent in tests/helpers/adcp_schema_validator.py:223-229
+# decided the OPPOSITE, to grade those fields at the wire layer rather than
+# exempt them.)
+#
+# Derived from the pin, never transcribed — a hand-copied list is exactly how
+# the stale rationale above drifted from the schema it described. The sole
+# consumer subtracts this from an allOf arm's `required` set, so envelope
+# properties the pin marks OPTIONAL need no listing: they cannot appear there.
+# If some future DOMAIN arm does require one (say message), grading it is then
+# correct, and the derived set lets it through where a hand-copied list of all
+# 11 envelope properties would have silently swallowed it.
+_PROTOCOL_ENVELOPE_FIELDS: frozenset[str] = frozenset(pinned_schema.load("core/protocol-envelope.json")["required"])
 
 # Fields the SDK's current schema tree defines but the local model does not yet
 # model. These are spec-vs-library mismatches, not bugs in our code.
@@ -867,11 +878,10 @@ def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
     silently drops out of grading instead of failing loudly (the exact bug
     class this suite exists to catch).
 
-    Protocol Envelope fields (``status`` et al — see ``_PROTOCOL_ENVELOPE_FIELDS``)
-    are excluded: every AdCP response schema composes the same shared
-    core/protocol-envelope.json arm, which spec-requires ``status``, but that
-    field is populated by the PROTOCOL LAYER at the transport boundary, not
-    the domain Pydantic model — same distinction as ``_VERSION_FIELDS``.
+    The shared Protocol Envelope arm's own required field — ``status``, the only
+    one the pin requires — is subtracted back out via ``_PROTOCOL_ENVELOPE_FIELDS``.
+    That exclusion is a temporary suite limitation, not a statement about layers;
+    see that constant's comment for the three fixes that retire it.
     """
     required: set[str] = set()
     for arm in schema.get("allOf", []) or []:
@@ -1068,6 +1078,26 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
 
 class TestResponseModelAlignment:
     """Local success models conform to the pinned AdCP response schemas."""
+
+    def test_protocol_envelope_requires_only_status(self):
+        """The envelope exclusion still covers exactly the one field it was scoped to.
+
+        ``_PROTOCOL_ENVELOPE_FIELDS`` is subtracted out of requiredness grading,
+        so anything it contains is a field this suite does NOT check. It is
+        derived from the pin, which means a pin bump that starts requiring a
+        second envelope field (``timestamp``, say) would widen the exclusion on
+        its own and drop that field out of grading with nobody deciding to.
+
+        Fail loudly here instead. A failure is not a bug in this test: it means
+        the pin moved and someone must choose — grade the new field, or exclude
+        it deliberately with its own recorded reason.
+        """
+        assert _PROTOCOL_ENVELOPE_FIELDS == frozenset({"status"}), (
+            f"pinned core/protocol-envelope.json now requires "
+            f"{sorted(_PROTOCOL_ENVELOPE_FIELDS)}, not just ['status'] — the "
+            f"requiredness exclusion silently widened with the pin bump. Decide "
+            f"per new field whether it is graded or excluded, then update this test."
+        )
 
     @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
     def test_declared_fields_present_in_schema_and_model(self, alignment: ResponseAlignment):
