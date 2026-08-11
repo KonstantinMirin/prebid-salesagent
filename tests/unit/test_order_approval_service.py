@@ -64,31 +64,11 @@ def mock_gam_client():
         }
 
 
-def test_start_approval_creates_sync_job(mock_db_session):
-    """Test that starting approval creates a SyncJob record."""
-    from src.core.database.models import SyncJob
-
-    approval_id = start_order_approval_background(
-        order_id="12345",
-        media_buy_id="mb_123",
-        tenant_id="tenant_1",
-        principal_id="principal_1",
-        webhook_url="https://example.com/webhook",
-    )
-
-    # Verify sync job was created
-    assert approval_id.startswith("approval_12345_")
-    mock_db_session.add.assert_called_once()
-
-    # Check the sync job was created with correct fields
-    sync_job_call = mock_db_session.add.call_args[0][0]
-    assert isinstance(sync_job_call, SyncJob)
-    assert sync_job_call.sync_type == "order_approval"
-    assert sync_job_call.status == "running"
-    assert sync_job_call.tenant_id == "tenant_1"
-    assert sync_job_call.progress["order_id"] == "12345"
-    assert sync_job_call.progress["media_buy_id"] == "mb_123"
-    assert sync_job_call.progress["webhook_url"] == "https://example.com/webhook"
+# test_start_approval_creates_sync_job lived here. It asserted the SyncJob's fields off
+# a MagicMock session's call_args (never a persisted row) and left the worker thread
+# running past the end of the test, where it reached the real DB and fired a webhook
+# into whatever test ran next (salesagent-egyz). Replaced by the real-DB path in
+# tests/integration/test_order_approval_background.py, which joins the thread.
 
 
 def test_start_approval_rejects_duplicate(mock_db_session):
