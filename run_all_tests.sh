@@ -134,6 +134,19 @@ scripts/creative-agent-stack.sh build
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
 dc build postgres adcp-server proxy tests
 
+# Pre-create logs/ group-writable + setgid BEFORE anything else touches the
+# bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at
+# import time (uid 1001, its own baked umask) -- when that umask strips the
+# group-write bit the tests container (a different uid, 1003 here) can create
+# the dir but not write into it, and every suite dies at collection with
+# `PermissionError: '/app/logs/audit.log'`. Owning it here first means
+# adcp-server writes into an already-correct dir instead of racing to
+# create it (confirmed live: sa-93d37d7c, sa-c9acaf66 both landed
+# drwxr-sr-x -- not group-writable -- and are latent failures until fixed).
+# This must stay ahead of the TLS step below too: that step's fallback runs a
+# `tests` container, which would otherwise be the one to create logs/ first.
+mkdir -p logs && chmod 2775 logs
+
 # TLS material for the tls-proxy service and the per-worker sidecars below. It
 # must exist before `up`: the service bind-mounts .test-tls/, and an absent
 # directory would materialise empty and nginx would refuse to start. The host
@@ -257,6 +270,18 @@ echo "Running suites in-network (serial): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
 RC=0
+# Structural backstop, not another one-off path pin: ANY service that writes
+# into the bind-mounted repo before this point (adcp-server, the per-worker
+# gwN servers, postgres, creative-agent) can leave files/dirs non-group-
+# writable depending on its own container's umask -- same class of bug
+# regardless of which path it is (logs/audit.log today, something else
+# tomorrow). Re-sweep the whole tree writable right before the one container
+# that needs it runs, the same way salesagent-remote-run already does once
+# at sync time -- catches whatever showed up in between instead of requiring
+# another bug report + another path pinned by hand.
+chmod -R g+w . 2>/dev/null || true
+chmod -R go-w .git 2>/dev/null || true
+
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -e "$SUITES" || RC=$?
 
 # tox writes per-suite JSON into /app/.tox, which is a plain bind-mounted dir
