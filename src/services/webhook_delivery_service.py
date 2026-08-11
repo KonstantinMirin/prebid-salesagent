@@ -22,7 +22,14 @@ from typing import Any
 from adcp import get_adcp_spec_version
 
 from src.core.security.outbound_http import OutboundError, OutboundRequestBlocked, terminal_client_error_status
-from src.core.security.webhook_egress import deliver_signed_webhook
+from src.core.security.webhook_egress import (
+    BasicCredentials,
+    BearerToken,
+    HmacSecretMissing,
+    SignWithSecret,
+    deliver_signed_webhook,
+    webhook_auth_for,
+)
 from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -332,17 +339,6 @@ class WebhookDeliveryService:
             )
             return False
 
-    def _verify_secret_strength(self, secret: str) -> bool:
-        """Verify webhook secret meets minimum strength requirements.
-
-        Args:
-            secret: Webhook secret
-
-        Returns:
-            True if secret is strong enough
-        """
-        return len(secret) >= 32
-
     def _send_webhook_enhanced(
         self,
         tenant_id: str,
@@ -478,31 +474,65 @@ class WebhookDeliveryService:
         # deliver_signed_webhook below -- it serializes, signs and stamps the
         # timestamp as one decision, so this function never holds a signature
         # and a body serialization as two independent things to keep in sync.
-        # FIXME(#1894): this sender still resolves auth inline instead of through
-        # src.core.security.webhook_egress.webhook_auth_for, and does it wrong four
-        # ways: reads webhook_secret (a column with no writers in src/), signs
-        # ungated by authentication_type, silently downgrades a weak secret to an
-        # UNSIGNED delivery, and compares "bearer" in a case no writer produces.
-        # It is the sole debt entry in the
-        # test_architecture_no_inline_webhook_auth_resolution allowlist; closing
-        # #1894 removes that entry. Fixing these in place would make this the
-        # fourth divergent copy -- converge on the resolver instead.
-        webhook_secret = getattr(config, "webhook_secret", None)
-        if webhook_secret and not self._verify_secret_strength(webhook_secret):
-            logger.warning(
-                "⚠️ Webhook secret for %s is too weak (min 32 characters required)",
-                safe_url,
-            )
-            webhook_secret = None
-
+        #
+        # The auth DECISION above that transport is owned entirely by
+        # webhook_auth_for (salesagent-47n9.24, GH #1894). This sender used to make
+        # it inline and made it wrong four ways at once: it read webhook_secret (a
+        # column with zero writers in src/, so the signing branch was unreachable
+        # for any row a buyer can create), signed on a truthy secret rather than on
+        # the scheme, silently downgraded a weak secret to an UNSIGNED delivery, and
+        # compared "bearer" against an enum every writer stores as "Bearer". One
+        # resolver call replaces all four, and the closed WebhookAuth set is what
+        # makes "what if it is none of these" un-writable.
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
         }
 
-        # Add authentication
-        if config.authentication_type == "bearer" and config.authentication_token:
-            headers["Authorization"] = f"Bearer {config.authentication_token}"
+        auth = webhook_auth_for(config.authentication_type, config.authentication_token)
+
+        if isinstance(auth, HmacSecretMissing):
+            # FAIL-CLOSED, and deliberately log-and-return rather than raise -- the
+            # same shape and the same reasoning as order_approval_service's backstop
+            # (src/services/order_approval_service.py). The buyer asked for a
+            # signature this sender cannot produce; an unsigned POST to an endpoint
+            # that will reject it is strictly worse than no POST at all, because it
+            # is an unauthenticated request to a third party that no receiver can
+            # attribute to us.
+            #
+            # The refusal a buyer can ACT on already happened at ingest
+            # (media_buy_create and the A2A push-config handler both reject an
+            # HMAC-SHA256 registration carrying no credentials). By the time control
+            # reaches here the poller is on its own thread with no request in
+            # flight, so there is no caller left to receive a raise.
+            #
+            # This does NOT cite "No Quiet Failures": that rule's worked example
+            # bans exactly this shape, and the honest reason it is an exception is
+            # written above. It records a circuit-breaker failure for the same
+            # reason a refused URL does -- a destination we cannot deliver to must
+            # not look healthy to the breaker.
+            logger.error(
+                "Webhook to %s is configured for HMAC-SHA256 but has no credentials "
+                "stored -- refusing to send unsigned",
+                safe_url,
+            )
+            circuit_breaker.record_failure()
+            return False
+
+        signing_secret = auth.secret if isinstance(auth, SignWithSecret) else None
+
+        # No secret-strength gate. It used to live here and never once fired: it
+        # tested webhook_secret, the column with no writers. Re-pointing it at
+        # authentication_token would take every buyer whose credential is under 32
+        # characters from "delivered" to "not delivered at all", and would make this
+        # the only one of three senders that refuses a short secret -- the same
+        # divergence, re-created one line lower. A length minimum is a REGISTRATION
+        # policy: it belongs beside the credential-presence gate at ingest, where
+        # the buyer can still act on it, and AdCP 3.1.1 mandates no minimum.
+        if isinstance(auth, BearerToken):
+            headers["Authorization"] = f"Bearer {auth.token}"
+        elif isinstance(auth, BasicCredentials):
+            headers["Authorization"] = f"Basic {auth.token}"
 
         # One call: the seam owns attempts, the BR-RULE-029 schedule (plus any
         # Retry-After the endpoint asks for), address and TLS policy, and which
@@ -521,7 +551,7 @@ class WebhookDeliveryService:
             result = deliver_signed_webhook(
                 config.url,
                 payload,
-                secret=webhook_secret,
+                secret=signing_secret,
                 headers=headers,
                 timeout=_delivery_timeout_seconds(),
                 max_attempts=3,

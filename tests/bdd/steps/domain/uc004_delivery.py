@@ -380,26 +380,40 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
         _persist_webhook_config_if_needed(ctx, env)
 
 
+# The pinned AdCP 3.1.1 ``AuthenticationScheme`` spellings. Every writer in
+# ``src/`` persists these verbatim, so a scenario that stores anything else is
+# describing a row no buyer can produce (salesagent-47n9.24, GH #1894).
+_DB_SCHEME_FOR_GHERKIN = {
+    "hmac-sha256": "HMAC-SHA256",
+    "hmac_sha256": "HMAC-SHA256",
+    "hmac": "HMAC-SHA256",
+    "bearer": "Bearer",
+}
+
+
 def _auth_scheme_to_db_fields(scheme: str | None, ctx: dict) -> dict[str, Any]:
     """Translate a Gherkin auth scheme to the PushNotificationConfig DB columns.
 
-    The ORM model exposes ``authentication_type`` (``"bearer"`` / ``"basic"`` /
-    ``None``) plus a separate ``webhook_secret`` column for HMAC. Each scheme
-    populates a different combination.
+    ONE pair of columns for every scheme: ``authentication_type`` plus
+    ``authentication_token``, which is where AdCP 3.1.1 puts the credential
+    (``push_notification_config.authentication.credentials``).
+
+    This used to write the HMAC secret to ``webhook_secret`` -- a column with
+    zero writers in ``src/`` -- and to store ``authentication_type="hmac"``, a
+    FIFTH spelling matching nothing production compares against. Between them
+    the graded HMAC surface exercised a row no buyer can create, against a
+    branch production has since abandoned (salesagent-47n9.24, GH #1894).
     """
     fields: dict[str, Any] = {}
     if scheme is None:
         return fields
-    normalized = scheme.lower()
-    if normalized in {"hmac-sha256", "hmac_sha256", "hmac"}:
-        secret = ctx.get("webhook_secret")
-        if secret:
-            fields["webhook_secret"] = secret
-    elif normalized == "bearer":
-        token = ctx.get("webhook_bearer_token")
-        if token:
-            fields["authentication_type"] = "bearer"
-            fields["authentication_token"] = token
+    db_scheme = _DB_SCHEME_FOR_GHERKIN.get(scheme.lower())
+    if db_scheme is None:
+        return fields
+    credential = ctx.get("webhook_secret") if db_scheme == "HMAC-SHA256" else ctx.get("webhook_bearer_token")
+    if credential:
+        fields["authentication_type"] = db_scheme
+        fields["authentication_token"] = credential
     return fields
 
 
@@ -3391,20 +3405,19 @@ def _wire_webhook_db(ctx: dict) -> None:
         secret = ctx.get("webhook_secret")
         bearer = ctx.get("webhook_bearer_token")
 
-        auth_type = None
-        auth_token = None
-        if scheme and scheme.lower() == "hmac-sha256":
-            auth_type = "hmac"
-        elif scheme and scheme.lower() == "bearer":
-            auth_type = "bearer"
-            auth_token = bearer
+        # Same translation as _auth_scheme_to_db_fields, through the same columns:
+        # the scheme names itself in authentication_type and the credential lands
+        # in authentication_token, whichever scheme it is.
+        auth_fields = _auth_scheme_to_db_fields(
+            scheme,
+            {"webhook_secret": secret, "webhook_bearer_token": bearer},
+        )
 
         configs.append(
             env.make_webhook_config(
                 url=url,
-                auth_type=auth_type,
-                auth_token=auth_token,
-                secret=secret,
+                auth_type=auth_fields.get("authentication_type"),
+                auth_token=auth_fields.get("authentication_token"),
             )
         )
     if configs:

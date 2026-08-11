@@ -123,12 +123,18 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         url: str | None = None,
         auth_type: str | None = None,
         auth_token: str | None = None,
-        secret: str | None = None,
     ) -> PushNotificationConfig:
         """Create a PushNotificationConfig via factory and return the ORM instance.
 
         ``url`` defaults to the running origin, so the configured endpoint is one
         that really answers.
+
+        There is no ``secret=`` parameter (salesagent-47n9.24, GH #1894). It wrote
+        ``webhook_secret``, a column with zero writers in ``src/``, so every test
+        that used it configured a row no buyer can create -- and graded a signing
+        branch production has now abandoned. An HMAC row is
+        ``auth_type="HMAC-SHA256", auth_token=<secret>``, which is what
+        ``media_buy_create`` and the A2A push-config handler actually persist.
         """
         from tests.factories import PushNotificationConfigFactory
 
@@ -149,7 +155,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
             url=url,
             authentication_type=auth_type,
             authentication_token=auth_token,
-            webhook_secret=secret,
             is_active=True,
         )
 

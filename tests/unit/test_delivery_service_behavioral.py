@@ -593,7 +593,9 @@ class TestDeliverWithBackoffGenericException:
 
         mock_config = MagicMock()
         mock_config.url = "https://example.com/hook"
-        mock_config.webhook_secret = None
+        # No webhook_secret: production stopped reading that column with
+        # salesagent-47n9.24, and a MagicMock answers every attribute, so leaving
+        # it set would keep this mock describing a config shape nothing reads.
         mock_config.authentication_type = None
         mock_config.authentication_token = None
 

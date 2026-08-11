@@ -241,14 +241,20 @@ class TestSendWebhookEnhancedAuthBlockedSkip:
 
 @pytest.mark.requires_db
 class TestSendWebhookEnhancedHmacSigning:
-    """HMAC-SHA256 signature is added when webhook_secret is configured.
+    """HMAC-SHA256 signature is added when the row ASKS for HMAC-SHA256.
+
+    Both cases used to configure ``webhook_secret`` with no
+    ``authentication_type`` at all, so they graded signing driven by "is a
+    credential present" -- defect 2 of GH #1894, encoded as an expectation. Since
+    salesagent-47n9.24 the scheme gates it, and the secret comes from
+    ``authentication_token``: the pair every writer in ``src/`` persists. The
+    obligation is unchanged; the row is now one a buyer can create.
 
     Covers: UC-004-EXT-G-06
     """
 
     def test_hmac_signature_header_present_when_secret_configured(self, integration_db):
-        """When PushNotificationConfig has a strong webhook_secret (>=32 chars),
-        X-ADCP-Signature header is set on the outgoing request.
+        """An HMAC-SHA256 row sets X-ADCP-Signature on the outgoing request.
 
         Covers: UC-004-EXT-G-06
         """
@@ -266,7 +272,8 @@ class TestSendWebhookEnhancedHmacSigning:
                 tenant=tenant,
                 principal=principal,
                 url=env.webhook_url,
-                webhook_secret="a" * 32,  # Exactly 32 chars — meets minimum
+                authentication_type="HMAC-SHA256",
+                authentication_token="a" * 32,
             )
 
             env.set_http_response(200)
@@ -315,7 +322,8 @@ class TestSendWebhookEnhancedHmacSigning:
                 tenant=tenant,
                 principal=principal,
                 url=env.webhook_url,
-                webhook_secret=secret,
+                authentication_type="HMAC-SHA256",
+                authentication_token=secret,
             )
 
             env.set_http_response(200)
@@ -1231,28 +1239,50 @@ class TestQueueFullDropsWebhook:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: weak webhook secret warning (line 463)
+# A short credential signs -- it is not silently downgraded (GH #1894)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.requires_db
-class TestWeakSecretNoSignature:
-    """Weak webhook secret (< 32 chars) triggers warning, no signature added.
+class TestShortSecretStillSigns:
+    """A short HMAC credential is signed with, not quietly discarded.
 
-    Covers: line 463 of webhook_delivery_service.py
+    This class asserted the OPPOSITE until salesagent-47n9.24: that a secret
+    under 32 characters is dropped and the delivery goes out UNSIGNED, at
+    WARNING level. That was the defect written down as an expectation (GH #1894,
+    defect 1) -- a buyer who configured signing received unsigned webhooks and no
+    error. It is rewritten rather than deleted because the obligation is real;
+    only the required outcome changed.
+
+    Refusing on a short secret was considered and rejected: the check tested
+    ``webhook_secret``, a column with no writers, so it had never once fired.
+    Re-pointing it at ``authentication_token`` would take every buyer holding a
+    credential under 32 characters from "delivered" to "not delivered at all",
+    and would make this the only one of three senders that refuses a short
+    secret -- the same divergence 47n9.24 exists to remove. A length minimum is
+    a REGISTRATION policy for the ingest gate, where the buyer can still act on
+    it; AdCP 3.1.1 mandates none.
     """
 
-    def test_weak_secret_omits_signature_header(self, integration_db):
-        """When webhook_secret is too short, X-ADCP-Signature is not added.
-
-        Covers: webhook_delivery_service.py line 463
-        """
+    def test_short_secret_is_signed_with_not_discarded(self, integration_db):
+        """A credential under the old 32-char minimum still produces a valid signature."""
         from tests.factories import (
             PrincipalFactory,
             PushNotificationConfigFactory,
             TenantFactory,
         )
         from tests.harness import CircuitBreakerEnv
+        from tests.helpers import assert_signature_verifies_over_wire_body
+
+        # 8 chars. Reachable in production, and only one way: AdCP 3.1.1 puts
+        # MinLen=32 on ``Authentication.credentials``, which the create_media_buy
+        # Pydantic boundary enforces -- but the A2A setTaskPushNotificationConfig
+        # handler reads the credential off a free-form protobuf string and runs
+        # only the URL and missing-credential preconditions
+        # (``_reject_invalid_a2a_push_config``), so an A2A-registered row can carry
+        # a short secret today. Those are exactly the rows a delivery-time strength
+        # gate would have taken from "delivered" to "not delivered at all".
+        secret = "tooshort"
 
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
@@ -1261,7 +1291,8 @@ class TestWeakSecretNoSignature:
                 tenant=tenant,
                 principal=principal,
                 url=env.webhook_url,
-                webhook_secret="tooshort",  # < 32 chars
+                authentication_type="HMAC-SHA256",
+                authentication_token=secret,
             )
 
             env.set_http_response(200)
@@ -1274,8 +1305,8 @@ class TestWeakSecretNoSignature:
             )
 
             assert result is True
-            sent_headers = env.last_delivery.headers
-            assert "X-ADCP-Signature" not in sent_headers
+            assert env.delivery_attempts == 1
+            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
 
 # ---------------------------------------------------------------------------

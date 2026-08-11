@@ -103,16 +103,20 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         url: str | None = None,
         auth_type: str | None = None,
         auth_token: str | None = None,
-        secret: str | None = None,
     ) -> MagicMock:
         """Create a mock webhook config object.
 
         ``url`` defaults to the running origin, so the configured endpoint is one
         that really answers.
+
+        No ``secret=`` and no ``webhook_secret`` attribute, mirroring the
+        integration twin (salesagent-47n9.24, GH #1894). A MagicMock answers every
+        attribute, so leaving it set would let this mock keep feeding a column
+        production no longer reads -- the failure mode a mock-based harness is
+        worst at surfacing.
         """
         config = MagicMock()
         config.url = url if url is not None else self.webhook_url
         config.authentication_type = auth_type
         config.authentication_token = auth_token
-        config.webhook_secret = secret
         return config

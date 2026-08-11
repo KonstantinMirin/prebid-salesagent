@@ -74,17 +74,20 @@ class TestCircuitBreakerEnvContract:
             assert set(env.mock) == {"sleep", "random", "db", "logger"}
 
     def test_make_webhook_config(self):
-        """make_webhook_config creates a mock with expected attributes."""
+        """make_webhook_config creates a mock carrying only columns production reads.
+
+        The spec-cased scheme is deliberate: ``AuthenticationScheme =
+        ["Bearer", "HMAC-SHA256"]`` @ pinned AdCP 3.1.1 is what every writer in
+        ``src/`` persists, so it is the row this mock should stand in for.
+        """
         with CircuitBreakerEnv() as env:
             config = env.make_webhook_config(
-                auth_type="bearer",
+                auth_type="Bearer",
                 auth_token="tok123",
-                secret="s3cret",
             )
             assert config.url == env.webhook_url
-            assert config.authentication_type == "bearer"
+            assert config.authentication_type == "Bearer"
             assert config.authentication_token == "tok123"
-            assert config.webhook_secret == "s3cret"
 
     def test_get_breaker_accepts_kwargs(self):
         """get_breaker passes keyword args to CircuitBreaker constructor."""

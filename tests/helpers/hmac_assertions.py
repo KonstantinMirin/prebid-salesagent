@@ -51,6 +51,17 @@ def assert_signature_verifies_over_wire_body(
     """
     sent_signature = request.headers[signature_header]
     timestamp = request.headers[timestamp_header]
+
+    # Named BEFORE the prefix check. A missing header reads as ``None`` from an
+    # ``http.client.HTTPMessage``, so ``.startswith`` would raise AttributeError
+    # and report a delivery that went out entirely UNSIGNED as a Python bug
+    # rather than as the security failure it is (salesagent-47n9.24).
+    assert sent_signature is not None, (
+        f"the delivery carries no {signature_header} at all — it went out UNSIGNED, "
+        f"so no receiver can attribute it to us"
+    )
+    assert timestamp is not None, f"the delivery carries no {timestamp_header}, so its signature cannot be verified"
+
     assert sent_signature.startswith("sha256="), sent_signature
 
     expected = hmac.new(

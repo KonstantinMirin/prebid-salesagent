@@ -104,12 +104,12 @@ _RESOLVER_FUNCTION = "webhook_auth_for"
 # This guard grades the file SET; the source comments tell the next reader which
 # kind each one is.
 _ALLOWLIST: set[tuple] = {
-    # salesagent-ywzz: reads ``webhook_secret`` (the orphan column), signs on a
-    # truthy secret ungated by ``authentication_type``, and silently DOWNGRADES
-    # a weak secret to unsigned delivery. Three defects in five lines, tracked
-    # as its own ticket so that fix converges on the resolver instead of
-    # becoming a fourth divergent read.
-    ("src/services/webhook_delivery_service.py",),
+    # ``src/services/webhook_delivery_service.py`` was here until
+    # salesagent-47n9.24 (GH #1894) converged it on the resolver. Do not re-add
+    # it, or anything else: the only remaining entry below is a justified false
+    # positive, so a NEW debt entry would mean a sender started resolving auth
+    # inline again -- which is the whole disease.
+    #
     # Justified false positive: ``on_get_task_push_notification_config`` and the
     # config LIST response read ``config.authentication_token`` to echo the
     # buyer's own registration back to them. That is a read-BACK, not a sender

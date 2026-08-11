@@ -36,6 +36,7 @@ from src.core.security.outbound_http import (
 )
 from src.core.security.webhook_egress import (
     BearerToken,
+    HmacSecretMissing,
     SignWithSecret,
     prepare_signed_request,
     webhook_auth_for,
@@ -245,22 +246,35 @@ class ProtocolWebhookService:
             push_notification_config.authentication_type,
             push_notification_config.authentication_token,
         )
+        if isinstance(auth, HmacSecretMissing):
+            # FAIL-CLOSED (salesagent-47n9.24, GH #1893). This used to fall through
+            # to an unsigned delivery: the buyer asked for a signature and received
+            # none, with no error on any surface. All three webhook senders now
+            # answer this case identically -- see the identical backstop in
+            # order_approval_service and webhook_delivery_service.
+            #
+            # log-and-return rather than raise, and no delivery-log row: nothing was
+            # attempted, so a row claiming an attempt would misreport a refusal as a
+            # delivery that failed on the wire. The refusal a buyer can act on
+            # already happened at ingest, where the request that carried the
+            # credential still existed to be rejected into.
+            logger.error(
+                "Webhook to %s is configured for HMAC-SHA256 but has no credentials "
+                "stored -- refusing to send unsigned",
+                webhook_url_for_log(url),
+            )
+            return False
+
         secret = None
         if isinstance(auth, BearerToken):
             headers["Authorization"] = f"Bearer {auth.token}"
         elif isinstance(auth, SignWithSecret):
             secret = auth.secret
-        # BasicCredentials, Unauthenticated and HmacSecretMissing all fall through
-        # to an unsigned delivery, which is exactly what this sender does today --
-        # the migration to webhook_auth_for deletes the spelling divergence, it
-        # does not change this sender's outcomes.
-        #
-        # HmacSecretMissing reaching an unsigned send IS a defect (the buyer asked
-        # for a signature and gets none), but it is a different sender's refusal
-        # decision than the one salesagent-47n9.20 was scoped to make, and no
-        # scenario grades it yet.
-        # FIXME(#1893): refuse HmacSecretMissing here too, matching
-        # order_approval_service's fail-closed backstop.
+        # BasicCredentials and Unauthenticated fall through to an unsigned delivery:
+        # neither is a promise this sender is failing to keep. Basic is not an AdCP
+        # scheme and this sender has never applied it (order_approval_service is the
+        # one that honours it); Unauthenticated means the buyer selected no scheme,
+        # so there is nothing to apply.
 
         # prepare_signed_request is called exactly once per delivery here —
         # its returned body_bytes are the exact bytes that must reach the

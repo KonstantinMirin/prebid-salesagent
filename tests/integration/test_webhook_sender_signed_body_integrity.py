@@ -100,11 +100,14 @@ class TestWebhookDeliveryServiceSignedBodyIntegrity:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
-        secret = "b" * 32  # Meets _verify_secret_strength's 32-char minimum.
+        # No length requirement: the 32-char minimum this line used to cite was
+        # deleted with the inline resolver (salesagent-47n9.24, GH #1894) -- it
+        # tested a column with no writers and had never once fired.
+        secret = "buyer-shared-secret"
 
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
-            env.make_webhook_config(secret=secret)
+            env.make_webhook_config(auth_type="HMAC-SHA256", auth_token=secret)
 
             env.set_http_response(200)
 
