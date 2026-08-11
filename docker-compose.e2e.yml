@@ -264,14 +264,23 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
-    # Runs as sacirunner:ci (host uid:gid), not the image's default root --
+    # Runs as the INVOKING host user, not the image's default root --
     # Dockerfile.test has no USER directive, so without this the container
     # writes test-results/.tox/schemas/logs into the bind-mounted /app as
-    # literal root (no userns-remap on this host, so container root IS host
-    # root). host uid 1003 = sacirunner, gid 1001 = ci -- matches the shared
-    # group every other identity on the box (sacirunner, claudeuser) already
-    # writes /srv/sa-runs and /srv/sa-tests through.
-    user: "1003:1001"
+    # literal root (no userns-remap on these hosts, so container root IS host
+    # root), and the next run — as an ordinary user — dies on `mkdir:
+    # Permission denied` before a single suite starts.
+    #
+    # Derived, never hardcoded. run_all_tests.sh exports TEST_UID/TEST_GID from
+    # `id -u`/`id -g`; the defaults here are only for a bare `docker compose
+    # run tests` and reproduce the old root behaviour rather than guessing.
+    # A literal uid here was correct on exactly one machine: pinning the CI
+    # box's 1003:1001 turned GitHub Actions red with
+    # `PermissionError: '/app/.tox'`, because .tox lives on the bind mount
+    # (see the volumes block) and the Actions checkout is owned by a different
+    # uid. Nothing local can catch that — `BDD In-Network (e2e_rest)` is the
+    # only job that runs the suite INSIDE this container.
+    user: "${TEST_UID:-0}:${TEST_GID:-0}"
     build:
       context: .
       dockerfile: Dockerfile.test
