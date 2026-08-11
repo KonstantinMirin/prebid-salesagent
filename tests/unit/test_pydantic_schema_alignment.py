@@ -157,6 +157,19 @@ def load_json_schema(schema_ref: str) -> dict[str, Any]:
     return pinned_schema.load_canonicalized(pinned_schema.normalize_ref(schema_ref))
 
 
+def _unsynthesized_guess(field_name: str) -> str:
+    """The generator's last-resort string for a shape it has no rule for.
+
+    Named rather than inlined so ``_synthesize_sample`` can RECOGNIZE a guess and
+    refuse it instead of feeding it to a model. A guess is not a sample: it is the
+    generator saying "I could not derive this", and passing it on is what turned a
+    mechanical gap in the instrument into a false conformance failure against
+    production code (the 'test_status_value' failures that bought
+    _PROTOCOL_ENVELOPE_FIELDS its exclusion in the first place).
+    """
+    return f"test_{field_name}_value"
+
+
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
     """Generate a reasonable example value for a JSON schema type."""
     # Inline enum (e.g. cache_scope: {"type": "string", "enum": ["public", "account"]}):
@@ -284,7 +297,7 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             return "Nike Air Jordan 2025 basketball shoes"
         if "po_number" in field_name.lower():
             return "PO-TEST-12345"
-        return f"test_{field_name}_value"
+        return _unsynthesized_guess(field_name)
     elif field_type == "number":
         return 100.0
     elif field_type == "integer":
@@ -974,11 +987,20 @@ def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
     raise AssertionError(f"No success arm found in oneOf (all arms look like error/submitted): {schema.get('$id')}")
 
 
-def _synthesize_sample(arm: dict[str, Any]) -> dict[str, Any]:
+def _synthesize_sample(arm: dict[str, Any], schema_ref: str) -> dict[str, Any]:
     """Build valid kwargs covering every required field from the pinned arm.
 
-    Array required fields → empty list (valid + minimal). Other types →
-    generate_example_value. Complex shapes use a registry sample_override instead.
+    Array required fields → empty list (valid + minimal). Enums and ``$ref``\\ s to
+    enum schemas → a real member. Other types → generate_example_value.
+
+    A shape the generator has no rule for RAISES here rather than passing its guess
+    through. That is the whole design correction: an instrument that cannot measure a
+    field must fail loudly AT that field, not quietly hand the model a value the spec
+    never allowed and report the resulting ValidationError as a conformance failure in
+    production code. This is the class of false failure that _PROTOCOL_ENVELOPE_FIELDS
+    was created to suppress — and suppressing a whole field's grading to silence an
+    instrument bug costs far more than one located error demanding either a generator
+    rule or an explicit sample_override, both of which already exist.
     """
     sample: dict[str, Any] = {}
     props = arm.get("properties", {})
@@ -986,8 +1008,18 @@ def _synthesize_sample(arm: dict[str, Any]) -> dict[str, Any]:
         spec = props.get(fname, {})
         if spec.get("type") == "array":
             sample[fname] = []
-        else:
-            sample[fname] = generate_example_value(spec.get("type", "string"), fname, spec)
+            continue
+        value = generate_example_value(spec.get("type", "string"), fname, spec)
+        if value == _unsynthesized_guess(fname):
+            raise AssertionError(
+                f"cannot synthesize a sample for required field {fname!r} of "
+                f"{schema_ref} — the pinned shape {spec or '{}'} has no rule in "
+                f"generate_example_value, so it fell back to a guessed string. "
+                f"Extend generate_example_value for this shape, or set "
+                f"sample_override on that schema's _RegistryRow. Do NOT exclude "
+                f"the field from grading."
+            )
+        sample[fname] = value
     return sample
 
 
@@ -1007,7 +1039,7 @@ def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[Response
             # A row may set declared_fields_override to also pin specific optional
             # fields production emits (e.g. CreateMediaBuySuccess valid_actions/context).
             declared = frozenset(arm.get("required", [])) - _VERSION_FIELDS
-        sample = row.sample_override if row.sample_override is not None else _synthesize_sample(arm)
+        sample = row.sample_override if row.sample_override is not None else _synthesize_sample(arm, row.schema_ref)
         alignments.append(
             ResponseAlignment(
                 schema_ref=row.schema_ref,
@@ -1108,6 +1140,47 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
         return _merge_composed(item_schema, item_schema)
 
     return _merge_composed(variant, schema)
+
+
+class TestSampleSynthesisFailsLoud:
+    """The instrument refuses to guess.
+
+    Graded here because the failure mode is silence: a _synthesize_sample that
+    quietly returns a guessed string does not break anything visibly — it hands a
+    model a value the spec never allowed, and the ValidationError that follows
+    reads as a conformance bug in production code. That misreading is what bought
+    _PROTOCOL_ENVELOPE_FIELDS its exclusion, so 'raises instead of guessing' is a
+    behaviour this suite has to keep, not an implementation detail.
+    """
+
+    def test_unsynthesizable_required_field_raises_located_error(self):
+        """A shape with no generator rule names itself, its schema, and the fix."""
+        arm = {
+            "required": ["opaque_field"],
+            "properties": {"opaque_field": {"type": "string", "contentEncoding": "base64"}},
+        }
+        with pytest.raises(AssertionError) as excinfo:
+            _synthesize_sample(arm, "media-buy/some-response.json")
+
+        message = str(excinfo.value)
+        assert "opaque_field" in message
+        assert "media-buy/some-response.json" in message
+        assert "contentEncoding" in message, "the message must show the shape it could not synthesize"
+        assert "sample_override" in message, "the message must name the escape hatch that already exists"
+
+    def test_known_shapes_still_synthesize(self):
+        """The guard fires on unknown shapes only — enums and arrays still work."""
+        arm = {
+            "required": ["status", "accounts"],
+            "properties": {
+                "status": {"type": "string", "enum": ["completed", "failed"]},
+                "accounts": {"type": "array"},
+            },
+        }
+        assert _synthesize_sample(arm, "account/some-response.json") == {
+            "status": "completed",
+            "accounts": [],
+        }
 
 
 class TestResponseModelAlignment:
