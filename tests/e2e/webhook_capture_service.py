@@ -49,6 +49,7 @@ import base64
 import binascii
 import contextlib
 import json
+import os
 import re
 import threading
 from collections.abc import Iterator

@@ -24,6 +24,9 @@ server can dial, and the runner must start it.
 
 from __future__ import annotations
 
+import builtins
+import dis
+import importlib
 import re
 from pathlib import Path
 
@@ -138,3 +141,54 @@ def test_the_guard_catches_a_routed_service_the_runner_forgets(tmp_path: Path) -
     started = set(runner_started_services("dc up -d postgres adcp-server\n"))
 
     assert [s for s in routed.values() if s not in started] == ["lonely-origin"]
+
+
+#: Modules that a compose service runs via ``python -m``. Each must not merely
+#: IMPORT cleanly — it must survive the call the container actually makes.
+_ORIGIN_MODULES = ("tests.e2e.webhook_capture_service", "tests.e2e.counterparty_origin_service")
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("module", _ORIGIN_MODULES)
+def test_every_origin_module_defines_every_name_its_entry_point_uses(module: str) -> None:
+    """``main()`` resolves every global it touches — not just the import block.
+
+    Importing a module proves nothing about ``python -m <module>``: the entry
+    point's body does not execute at import time, so a name it uses that was
+    never imported is invisible until the container starts and dies. That is not
+    hypothetical — a refactor removed ``import os`` from the capture service
+    while ``main()`` still read ``os.environ``; the module imported fine, the
+    stdlib-only guard passed, the container exited with a NameError, and the
+    failure surfaced a full suite later as "webhook-capture is not answering /
+    Temporary failure in name resolution" — a DNS-shaped message for a missing
+    import.
+
+    Compiling the module and resolving ``main``'s global loads against the
+    module namespace plus builtins catches it in-process, in milliseconds.
+    """
+    imported = importlib.import_module(module)
+    main = getattr(imported, "main", None)
+
+    assert main is not None, format_failure(
+        summary=f"{module} has no main() but is run as a compose entry point",
+        violations=[f"{module}: no main"],
+        fix_hint="A service run via `python -m` needs a main() the container can call.",
+    )
+
+    unresolved = sorted(
+        name
+        for instruction in dis.get_instructions(main)
+        if instruction.opname == "LOAD_GLOBAL"
+        for name in [instruction.argval]
+        if not hasattr(imported, name) and not hasattr(builtins, name)
+    )
+
+    assert not unresolved, format_failure(
+        summary=f"{module}.main() uses names the module never defines",
+        violations=[f"{module}.main: {name} is not defined or imported" for name in unresolved],
+        fix_hint=(
+            "Import it. The module still IMPORTS cleanly without it — only `python -m` fails, "
+            "and it fails as an unreachable service rather than as a missing name."
+        ),
+        docs_link="docs/development/structural-guards.md",
+    )

@@ -89,14 +89,32 @@ class _JwksStore:
 def _capabilities(brand_json_url: str) -> dict:
     """The capabilities document for one agent.
 
-    ``identity.brand_json_url`` is the ONLY field hop 1 exists to deliver
+    ``identity.brand_json_url`` is what hop 1 exists to deliver
     (``_extract_brand_json_url``). Key discovery goes through brand.json — never
     through an ``adagents.json``, which is a different mechanism the resolver
     does not consult here.
+
+    ``identity.key_origins`` is NOT optional for a counterparty that signs.
+    ``_extract_key_origins`` returns ``None`` when the map is absent, which is a
+    legitimate posture for a deployment that never signs — but the verifier then
+    refuses an actually-signed request with
+    ``request_signature_key_origin_missing`` at step 7. Learned in-network: the
+    first version of this origin published only ``brand_json_url``, and the
+    tampered-signature leg came back with that code instead of
+    ``request_signature_invalid``, i.e. the request never reached the signature
+    check at all. An origin that omits this is not "slightly incomplete" — it
+    cannot be a signing counterparty.
+
+    The value is the scheme+host+port the trust root is served from, keyed by
+    PURPOSE (``request_signing``); the verifier pins the resolved JWKS against it
+    so a key discovered from one origin cannot be swapped for one from another.
     """
     return {
         "adcp_version": "3.1.1",
-        "identity": {"brand_json_url": brand_json_url},
+        "identity": {
+            "brand_json_url": brand_json_url,
+            "key_origins": {"request_signing": PUBLIC_ORIGIN},
+        },
     }
 
 
