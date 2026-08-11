@@ -93,29 +93,24 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 # Every AdCP response schema composes the same shared Protocol Envelope arm
 # (core/protocol-envelope.json) via a top-level allOf, and that arm spec-requires
 # exactly one field: "status". Excluding it from requiredness grading is NOT a
-# layering principle — it is a temporary concession to two mechanical limits of
-# this suite, and one tracked model gap:
+# layering principle — it is a temporary concession, now down to one tracked
+# model gap: SyncAccountsResponse genuinely does not declare status (GH #1900).
 #
-#   1. the property walk in _resolve_response_item_schema merges allOf `required`
-#      but not allOf `properties`, so 7 of the registered models cannot be graded
-#      on status correctly yet;
-#   2. the sample generator cannot synthesize a valid enum/Literal value, which
-#      turns 4 more into false failures; and
-#   3. SyncAccountsResponse genuinely does not declare status — GH #1900.
+# The two MECHANICAL limits this exclusion also used to buy time for are fixed
+# as of the allOf-`properties` merge in _merge_composed: the property walk no
+# longer reports an envelope field as required-but-undefined (that was 7 failures
+# on test_declared_fields_present_in_schema_and_model), and _synthesize_sample
+# now reads a real per-field spec instead of an empty one, so status resolves
+# through its $ref to a valid enum member rather than the string
+# 'test_status_value' (that was 4 more on test_required_fields_enforced).
 #
-# Those counts are measured, not estimated: empty this frozenset and the suite
-# goes to 13 failures — 7 on test_declared_fields_present_in_schema_and_model
-# (limit 1), 4 on test_required_fields_enforced with input_value=
-# 'test_status_value' (limit 2), SyncAccountsResponse with a missing required
-# key (limit 3), and the meta-test below. Do not read 7+4+1 as a share of the
-# registry: limits 1 and 2 hit the same four models, so 8 distinct models are
-# affected, not 12.
-#
-# The other 10 of the 11 registered models already carry a spec-correct default
-# for status, inherited straight from their adcp library base, and would pass
-# through the model_defaulted branch of test_required_fields_enforced once (1)
-# and (2) are fixed. So the exclusion buys time for those three fixes; it does
-# not assert that the response model is the wrong layer for status.
+# Measured, not estimated: empty this frozenset today and the suite goes to 2
+# failures — SyncAccountsResponse with a missing required key, and the meta-test
+# below. The other 10 of the 11 registered models already carry a spec-correct
+# default for status, inherited straight from their adcp library base, and pass
+# through the model_defaulted branch of test_required_fields_enforced. So the
+# exclusion buys time for exactly one model fix; it does not assert that the
+# response model is the wrong layer for status.
 #
 # (For the record, the two claims this comment used to make are both false, and
 # citing them misled a reviewer: _serialize_for_a2a stamps only message/success,
@@ -919,19 +914,49 @@ def _standard_branch_required_fields(schema: dict[str, Any]) -> set[str]:
     return set(node.get("required", [])) if walked else set()
 
 
-def _merge_composed_required(node: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
-    """Merge required fields from schema's top-level allOf arms and its
-    if/then/else standard branch into node's own required[], rebuilding node
-    only if that adds anything.
+def _allof_properties(schema: dict[str, Any]) -> dict[str, Any]:
+    """Property definitions contributed by every arm of a schema's top-level
+    ``allOf`` — the shared Protocol/Version Envelope arms above all.
+
+    Requiredness and definedness have to be merged from the same place or the
+    walk contradicts itself: ``_allof_required_fields`` already pulls ``status``
+    out of the envelope arm's ``required``, so a walk that does not also pull in
+    the arm's ``properties`` reports a field as schema-required and, in the same
+    breath, as not defined by the schema. Both graders read the merged node —
+    ``test_declared_fields_present_in_schema_and_model`` checks membership in
+    ``properties``, and ``_synthesize_sample`` reads the per-field spec out of it
+    to build a valid value — so the missing half showed up as 7 spurious
+    "not defined by pinned schema" failures plus samples synthesized from an
+    empty spec.
+    """
+    props: dict[str, Any] = {}
+    for arm in schema.get("allOf", []) or []:
+        resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
+        props |= resolved.get("properties", {})
+    return props
+
+
+def _merge_composed(node: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """Merge the fields composed into ``schema`` at its root — ``required`` from
+    its top-level allOf arms and its if/then/else standard branch, ``properties``
+    from those same allOf arms — into ``node``, rebuilding it only if that adds
+    anything.
+
+    ``node``'s own definitions win: a domain schema that redeclares an envelope
+    property (narrowing it, say) is the more specific statement about the shape
+    a buyer receives.
 
     schema is usually node itself, but a resolved oneOf variant passes the
     top-level schema separately: allOf/if-then-else compose at the schema
     root, not on the individual arm.
     """
-    merged = set(node.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
-    if merged == set(node.get("required", [])):
+    merged_required = (
+        set(node.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
+    )
+    merged_properties = _allof_properties(schema) | node.get("properties", {})
+    if merged_required == set(node.get("required", [])) and merged_properties == node.get("properties", {}):
         return node
-    return {**node, "required": sorted(merged)}
+    return {**node, "required": sorted(merged_required), "properties": merged_properties}
 
 
 def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
@@ -941,7 +966,7 @@ def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
     ``if``/``then``/``else`` standard branch — when it is a flat single-shape
     response (no oneOf)."""
     if "oneOf" not in schema:
-        return _merge_composed_required(schema, schema)
+        return _merge_composed(schema, schema)
     for arm in schema["oneOf"]:
         required = set(arm.get("required", []))
         if "errors" not in required and "task_id" not in required:
@@ -1057,12 +1082,13 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
 
     Handles flat single-shape responses (no oneOf → the schema is the success
     shape) and oneOf responses (pick the arm exposing ``selector``). Merges in
-    required fields from the schema's own top-level ``allOf`` arms (the
-    shared Protocol/Version Envelope) and from the standard branch of any
-    top-level ``if``/``then``/``else`` chain — those apply regardless of which
-    oneOf variant matched, and 3.1.1 moved some formerly-flat requirements
-    (e.g. ``status``, ``products``/``cache_scope``) into one of those two
-    composition forms for schemas with no oneOf of their own.
+    both the required fields AND the property definitions composed at the
+    schema root — from its own top-level ``allOf`` arms (the shared
+    Protocol/Version Envelope) and, for requiredness, from the standard branch
+    of any top-level ``if``/``then``/``else`` chain. Those apply regardless of
+    which oneOf variant matched, and 3.1.1 moved some formerly-flat
+    requirements (e.g. ``status``, ``products``/``cache_scope``) into one of
+    those two composition forms for schemas with no oneOf of their own.
     """
     schema = load_json_schema(alignment.schema_ref)
     if "oneOf" in schema:
@@ -1079,9 +1105,9 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
         # short-circuit every field/required check below to nothing.
         if "$ref" in item_schema:
             item_schema = pinned_schema.load(item_schema["$ref"])
-        return _merge_composed_required(item_schema, item_schema)
+        return _merge_composed(item_schema, item_schema)
 
-    return _merge_composed_required(variant, schema)
+    return _merge_composed(variant, schema)
 
 
 class TestResponseModelAlignment:
