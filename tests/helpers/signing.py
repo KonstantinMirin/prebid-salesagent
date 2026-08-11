@@ -20,6 +20,7 @@ Anything that decides or asserts belongs in the test, not here.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -592,6 +593,62 @@ def rejection_code(response: Any) -> str | None:
     return remainder.rstrip('"') or None
 
 
+#: One Prometheus text-format sample line: ``name{a="1",b="2"} 3.0`` (labels optional).
+_SCRAPED_SAMPLE_RE = re.compile(
+    r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>[^}]*)\})?[ \t]+(?P<value>[^ \t]+)[ \t]*$"
+)
+
+#: One ``name="value"`` pair inside a sample's label set, with backslash escapes intact.
+_SCRAPED_LABEL_RE = re.compile(r'(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)="(?P<value>(?:[^"\\]|\\.)*)"')
+
+#: The three escapes the Prometheus text exposition format defines for a label value.
+_SCRAPED_UNESCAPES = (("\\\\", "\\"), ('\\"', '"'), ("\\n", "\n"))
+
+
+def scraped_counter_samples(text: str, sample_name: str, **labels: str) -> dict[tuple[tuple[str, str], ...], float]:
+    """Samples named *sample_name* in SCRAPED Prometheus text, filtered to a label superset.
+
+    The cross-container analogue of :func:`samples_with`, and deliberately NOT folded
+    into it. :func:`counter_samples` collects ``prometheus_client.REGISTRY`` inside THIS
+    process; this parses the ``text/plain`` exposition a test scraped over TLS from
+    another container's ``GET /metrics``. Same vocabulary, genuinely different operation
+    — the CLAUDE.md DRY carve-out — and an e2e module cannot reach the in-process
+    registry at all: the counter it needs was incremented in the server container.
+
+    One definition rather than a parse open-coded in the e2e module, for the same reason
+    :func:`rejection_code` exists: a reader that mis-handles the label escaping or the
+    ``# HELP``/``# TYPE`` lines reports a delta of zero, which looks exactly like "the
+    mechanism did not run" — the failure this whole grading exists to tell apart.
+
+    Returns the same shape as :func:`counter_samples` (label tuple -> value) so a caller
+    can sum, compare or diff two scrape windows without learning a second vocabulary.
+    """
+    wanted = labels.items()
+    out: dict[tuple[tuple[str, str], ...], float] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _SCRAPED_SAMPLE_RE.match(line)
+        if match is None or match.group("name") != sample_name:
+            continue
+        sample_labels = {
+            pair.group("name"): _unescape_label_value(pair.group("value"))
+            for pair in _SCRAPED_LABEL_RE.finditer(match.group("labels") or "")
+        }
+        if not wanted <= sample_labels.items():
+            continue
+        out[tuple(sorted(sample_labels.items()))] = float(match.group("value"))
+    return out
+
+
+def _unescape_label_value(value: str) -> str:
+    """Undo the Prometheus text format's label-value escaping."""
+    for escaped, literal in _SCRAPED_UNESCAPES:
+        value = value.replace(escaped, literal)
+    return value
+
+
 def counter_samples(sample_name: str) -> dict[tuple[tuple[str, str], ...], float]:
     """All Prometheus samples named *sample_name*, keyed by their label set."""
     from prometheus_client import REGISTRY
@@ -731,8 +788,9 @@ def signed_headers(
     body: bytes = b"",
     extra: dict[str, str] | None = None,
     key_id: str = COUNTERPARTY_KID,
+    origin: str = WIRE_ORIGIN,
 ) -> dict[str, str]:
-    """The full header set for one signed in-process request to *path*.
+    """The full header set for one signed request to *path* at *origin*.
 
     Merges the wire headers a signed request carries anyway (tenant hint, bearer,
     whatever the case needs) with the signature over exactly those headers and *body*
@@ -744,6 +802,18 @@ def signed_headers(
 
     Signed FRESH per call: ``sign_request`` mints a new nonce each time, so two
     requests in one test do not collide in A4's replay store.
+
+    *origin* defaults to :data:`WIRE_ORIGIN`, the in-process ASGI client's origin, so
+    every existing caller signs byte-identical bytes. An e2e caller passes the REAL TLS
+    origin **including the port**: ``_verify_url``
+    (``src/core/signing/request_verifier_middleware.py``) rebuilds the authority from
+    the ``Host`` header nginx forwards verbatim and the scheme from
+    ``X-Forwarded-Proto``, so a signature over a portless authority covers a different
+    ``@target-uri`` than the one the verifier reconstructs and is refused as
+    ``request_signature_invalid`` — a fixture bug wearing a verifier bug's clothes.
+    Widened here rather than by inlining :func:`sign_wire_request` at the e2e call site
+    for the reason this function's own docstring gives: a second copy of the merge that
+    signs a slightly different URL looks like a verifier bug.
     """
     base = request_headers(token, extra)
     return {
@@ -751,7 +821,7 @@ def signed_headers(
         **sign_wire_request(
             private_key,
             method=method,
-            url=f"{WIRE_ORIGIN}{path}",
+            url=f"{origin}{path}",
             headers=base,
             body=body,
             key_id=key_id,

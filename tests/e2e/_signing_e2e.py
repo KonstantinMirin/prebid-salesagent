@@ -31,7 +31,7 @@ import contextlib
 import os
 import re
 import ssl
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -272,6 +272,7 @@ def provisioned_trust_root_tenant(
     mint_key: bool = True,
     declarations_from_tenant: Callable[[Any], dict[str, Any]] | None = None,
     buyer_access_token: str | None = None,
+    counterparty_principals: Mapping[str, str] | None = None,
 ) -> Iterator[tuple]:
     """The tenant seam, shared by every signing e2e module.
 
@@ -305,6 +306,18 @@ def provisioned_trust_root_tenant(
     token without the yield growing a third element. Callers that pass nothing get
     byte-for-byte the tenant they got before.
 
+    *counterparty_principals* maps ``access_token -> agent_url`` and seeds one Principal
+    per entry. ``Principal.agent_url`` is the ONLY legitimate source for an inbound
+    counterparty's identity (security.mdx forbids taking it from a header or a body
+    field) and it is the sole input to the verifier's key-resolution walk
+    (``_resolve_request_context`` -> ``_resolution_for``), so a module grading the
+    INBOUND signed path needs a principal that carries one — which
+    :func:`_seed_buying_surface` deliberately does not create (``PrincipalFactory``
+    leaves the nullable column NULL). Two entries rather than one is the ordinary case
+    there: a counterparty whose brand.json lists it and one whose does not resolve to
+    two DIFFERENT ``agent_url`` values, and ``AGENT_RESOLUTION_CACHE`` is keyed on
+    exactly that, so they cannot collide.
+
     Note that the session below stays bound for the whole ``yield``: a caller cannot
     open a second ``live_db_env`` from its test body, so anything that must be seeded
     belongs in the seed above rather than in the test.
@@ -312,7 +325,7 @@ def provisioned_trust_root_tenant(
     The row is removed at both ends: ``virtual_host`` is host-routing state
     shared by the whole e2e session.
     """
-    from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory, TenantFactory
+    from tests.factories import AuthorizedPropertyFactory, PrincipalFactory, SigningKeyFactory, TenantFactory
 
     drop_tenant(live_server, tenant_id)
     try:
@@ -326,6 +339,8 @@ def provisioned_trust_root_tenant(
             AuthorizedPropertyFactory(tenant=tenant, publisher_domain=host, tags=["premium_news"])
             if buyer_access_token is not None:
                 _seed_buying_surface(env, tenant, access_token=buyer_access_token)
+            for access_token, agent_url in (counterparty_principals or {}).items():
+                PrincipalFactory(tenant=tenant, access_token=access_token, agent_url=agent_url)
             if declarations_from_tenant is not None:
                 tenant.capability_declarations = declarations_from_tenant(tenant)
             env._commit_factory_data()

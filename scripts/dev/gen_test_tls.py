@@ -50,6 +50,21 @@ CA_KEY = TLS_DIR / "ca.key"
 SERVER_CERT = TLS_DIR / "server.pem"
 SERVER_KEY = TLS_DIR / "server.key"
 
+# The trust store the SERVER uses for its OUTBOUND walk (salesagent-mp53.8).
+# The inbound verifier resolves an unknown counterparty by fetching its
+# capabilities/brand.json/JWKS over the stack's own TLS front, and the SDK builds
+# that client with a bare ``ssl.create_default_context()`` — ``trust_env=False``
+# on its httpx clients is an httpx-level flag and provably cannot reach it, so
+# only the OpenSSL env vars do.
+#
+# CONCATENATED, never ca.pem alone: SSL_CERT_FILE replaces the FILE half of the
+# default store, so a CA-only file leaves the process trusting nothing else.
+# (Note the honest limit: SSL_CERT_DIR is honoured independently, so on an image
+# with a populated /etc/ssl/certs the system roots would still resolve — the
+# concatenation is right because it is correct under EVERY image, not because
+# omitting it always breaks.)
+CA_BUNDLE = TLS_DIR / "ca-bundle.pem"
+
 VALIDITY = dt.timedelta(days=30)
 RENEW_WITHIN = dt.timedelta(days=7)
 CLOCK_SKEW = dt.timedelta(hours=1)
@@ -163,7 +178,7 @@ def _is_current() -> bool:
     unreadable, it expires soon, or the SAN set drifted from what the stacks are
     reachable at (a name added to ``SAN_DNS_NAMES`` must actually reach a leaf).
     """
-    if not all(path.is_file() for path in (CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY)):
+    if not all(path.is_file() for path in (CA_CERT, CA_KEY, SERVER_CERT, SERVER_KEY, CA_BUNDLE)):
         return False
     try:
         ca = x509.load_pem_x509_certificate(CA_CERT.read_bytes())
@@ -223,7 +238,43 @@ def ensure_test_tls(*, force: bool = False) -> Path:
     # not need it, but a chain costs nothing and makes the file usable by tools
     # that do walk it.
     _write(SERVER_CERT, _pem_cert(leaf_cert) + _pem_cert(ca_cert), private=False)
+    _write(CA_BUNDLE, _public_roots() + _pem_cert(ca_cert), private=False)
     return CA_CERT
+
+
+def _public_roots() -> bytes:
+    """The public root store to concatenate our test CA onto.
+
+    Emitted HERE, at generation time, rather than assembled once by hand: a
+    bundle built by hand outlives the next certificate rotation and then quietly
+    pins a CA that no longer signs anything.
+
+    Prefers the system bundle, falls back to certifi, and FAILS LOUDLY if neither
+    is available. It must never silently emit a CA-only file — that would leave
+    the server trusting our test CA and nothing else, which fails as an opaque
+    handshake error on the first real outbound TLS call and looks nothing like a
+    missing-roots problem. Note that ``ensure-test-tls.sh``'s interpreter
+    contract is literally ``import cryptography``; its fallback interpreter can
+    have that and NOT certifi, which is exactly why the system paths are tried
+    first and why the failure is explicit rather than an empty prefix.
+    """
+    for candidate in (
+        Path("/etc/ssl/certs/ca-certificates.crt"),  # Debian/Ubuntu
+        Path("/etc/pki/tls/certs/ca-bundle.crt"),  # RHEL/Fedora
+        Path("/etc/ssl/cert.pem"),  # macOS/BSD
+    ):
+        if candidate.is_file():
+            return candidate.read_bytes()
+    try:
+        import certifi
+    except ImportError as exc:
+        raise RuntimeError(
+            "cannot build .test-tls/ca-bundle.pem: no system CA bundle found and certifi is not "
+            "importable. Refusing to emit a CA-only bundle — SSL_CERT_FILE REPLACES the file half "
+            "of the trust store, so that would leave the server trusting the test CA alone. "
+            "Install certifi or run where a system bundle exists."
+        ) from exc
+    return Path(certifi.where()).read_bytes()
 
 
 def main() -> None:

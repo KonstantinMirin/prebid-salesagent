@@ -35,6 +35,10 @@ map $ssl_server_name $tls_upstream_named {
     # The e2e webhook receiver. Plaintext behind this front by design: the front
     # terminates TLS, the capture service never does.
     webhooks.adcp-e2e.dev   webhook-capture:8080;
+    # The counterparty identity origin the INBOUND verifier walks
+    # (salesagent-mp53.8). Plaintext behind this front by the same rule: one
+    # terminator, one leaf, one place to keep in step.
+    counterparty.adcp.test  counterparty-origin:8080;
 }
 
 server {

@@ -43,16 +43,22 @@ reason its own ticket does not own is a guard people learn to ignore.
 
 from __future__ import annotations
 
-import ast
 import ipaddress
 import re
-from pathlib import Path
 
 import pytest
-import yaml
 
 from src.core.security.url_validator import BLOCKED_NETWORKS
-from tests.unit._architecture_helpers import format_failure, repo_root
+from tests.unit._architecture_helpers import (
+    TLS_FRONT_SERVICE,
+    format_failure,
+    load_yaml,
+    repo_root,
+    san_covers,
+    san_dns_names,
+    sni_map_hostnames,
+    tls_front_aliases,
+)
 
 #: The success-leg receiver's hostname (OWNER DECISION 4). An UNREGISTERED name
 #: under a normal delegable gTLD: ``.dev`` is not an RFC 6761 special-use name,
@@ -62,10 +68,11 @@ from tests.unit._architecture_helpers import format_failure, repo_root
 #: below — real DNS is never consulted.
 CAPTURE_HOSTNAME = "webhooks.adcp-e2e.dev"
 
-#: The service that must carry the alias and the SNI route. Extending the
-#: EXISTING TLS front is the requirement; a second front would mean two
-#: terminators, two certificates and two places to keep in step.
-TLS_FRONT_SERVICE = "tls-proxy"
+#: ``TLS_FRONT_SERVICE`` — the service that must carry the alias and the SNI
+#: route — is imported from ``_architecture_helpers`` alongside the four
+#: detectors below: every in-stack HTTPS origin asks the same four questions of
+#: the same front, so one home for them is what keeps two origin guards from
+#: drifting into two answers.
 
 _REPO_ROOT = repo_root()
 _BASE_COMPOSE = _REPO_ROOT / "docker-compose.e2e.yml"
@@ -76,78 +83,17 @@ _GEN_TLS_SCRIPT = _REPO_ROOT / "scripts" / "dev" / "gen_test_tls.py"
 #: ``${NAME}`` or ``${NAME:-default}`` — compose's own interpolation syntax.
 _COMPOSE_VAR_RE = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}")
 
-#: An nginx ``map $ssl_server_name <target> { ... }`` block.
-_SNI_MAP_RE = re.compile(r"map\s+\$ssl_server_name\s+\$\w+\s*\{(?P<body>[^}]*)\}", re.DOTALL)
-
 #: A TLS ``listen`` directive — one per terminating front.
 _TLS_LISTEN_RE = re.compile(r"^\s*listen\s+[^;]*\bssl\b[^;]*;", re.MULTILINE)
 
 
 # ---------------------------------------------------------------------------
 # Detectors — each takes the parsed artifact, so every one is exercised twice:
-# once against the real file, once against a synthetic known-bad input.
+# once against the real file, once against a synthetic known-bad input. The four
+# shared with the counterparty-origin guard (``san_dns_names``, ``san_covers``,
+# ``tls_front_aliases``, ``sni_map_hostnames``) live in
+# ``tests/unit/_architecture_helpers.py``; their self-tests stay here.
 # ---------------------------------------------------------------------------
-
-
-def san_dns_names(source: str) -> tuple[str, ...]:
-    """The ``SAN_DNS_NAMES`` literal from ``gen_test_tls.py``, read without importing it.
-
-    AST rather than import: the generator pulls in ``cryptography`` and writes
-    into ``.test-tls/`` at module scope in some call paths — a guard must read
-    the declaration, not run the generator.
-    """
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
-        if "SAN_DNS_NAMES" not in targets:
-            continue
-        if not isinstance(node.value, ast.Tuple | ast.List):
-            continue
-        return tuple(e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
-    return ()
-
-
-def san_covers(san_names: tuple[str, ...], hostname: str) -> bool:
-    """Whether *hostname* is covered by *san_names*, exactly or by a one-label wildcard.
-
-    Mirrors RFC 6125 wildcard matching as TLS clients apply it: ``*.example.com``
-    covers ``a.example.com`` and NOT ``a.b.example.com``.
-    """
-    for san in san_names:
-        if san == hostname:
-            return True
-        if san.startswith("*.") and hostname.endswith(san[1:]) and "." not in hostname[: -len(san[1:])]:
-            return True
-    return False
-
-
-def tls_front_aliases(compose: dict) -> list[str]:
-    """Every network alias declared on the shared TLS front service."""
-    service = compose.get("services", {}).get(TLS_FRONT_SERVICE) or {}
-    networks = service.get("networks") or {}
-    if not isinstance(networks, dict):
-        return []
-    aliases: list[str] = []
-    for network in networks.values():
-        if isinstance(network, dict):
-            aliases.extend(network.get("aliases") or [])
-    return aliases
-
-
-def sni_map_hostnames(template: str) -> list[str]:
-    """The SNI names routed by the template's ``map $ssl_server_name`` block(s)."""
-    hostnames: list[str] = []
-    for match in _SNI_MAP_RE.finditer(template):
-        for line in match.group("body").splitlines():
-            line = line.split("#", 1)[0].strip().rstrip(";")
-            if not line:
-                continue
-            key = line.split()[0]
-            if key not in {"default", "hostnames", "volatile"}:
-                hostnames.append(key)
-    return hostnames
 
 
 def count_tls_fronts(template: str) -> int:
@@ -212,14 +158,10 @@ def find_private_subnets(compose: dict) -> list[str]:
     return violations
 
 
-def _load(path: Path) -> dict:
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-
-
 def _merged_compose() -> dict:
     """Base + per-stack ports overlay, for checks that do not care which file declares a thing."""
-    merged = _load(_BASE_COMPOSE)
-    overlay = _load(_PORTS_COMPOSE)
+    merged = load_yaml(_BASE_COMPOSE)
+    overlay = load_yaml(_PORTS_COMPOSE)
     merged_networks = {**(merged.get("networks") or {}), **(overlay.get("networks") or {})}
     if merged_networks:
         merged["networks"] = merged_networks
@@ -260,7 +202,7 @@ def test_test_certificate_covers_the_webhook_capture_hostname() -> None:
 @pytest.mark.arch_guard
 def test_webhook_capture_hostname_is_an_alias_on_the_existing_tls_front() -> None:
     """``webhooks.adcp-e2e.dev`` resolves to the shared ``tls-proxy``, not a second terminator."""
-    aliases = tls_front_aliases(_load(_BASE_COMPOSE))
+    aliases = tls_front_aliases(load_yaml(_BASE_COMPOSE))
 
     assert CAPTURE_HOSTNAME in aliases, format_failure(
         summary=f"{CAPTURE_HOSTNAME} is not a network alias on the {TLS_FRONT_SERVICE} service",
@@ -358,7 +300,7 @@ def test_base_compose_never_hardcodes_the_network_subnet() -> None:
     one the in-network runner uses alone, and this repo runs stacks concurrently
     by design (``COMPOSE_PROJECT_NAME="adcp-test-$$"``).
     """
-    violations = find_hardcoded_subnets(_load(_BASE_COMPOSE))
+    violations = find_hardcoded_subnets(load_yaml(_BASE_COMPOSE))
 
     assert not violations, format_failure(
         summary="docker-compose.e2e.yml hardcodes a network subnet",
@@ -505,7 +447,7 @@ def test_every_stack_entry_point_allocates_a_subnet(entry_point: str) -> None:
         violations=[f"{entry_point}: no reference to {_SUBNET_ALLOCATOR}"],
         fix_hint=(
             "Export E2E_NETWORK_SUBNET from the allocator before `docker compose up`, guarded by "
-            "`if [ -z \"${E2E_NETWORK_SUBNET:-}\" ]` so an explicit caller value still wins."
+            '`if [ -z "${E2E_NETWORK_SUBNET:-}" ]` so an explicit caller value still wins.'
         ),
     )
 
@@ -522,7 +464,7 @@ def test_the_subnet_reaches_pytest_through_both_hops() -> None:
     warning for ``E2E_TLS_BASE_URL``/``E2E_CA_BUNDLE``.
     """
     subnet_env_var = "E2E_NETWORK_SUBNET"
-    compose = _load(_BASE_COMPOSE)
+    compose = load_yaml(_BASE_COMPOSE)
     runner_env = (compose.get("services", {}).get("tests", {}) or {}).get("environment", {}) or {}
     tox_ini = (repo_root() / "tox.ini").read_text(encoding="utf-8")
 

@@ -85,6 +85,24 @@ services:
       # key that genuinely exists — a failure that no in-process run can reproduce,
       # because only e2e_rest crosses into this container.
       # Same worthless value as docker-compose.yml, and for the same reason.
+      # The trust store for this server's OUTBOUND counterparty walk
+      # (salesagent-mp53.8). The inbound verifier resolves an unknown signer by
+      # fetching capabilities -> brand.json -> JWKS from the counterparty over
+      # the stack's own TLS front, and the SDK builds that client with a bare
+      # ssl.create_default_context() per hop — trust_env=False on its httpx
+      # clients is an httpx-level flag and provably cannot reach it, so only the
+      # OpenSSL env vars do. Without this the walk dies at certificate
+      # verification and surfaces as capabilities_unreachable, i.e. a SILENT
+      # request_signature_key_unknown.
+      #
+      # The file is the CONCATENATED bundle (public roots + our test CA), emitted
+      # by gen_test_tls.py so it stays in step with the CA it trusts, and already
+      # visible in here through the .:/app mount below. Verification stays fully
+      # ON against a real CA — this is the receiver-side twin of the runner's
+      # E2E_CA_BUNDLE, not a hatch, and it is NOT the private-destination pin
+      # (that one has no env reader by design — see
+      # tests/unit/test_architecture_no_private_destinations.py).
+      SSL_CERT_FILE: /app/.test-tls/ca-bundle.pem
       ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
       ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
@@ -170,6 +188,14 @@ services:
           # which upstream a connection reaches — see the $ssl_server_name map in
           # config/nginx/nginx-tls-test.conf.template.
           - webhooks.adcp-e2e.dev
+          # The counterparty identity origin (salesagent-mp53.8). Another SNI
+          # alias on the SAME front — see the $ssl_server_name map. Unlike the
+          # webhook receiver this one may sit under .adcp.test: the reserved-TLD
+          # gate lives on the outbound WEBHOOK path (notification_proof_service),
+          # and the inbound counterparty walk is gated by SDK address arithmetic
+          # alone (resolve_and_validate_host applies no TLD rule). So it needs no
+          # new SAN — *.adcp.test already covers it.
+          - counterparty.adcp.test
     healthcheck:
       test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://proxy.adcp.test:8443/health"]
       interval: 10s
@@ -188,14 +214,23 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
-    # Runs as sacirunner:ci (host uid:gid), not the image's default root --
+    # Runs as the INVOKING host user, not the image's default root --
     # Dockerfile.test has no USER directive, so without this the container
     # writes test-results/.tox/schemas/logs into the bind-mounted /app as
-    # literal root (no userns-remap on this host, so container root IS host
-    # root). host uid 1003 = sacirunner, gid 1001 = ci -- matches the shared
-    # group every other identity on the box (sacirunner, claudeuser) already
-    # writes /srv/sa-runs and /srv/sa-tests through.
-    user: "1003:1001"
+    # literal root (no userns-remap on these hosts, so container root IS host
+    # root), and the next run -- as an ordinary user -- dies on `mkdir:
+    # Permission denied` before a single suite starts.
+    #
+    # Derived, never hardcoded. run_all_tests.sh exports TEST_UID/TEST_GID from
+    # `id -u`/`id -g`; the defaults here are only for a bare `docker compose
+    # run tests` and reproduce the old root behaviour rather than guessing.
+    # A literal uid here was correct on exactly one machine: pinning the CI
+    # box's 1003:1001 turned GitHub Actions red with
+    # `PermissionError: '/app/.tox'`, because .tox lives on the bind mount
+    # (see the volumes block) and the Actions checkout is owned by a different
+    # uid. Nothing local can catch that -- `BDD In-Network (e2e_rest)` is the
+    # only job that runs the suite INSIDE this container.
+    user: "${TEST_UID:-0}:${TEST_GID:-0}"
     build:
       context: .
       dockerfile: Dockerfile.test
@@ -426,6 +461,37 @@ services:
       PORT: "8080"
       # Reported by GET /health so a readback client can prove it is talking to
       # its OWN stack rather than a cross-wired sibling on the same host port.
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
+    volumes:
+      - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/health',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Static counterparty identity origin for the inbound signing walk
+  # (salesagent-mp53.8). A SIBLING of webhook-capture, not a mode inside it: what
+  # would be shared is ~30 lines of BaseHTTPRequestHandler, while the coupling
+  # would be real — that service's other mode records raw bytes for the signing
+  # suite and its do_POST semantics must not bleed into an identity origin.
+  #
+  # Serves the three hops async_resolve_agent walks (capabilities ->
+  # brand_json_url -> brand.json -> jwks_uri -> JWKS) as plain GETs, because
+  # _fetch_capabilities does a raw GET with follow_redirects=False and demands a
+  # 200 JSON object — which is exactly why the seller's OWN trust root cannot
+  # stand in as the counterparty: our /mcp answers GET with an SSE redirect.
+  counterparty-origin:
+    image: python:3.12-slim
+    working_dir: /app
+    command: ["python", "-m", "tests.e2e.counterparty_origin_service"]
+    environment:
+      PORT: "8080"
+      # Every absolute URL this origin publishes about ITSELF must be the name
+      # the SERVER dials, not the container-internal address it binds — a
+      # mismatch here sends hop 2 or 3 somewhere unreachable and surfaces as an
+      # unresolvable key three assertions later.
+      COUNTERPARTY_PUBLIC_ORIGIN: https://counterparty.adcp.test:8443
       COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
     volumes:
       - .:/app

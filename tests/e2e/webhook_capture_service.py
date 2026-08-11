@@ -35,13 +35,12 @@ readback client can assert it is talking to its own stack, not a cross-wired
 sibling on the same host port.
 
 Runs on a bare ``python:3.12-slim`` image — no project dependencies, no build
-step. That constraint is why the thread-serving bootstrap below is INLINED
-rather than imported from ``tests.helpers.local_http_origin.serve_in_thread``,
-the otherwise-obvious reuse target: importing anything under ``tests.helpers``
-runs its package ``__init__.py``, which transitively imports ``tests.factories``
-(``factory-boy`` et al.) — dev-only dependencies a bare stdlib image does not
-have. Upstream confirmed this the hard way: the container exited on import
-before ever binding a socket. Keep this module stdlib-only.
+step. That constraint is why the shared JSON/HTTP scaffolding lives at
+``tests/e2e/_stdlib_json_http`` rather than under ``tests.helpers.``: importing
+anything from that package runs its ``__init__``, which transitively imports
+``tests.factories`` (``factory-boy`` et al.) — dev-only dependencies a bare
+stdlib image does not have. Upstream confirmed this the hard way: the container
+exited on import before ever binding a socket. Keep this module stdlib-only.
 """
 
 from __future__ import annotations
@@ -50,41 +49,13 @@ import base64
 import binascii
 import contextlib
 import json
-import os
 import re
-import socket
 import threading
 from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name, serve_forever_in_thread
 
 _WEBHOOK_PATH_RE = re.compile(r"^/webhook/(?P<key>[^/]+)/?$")
-
-
-@contextlib.contextmanager
-def _serve_in_thread(
-    handler_class: type[BaseHTTPRequestHandler], *, host: str, port: int, server_attrs: dict[str, object]
-) -> Iterator[ThreadingHTTPServer]:
-    """Bind, serve on a daemon thread, tear down.
-
-    ``request_queue_size`` overrides ``socketserver``'s default backlog of 5 —
-    too small for this service's real concurrency (many xdist workers under
-    ``run_all_tests.sh`` all posting/reading at once). Upstream confirmed the
-    hard way: a burst of 20 concurrent writers reliably produced
-    ``ConnectionResetError`` on a many-core box (fine on a quieter machine,
-    which is exactly how a backlog-too-small bug hides until it doesn't).
-    """
-    family = socket.getaddrinfo(host, None)[0][0]
-    server_class = type("_Server", (ThreadingHTTPServer,), {"address_family": family, "request_queue_size": 128})
-    server = server_class((host, port), handler_class)
-    for name, value in server_attrs.items():
-        setattr(server, name, value)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
 
 
 class _CaptureStore:
@@ -125,23 +96,8 @@ class _CaptureStore:
             }
 
 
-class _CaptureRequestHandler(BaseHTTPRequestHandler):
+class _CaptureRequestHandler(JsonRequestHandler):
     """Route ``/health`` and ``/webhook/<key>`` against ``self.server``'s store."""
-
-    protocol_version = "HTTP/1.1"
-
-    def _write_json(self, status: int, body: dict) -> None:
-        data = json.dumps(body).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.write(data)
-
-    def _read_raw_body(self) -> bytes:
-        content_length = int(self.headers.get("Content-Length") or 0)
-        return self.rfile.read(content_length) if content_length else b""
 
     def _wire_entry(self, raw: bytes) -> dict:
         """The exact request as it arrived: path, headers verbatim, body base64.
@@ -208,9 +164,6 @@ class _CaptureRequestHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler name
         self._handle_webhook("DELETE")
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - stdlib signature
-        """Suppress HTTP server logs during tests."""
-
 
 def decode_body(entry: dict) -> bytes:
     """The raw request bytes from a ``received_raw`` entry.
@@ -245,15 +198,17 @@ def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[
     Reads ``COMPOSE_PROJECT_NAME`` once at start so ``GET /health`` can report
     which compose stack this instance belongs to.
     """
-    compose_project_name = os.environ.get("COMPOSE_PROJECT_NAME", "")
-    with _serve_in_thread(
+    server = serve_forever_in_thread(
         _CaptureRequestHandler,
         host=host,
         port=port,
-        server_attrs={"store": _CaptureStore(), "compose_project_name": compose_project_name},
-    ) as server:
-        actual_port = server.server_address[1]
-        yield f"http://{host}:{actual_port}"
+        server_attrs={"store": _CaptureStore(), "compose_project_name": compose_project_name()},
+    )
+    try:
+        yield f"http://{host}:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def main() -> None:

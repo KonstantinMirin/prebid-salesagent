@@ -1154,6 +1154,127 @@ def format_failure(
 
 
 # ---------------------------------------------------------------------------
+# e2e stack wiring detectors — the compose file, the shared TLS front, the leaf
+# certificate. Shared by every guard that checks one origin's four wiring sites
+# (``test_architecture_e2e_webhook_capture_wiring.py``,
+# ``test_architecture_e2e_counterparty_origin_wiring.py``): each such origin is
+# the SAME four questions asked about a different hostname, so the detectors
+# live here and only the hostname/service/expectations belong to the guard.
+# ---------------------------------------------------------------------------
+
+#: The one TLS-terminating service every in-stack HTTPS origin is fronted by.
+#: Extending the EXISTING front is the requirement; a second front would mean two
+#: terminators, two certificates and two places to keep in step.
+TLS_FRONT_SERVICE = "tls-proxy"
+
+#: An nginx ``map $ssl_server_name <target> { ... }`` block.
+_SNI_MAP_RE = re.compile(r"map\s+\$ssl_server_name\s+\$\w+\s*\{(?P<body>[^}]*)\}", re.DOTALL)
+
+#: Rows of an SNI map that name a map DIRECTIVE rather than a hostname.
+_SNI_MAP_DIRECTIVES = frozenset({"default", "hostnames", "volatile"})
+
+
+def load_yaml(path: Path) -> dict:
+    """Parse a YAML file into a dict (empty file -> ``{}``)."""
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def san_dns_names(source: str) -> tuple[str, ...]:
+    """The ``SAN_DNS_NAMES`` literal from ``gen_test_tls.py``, read without importing it.
+
+    AST rather than import: the generator pulls in ``cryptography`` and writes
+    into ``.test-tls/`` at module scope in some call paths — a guard must read
+    the declaration, not run the generator.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if "SAN_DNS_NAMES" not in targets:
+            continue
+        if not isinstance(node.value, ast.Tuple | ast.List):
+            continue
+        return tuple(e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+    return ()
+
+
+def san_covers(san_names: tuple[str, ...], hostname: str) -> bool:
+    """Whether *hostname* is covered by *san_names*, exactly or by a one-label wildcard.
+
+    Mirrors RFC 6125 wildcard matching as TLS clients apply it: ``*.example.com``
+    covers ``a.example.com`` and NOT ``a.b.example.com``.
+    """
+    for san in san_names:
+        if san == hostname:
+            return True
+        if san.startswith("*.") and hostname.endswith(san[1:]) and "." not in hostname[: -len(san[1:])]:
+            return True
+    return False
+
+
+def tls_front_aliases(compose: dict) -> list[str]:
+    """Every network alias declared on the shared TLS front service."""
+    service = compose.get("services", {}).get(TLS_FRONT_SERVICE) or {}
+    networks = service.get("networks") or {}
+    if not isinstance(networks, dict):
+        return []
+    aliases: list[str] = []
+    for network in networks.values():
+        if isinstance(network, dict):
+            aliases.extend(network.get("aliases") or [])
+    return aliases
+
+
+def sni_map_upstreams(template: str) -> dict[str, str]:
+    """``hostname -> upstream`` for every route in the template's SNI map block(s).
+
+    The upstream half matters as much as the key: a hostname routed to the WRONG
+    service is wired everywhere a guard would look and still reaches the wrong
+    origin, which on a signing path reads as an unresolvable counterparty rather
+    than as a compose typo.
+    """
+    routes: dict[str, str] = {}
+    for match in _SNI_MAP_RE.finditer(template):
+        for raw in match.group("body").splitlines():
+            line = raw.split("#", 1)[0].strip().rstrip(";")
+            if not line:
+                continue
+            fields = line.split()
+            if fields[0] in _SNI_MAP_DIRECTIVES:
+                continue
+            routes[fields[0]] = fields[1] if len(fields) > 1 else ""
+    return routes
+
+
+def sni_map_hostnames(template: str) -> list[str]:
+    """The SNI names routed by the template's ``map $ssl_server_name`` block(s)."""
+    return list(sni_map_upstreams(template))
+
+
+def compose_service(compose: dict, name: str) -> dict:
+    """One compose service's definition, or ``{}`` when it is not declared."""
+    service = compose.get("services", {}).get(name)
+    return service if isinstance(service, dict) else {}
+
+
+def compose_service_environment(compose: dict, name: str) -> dict[str, str]:
+    """A service's ``environment:`` as a mapping, accepting both compose spellings.
+
+    Compose allows a mapping AND a ``KEY=value`` list; a guard that reads only the
+    mapping form silently passes on the other, which is the shape of a guard that
+    grades nothing.
+    """
+    environment = compose_service(compose, name).get("environment") or {}
+    if isinstance(environment, dict):
+        return {str(key): "" if value is None else str(value) for key, value in environment.items()}
+    if isinstance(environment, list):
+        pairs = (str(entry).split("=", 1) for entry in environment)
+        return {parts[0]: parts[1] if len(parts) > 1 else "" for parts in pairs}
+    return {}
+
+
+# ---------------------------------------------------------------------------
 # BDD xfail-registration structures (tests/bdd/conftest.py)
 # ---------------------------------------------------------------------------
 
