@@ -146,6 +146,35 @@ dc build postgres adcp-server proxy tests
 # This must stay ahead of the TLS step below too: that step's fallback runs a
 # `tests` container, which would otherwise be the one to create logs/ first.
 mkdir -p logs && chmod 2775 logs
+# The setgid bit above fixes the GROUP of files created in here, but NOT their
+# write bit -- that comes from the creating process's umask, and adcp-server's
+# yields 0644. So a FRESH logs/ still ends up with `-rw-r--r-- ci:ci`
+# audit.log, and the tests container (a different uid in the same `ci` group)
+# dies at collection with `PermissionError: '/app/logs/audit.log'`. The
+# `chmod -R g+w .` backstop further down cannot repair it either: it runs as
+# the sync user, which does not OWN a ci-created file, so the chmod fails and
+# is swallowed by its `2>/dev/null || true`. Pre-create the files ourselves so
+# the server APPENDS to an already-group-writable file instead of creating one
+# with its own umask. Runs before every `dc up`/`dc run` for the same reason
+# the mkdir does. (Observed live: sa-067cc4a9 failed exactly this way on a
+# fresh run dir, while sa-858f3b3a passed only because it inherited a stale
+# 0664 logs/ from an earlier run -- i.e. this was always latent, and green
+# runs were green by accident.)
+# rm first, then recreate: on a REUSED run directory the existing files are
+# owned by the server's uid, so `touch` (needs write) and `chmod` (needs
+# ownership) both fail on them -- and under `set -e` that would abort the whole
+# script. Unlinking works regardless of file ownership because it is the
+# DIRECTORY's write bit that governs it, and we own the directory. These are
+# per-run scratch logs, so discarding a previous run's copy costs nothing.
+# The list is exactly what src/core/audit_logger.py opens: audit.log (its
+# FileHandler), error.log (its error FileHandler), and the two append-mode
+# sinks structured.jsonl and security.jsonl. security.jsonl only appears on a
+# security event, so it is the one that hides longest before biting.
+for _log in audit.log error.log structured.jsonl security.jsonl; do
+    rm -f "logs/$_log"
+    touch "logs/$_log"
+    chmod 664 "logs/$_log"
+done
 
 # TLS material for the tls-proxy service and the per-worker sidecars below. It
 # must exist before `up`: the service bind-mounts .test-tls/, and an absent
