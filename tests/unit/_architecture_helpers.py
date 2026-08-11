@@ -167,6 +167,88 @@ def find_plain_json_column_violations(tree: ast.Module) -> list[int]:
     return lines
 
 
+_FS_MUTATING_CALLS: frozenset[str] = frozenset(
+    {
+        "mkdir",
+        "makedirs",
+        "touch",
+        "open",
+        "write_text",
+        "write_bytes",
+        "unlink",
+        "rmtree",
+        "remove",
+        "rename",
+        "replace",
+        "copy",
+        "copyfile",
+        "chmod",
+        "symlink_to",
+        "FileHandler",
+        "RotatingFileHandler",
+        "TimedRotatingFileHandler",
+        "WatchedFileHandler",
+        "NamedTemporaryFile",
+        "mkstemp",
+        "mkdtemp",
+    }
+)
+
+
+def _is_main_guard(node: ast.AST) -> bool:
+    """True for ``if __name__ == "__main__":`` — a block that never runs on import."""
+    if not isinstance(node, ast.If):
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+    )
+
+
+def iter_import_time_statements(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Yield statements that EXECUTE when the module is imported.
+
+    Descends through module-level control flow (if/try/with/for) because those
+    bodies do run on import, but never into function or class bodies (deferred to
+    call time) nor into ``if __name__ == "__main__":`` (only runs as a script).
+    """
+    stack: list[ast.stmt] = list(tree.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        if _is_main_guard(node):
+            continue
+        yield node
+        for field in ("body", "orelse", "finalbody", "handlers"):
+            stack.extend(getattr(node, field, []) or [])
+
+
+def find_import_time_fs_io_violations(tree: ast.Module) -> list[int]:
+    """Return line numbers of filesystem I/O performed at MODULE IMPORT time.
+
+    Import-time filesystem I/O makes a module's importability depend on the
+    working directory and uid of whoever imports it -- neither of which the
+    module chooses. It once took out every pytest suite at COLLECTION when two
+    containers sharing a bind mount raced to create ``logs/audit.log``.
+    """
+    lines: list[int] = []
+    for stmt in iter_import_time_statements(tree):
+        for node in iter_statement_scoped_nodes(stmt):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name in _FS_MUTATING_CALLS:
+                lines.append(node.lineno)
+    return sorted(lines)
+
+
 def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[ast.Call]:
     """Yield Call nodes, optionally filtered by callable name."""
     for node in ast.walk(tree):

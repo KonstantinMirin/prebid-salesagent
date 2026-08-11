@@ -58,6 +58,23 @@ services:
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      # Keep this server's log files OFF the bind mount it shares with `tests`.
+      # The image bakes USER app (uid 1001) while `tests` runs as the invoking
+      # host user, so with the default CWD-relative path both create
+      # /app/logs/*.log on the same mounted tree. Whoever got there first owned
+      # the files at umask-derived mode 644 and the other uid could no longer
+      # open them for append — surfacing as `PermissionError: [Errno 13]
+      # Permission denied: '/app/logs/audit.log'` and killing entire suites at
+      # pytest COLLECTION, apparently at random because it depended purely on
+      # which container won the race.
+      #
+      # A container-local path (not a volume at /app/logs — Docker would create
+      # THAT mount point on the host as root:755 and lock `tests` out of its own
+      # log directory instead; measured) means the two never share a path at
+      # all. /tmp is writable by any uid, so this holds however the image's user
+      # is configured. The database remains the audit authority; these files are
+      # a backup.
+      ADCP_LOG_DIR: /tmp/adcp-logs
       # Must match the `tests` service's ADCP_WEBHOOK_HOST below: this is the
       # SERVER's own trusted-test-host allowlist entry for outbound webhook SSRF
       # validation (WebhookURLValidator._is_trusted_test_host), not just the
