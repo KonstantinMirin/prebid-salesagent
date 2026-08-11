@@ -36,6 +36,8 @@ coercion guarantees dict-ness only — a well-formed dict's inner asset-union va
 validated separately (#1779).
 """
 
+from typing import NamedTuple
+
 import pytest
 
 from tests.harness import CreativeListEnv, TransportResult
@@ -59,18 +61,40 @@ def _seed_authenticated_principal(env: CreativeListEnv):
     return tenant, principal
 
 
-def _list_single_creative_with_data(data: dict, transport: Transport) -> tuple[TransportResult, str]:
+class ListedBlobRow(NamedTuple):
+    """The outcome of seeding one creative and listing it.
+
+    Carries the transport ``result`` and the rendered drop-``warnings`` every coercion guard
+    needs, plus the identity of the seeded row (``creative_id``/``tenant_id``/``principal_id``)
+    captured inside the env session so an attribution test can assert *which* row a drop names
+    without reopening ``CreativeListEnv`` and re-rolling the seed/patch/call/render scaffold.
+    Callers that only need the result/warnings unpack ``result, warnings, *_``.
+    """
+
+    result: TransportResult
+    warnings: str
+    creative_id: str
+    tenant_id: str
+    principal_id: str
+
+
+def _list_single_creative_with_data(data: dict, transport: Transport) -> ListedBlobRow:
     """Seed one approved creative carrying *data* in its blob, list via *transport*, assert
-    the listing did not error, and return ``(result, warnings_text)``.
+    the listing did not error, and return a :class:`ListedBlobRow`.
 
     Collapses the seed-one-creative-and-list scaffold shared by the untyped-blob coercion
     guards (CLAUDE.md DRY): across those tests only the ``data`` literal and the per-test
     wire/log assertions vary. The module logger is patched (rather than captured via
     ``caplog``) so the drop-warning assertion is immune to the tox/integration logging
     config — levels/handlers/propagation/``logging.disable`` — that suppressed
-    capture-based approaches. ``warnings_text`` is the ``logger.warning`` calls rendered
-    to their final messages (``fmt % args``) so callers assert on the substituted text
-    (the coercers pass the field label as a ``%s`` arg, not baked into the format string).
+    capture-based approaches. ``ListedBlobRow.warnings`` is the ``logger.warning`` calls
+    rendered to their final messages (``fmt % args``) so callers assert on the substituted
+    text (the coercers pass the field label as a ``%s`` arg, not baked into the format string).
+
+    The seeded row's ids are captured inside the ``with CreativeListEnv()`` block (ORM attrs
+    detach once the env exits) and returned so the attribution guard can assert which row a
+    drop names — the one thing the coercion-behavior guards don't pin — through this same
+    helper rather than a sixth copy of the scaffold.
 
     Runs on any wire transport (callers parametrize over ``_ALL_WIRE``): ``"key" not in
     creative`` and stringify-not-null are per-transport serialization claims — omission
@@ -83,13 +107,15 @@ def _list_single_creative_with_data(data: dict, transport: Transport) -> tuple[T
 
     with CreativeListEnv() as env:
         tenant, principal = _seed_authenticated_principal(env)
-        CreativeFactory(
+        creative = CreativeFactory(
             tenant=tenant,
             principal=principal,
             format="display_300x250",
             status="approved",
             data=data,
         )
+        # Capture the seeded ids inside the session block (ORM attrs detach once env exits).
+        creative_id, tenant_id, principal_id = creative.creative_id, env._tenant_id, env._principal_id
         with patch("src.core.tools.creatives.listing.logger") as mock_logger:
             result = env.call_via(transport)
 
@@ -101,7 +127,7 @@ def _list_single_creative_with_data(data: dict, transport: Transport) -> tuple[T
     # substitution on presence of format args (as stdlib LogRecord.getMessage does) so a
     # legal zero/one-arg warning carrying a literal ``%`` cannot raise and mask the signal.
     warnings_text = " ".join(rendered_log_calls(mock_logger.warning))
-    return result, warnings_text
+    return ListedBlobRow(result, warnings_text, creative_id, tenant_id, principal_id)
 
 
 class TestConceptIdsFilterValidation:
@@ -145,7 +171,7 @@ class TestNumericConceptCoercion:
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_numeric_concept_id_is_coerced_to_string(self, integration_db, transport):
-        result, warnings = _list_single_creative_with_data(
+        result, warnings, *_ = _list_single_creative_with_data(
             {"assets": {}, "concept_id": 12345, "concept_name": 678}, transport
         )
         creative = result.wire_response["creatives"][0]
@@ -165,7 +191,7 @@ class TestNonScalarConceptValueDropped:
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_non_scalar_concept_value_is_dropped(self, integration_db, transport):
-        result, warnings = _list_single_creative_with_data(
+        result, warnings, *_ = _list_single_creative_with_data(
             {"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}}, transport
         )
         creative = result.wire_response["creatives"][0]
@@ -255,7 +281,7 @@ class TestMalformedTagsBlobCoerced:
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_non_list_tags_value_is_dropped(self, integration_db, transport):
         """A non-list tags blob (a bare string) is dropped to absent, not crashed on."""
-        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": "premium"}, transport)
+        result, warnings, *_ = _list_single_creative_with_data({"assets": {}, "tags": "premium"}, transport)
         creative = result.wire_response["creatives"][0]
         # Dropped to None → exclude_none omits the key from the wire entirely.
         assert "tags" not in creative
@@ -266,7 +292,7 @@ class TestMalformedTagsBlobCoerced:
     def test_non_string_tags_elements_are_coerced_or_dropped(self, integration_db, transport):
         """Scalar elements are stringified (bool included: ``str(True) == "True"``),
         non-scalar elements dropped+logged, order preserved."""
-        result, warnings = _list_single_creative_with_data(
+        result, warnings, *_ = _list_single_creative_with_data(
             {"assets": {}, "tags": [1, "keep", {"k": "v"}, True]}, transport
         )
         creative = result.wire_response["creatives"][0]
@@ -282,7 +308,7 @@ class TestMalformedTagsBlobCoerced:
         never silently swallowed. Removing the ``el is None`` drop branch leaves the element
         silently discarded (``["keep", null] -> ["keep"]`` with no log), reddening the log
         assertion."""
-        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": ["keep", None]}, transport)
+        result, warnings, *_ = _list_single_creative_with_data({"assets": {}, "tags": ["keep", None]}, transport)
         creative = result.wire_response["creatives"][0]
         assert creative["tags"] == ["keep"]
         assert "Dropping null tags element" in warnings
@@ -297,7 +323,7 @@ class TestMalformedTagsBlobCoerced:
         ``[]`` (mutating the empty-list ``return None`` collapse to ``return coerced``
         reddens this test). The collapse is a valid-input serialization choice, not a
         corruption drop, so it must NOT emit a drop-warning — it logs at debug instead."""
-        result, warnings = _list_single_creative_with_data({"assets": {}, "tags": []}, transport)
+        result, warnings, *_ = _list_single_creative_with_data({"assets": {}, "tags": []}, transport)
         creative = result.wire_response["creatives"][0]
         assert "tags" not in creative
         assert warnings == "", f"{transport}: empty-tags collapse must not warn: {warnings!r}"
@@ -317,7 +343,7 @@ class TestMalformedAssetsBlobCoerced:
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_non_dict_assets_value_is_dropped(self, integration_db, transport):
-        result, warnings = _list_single_creative_with_data({"assets": ["not", "a", "dict"]}, transport)
+        result, warnings, *_ = _list_single_creative_with_data({"assets": ["not", "a", "dict"]}, transport)
         creative = result.wire_response["creatives"][0]
         # Dropped to None → exclude_none omits the key from the wire entirely.
         assert "assets" not in creative
@@ -334,7 +360,7 @@ class TestMalformedAssetsBlobCoerced:
         This pins the object-field empty policy production made — ``{} -> {}`` had a coercer-level
         oracle but no wire oracle before this. Collapsing ``{}`` to absent (mutating
         ``_coerce_blob_dict`` to return ``None`` on an empty dict) reddens this."""
-        result, warnings = _list_single_creative_with_data({"assets": {}}, transport)
+        result, warnings, *_ = _list_single_creative_with_data({"assets": {}}, transport)
         creative = result.wire_response["creatives"][0]
         assert creative["assets"] == {}
         assert warnings == "", f"{transport}: empty-assets preservation must not warn: {warnings!r}"
@@ -349,29 +375,14 @@ class TestCoercionDropIdentifiesTheRow:
     ``test_tenant`` / ``test_principal``), so any transposition reddens."""
 
     def test_drop_warning_names_the_corrupt_row(self, integration_db):
-        from unittest.mock import patch
+        # Route through the shared seed-and-list helper (which now returns the seeded row
+        # identity) rather than re-rolling the scaffold; only the attribution asserts below
+        # are distinct from the coercion-behavior guards. A non-list ``tags`` → drop + warn.
+        listed = _list_single_creative_with_data({"assets": {}, "tags": "premium"}, Transport.REST)
 
-        from tests.factories import CreativeFactory
-
-        with CreativeListEnv() as env:
-            tenant, principal = _seed_authenticated_principal(env)
-            creative = CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                format="display_300x250",
-                status="approved",
-                data={"assets": {}, "tags": "premium"},  # non-list tags → drop + warn
-            )
-            # Capture the ids inside the session block (ORM attrs detach once env exits).
-            creative_id, tenant_id, principal_id = creative.creative_id, env._tenant_id, env._principal_id
-            with patch("src.core.tools.creatives.listing.logger") as mock_logger:
-                result = env.call_via(Transport.REST)
-
-        assert not result.is_error, f"listing errored: {result.error!r}"
-        warnings = " ".join(rendered_log_calls(mock_logger.warning))
-        assert "Dropping non-list tags value" in warnings
+        assert "Dropping non-list tags value" in listed.warnings
         # Each id under its correct label — a swapped call-site/_blob_log_context arg order (e.g.
         # creative_id rendered as the principal_id) reddens because the three values differ.
-        assert f"creative_id={creative_id}" in warnings
-        assert f"tenant_id={tenant_id}" in warnings
-        assert f"principal_id={principal_id}" in warnings
+        assert f"creative_id={listed.creative_id}" in listed.warnings
+        assert f"tenant_id={listed.tenant_id}" in listed.warnings
+        assert f"principal_id={listed.principal_id}" in listed.warnings

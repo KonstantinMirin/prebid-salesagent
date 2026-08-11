@@ -35,6 +35,29 @@ from src.core.validation_helpers import adcp_validation_boundary
 logger = logging.getLogger(__name__)
 
 
+def _log_blob_drop(shape: str, field_label: str, log_context: str, *, value_type: str | None = None) -> None:
+    """Emit the one drop-warning template shared by every blob coercer.
+
+    All four blob-drop sites — the non-scalar/non-dict/non-list whole-value drops and the
+    null-element drop inside a list — route through this single emitter so the message shape
+    cannot drift out of lockstep: a reworded stem or a new attribution field lands in one place
+    instead of four. ``value_type`` present renders the "...value of type X..." form (a corrupt
+    whole value); ``value_type`` absent renders the "...element..." form (a corrupt element inside
+    an otherwise-valid list). ``log_context`` is the optional operator-attribution suffix built by
+    :func:`_blob_log_context` (empty for the pure-function callers).
+    """
+    if value_type is None:
+        logger.warning("Dropping %s %s element from creative listing%s", shape, field_label, log_context)
+    else:
+        logger.warning(
+            "Dropping %s %s value of type %s from creative listing%s",
+            shape,
+            field_label,
+            value_type,
+            log_context,
+        )
+
+
 def _coerce_blob_scalar(value: Any, field_label: str, *, log_context: str = "") -> str | None:
     """Coerce an untyped JSON-blob value to a spec string field.
 
@@ -57,12 +80,7 @@ def _coerce_blob_scalar(value: Any, field_label: str, *, log_context: str = "") 
         return value
     if isinstance(value, (int, float)):  # bool is an int subclass; str(True)="True" is acceptable
         return str(value)
-    logger.warning(
-        "Dropping non-scalar %s value of type %s from creative listing%s",
-        field_label,
-        type(value).__name__,
-        log_context,
-    )
+    _log_blob_drop("non-scalar", field_label, log_context, value_type=type(value).__name__)
     return None
 
 
@@ -87,12 +105,7 @@ def _coerce_blob_dict(value: Any, field_label: str, *, log_context: str = "") ->
     """
     if value is None or isinstance(value, dict):
         return value
-    logger.warning(
-        "Dropping non-dict %s value of type %s from creative listing%s",
-        field_label,
-        type(value).__name__,
-        log_context,
-    )
+    _log_blob_drop("non-dict", field_label, log_context, value_type=type(value).__name__)
     return None
 
 
@@ -121,17 +134,12 @@ def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = ""
     if value is None:
         return None
     if not isinstance(value, list):
-        logger.warning(
-            "Dropping non-list %s value of type %s from creative listing%s",
-            field_label,
-            type(value).__name__,
-            log_context,
-        )
+        _log_blob_drop("non-list", field_label, log_context, value_type=type(value).__name__)
         return None
     coerced: list[str] = []
     for element in value:
         if element is None:
-            logger.warning("Dropping null %s element from creative listing%s", field_label, log_context)
+            _log_blob_drop("null", field_label, log_context)
             continue
         scalar = _coerce_blob_scalar(element, field_label, log_context=log_context)
         if scalar is not None:
