@@ -886,7 +886,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 # strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
 _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     # Graduated (salesagent-rrz8): MCP ToolResult now pre-serializes via
-    # model_dump(mode="json") (src/core/tools/_mcp_boundary.py), so unset
+    # model_dump(mode="json") (src/core/tools/_mcp.py), so unset
     # fields are correctly omitted instead of serialized as JSON null.
     # Former entries: T-UC-010-ext-e-absent (context: null), T-UC-010-
     # degradation-account/no_tenant (account: null).
@@ -1379,25 +1379,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # boundary) and webhook-creds-short — so the routes are removed and the
         # scenarios grade live on all transports.
 
-        # UC-002 ext-g inline-creative missing URL (#1417): the inline
-        # creative carries a FormatId object on the wire. On a2a/rest the
-        # reference-creative URL validation rejects it with the AdCP CREATIVE_REJECTED
-        # envelope (message names the missing URL). On MCP the idempotency
-        # canonicalization (rfc8785) cannot serialize the FormatId object and raises a
-        # bare CanonicalizationError BEFORE the AdCP boundary translator runs — no
-        # two-layer envelope on MCP (same class of MCP serialization gap recorded for
-        # the oneOf-both account shape and the short webhook credential above). The
-        # a2a/rest rows assert the real wire CREATIVE_REJECTED with the URL message.
-        if is_mcp and "T-UC-002-ext-g" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="MCP rfc8785 canonicalization cannot serialize the inline creative's FormatId "
-                    "object (raises CanonicalizationError before the AdCP boundary translator) — no "
-                    "two-layer CREATIVE_REJECTED envelope on MCP (a2a/rest pass). Documented MCP "
-                    "serialization gap.",
-                    strict=True,
-                )
-            )
+        # Graduated: UC-002 ext-g inline-creative missing URL (#1417) no longer
+        # xfails on MCP. The gap was: the inline creative carries a FormatId on the
+        # wire, and `_upgrade_legacy_format_ids` (src/core/schemas/_base.py) wrote
+        # LIVE FormatId objects into the caller's own request dicts — pydantic hands
+        # a mode="before" validator its input by reference — so the dict that
+        # reached rfc8785 idempotency canonicalization held an unserializable
+        # object and raised a bare CanonicalizationError BEFORE the AdCP boundary
+        # translator ran, yielding no two-layer envelope on MCP.
+        #
+        # `copy_before_mutating()` (same module) now gives that validator a
+        # defensive copy, so the canonicalized dict stays plain JSON,
+        # canonicalization succeeds, the boundary translator runs, and MCP emits the
+        # same CREATIVE_REJECTED envelope a2a/rest already did. The strict=True
+        # marker fired as designed — deterministic XPASS on run sa-d9585e1a — so the
+        # route is removed and the scenario grades live on all transports.
+        #
+        # NOTE: this scenario's Then steps are weaker than the obligation (they
+        # assert failure + "URL" in the RECONSTRUCTED message and never name an
+        # error code, so CREATIVE_REJECTED itself is ungraded). That weakness is
+        # pre-existing, not introduced by graduating this route; strengthening it to
+        # a wire-envelope + error-code assertion is tracked separately.
 
         # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
         _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}

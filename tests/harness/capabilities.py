@@ -11,6 +11,13 @@ anonymous and authenticated callers per INV-4 (salesagent-dn2s). The mock
 below stands in for that class: production code only reads class-level
 attributes/staticmethods off it, so a MagicMock works interchangeably.
 
+The adapter/audit patches are the ONLY ones: everything the wire-shape and
+pinned-schema integration tests grade (the response builder, strip_none_deep,
+the real transport serializers) runs unpatched, so this env is also the
+environment behind the get_adcp_capabilities rows in
+tests/integration/test_wire_omission_matrix.py and
+tests/integration/test_a2a_wire_integer_serialization.py.
+
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
 Usage::
@@ -267,12 +274,20 @@ class CapabilitiesEnv(IntegrationEnv):
         return GetAdcpCapabilitiesRequest(**kwargs)
 
     def call_impl(self, **kwargs: Any) -> GetAdcpCapabilitiesResponse:
-        """Call _get_adcp_capabilities_impl directly (sync — no wrapper needed)."""
+        """Call _get_adcp_capabilities_impl directly (sync — no wrapper needed).
+
+        Accepts either a pre-built ``req=GetAdcpCapabilitiesRequest(...)`` or the
+        flat When-step kwargs (protocols/context/adcp_version/...) that
+        ``_build_request`` assembles. No kwargs at all means ``req=None`` — the
+        parameterless discovery call the wire-shape tests exercise.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
-        req = self._build_request(**kwargs) if kwargs else None
+        req = kwargs.pop("req", None)
+        if req is None and kwargs:
+            req = self._build_request(**kwargs)
         return _get_adcp_capabilities_impl(req, identity)
 
     def call_a2a(self, **kwargs: Any) -> GetAdcpCapabilitiesResponse:
@@ -296,11 +311,12 @@ class CapabilitiesEnv(IntegrationEnv):
         the parameterless happy-path route — both are real production routes
         (salesagent-5yik, owner decision 2026-07-24: POST, matching the
         codebase's RPC-over-REST convention).
+
+        The request preamble (pop identity → commit factory data → client →
+        auth-dep override) is the base's ``_prepare_rest_request``; only the
+        verb choice is env-specific.
         """
-        identity = self._pop_rest_identity(kwargs)
-        self._commit_factory_data()
-        client = self.get_rest_client()
-        self._configure_rest_auth(identity)
+        client, _identity = self._prepare_rest_request(kwargs)
         if not kwargs:
             return client.get(endpoint)
         body = self.build_rest_body(**kwargs)

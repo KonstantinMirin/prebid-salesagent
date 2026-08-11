@@ -62,7 +62,7 @@ from src.core.schemas.account import (
     SyncResponseAccount,
 )
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
@@ -330,7 +330,7 @@ async def list_accounts(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_accounts_impl(req, identity)
 
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 # ---------------------------------------------------------------------------
@@ -2023,7 +2023,7 @@ async def sync_accounts(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)
 
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 # ---------------------------------------------------------------------------

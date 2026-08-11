@@ -17,7 +17,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
@@ -220,7 +220,7 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     """
     identity = resolve_identity_from_context(context, require_valid_token=False)
     response = await _get_signals_impl(req, identity)
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 def _build_activate_signal_request(
@@ -343,7 +343,7 @@ async def activate_signal(
     identity = resolve_identity_from_context(ctx)
     req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
     response = await _activate_signal_impl(req=req, identity=identity)
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 async def get_signals_raw(

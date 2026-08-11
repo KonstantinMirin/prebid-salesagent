@@ -42,7 +42,7 @@ from pydantic import Field
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 
 logger = logging.getLogger(__name__)
 
@@ -598,7 +598,7 @@ async def list_creative_formats(
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_creative_formats_impl(req, identity)
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 def list_creative_formats_raw(

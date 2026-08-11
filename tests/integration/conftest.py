@@ -510,10 +510,13 @@ def sample_products(integration_db, sample_tenant):
 @pytest.fixture(scope="function")
 def mcp_server(integration_db):
     """Start a real MCP server for integration testing using the test database."""
+    import shutil
     import socket
     import subprocess
     import sys
+    import tempfile
     import time
+    from pathlib import Path
 
     # Find an available port
     def get_free_port():
@@ -564,34 +567,41 @@ from src.core.main import mcp
 mcp.run(transport='http', host='0.0.0.0', port={port})
 """
 
-    # The server's output MUST go to a file, never a PIPE: nothing drains the
-    # pipe while tests run, so once the server had logged ~64KB (uvicorn access
-    # lines + app INFO + rich console output) its next logging `emit` blocked
-    # on the full pipe buffer and the server froze mid-request — the client's
-    # await never returned and the whole integration env wedged at whatever
-    # test happened to cross the threshold (observed hanging create_media_buy
-    # in four consecutive CI runs; py-spy showed the server MainThread inside
-    # logging emit → resolve_tenant_adapter_type). A file-backed stream cannot
-    # block the writer, and the startup-failure paths read it for diagnostics.
-    import tempfile
+    # The server's output goes to FILES, never PIPEs. A PIPE nobody drains caps
+    # at 64KB; once server logging fills it (uvicorn access lines + app INFO +
+    # rich console output), the server blocks on a log write INSIDE a request
+    # handler and the calling test awaits forever — py-spy showed the server
+    # MainThread parked in logging emit while create_media_buy hung for four
+    # consecutive runs, and this wedged every full CI run at integration's quiet
+    # tail until the >1h run reaper killed it (#1868 review). Files keep the
+    # error-path diagnostics below without needing a drainer thread.
+    output_dir = Path(tempfile.mkdtemp(prefix=f"mcp-server-{port}-"))
+    stdout_path = output_dir / "stdout.log"
+    stderr_path = output_dir / "stderr.log"
+    stdout_f = stdout_path.open("wb")
+    stderr_f = stderr_path.open("wb")
+    try:
+        process = subprocess.Popen(
+            [sys.executable, "-c", server_script],
+            env=env,
+            stdout=stdout_f,
+            stderr=stderr_f,
+        )
+    finally:
+        # The child inherited the fds; the parent's handles are not needed.
+        stdout_f.close()
+        stderr_f.close()
 
-    server_log = tempfile.NamedTemporaryFile(mode="w+b", prefix=f"mcp-server-{port}-", suffix=".log", delete=False)
-
-    def _server_log_tail(limit: int = 8000) -> str:
+    def _tail(path: Path, limit: int = 8000) -> str:
+        """Last `limit` bytes of a log file — a chatty server writes far more than a failure message needs."""
         try:
-            server_log.flush()
-            with open(server_log.name, "rb") as fh:
-                data = fh.read()
-            return data[-limit:].decode(errors="replace") if data else "N/A"
+            data = path.read_bytes()
         except OSError:
             return "N/A (log unreadable)"
+        return data[-limit:].decode(errors="replace") if data else "N/A"
 
-    process = subprocess.Popen(
-        [sys.executable, "-c", server_script],
-        env=env,
-        stdout=server_log,
-        stderr=subprocess.STDOUT,
-    )
+    def _server_output() -> str:
+        return f"STDOUT: {_tail(stdout_path)}\nSTDERR: {_tail(stderr_path)}"
 
     # Wait for server to be ready.
     # Server startup is dominated by Python imports (fastmcp + adcp SDK + project)
@@ -604,25 +614,30 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     start_time = time.time()
     server_ready = False
 
-    while time.time() - start_time < max_wait:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
-                s.connect(("localhost", port))
-                server_ready = True
-                break
-        except (ConnectionRefusedError, OSError):
-            # Check if process has died
-            if process.poll() is not None:
-                raise RuntimeError(f"MCP server process died unexpectedly.\nOUTPUT: {_server_log_tail()}")
-            time.sleep(0.3)
+    try:
+        while time.time() - start_time < max_wait:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(1)
+                    s.connect(("localhost", port))
+                    server_ready = True
+                    break
+            except (ConnectionRefusedError, OSError):
+                # Check if process has died
+                if process.poll() is not None:
+                    raise RuntimeError(f"MCP server process died unexpectedly.\n{_server_output()}")
+                time.sleep(0.3)
 
-    if not server_ready:
-        process.kill()
-        process.wait(timeout=5)
-        raise RuntimeError(
-            f"MCP server failed to start on port {port} within {max_wait}s.\nOUTPUT: {_server_log_tail()}"
-        )
+        if not server_ready:
+            process.kill()
+            process.wait(timeout=5)
+            raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\n{_server_output()}")
+    except BaseException:
+        # Both raise points above happen before yield, so pytest's generator-fixture
+        # teardown (the code after yield, including shutil.rmtree(output_dir) below)
+        # never runs for them -- clean up here instead, on every setup-failure path.
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
 
     # Return server info
     class ServerInfo:
@@ -642,11 +657,7 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-    server_log.close()
-    try:
-        os.unlink(server_log.name)
-    except OSError:
-        pass
+    shutil.rmtree(output_dir, ignore_errors=True)
 
     # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
 

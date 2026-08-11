@@ -29,7 +29,7 @@ from src.core.schemas import (
     ListCreativesResponse,
 )
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 
@@ -603,7 +603,7 @@ async def list_creatives(
         page=page,
         identity=identity,
     )
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 def list_creatives_raw(

@@ -10,7 +10,7 @@ from pydantic import Field
 
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 from ._sync import _sync_creatives_impl
@@ -70,7 +70,7 @@ async def sync_creatives(
         context=context,
         identity=identity,
     )
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 def sync_creatives_raw(

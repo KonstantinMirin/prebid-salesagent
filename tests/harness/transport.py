@@ -14,28 +14,34 @@ Usage::
 from __future__ import annotations
 
 import functools
-import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-_PINNED_ERROR_ENUM = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
-)
+from tests.helpers import pinned_schema
 
 
 @functools.lru_cache(maxsize=1)
 def _pinned_error_metadata() -> dict[str, dict[str, str]]:
-    """code -> {recovery, suggestion} from the pinned AdCP error-code enum.
+    """code -> {recovery, suggestion} from the installed SDK's error-code enum.
 
-    The pinned enum (@v3.1.1) is the authoritative recovery classification;
-    the installed SDK ships fewer codes and diverges on several recovery values,
-    so it is NOT used here (pin-wins).
+    The SDK tree is the single source of truth for schema SHAPE
+    (``tests/helpers/pinned_schema.py``). Sourcing this enum from it rather than
+    from the vendored ``tests/fixtures/adcp_schemas_pinned/`` copy is a no-op
+    today: both trees resolve to a byte-identical ``enumMetadata`` block (93
+    codes, ``recovery`` and ``suggestion`` equal for every one). The two sources
+    HAD diverged — the vendored copy sat at 65 codes — and were reconciled when
+    the fixture was regenerated against the pin.
+
+    Only ``recovery`` is read here (see ``assert_wire_error``);
+    ``extract_wire_suggestion`` below reads the WIRE's own suggestion text, not
+    this metadata. Consumers that grade ``suggestion`` CONTENT
+    (test_architecture_error_suggestion_enum_conformance.py) stay on the
+    vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources".
     """
-    return json.loads(_PINNED_ERROR_ENUM.read_text())["enumMetadata"]
+    return pinned_schema.load("error-code.json")["enumMetadata"]
 
 
 def is_pinned_error_code(code: str | None) -> bool:
@@ -184,7 +190,7 @@ class TransportResult:
         meta = _pinned_error_metadata()
         spec = meta.get(code)
         assert spec is not None, (
-            f"{code!r} is not a canonical AdCP error code (pinned error-code.json @v3.1.1). "
+            f"{code!r} is not a canonical AdCP error code (pinned error-code.json). "
             "Reconcile the feature to a canonical code."
         )
         expected_recovery = recovery if recovery is not None else spec["recovery"]

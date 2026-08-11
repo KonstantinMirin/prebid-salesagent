@@ -44,6 +44,17 @@ COMPOSE_FILE="docker-compose.e2e.yml"
 # concurrent runs never contend; the suffix just keeps container names distinct.
 # Compose rejects uppercase project names — lowercase whatever we're given.
 export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$$}" | tr '[:upper:]' '[:lower:]')"
+# The tests container runs as THIS user (docker-compose.e2e.yml `tests.user`), so
+# everything it writes into the bind-mounted repo -- test-results/, .tox/,
+# schemas/, logs -- is owned by whoever launched the run, on any host. Derived
+# here rather than written into compose: a literal uid is correct on exactly one
+# machine, and pinning the CI box's turned GitHub Actions red on `.tox`.
+#
+# Both are overridable. A host whose artifacts must stay writable by SEVERAL
+# identities (the CI box shares group `ci` across sacirunner and claudeuser)
+# exports TEST_GID to that shared group instead of taking the primary one.
+export TEST_UID="${TEST_UID:-$(id -u)}"
+export TEST_GID="${TEST_GID:-$(id -g)}"
 # The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
 # interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
@@ -198,15 +209,27 @@ echo "Running suites in-network (serial): $SUITES"
 RC=0
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -e "$SUITES" || RC=$?
 
-# tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
-# (kept off the bind mount so venvs don't live on the slow host tree). The host
-# .tox is therefore empty — extract the reports from the volume with a throwaway
-# container before the cleanup trap runs `down -v` and removes it.
-echo "Extracting JSON reports from the tox_data volume..."
-docker run --rm \
-    -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
-    -v "$(pwd)/${RESULTS_DIR}:/out" \
-    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true' || true
+# tox writes per-suite JSON into /app/.tox, which is a plain bind-mounted dir
+# now (Aug 2026: the tox_data named volume it used to live on was removed --
+# a fresh named volume's mountpoint is always created root:root by the Docker
+# daemon regardless of the tests container's own `user:` override, which
+# permanently blocked the non-root test runner from `.tox/<env>` on every
+# single run). No throwaway extraction container needed any more -- .tox is
+# just a normal host directory, already right where $RESULTS_DIR is.
+echo "Collecting JSON reports..."
+# Loud, not silent (Aug 2026): this used to be `2>/dev/null || true`, which
+# once ate a real failure completely silently -- a full 23-minute run
+# finished clean (exit 0, all 7 suites really passed, .tox/*.json all
+# present and correct) but test-results/ never got populated, with zero
+# trace of why. Re-mkdir defensively right before copying (idempotent, cheap
+# insurance against $RESULTS_DIR having been removed or never created for
+# any reason) and let a real failure actually say something instead of
+# vanishing 23 minutes of work without a trace.
+mkdir -p "$RESULTS_DIR"
+if ! cp .tox/*.json "$RESULTS_DIR/"; then
+    echo "WARNING: failed to copy JSON reports into $RESULTS_DIR/ -- see error above." >&2
+    echo "         Reports are still in .tox/*.json inside $(pwd) if you need them by hand." >&2
+fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
