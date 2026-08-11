@@ -145,7 +145,13 @@ dc build postgres adcp-server proxy tests
 # drwxr-sr-x -- not group-writable -- and are latent failures until fixed).
 # This must stay ahead of the TLS step below too: that step's fallback runs a
 # `tests` container, which would otherwise be the one to create logs/ first.
-mkdir -p logs && chmod 2775 logs
+mkdir -p logs
+# Guarded, not silent: chmod on a logs/ that already exists owned by ANOTHER
+# uid fails with EPERM, and a bare `chmod` here would abort the whole script
+# under `set -e` -- so tolerate the failure, but do NOT assume it worked. The
+# verification below is what turns a still-broken state into a diagnosable
+# error instead of a collection-time PermissionError 200 lines later.
+chmod 2775 logs 2>/dev/null || true
 # The setgid bit above fixes the GROUP of files created in here, but NOT their
 # write bit -- that comes from the creating process's umask, and adcp-server's
 # yields 0644. So a FRESH logs/ still ends up with `-rw-r--r-- ci:ci`
@@ -171,9 +177,22 @@ mkdir -p logs && chmod 2775 logs
 # sinks structured.jsonl and security.jsonl. security.jsonl only appears on a
 # security event, so it is the one that hides longest before biting.
 for _log in audit.log error.log structured.jsonl security.jsonl; do
-    rm -f "logs/$_log"
-    touch "logs/$_log"
-    chmod 664 "logs/$_log"
+    rm -f "logs/$_log" 2>/dev/null || true
+    : >"logs/$_log" 2>/dev/null || true
+    chmod 664 "logs/$_log" 2>/dev/null || true
+    # Verify rather than hope. `-w` would test OUR access; what actually
+    # matters is the GROUP write bit, because the tests container is a
+    # different uid that reaches these files through the shared group. find
+    # -perm is used over `stat` because stat's flags differ between the GNU
+    # coreutils on the CI box and the BSD one on a macOS host, and this
+    # script runs on both.
+    if [ -z "$(find "logs/$_log" -perm -g+w 2>/dev/null)" ]; then
+        echo "ERROR: logs/$_log is not group-writable; the tests container runs as a" >&2
+        echo "       different uid in the same group and will die at collection with" >&2
+        echo "       PermissionError. Current state:" >&2
+        ls -la "logs/$_log" logs/ >&2 || true
+        exit 1
+    fi
 done
 
 # TLS material for the tls-proxy service and the per-worker sidecars below. It
