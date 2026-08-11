@@ -160,7 +160,17 @@ fi
 # reached by service name. tls-proxy is in this explicit list deliberately: it is
 # a normal `up` service, and omitting it would leave E2E_TLS_BASE_URL pointing at
 # nothing while every https scenario reported green on the http branch.
-dc up -d postgres adcp-server proxy tls-proxy creative-pg creative-agent
+# webhook-capture and counterparty-origin are in this list deliberately: they are
+# ORIGINS the SERVER dials, routed by SNI through tls-proxy, and a service that is
+# declared in compose but never started answers 502 from nginx — which reads as a
+# verifier or signing failure three assertions later rather than as a missing
+# service. (salesagent-mp53.9 shipped webhook-capture without adding it here and
+# got away with it only because nothing in-network dialled it yet: its egress test
+# checks DNS and gate arithmetic, and its contract test runs the service
+# in-process. salesagent-mp53.8's counterparty walk is the first leg that actually
+# needs an origin up, and it failed exactly this way.) The guard
+# tests/unit/test_architecture_e2e_origin_services_start.py pins the pairing.
+dc up -d postgres adcp-server proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))

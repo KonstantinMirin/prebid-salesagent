@@ -406,6 +406,92 @@ async def fetch_capabilities(client: httpx.AsyncClient, path: str = "/api/v1/cap
     return response.json()
 
 
+def buyer_headers(token: str) -> dict[str, str]:
+    """Wire headers for a buyer driving one of this suite's tenants over A2A.
+
+    No ``x-adcp-tenant``: the tenant resolves from the Host header the client sends.
+    That is the same exact-string ``virtual_host`` match the signing posture is derived
+    from, so routing by header here would let the request reach one tenant while the
+    posture was computed for another.
+    """
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+async def post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: str, token: str) -> dict[str, Any]:
+    """POST one A2A JSON-RPC envelope, naming the leg in every failure mode.
+
+    A bare ``httpx.ReadTimeout`` out of a multi-request flow says nothing about WHICH
+    request hung, which is the difference between a slow discovery hop and a delivery
+    that never started.
+    """
+    try:
+        response = await client.post("/a2a", json=message, headers=buyer_headers(token))
+    except httpx.TimeoutException as exc:
+        raise AssertionError(f"the A2A {leg} request timed out against the live stack: {exc!r}") from exc
+    assert response.status_code == 200, (
+        f"the A2A {leg} request must succeed; got HTTP {response.status_code}: {response.text[:600]!r}"
+    )
+    return response.json()
+
+
+def a2a_data_part(a2a_response: dict[str, Any]) -> dict[str, Any] | None:
+    """The AdCP payload out of an A2A JSON-RPC result's first data part."""
+    for artifact in (a2a_response.get("result") or {}).get("artifacts") or []:
+        for part in artifact.get("parts") or []:
+            if part.get("kind") == "data" and "data" in part:
+                return part["data"]
+    return None
+
+
+async def published_jwks_for_agent(
+    client: httpx.AsyncClient, *, brand_json_url: str, agent_url: str
+) -> tuple[dict[str, Any], str]:
+    """The JWKS a receiver resolves for *agent_url*, and the single ``kid`` it carries.
+
+    The receiver's own key-resolution hop: fetch the trust root, find the ``sales``
+    ``agents[]`` entry whose ``url`` BYTE-EQUALS *agent_url* (``security.mdx`` @ v3.1.1
+    :1104 step 5 — "no canonicalization at this step"), and fetch its ``jwks_uri``. Every
+    address is read out of a served document; nothing is written down by the caller.
+
+    Deliberately NOT folded together with ``test_webhook_signature_e2e``'s
+    ``_walk_discovery_to_jwks``, which looks similar and is a different operation: that
+    one matches against the AGENT CARD's interface url and additionally grades
+    ``check_key_origin_consistency`` and the capabilities/identity cross-check, because
+    those are E2E-3's own obligations. This one matches against a url that arrived on the
+    WIRE — the ``seller_agent_url`` a challenge named — which is the whole point at the
+    call site: a challenge whose ``seller_agent_url`` resolves to no published key is one
+    no receiver can verify, however well formed the signature is.
+    """
+    brand_response = await client.get(brand_json_url)
+    assert brand_response.status_code == 200, (
+        f"the trust root must resolve over TLS at {brand_json_url!r}; got HTTP {brand_response.status_code}"
+    )
+    brand = brand_response.json()
+
+    matching = [
+        entry for entry in (brand.get("agents") or []) if entry.get("type") == "sales" and entry.get("url") == agent_url
+    ]
+    assert len(matching) == 1, (
+        f"the served brand.json must carry exactly one sales agents[] entry whose url byte-equals {agent_url!r} — "
+        "that is the match a receiver performs before it can resolve a key; served "
+        f"{[entry.get('url') for entry in (brand.get('agents') or [])]}"
+    )
+    jwks_uri = matching[0]["jwks_uri"]
+
+    jwks_response = await client.get(jwks_uri)
+    assert jwks_response.status_code == 200, (
+        f"the advertised JWKS must resolve over TLS at {jwks_uri!r}; got HTTP {jwks_response.status_code}"
+    )
+    jwks = jwks_response.json()
+    keys = jwks.get("keys") or []
+    assert len(keys) == 1, (
+        f"the JWKS at {jwks_uri!r} must carry exactly the one key this tenant was provisioned with; it carries "
+        f"{len(keys)}. An empty key set is the shape production shipped (salesagent-7x8t), and a verifier would "
+        f"have nothing to resolve. Document: {jwks!r}"
+    )
+    return jwks, keys[0]["kid"]
+
+
 def _admin_post_expecting_flash(
     base_url: str,
     *,

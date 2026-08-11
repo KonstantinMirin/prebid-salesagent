@@ -47,6 +47,7 @@ import socket
 import pytest
 
 from src.core.security.url_validator import check_url_ssrf, is_reserved_tld_host
+from tests.e2e.conftest import e2e_in_network
 
 #: The success-leg receiver (OWNER DECISION 4, salesagent-mp53.9). Kept as a
 #: literal here rather than imported from the compose wiring: this module's whole
@@ -72,19 +73,8 @@ STILL_REFUSED_URLS = (
 )
 
 
-def in_network() -> bool:
-    """Whether this process runs INSIDE the compose network rather than on the host.
-
-    The in-network runner addresses the stack by service name (``ADCP_TEST_HOST``
-    = ``proxy``); the host path reaches published ports on localhost and cannot
-    resolve a compose alias at all, so the DNS-shaped claims below are only
-    meaningful here.
-    """
-    return os.getenv("ADCP_TEST_HOST", "localhost") not in {"localhost", "127.0.0.1"}
-
-
 requires_in_network = pytest.mark.skipif(
-    not in_network(),
+    not e2e_in_network(),
     reason="in-network only: a compose alias is not resolvable from the host path (set ADCP_TEST_HOST)",
 )
 

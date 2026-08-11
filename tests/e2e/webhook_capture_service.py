@@ -52,10 +52,37 @@ import json
 import re
 import threading
 from collections.abc import Iterator
+from urllib.parse import parse_qs
 
 from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name, serve_forever_in_thread
 
 _WEBHOOK_PATH_RE = re.compile(r"^/webhook/(?P<key>[^/]+)/?$")
+
+#: The query parameter that puts one delivery into ECHO mode (salesagent-mp53.4).
+_ECHO_PARAM = "echo"
+
+#: The REQUEST field carrying the value to echo. Always this one, whatever the
+#: response is spelled as: the spec defines the challenge document's field, and
+#: the two accepted RESPONSE spellings ("challenge" / "token") are a property of
+#: the answer, not of what the receiver reads.
+_CHALLENGE_FIELD = "challenge"
+
+
+def webhook_path(key: str, *, echo: str | None = None) -> str:
+    """The delivery path for *key*, optionally in echo mode.
+
+    Echo mode is named IN THE URL rather than configured on the service, and that
+    is the whole point: proof-of-control is decided by what the receiver answers
+    to ONE challenge, so "echoes" and "does not echo" must be two different
+    destinations a registration can point at — not two states of one receiver
+    that a test flips between. A side channel would let the echoing and
+    non-echoing legs race each other, and would make the non-echo control
+    ("answers 2xx WITHOUT the echo must NOT activate") depend on ordering.
+
+    The receiver stays honest either way: it captures the wire identically in
+    both modes, so a challenge is recorded whether or not it is echoed back.
+    """
+    return f"/webhook/{key}" if echo is None else f"/webhook/{key}?{_ECHO_PARAM}={echo}"
 
 
 class _CaptureStore:
@@ -117,7 +144,11 @@ class _CaptureRequestHandler(JsonRequestHandler):
         self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
 
     def _handle_webhook(self, method: str) -> None:
-        match = _WEBHOOK_PATH_RE.match(self.path)
+        # Split the query FIRST: the path regex is anchored, so a delivery in
+        # echo mode (`/webhook/<key>?echo=challenge`) would otherwise 404 as if
+        # the key were malformed.
+        path, _, query = self.path.partition("?")
+        match = _WEBHOOK_PATH_RE.match(path)
         if not match:
             self._write_json(404, {"error": f"no key in path {self.path!r}"})
             return
@@ -125,13 +156,13 @@ class _CaptureRequestHandler(JsonRequestHandler):
         store: _CaptureStore = self.server.store  # type: ignore[attr-defined]
 
         if method == "POST":
-            self._handle_delivery(key, store)
+            self._handle_delivery(key, store, echo_field=parse_qs(query).get(_ECHO_PARAM, [None])[0])
         elif method == "GET":
             self._write_json(200, store.get(key))
         elif method == "DELETE":
             self._write_json(200, store.drain(key))
 
-    def _handle_delivery(self, key: str, store: _CaptureStore) -> None:
+    def _handle_delivery(self, key: str, store: _CaptureStore, *, echo_field: str | None = None) -> None:
         """Capture the wire unconditionally; answer 400 if the body was not JSON.
 
         The capture happens BEFORE the parse decision so an unparseable delivery
@@ -140,6 +171,21 @@ class _CaptureRequestHandler(JsonRequestHandler):
         quiet 200 to a body we could not read would let a sender's corruption
         pass as a successful delivery, which is the failure this service exists
         to make visible.
+
+        In ECHO mode (salesagent-mp53.4) the answer carries the challenge value
+        read back OUT OF THE POSTED BODY — never a value the receiver was
+        configured with. A receiver that echoed a preloaded constant would answer
+        correctly to a challenge it never actually read, which is precisely the
+        proof-of-control failure the echo exists to detect.
+
+        ``?echo=`` names only the RESPONSE key: the spec lets a receiver answer
+        ``{"challenge": ...}`` or ``{"token": ...}`` and the SDK's
+        ``validate_webhook_challenge_response`` accepts either, so both spellings
+        must be exercisable. The value is always read from the request's
+        ``challenge`` field, because that is the one field the spec says the
+        receiver echoes — keying the read off the response spelling instead would
+        make the ``token`` leg answer ``null`` and pass only because nothing
+        compared it.
         """
         raw = self._read_raw_body()
         wire = self._wire_entry(raw)
@@ -150,6 +196,9 @@ class _CaptureRequestHandler(JsonRequestHandler):
             self._write_json(400, {"error": f"body is not valid JSON: {exc}", **store.get(key)})
             return
         store.append(key, wire=wire, payload=payload)
+        if echo_field is not None:
+            self._write_json(200, {echo_field: payload.get(_CHALLENGE_FIELD)})
+            return
         self._write_json(200, store.get(key))
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler name

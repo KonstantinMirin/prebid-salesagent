@@ -55,10 +55,12 @@ import httpx
 import pytest
 
 from tests.e2e._signing_e2e import (
+    a2a_data_part,
     ca_verified_ssl_context,
     declaring_tenant_provisioner,
     fetch_capabilities,
     netloc,
+    post_a2a,
     provision_signing_key_via_admin,
     tls_base_url,
 )
@@ -165,7 +167,7 @@ async def _fire_one_delivery(client: httpx.AsyncClient, receiver: dict) -> None:
         ),
         push_notification_config={"url": receiver["url"]},
     )
-    result = await _post_a2a(client, message, leg="create_media_buy")
+    result = await post_a2a(client, message, leg="create_media_buy", token=_BUYER_TOKEN)
     assert "error" not in result, f"the A2A create_media_buy returned an error: {result['error']!r}"
 
 
@@ -177,8 +179,8 @@ async def _discover_product_and_pricing(client: httpx.AsyncClient) -> tuple[str,
     valid without this module restating that derivation rule.
     """
     message = build_a2a_message_send(skill="get_products", parameters={"brand": {"domain": "testbrand.com"}})
-    result = await _post_a2a(client, message, leg="get_products")
-    products = (_a2a_data_part(result) or {}).get("products") or []
+    result = await post_a2a(client, message, leg="get_products", token=_BUYER_TOKEN)
+    products = (a2a_data_part(result) or {}).get("products") or []
     assert products, (
         "the seeded tenant must expose at least one product with a pricing option, or there is nothing "
         f"to buy and no delivery to sign. A2A response: {str(result)[:600]!r}"
@@ -186,42 +188,6 @@ async def _discover_product_and_pricing(client: httpx.AsyncClient) -> tuple[str,
     pricing_options = products[0].get("pricing_options") or []
     assert pricing_options, f"product {products[0].get('product_id')!r} exposes no pricing_options: {products[0]!r}"
     return products[0]["product_id"], pricing_options[0]["pricing_option_id"]
-
-
-async def _post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: str) -> dict[str, Any]:
-    """POST one A2A JSON-RPC envelope, naming the leg in every failure mode.
-
-    A bare ``httpx.ReadTimeout`` out of a two-request flow says nothing about WHICH
-    request hung, which is the difference between a slow discovery hop and a delivery
-    that never started.
-    """
-    try:
-        response = await client.post("/a2a", json=message, headers=_buyer_headers())
-    except httpx.TimeoutException as exc:
-        raise AssertionError(f"the A2A {leg} request timed out against the live stack: {exc!r}") from exc
-    assert response.status_code == 200, (
-        f"the A2A {leg} request must succeed; got HTTP {response.status_code}: {response.text[:600]!r}"
-    )
-    return response.json()
-
-
-def _a2a_data_part(a2a_response: dict[str, Any]) -> dict[str, Any] | None:
-    """The AdCP payload out of an A2A JSON-RPC result's first data part."""
-    for artifact in (a2a_response.get("result") or {}).get("artifacts") or []:
-        for part in artifact.get("parts") or []:
-            if part.get("kind") == "data" and "data" in part:
-                return part["data"]
-    return None
-
-
-def _buyer_headers() -> dict[str, str]:
-    """No ``x-adcp-tenant``: the tenant resolves from the Host header the client sends.
-
-    That is the same exact-string ``virtual_host`` match the signing posture is derived
-    from, so routing by header here would let the request reach one tenant while the
-    posture was computed for another.
-    """
-    return {"Authorization": f"Bearer {_BUYER_TOKEN}", "Content-Type": "application/json"}
 
 
 def _await_deliveries(receiver: dict) -> list[CapturedWebhook]:
