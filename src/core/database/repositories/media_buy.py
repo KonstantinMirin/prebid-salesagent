@@ -16,10 +16,10 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from src.core.database.models import MediaBuy, MediaPackage
+from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
@@ -39,7 +39,9 @@ class MediaBuyRepository:
         tenant_id: Tenant scope for all queries.
     """
 
-    _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "media_buy_id", "created_at"})
+    # "revision" is repository-managed (bumped on every successful mutation);
+    # callers may never write it directly — see _bump_revision.
+    _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "media_buy_id", "created_at", "revision"})
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
 
     def __init__(self, session: Session, tenant_id: str) -> None:
@@ -430,6 +432,52 @@ class MediaBuyRepository:
         self._session.flush()
         return media_buy
 
+    @staticmethod
+    def _bump_revision(media_buy: MediaBuy) -> None:
+        """Increment the persisted monotonic revision counter by 1.
+
+        Assigning a SQL expression rather than doing a Python read-modify-write is
+        deliberate: it emits ``UPDATE ... SET revision = coalesce(revision, 0) + 1``,
+        so the database serializes concurrent bumps. A read-modify-write would let
+        two mutations that read the same value write the same value, and ``revision``
+        is the buyer's optimistic-concurrency token — it MUST strictly increase on
+        every successful mutation, including two landing in the same clock tick.
+
+        Note the attribute is left holding an expression until the next refresh, so
+        callers must not read ``media_buy.revision`` between this call and the flush.
+        """
+        media_buy.revision = func.coalesce(MediaBuy.revision, 0) + 1
+
+    @staticmethod
+    def _stamp_confirmation_if_needed(media_buy: MediaBuy) -> bool:
+        """Write ``confirmed_at`` the first time the buy reaches a committed status.
+
+        Write-once by design: ``confirmed_at`` is the instant the seller committed to
+        running the buy, so it must stay stable across every later transition rather
+        than tracking the most recent one. Returns whether it stamped.
+        """
+        if media_buy.confirmed_at is not None:
+            return False
+        if not is_media_buy_seller_confirmed(media_buy.status):
+            return False
+        media_buy.confirmed_at = datetime.datetime.now(datetime.UTC)
+        return True
+
+    def bump_revision(self, media_buy_id: str) -> MediaBuy | None:
+        """Bump the revision counter for mutations that persist outside this class.
+
+        Package-level writes (pause, targeting overlay, budget) change what the buyer
+        sees on the media buy, so they move its concurrency token too — but they
+        persist directly on the session rather than through update_status /
+        update_fields, which would otherwise leave the token stale.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        if media_buy is None:
+            return None
+        self._bump_revision(media_buy)
+        self._session.flush()
+        return media_buy
+
     def update_status(
         self,
         media_buy_id: str,
@@ -450,6 +498,11 @@ class MediaBuyRepository:
             media_buy.approved_at = approved_at
         if approved_by is not None:
             media_buy.approved_by = approved_by
+        # Stamp before bumping: _bump_revision leaves revision holding a SQL
+        # expression, and reading any attribute after that can trigger a refresh
+        # mid-mutation. The stamp reads status and confirmed_at, so it goes first.
+        self._stamp_confirmation_if_needed(media_buy)
+        self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
@@ -460,7 +513,7 @@ class MediaBuyRepository:
         Returns the updated MediaBuy, or None if not found in this tenant.
         Raises ValueError if any kwarg is not a valid MediaBuy attribute or
         if the caller attempts to update an immutable field (tenant_id,
-        media_buy_id, created_at).
+        media_buy_id, created_at, revision).
         """
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
@@ -472,6 +525,10 @@ class MediaBuyRepository:
             if not hasattr(media_buy, key):
                 raise ValueError(f"MediaBuy has no attribute {key!r}")
             setattr(media_buy, key, value)
+        # Same ordering rule as update_status: stamp (which reads attributes) before
+        # the bump (which replaces one with a SQL expression).
+        self._stamp_confirmation_if_needed(media_buy)
+        self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
