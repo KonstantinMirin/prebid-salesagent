@@ -90,44 +90,6 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
-# Every AdCP response schema composes the same shared Protocol Envelope arm
-# (core/protocol-envelope.json) via a top-level allOf, and that arm spec-requires
-# exactly one field: "status". Excluding it from requiredness grading is NOT a
-# layering principle — it is a temporary concession, now down to one tracked
-# model gap: SyncAccountsResponse genuinely does not declare status (GH #1900).
-#
-# The two MECHANICAL limits this exclusion also used to buy time for are fixed
-# as of the allOf-`properties` merge in _merge_composed: the property walk no
-# longer reports an envelope field as required-but-undefined (that was 7 failures
-# on test_declared_fields_present_in_schema_and_model), and _synthesize_sample
-# now reads a real per-field spec instead of an empty one, so status resolves
-# through its $ref to a valid enum member rather than the string
-# 'test_status_value' (that was 4 more on test_required_fields_enforced).
-#
-# Measured, not estimated: empty this frozenset today and the suite goes to 2
-# failures — SyncAccountsResponse with a missing required key, and the meta-test
-# below. The other 10 of the 11 registered models already carry a spec-correct
-# default for status, inherited straight from their adcp library base, and pass
-# through the model_defaulted branch of test_required_fields_enforced. So the
-# exclusion buys time for exactly one model fix; it does not assert that the
-# response model is the wrong layer for status.
-#
-# (For the record, the two claims this comment used to make are both false, and
-# citing them misled a reviewer: _serialize_for_a2a stamps only message/success,
-# never status — src/a2a_server/adcp_a2a_server.py:1350-1383 — and the
-# message/context_id precedent in tests/helpers/adcp_schema_validator.py:223-229
-# decided the OPPOSITE, to grade those fields at the wire layer rather than
-# exempt them.)
-#
-# Derived from the pin, never transcribed — a hand-copied list is exactly how
-# the stale rationale above drifted from the schema it described. The sole
-# consumer subtracts this from an allOf arm's `required` set, so envelope
-# properties the pin marks OPTIONAL need no listing: they cannot appear there.
-# If some future DOMAIN arm does require one (say message), grading it is then
-# correct, and the derived set lets it through where a hand-copied list of all
-# 11 envelope properties would have silently swallowed it.
-_PROTOCOL_ENVELOPE_FIELDS: frozenset[str] = frozenset(pinned_schema.load("core/protocol-envelope.json")["required"])
-
 # Fields the SDK's current schema tree defines but the local model does not yet
 # model. These are spec-vs-library mismatches, not bugs in our code.
 #
@@ -164,8 +126,8 @@ def _unsynthesized_guess(field_name: str) -> str:
     refuse it instead of feeding it to a model. A guess is not a sample: it is the
     generator saying "I could not derive this", and passing it on is what turned a
     mechanical gap in the instrument into a false conformance failure against
-    production code (the 'test_status_value' failures that bought
-    _PROTOCOL_ENVELOPE_FIELDS its exclusion in the first place).
+    production code (the 'test_status_value' failures that once bought the envelope
+    'status' its blanket exclusion from requiredness grading).
     """
     return f"test_{field_name}_value"
 
@@ -894,16 +856,16 @@ def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
     silently drops out of grading instead of failing loudly (the exact bug
     class this suite exists to catch).
 
-    The shared Protocol Envelope arm's own required field — ``status``, the only
-    one the pin requires — is subtracted back out via ``_PROTOCOL_ENVELOPE_FIELDS``.
-    That exclusion is a temporary suite limitation, not a statement about layers;
-    see that constant's comment for the three fixes that retire it.
+    This includes the shared Protocol Envelope arm's own ``status``. It used to be
+    subtracted back out; nothing is excluded now, so a pin bump that adds a second
+    envelope-required field lands directly as alignment failures on every model
+    lacking it — forcing the same per-field decision, at the location that needs it.
     """
     required: set[str] = set()
     for arm in schema.get("allOf", []) or []:
         resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
         required |= set(resolved.get("required", []))
-    return required - _PROTOCOL_ENVELOPE_FIELDS
+    return required
 
 
 def _standard_branch_required_fields(schema: dict[str, Any]) -> set[str]:
@@ -997,8 +959,8 @@ def _synthesize_sample(arm: dict[str, Any], schema_ref: str) -> dict[str, Any]:
     through. That is the whole design correction: an instrument that cannot measure a
     field must fail loudly AT that field, not quietly hand the model a value the spec
     never allowed and report the resulting ValidationError as a conformance failure in
-    production code. This is the class of false failure that _PROTOCOL_ENVELOPE_FIELDS
-    was created to suppress — and suppressing a whole field's grading to silence an
+    production code. This is the class of false failure that the envelope-status
+    exclusion was created to suppress — and suppressing a whole field's grading to silence an
     instrument bug costs far more than one located error demanding either a generator
     rule or an explicit sample_override, both of which already exist.
     """
@@ -1148,8 +1110,8 @@ class TestSampleSynthesisFailsLoud:
     Graded here because the failure mode is silence: a _synthesize_sample that
     quietly returns a guessed string does not break anything visibly — it hands a
     model a value the spec never allowed, and the ValidationError that follows
-    reads as a conformance bug in production code. That misreading is what bought
-    _PROTOCOL_ENVELOPE_FIELDS its exclusion, so 'raises instead of guessing' is a
+    reads as a conformance bug in production code. That misreading is what bought the
+    envelope-status exclusion its existence, so 'raises instead of guessing' is a
     behaviour this suite has to keep, not an implementation detail.
     """
 
@@ -1185,26 +1147,6 @@ class TestSampleSynthesisFailsLoud:
 
 class TestResponseModelAlignment:
     """Local success models conform to the pinned AdCP response schemas."""
-
-    def test_protocol_envelope_requires_only_status(self):
-        """The envelope exclusion still covers exactly the one field it was scoped to.
-
-        ``_PROTOCOL_ENVELOPE_FIELDS`` is subtracted out of requiredness grading,
-        so anything it contains is a field this suite does NOT check. It is
-        derived from the pin, which means a pin bump that starts requiring a
-        second envelope field (``timestamp``, say) would widen the exclusion on
-        its own and drop that field out of grading with nobody deciding to.
-
-        Fail loudly here instead. A failure is not a bug in this test: it means
-        the pin moved and someone must choose — grade the new field, or exclude
-        it deliberately with its own recorded reason.
-        """
-        assert _PROTOCOL_ENVELOPE_FIELDS == frozenset({"status"}), (
-            f"pinned core/protocol-envelope.json now requires "
-            f"{sorted(_PROTOCOL_ENVELOPE_FIELDS)}, not just ['status'] — the "
-            f"requiredness exclusion silently widened with the pin bump. Decide "
-            f"per new field whether it is graded or excluded, then update this test."
-        )
 
     @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
     def test_declared_fields_present_in_schema_and_model(self, alignment: ResponseAlignment):
