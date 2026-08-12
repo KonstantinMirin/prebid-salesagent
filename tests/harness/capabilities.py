@@ -32,6 +32,7 @@ beads: salesagent-4sn7 (#1592 / #1210)
 from __future__ import annotations
 
 import asyncio
+from enum import Enum
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -49,6 +50,26 @@ DEFAULT_ADAPTER_CHANNELS = ["display", "social", "ctv"]
 #: :meth:`CapabilitiesEnv.declare_signing`. A single-label host derives ``http://``,
 #: which no conformant ``identity.brand_json_url`` can be built from.
 SIGNING_AGENT_HOST = "seller-capabilities.example.com"
+
+
+class IdentityMode(Enum):
+    """How :meth:`CapabilitiesEnv.declare_signing` treats the ``identity`` block.
+
+    A posture that names an operation bucket fires the pinned
+    ``identity.brand_json_url`` ``required_when``, so whether identity is DERIVED,
+    ABSENT or an empty object is the very thing the boundary rows grade. ``None``
+    is deliberately NOT overloaded to mean "omit": a caller passing
+    ``identity=None`` almost always means "I have no opinion", which is DERIVE.
+    """
+
+    #: Attach the derived ``brand_json_url`` iff the posture names a bucket (default).
+    DERIVE = "derive"
+    #: Declare the posture with NO identity block at all — the invalid boundary.
+    OMIT = "omit"
+
+
+DERIVE_IDENTITY = IdentityMode.DERIVE
+OMIT_IDENTITY = IdentityMode.OMIT
 
 #: docker-compose.e2e.yml's adcp-server service, whose environment names the ONE
 #: KEK the LIVE SERVER CONTAINER holds. e2e_rest scenarios resolve a provisioned
@@ -138,6 +159,7 @@ class CapabilitiesEnv(IntegrationEnv):
         request_signing: dict[str, Any] | None = None,
         keyed_alg: str | None = None,
         host: str = SIGNING_AGENT_HOST,
+        identity: dict[str, Any] | IdentityMode = DERIVE_IDENTITY,
     ) -> None:
         """Put this tenant in a state where a signing posture is real (#1291 D1).
 
@@ -165,6 +187,14 @@ class CapabilitiesEnv(IntegrationEnv):
            actually serves — so the value has to come from
            ``src.core.agent_identity.brand_json_url``, never a literal.
 
+        *identity* selects which of the three states load 3 realizes, because the
+        ``required_when`` boundary rows grade the pointer's ABSENCE as much as its
+        presence: :data:`DERIVE_IDENTITY` (default) keeps the derivation above,
+        :data:`OMIT_IDENTITY` declares the posture with no identity block, and a literal
+        dict (``{}`` for the empty-identity partition) is declared verbatim. The other
+        two loads stay in force in every mode — the rows that need identity absent still
+        need the dotted host and, where keyed, the minted key.
+
         Not decorated with ``@realize_e2e``: every step is a real write (the ``tenants``
         row, the ``signing_keys`` row) that a live server reads back through its own
         session, so no test-only injection seam is needed and the e2e escape-hatch pin
@@ -184,13 +214,18 @@ class CapabilitiesEnv(IntegrationEnv):
         from src.core.signing.posture import RequestSigningPosture
 
         blocks: dict[str, Any] = {"request_signing": request_signing}
-        # The pointer is declared ONLY where the posture obliges one, so a row that
-        # declares `supported` and nothing else keeps grading the conservative default
-        # (which fires no required_when trigger) rather than a trust-root-bearing posture.
-        if request_signing_buckets_declared(RequestSigningPosture(**request_signing)):
-            tenant = self.get_one(Tenant, tenant_id=self._tenant_id)
-            assert tenant is not None, "the tenants row must exist before its identity URLs are derived"
-            blocks["identity"] = {"brand_json_url": brand_json_url(tenant)}
+        if isinstance(identity, IdentityMode):
+            # The pointer is declared ONLY where the posture obliges one, so a row that
+            # declares `supported` and nothing else keeps grading the conservative default
+            # (which fires no required_when trigger) rather than a trust-root-bearing posture.
+            if identity is IdentityMode.DERIVE and request_signing_buckets_declared(
+                RequestSigningPosture(**request_signing)
+            ):
+                tenant = self.get_one(Tenant, tenant_id=self._tenant_id)
+                assert tenant is not None, "the tenants row must exist before its identity URLs are derived"
+                blocks["identity"] = {"brand_json_url": brand_json_url(tenant)}
+        else:
+            blocks["identity"] = dict(identity)
         self.declare_capabilities(**blocks)
 
     def _provision_signing_key(self, alg: str) -> None:
