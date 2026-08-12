@@ -25,13 +25,21 @@ codes (4 textual divergences), which is why only this reader migrated.
 Reproduce the fixture count: ``uv run python3 -c "import json;
 print(len(json.load(open('tests/fixtures/adcp_schemas_pinned/enums/error-code.json'))['enum']))"``
 -> 64 (see docs/adcp-spec-version.md "Pinned schema sources" for the full measurement).
+
+The final section extends the same oracle to ``src/``'s own wire-code tables:
+``src.core.exceptions`` must expose ``RECOVERY_BY_WIRE_CODE``, machine-read from
+the same normative ``enumMetadata`` block, and no other table in that module may
+answer a recovery question. This file keeps its OWN independent load of the pin
+(``_pinned_recovery_by_code`` below) and grades src's table against it — never
+the reverse — so the oracle also catches a bug in src's loader.
 """
 
 from __future__ import annotations
 
 import pytest
+from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import ERROR_CODE_MAPPING, AdCPError, translate_error_code
+from src.core.exceptions import ERROR_CODE_MAPPING, WIRE_STANDARD_CODES, AdCPError, translate_error_code
 from tests.helpers import pinned_schema
 
 
@@ -147,4 +155,114 @@ def test_internal_only_codes_are_documented() -> None:
         f"New non-spec error code(s) {sorted(unexpected)} are not in the pinned enum and so "
         f"escape the recovery oracle. Either add the code to the AdCP error-code enum (and the "
         f"pin) or, if it is genuinely internal-only, add it to known_internal here."
+    )
+
+
+# ---------------------------------------------------------------------------
+# src-side mirror: the production recovery table IS the pin, machine-read
+# ---------------------------------------------------------------------------
+# The normative enumMetadata block is currently machine-read only by this test
+# helper, so nothing in src/ can consult it and every production recovery value
+# is hand-typed. These three tests grade the src-side table that fixes that:
+# it must equal the pin exactly, it must classify every code src can put on the
+# wire, and it must be the ONLY table in exceptions.py that answers a recovery
+# question (WIRE_STANDARD_CODES answers membership only).
+
+# The two spec codes the SDK helper table has not caught up to; the pinned enum
+# defines both (CREATIVE_NOT_FOUND correctable, CONFIGURATION_ERROR terminal),
+# so they are wire codes src can emit and must therefore be classified.
+_SUPPLEMENT_WIRE_CODES = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+
+
+def _src_recovery_by_wire_code() -> dict[str, str]:
+    """The production recovery table, imported inside the test body.
+
+    Deliberately NOT a module-level import. While ``RECOVERY_BY_WIRE_CODE`` does
+    not exist in src/, a module-level import would make this whole file a
+    collection ERROR and silently un-grade the four oracles above; function-local,
+    its absence is a FAILED result on the three obligations below and nothing else.
+    """
+    from src.core.exceptions import RECOVERY_BY_WIRE_CODE
+
+    return RECOVERY_BY_WIRE_CODE
+
+
+def test_src_recovery_table_mirrors_pinned_enum() -> None:
+    """``src.core.exceptions.RECOVERY_BY_WIRE_CODE`` equals the pinned enumMetadata
+    recovery block, code for code.
+
+    Exact dict equality, not a size check: a loader that reads the wrong spec
+    directory, drops the codes whose metadata shape differs, or falls back to the
+    SDK helper's ``STANDARD_ERROR_CODES`` (which contradicts the pin on 7 of its
+    38 codes) all produce a table of plausible size. This test loads the pin
+    independently via ``tests.helpers.pinned_schema`` and never reads src's table
+    as its own expectation, so it grades src's loader rather than agreeing with it.
+    """
+    pinned = _pinned_recovery_by_code()
+    src_table = _src_recovery_by_wire_code()
+
+    divergent = {
+        code: {"src": src_table.get(code), "pin": pinned.get(code)}
+        for code in sorted(set(pinned) | set(src_table))
+        if src_table.get(code) != pinned.get(code)
+    }
+    assert src_table == pinned, (
+        f"src.core.exceptions.RECOVERY_BY_WIRE_CODE diverges from the pinned "
+        f"error-code.json enumMetadata on {len(divergent)} code(s): {divergent}. "
+        f"The enumMetadata block is normative ($comment: 'SDKs MUST consume this "
+        f"block instead of parsing Recovery: X from enumDescriptions prose') — load "
+        f"it at import time; do not hand-type values and do not source them from "
+        f"the SDK helper's STANDARD_ERROR_CODES."
+    )
+
+
+def test_src_recovery_table_covers_every_code_that_reaches_the_wire() -> None:
+    """Every wire code src can emit has a classification in the src-side table.
+
+    The codes that reach a buyer are the ERROR_CODE_MAPPING translation targets
+    plus the pinned-spec supplement. A table that omits one of them makes the
+    recovery answer a KeyError at exactly the moment a caller needs it.
+    """
+    src_table = _src_recovery_by_wire_code()
+
+    emittable = set(ERROR_CODE_MAPPING.values()) | set(_SUPPLEMENT_WIRE_CODES)
+    unclassified = sorted(emittable - set(src_table))
+    assert not unclassified, (
+        f"Wire code(s) {unclassified} can reach a buyer (ERROR_CODE_MAPPING target "
+        f"or pinned-spec supplement) but carry no recovery classification in "
+        f"src.core.exceptions.RECOVERY_BY_WIRE_CODE."
+    )
+
+
+def test_wire_standard_codes_carry_no_classification() -> None:
+    """``WIRE_STANDARD_CODES`` answers membership only — one provenance rule.
+
+    Every entry's value must be empty. The table is built from the SDK helper's
+    ``STANDARD_ERROR_CODES``, whose recovery values contradict the pin on 7 codes
+    (UNSUPPORTED_FEATURE, AUTHORIZATION_REQUIRED, IDEMPOTENCY_CONFLICT,
+    IDEMPOTENCY_EXPIRED, BUDGET_EXHAUSTED, CONFLICT, ACCOUNT_PAYMENT_REQUIRED);
+    keeping those values live in the module makes a future value read silently
+    pin-contradicting for 7 codes instead of a loud KeyError for all of them.
+    RECOVERY_BY_WIRE_CODE is the only classification either TABLE in exceptions.py
+    carries. Two hand-typed surfaces remain outside the tables: the per-class
+    ``_default_recovery`` literals, which the oracles above DO grade against this
+    pin, and the ``recovery=`` constructor kwarg, which nothing grades — a call site
+    can still pair a code with a recovery the pin contradicts.
+    """
+    classified = {code: entry for code, entry in WIRE_STANDARD_CODES.items() if entry != {}}
+    assert not classified, (
+        f"{len(classified)} WIRE_STANDARD_CODES entries still carry values "
+        f"(e.g. {dict(sorted(classified.items())[:3])}). The table answers membership "
+        f"only; recovery comes from RECOVERY_BY_WIRE_CODE, machine-read from the pin."
+    )
+
+    assert set(WIRE_STANDARD_CODES) == set(STANDARD_ERROR_CODES) | set(_SUPPLEMENT_WIRE_CODES), (
+        "WIRE_STANDARD_CODES must stay the SDK helper's code-NAME baseline plus the "
+        "pinned-spec supplement names — emptying the values must not change which "
+        "codes are members."
+    )
+    assert len(WIRE_STANDARD_CODES) == 40, (
+        f"WIRE_STANDARD_CODES has {len(WIRE_STANDARD_CODES)} entries, not 40 (38 SDK "
+        f"+ 2 supplement). src/core/security/webhook_strict_json.py:102 documents the "
+        f"40-entry count; update it together with this assertion if the SDK pin moves."
     )

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel, ValidationError
@@ -32,24 +32,89 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # Every code that reaches the wire (buyer agent) MUST be in
 # WIRE_STANDARD_CODES.  Codes in ERROR_CODE_MAPPING are translated at the
 # transport boundary; codes in INTERNAL_CODES never leave the server.
+#
+# Two tables, one job each, so neither answers a question the other owns:
+#   * WIRE_STANDARD_CODES  — which code NAMES may reach a buyer. Membership only;
+#     its values are empty by construction (see below).
+#   * RECOVERY_BY_WIRE_CODE — what each of those codes means for retry. Loaded
+#     from the pinned spec at import; the only recovery classification either
+#     TABLE in this module carries.
+# Scope note: raise sites do NOT read RECOVERY_BY_WIRE_CODE yet. Two hand-typed
+# surfaces survive, and they differ in whether anything checks them:
+#   * the per-class ``_default_recovery`` literals below — hand-typed but GRADED
+#     against this same pin by
+#     tests/unit/test_architecture_error_recovery_enum_conformance.py (every class
+#     whose code the pin defines).
+#   * the ``recovery=`` kwarg on ``AdCPError.__init__`` / ``synthesize`` — hand-typed
+#     and UNGRADED: a call site can pair a code with a recovery the pin contradicts
+#     and no oracle sees it (context_manager.py:405 does exactly that today,
+#     ``recovery="terminal"`` on a SERVICE_UNAVAILABLE the pin calls ``transient``).
+# Both go when ``recovery`` becomes a read-only property over this table.
+
+
+def _load_pinned_recovery() -> dict[str, RecoveryHint]:
+    """Read the normative ``recovery`` classification for every pinned wire code.
+
+    Source: the installed SDK's own plain schema tree, ``adcp/_schemas/<major.minor>/
+    enums/error-code.json`` → ``enumMetadata``. That block is normative — its
+    ``$comment`` states "SDKs MUST consume this block instead of parsing
+    'Recovery: X' from enumDescriptions prose" — so it is machine-read here rather
+    than transcribed. A pin bump moves this table with zero edits to this file.
+
+    Deliberately NOT sourced from ``adcp.server.helpers.STANDARD_ERROR_CODES``:
+    probed at the 6.6.0 pin, the helper's own ``recovery`` values contradict the
+    schema on 7 of its 38 codes (UNSUPPORTED_FEATURE, AUTHORIZATION_REQUIRED,
+    IDEMPOTENCY_CONFLICT and IDEMPOTENCY_EXPIRED terminal-vs-correctable;
+    ACCOUNT_PAYMENT_REQUIRED and BUDGET_EXHAUSTED correctable-vs-terminal;
+    CONFLICT correctable-vs-transient). The SDK is a cross-check, not the
+    authority (CLAUDE.md spec-grounding gate).
+
+    Mirrors ``_pinned_recovery_by_code`` in
+    tests/unit/test_architecture_error_recovery_enum_conformance.py, which keeps
+    its OWN independent load — src cannot import from tests, and the duplicated
+    path derivation is what lets that oracle grade this loader instead of
+    agreeing with it.
+    """
+    import json
+    from pathlib import Path
+
+    import adcp
+
+    major, minor = adcp.get_adcp_spec_version().split(".")[:2]
+    schema_path = Path(adcp.__file__).parent / "_schemas" / f"{major}.{minor}" / "enums" / "error-code.json"
+    metadata = json.loads(schema_path.read_text())["enumMetadata"]
+    return {
+        code: entry["recovery"] for code, entry in metadata.items() if isinstance(entry, dict) and "recovery" in entry
+    }
+
+
+# The recovery classification for every code the pinned spec defines (92 at the
+# 3.1 pin). Read-only vocabulary: consumers look a code up, never assign one.
+RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 
 # Spec codes the SDK helper table has not caught up to. The pinned 3.1 enum
-# (enums/error-code.json @ adcp 04f59d2d5) defines these as real wire codes;
-# adcp 5.7's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
-# cross-check, not the authority. CREATIVE_NOT_FOUND per the enum: correctable,
-# and "Sellers MUST return this code uniformly for any creative_id not owned by
-# the calling account" (#1430 review). CONFIGURATION_ERROR per the enum:
-# terminal — "the buyer cannot resolve a seller-side deployment
-# misconfiguration and MUST NOT auto-retry" (#1430 review). The remaining
-# demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same treatment
-# in #1602.
-_SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
-    "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
-    "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
-}
+# (enums/error-code.json, shipped inside the installed adcp SDK) defines these
+# as real wire codes; the SDK's ``STANDARD_ERROR_CODES`` predates them, and the
+# SDK is a cross-check, not the authority. CREATIVE_NOT_FOUND per the enum:
+# "Sellers MUST return this code uniformly for any creative_id not owned by the
+# calling account" (#1430 review). CONFIGURATION_ERROR per the enum: "the buyer
+# cannot resolve a seller-side deployment misconfiguration and MUST NOT
+# auto-retry" (#1430 review). Their recovery classifications are NOT repeated
+# here — this is a set of code NAMES; RECOVERY_BY_WIRE_CODE answers what they
+# mean. The remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for
+# the same treatment in #1602.
+_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
 
-# The authoritative wire-code table: SDK baseline + pinned-spec supplement.
-WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {**STANDARD_ERROR_CODES, **_SPEC_SUPPLEMENT_CODES}
+# The authoritative wire-code table: SDK code-name baseline + pinned-spec
+# supplement. Values are empty on purpose and every consumer is a membership
+# check — carrying the SDK's own recovery values here would leave 7 codes
+# answering a recovery question with a value the pin contradicts, one line below
+# the table that reads the pin. An accidental value read is a loud KeyError for
+# every code instead of a silently wrong classification for some. Look a
+# classification up in RECOVERY_BY_WIRE_CODE, never here.
+WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {
+    code: {} for code in (*STANDARD_ERROR_CODES, *sorted(_SPEC_SUPPLEMENT_CODES))
+}
 
 ERROR_CODE_MAPPING: dict[str, str] = {
     # Internal-only codes that occasionally leak to the wire when a raise site
@@ -139,6 +204,31 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 # Sanity check: every mapping target must be a standard code.
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(WIRE_STANDARD_CODES)
 assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
+
+# Sanity checks on the machine-read recovery table. A loader that reads the wrong
+# schema directory, or a pin whose enumMetadata changed shape, must fail the import
+# rather than hand every caller a plausible-looking partial table.
+assert len(RECOVERY_BY_WIRE_CODE) >= 90, (
+    f"RECOVERY_BY_WIRE_CODE loaded only {len(RECOVERY_BY_WIRE_CODE)} codes from the pinned "
+    f"enumMetadata; the 3.1 pin defines 92. The loader is reading the wrong file or shape."
+)
+
+_BAD_RECOVERY_VALUES = {v for v in RECOVERY_BY_WIRE_CODE.values() if v not in get_args(RecoveryHint)}
+assert not _BAD_RECOVERY_VALUES, (
+    f"Pinned enumMetadata carries recovery value(s) outside RecoveryHint: {_BAD_RECOVERY_VALUES}"
+)
+
+_UNCLASSIFIED_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(RECOVERY_BY_WIRE_CODE)
+assert not _UNCLASSIFIED_TARGETS, (
+    f"ERROR_CODE_MAPPING translates to wire code(s) the pin does not classify: {_UNCLASSIFIED_TARGETS}"
+)
+
+_UNCLASSIFIED_SUPPLEMENT = _SPEC_SUPPLEMENT_CODES - set(RECOVERY_BY_WIRE_CODE)
+assert not _UNCLASSIFIED_SUPPLEMENT, (
+    f"Spec-supplement code(s) absent from the pinned enumMetadata: {_UNCLASSIFIED_SUPPLEMENT}. "
+    f"The supplement exists because the SDK helper lags the pin — a code the PIN lacks does not "
+    f"belong in it."
+)
 
 
 def translate_error_code(code: str) -> str:
