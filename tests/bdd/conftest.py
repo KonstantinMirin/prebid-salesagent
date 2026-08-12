@@ -816,18 +816,46 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # gated for these entries, so un-xfailed too) verified in-network: bdd_e2e run
     # test-results/innet_120826_1403 has all SIX rows of the outline passing on e2e_rest,
     # 534 passed / 0 failed.
+    # Graduated 2026-08-12 (#1291 D2), PARTIALLY: reporting_delivery_methods=['webhook'],
+    # supported=false removed — a KEYLESS tenant declaring webhook report delivery is the one
+    # reachable violation of must_equal_when, and validate_signing_platform_backing rule (d)
+    # rejects it naming capability_declarations.webhook_signing.supported. The outline's three
+    # realizable VALID rows (the keyed [webhook] trigger and the two in-profile algorithm sets)
+    # now derive their posture from real key material too, instead of passing against an absent
+    # block. The four rows below cannot be realized here, for two different reasons, and each
+    # carries its own — none of them is signing's to fix.
+    #
+    # Two MORE rows of this outline left the passing count in the same change, and did not come
+    # here: supports_webhook_delivery=true / wholesale_feed_webhooks.supported=true (both "valid")
+    # passed only because the Given recorded intent, so their trigger never reached the wire and
+    # the must_equal_when assertion short-circuited on a block that graded nothing. A test that
+    # cannot fail is not coverage, so they are parked (owner decision, 2026-07-30) — in
+    # _UC010_PARKED_ROWS, not here, because a STRICT xfail cannot hold a row that passes: it
+    # converts the vacuous pass into an XPASS build failure (measured: 6 failures, 2 rows x 3
+    # transports, before the park moved).
+    #
+    # Net effect on this tag, and it is DOWN on purpose: +1 graduated row and -2 parked rows, so
+    # the uc010 slice went 344 -> 341 passed with 252 -> 255 xfailed, 0 failed, 0 xpassed. In
+    # network, bdd_e2e test-results/innet_120826_1507: on e2e_rest the graduated
+    # supported=false row PASSES, both algorithm rows and the keyed trigger row pass, and all four
+    # unreachable rows xfail; 535 passed / 0 failed.
     (
         "T-UC-010-v31-webhook-signing-bounds",
         {
-            "reporting_delivery_methods=['webhook'], supported=false",
             "supports_webhook_delivery=true, supported absent",
             "algorithms=['rsa-pss-sha512']",
         },
-        "the declaration store deliberately carries NO webhook_signing field under the STRICT "
-        "capability policy, so a supported!=true-under-trigger or out-of-enum-algorithm posture "
-        "cannot be declared and therefore cannot be rejected on its own terms; declaring the block "
-        "at all is refused with CONFIGURATION_ERROR. Grading these bounds needs the posture to be "
-        "declarable, which lands with RFC 9421 signing — #1291",
+        "these two boundaries have no reachable state in this deployment, and both FAIL rather "
+        "than pass: the supports_webhook_delivery row names a must_equal_when trigger whose block "
+        "is unbacked — media_buy.content_standards has no surface (#1855) — and declaring it is "
+        "refused NAMING THAT BLOCK, so realizing it would grade the wrong refusal. The "
+        "rsa-pss-sha512 row asks for an algorithm outside the AdCP profile, but "
+        "webhook_signing.algorithms is DERIVED from the ACTIVE key row and narrow_alg refuses an "
+        "off-profile algorithm at MINT time, so the value can never exist in the store to be "
+        "rejected on the read path: the obligation is met by construction rather than by a "
+        "rejection, and the row becomes gradable only if the profile itself widens. The two "
+        "same-outline rows that pass VACUOUSLY are parked in _UC010_PARKED_ROWS instead — a strict "
+        "xfail cannot hold a row that passes",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the baseline-absence row passes
     # (polling_only → reporting_delivery_methods/offline_delivery_protocols absent, webhook_signing
@@ -947,6 +975,34 @@ _UC010_PARKED_TAGS: dict[str, str] = {
         "artifact_webhook delivery). Re-homed off #1291, which does not unblock it"
     ),
 }
+
+
+# The same park, one level finer: individual ROWS of a wired outline whose state cannot be
+# realized here, in outlines whose other rows ARE graded. _SELECTIVE_XFAIL cannot express
+# this, because it is strict — and a row parked HERE is one that would PASS, vacuously, on
+# a Given that could not realize its trigger. Strict-xfailing it turns the vacuous pass into
+# a build failure; leaving it alone counts a test that cannot fail as coverage.
+#
+# So the park is imperative (``pytest.xfail`` before the harness is built), exactly like
+# _UC010_PARKED_TAGS: the row does not run, and the reason says what would make it runnable.
+# An entry leaves this table when production backs the block — never by weakening the
+# scenario. (tag, nodeid substrings, reason)
+_UC010_PARKED_ROWS: list[tuple[str, set[str], str]] = [
+    (
+        "T-UC-010-v31-webhook-signing-bounds",
+        {
+            "supports_webhook_delivery=true, supported=true",
+            "wholesale_feed_webhooks.supported=true, supported=true",
+        },
+        "the row's must_equal_when trigger is an unbacked block — media_buy.content_standards "
+        "has no surface in this deployment (#1855) and wholesale_feed_webhooks has no model "
+        "field at all (#1867) — so the trigger can never reach the wire and "
+        "_assert_webhook_signing_must_equal_when short-circuits: the row would PASS while "
+        "grading nothing but a generic schema-valid block. Parked rather than left green "
+        "(#1291 D2, owner decision): a test that cannot fail is not coverage. It graduates with "
+        "the surface that makes its trigger declarable",
+    ),
+]
 
 
 # MCP selective xfails: previously the MCP wrapper did not accept the
@@ -4174,6 +4230,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         if parked:
             tag = sorted(parked)[0]
             pytest.xfail(f"{tag}: {_UC010_PARKED_TAGS[tag]}")
+        for tag, substrings, reason in _UC010_PARKED_ROWS:
+            if tag in marker_names and any(s in request.node.nodeid for s in substrings):
+                pytest.xfail(f"{tag}: {reason}")
         if not (marker_names & _UC010_WIRED_TAGS):
             pytest.xfail(
                 "UC-010 harness wiring not extended to this tag (dormant, never graded) — steps tracked by #1855; presence-object production gap is #1855"

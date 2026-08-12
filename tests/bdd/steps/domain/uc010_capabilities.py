@@ -1635,16 +1635,30 @@ def given_brand_posture(ctx: dict) -> None:
     }
 
 
-def _declare_webhook_reporting(ctx: dict, methods: list[str]) -> None:
-    """Realize webhook report delivery: the declaration AND the key it obliges.
+#: The algorithm minted wherever a row needs webhook_signing.supported to DERIVE true.
+#: webhook_signing is derived platform state, so "the seller emits signed webhooks" is
+#: realized by holding a key this deployment can open on a trust root it can publish —
+#: never by declaring the block, which production refuses outright.
+_WEBHOOK_SIGNING_ALG = "ed25519"
 
-    One helper for both outlines that need it, because the two halves are not separable —
-    ``must_equal_when`` grades the declaration against the DERIVED webhook_signing value,
-    so declaring webhook delivery without a key this deployment can open on a publishable
-    trust root is REJECTED, and the scenario would grade that refusal instead.
+
+def _realize_webhook_signing(
+    ctx: dict,
+    *,
+    keyed_alg: str | None = _WEBHOOK_SIGNING_ALG,
+    reporting_methods: list[str] | None = None,
+) -> None:
+    """Realize a webhook-signing state: the key it derives from, and any trigger declared.
+
+    One helper for all three outlines that need it, because the two halves are not
+    separable — ``must_equal_when`` grades the declared trigger against the DERIVED
+    webhook_signing value. Keyed is the default because that is what an honest webhook
+    emitter looks like; ``keyed_alg=None`` alongside a trigger is the deliberate violation
+    rule (d) exists to reject, and is the only way to reach that rejection.
     """
-    ctx["env"].declare_signing(keyed_alg=_WEBHOOK_SIGNING_ALG)
-    ctx["env"].declare_capabilities(reporting_delivery_methods=methods)
+    ctx["env"].declare_signing(keyed_alg=keyed_alg)
+    if reporting_methods:
+        ctx["env"].declare_capabilities(reporting_delivery_methods=reporting_methods)
 
 
 @given(parsers.parse("the tenant declares reporting delivery methods {methods} with offline protocols {protocols}"))
@@ -1663,14 +1677,8 @@ def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) ->
         return  # baseline polling: declaring nothing IS the state under test
     if declared_protocols or "offline" in declared_methods:
         return  # unbacked offline delivery — see the tag's entry in _SELECTIVE_XFAIL
-    _declare_webhook_reporting(ctx, declared_methods)
+    _realize_webhook_signing(ctx, reporting_methods=declared_methods)
 
-
-#: The algorithm minted wherever a row needs webhook_signing.supported to DERIVE true.
-#: webhook_signing is derived platform state, so "the seller emits signed webhooks" is
-#: realized by holding a key this deployment can open on a trust root it can publish —
-#: never by declaring the block, which production refuses outright.
-_WEBHOOK_SIGNING_ALG = "ed25519"
 
 #: mutating-webhook emission labels -> the declaration blocks that make the trigger real.
 #: All four labels are listed so a label that drifts from the feature fails loudly here
@@ -1709,7 +1717,7 @@ def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
         return  # undeclarable trigger — see the tag's entry in _SELECTIVE_XFAIL
     if not blocks:
         return  # the no-emission row: declaring nothing IS the state under test
-    _declare_webhook_reporting(ctx, blocks["reporting_delivery_methods"])
+    _realize_webhook_signing(ctx, reporting_methods=blocks["reporting_delivery_methods"])
 
 
 #: The identity-block states the two identity outlines grade, in each outline's own
@@ -2578,13 +2586,48 @@ def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
 # ── Thens: webhook_signing must_equal_when + algorithm-enum bounds ────────
 
 
+#: webhook_signing boundary labels -> the PLATFORM state that realizes them.
+#:
+#: ``webhook_signing`` is derived, so none of these is a declaration of the block: a keyed
+#: tenant on a publishable trust root derives ``supported: true`` and takes ``algorithms``
+#: from the ACTIVE key's own alg, and a keyless one derives false. ``keyed_alg=None`` with
+#: a trigger declared is therefore the honest realization of "the seller advertises webhook
+#: delivery but this deployment derives supported=false", which is the rejection rule (d)
+#: exists for.
+#:
+#: ``None`` marks a label this deployment cannot realize AT ALL, and each is parked with its
+#: own reason in ``_SELECTIVE_XFAIL``: the two content-standards / wholesale-feed triggers
+#: are unbacked blocks (#1855 / #1867) whose declaration is refused naming THAT block, and
+#: an off-profile algorithm is refused at MINT time (``narrow_alg``), so it can never exist
+#: in the store to be rejected on the read path.
+_WEBHOOK_SIGNING_BOUNDARIES: dict[str, tuple[str | None, list[str] | None] | None] = {
+    "reporting_delivery_methods=['webhook'], supported=true": (_WEBHOOK_SIGNING_ALG, ["webhook"]),
+    "reporting_delivery_methods=['webhook'], supported=false": (None, ["webhook"]),
+    "algorithms=['ed25519']": ("ed25519", None),
+    "algorithms=['ecdsa-p256-sha256']": ("ecdsa-p256-sha256", None),
+    "supports_webhook_delivery=true, supported=true": None,
+    "supports_webhook_delivery=true, supported absent": None,
+    "wholesale_feed_webhooks.supported=true, supported=true": None,
+    "algorithms=['rsa-pss-sha512']": None,
+}
+
+
 @given(parsers.parse("the tenant declares webhook_signing posture described as {boundary_point}"))
 def given_webhook_signing_boundary(ctx: dict, boundary_point: str) -> None:
-    """Declare a webhook_signing boundary — a mutating-webhook trigger paired with a
-    supported value, or an algorithms set. Records intent; the declaration store
-    deliberately carries no webhook_signing field under the STRICT capability policy
-    (#1291), so the outline strict-xfails on all transports."""
-    _config(ctx)["webhook_signing_boundary"] = boundary_point.strip()
+    """Realize one webhook_signing boundary as key material plus, where the row names a
+    trigger, the declaration that obliges a signed webhook.
+
+    The keyless-with-trigger row is the load-bearing one: it is the only way to reach rule
+    (d)'s rejection, because a tenant that HAS a key derives supported=true and satisfies
+    the invariant instead of violating it.
+    """
+    boundary_point = boundary_point.strip()
+    assert boundary_point in _WEBHOOK_SIGNING_BOUNDARIES, f"unmapped webhook_signing boundary: {boundary_point!r}"
+    state = _WEBHOOK_SIGNING_BOUNDARIES[boundary_point]
+    if state is None:
+        return  # unrealizable here — see the tag's entry in _SELECTIVE_XFAIL
+    keyed_alg, reporting_methods = state
+    _realize_webhook_signing(ctx, keyed_alg=keyed_alg, reporting_methods=reporting_methods)
 
 
 def _assert_webhook_signing_must_equal_when(ctx: dict, webhook_signing: dict) -> None:
