@@ -683,6 +683,10 @@ class TestGetMediaBuysResponseStructure:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=1000.0,
+                    # Spec-required on media_buys[] at 3.1.1; the model enforces them
+                    # now that it is grounded on the library item type.
+                    confirmed_at=now,
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(
                             package_id="pkg_1",

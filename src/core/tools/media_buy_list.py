@@ -41,6 +41,10 @@ class _MediaBuyData:
     updated_at: datetime | None
     status: str | None
     is_paused: bool
+    # Spec-required on media_buys[] at AdCP 3.1.1; carried through this row object so
+    # the response is built from persisted values rather than defaults.
+    confirmed_at: datetime | None
+    revision: int
 
 
 @dataclass
@@ -285,6 +289,12 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
+                # Both spec-required on media_buys[] at AdCP 3.1.1, and both read
+                # straight off the persisted columns rather than defaulted here:
+                # confirmed_at is stamped once by the repository when the seller
+                # commits, revision is its monotonic mutation counter.
+                confirmed_at=buy.confirmed_at,
+                revision=buy.revision,
             )
         )
 
@@ -417,6 +427,8 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
             status=buy.status,
             is_paused=buy.is_paused,
+            confirmed_at=buy.confirmed_at,
+            revision=buy.revision,
         )
         for buy in buys
         if filter_statuses is None or _compute_status(buy, today) in filter_statuses

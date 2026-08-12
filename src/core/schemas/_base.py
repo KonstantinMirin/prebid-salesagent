@@ -17,14 +17,13 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
 from src.core.enum_helpers import enum_value
 
 if TYPE_CHECKING:
-    from src.core.schemas.creative import Creative, CreativeApproval
+    from src.core.schemas.creative import Creative
 
 from adcp import Error
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     ContextObject,
     DeliveryStatus,  # noqa: F401 — used by Snapshot below
-    MediaBuyStatus,
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
@@ -61,9 +60,15 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.enums.media_buy_valid_action import (
-    MediaBuyValidAction,
-)  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.enums.snapshot_unavailable_reason import (
+    SnapshotUnavailableReason as LibrarySnapshotUnavailableReason,
+)
+from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+    MediaBuy as LibraryGetMediaBuysMediaBuy,
+)
+from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+    Package as LibraryGetMediaBuysPackage,
+)
 from adcp.types.generated_poc.media_buy.get_media_buys_response import (
     Snapshot as LibraryGetMediaBuysSnapshot,
 )
@@ -2718,11 +2723,11 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 # DeliveryStatus: imported from adcp library at top of file (all 6 values).
 
 
-class SnapshotUnavailableReason(StrEnum):
-    """Reason why a delivery snapshot is not available."""
-
-    SNAPSHOT_UNSUPPORTED = "SNAPSHOT_UNSUPPORTED"
-    SNAPSHOT_TEMPORARILY_UNAVAILABLE = "SNAPSHOT_TEMPORARILY_UNAVAILABLE"
+# Reason why a delivery snapshot is not available. Aliased to the library enum
+# rather than redeclared: the local copy carried only two of the pinned three
+# members (it was missing SNAPSHOT_PERMISSION_DENIED), which is exactly the drift
+# that copying an enum out of the spec produces.
+SnapshotUnavailableReason = LibrarySnapshotUnavailableReason
 
 
 class ApprovalStatus(StrEnum):
@@ -2745,29 +2750,31 @@ class Snapshot(LibraryGetMediaBuysSnapshot):
     """
 
 
-class GetMediaBuysPackage(SalesAgentBaseModel):
-    """Package details within a GetMediaBuys response."""
+class GetMediaBuysPackage(LibraryGetMediaBuysPackage):
+    """Package details within a GetMediaBuys response.
 
-    package_id: str = Field(..., description="Package identifier")
-    budget: float | None = Field(default=None, description="Package budget allocation")
-    bid_price: float | None = Field(default=None, description="Bid price for auction-based pricing")
-    product_id: str | None = Field(default=None, description="Product identifier for this package")
-    start_time: str | None = Field(default=None, description="Package start time (ISO 8601)")
-    end_time: str | None = Field(default=None, description="Package end time (ISO 8601)")
-    paused: bool | None = Field(default=None, description="Whether this package is paused")
+    Grounded on the library type so the item chain above it can be too. Only the
+    fields that genuinely narrow the library's are redeclared; package_id, budget,
+    bid_price, product_id, paused and start/end_time are inherited verbatim.
+
+    start_time/end_time used to be declared here as ``str``. The library (and the
+    pinned schema) type them as aware datetimes, which is strictly more correct:
+    Pydantic still accepts the ISO strings production passes and re-emits ISO under
+    ``mode="json"``, so the wire is unchanged while the model stops accepting
+    arbitrary strings.
+    """
+
     targeting_overlay: Targeting | None = Field(
         default=None,
         description="Targeting overlay echoed from the most recent create_media_buy or update_media_buy. Includes any property_list / collection_list references the buyer attached, so callers can verify what was persisted without replaying the request.",
     )
-    creative_approvals: list["CreativeApproval"] | None = Field(
-        default=None, description="Creative approval state for creatives assigned to this package"
-    )
-    snapshot: Snapshot | None = Field(
-        default=None, description="Near-real-time delivery snapshot (present when include_snapshot=true)"
-    )
-    snapshot_unavailable_reason: SnapshotUnavailableReason | None = Field(
-        default=None, description="Reason snapshot is unavailable (present when include_snapshot=true but no snapshot)"
-    )
+    # snapshot, creative_approvals and snapshot_unavailable_reason are inherited.
+    # Snapshot is a local subclass that adds NO fields of its own, so narrowing to it
+    # would buy nothing a Pattern #4 override is meant to buy. Neither can
+    # be narrowed here: list[] is invariant, so list[our CreativeApproval] is not a
+    # list[library CreativeApproval] even though the element type now IS a subclass —
+    # and inheriting costs nothing, since our subclass adds no fields and instances of
+    # it satisfy the library annotation.
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)
@@ -2776,20 +2783,23 @@ class GetMediaBuysPackage(SalesAgentBaseModel):
         return result
 
 
-class GetMediaBuysMediaBuy(SalesAgentBaseModel):
-    """Media buy details in a GetMediaBuys response."""
+class GetMediaBuysMediaBuy(LibraryGetMediaBuysMediaBuy):
+    """Media buy details in a GetMediaBuys response.
 
-    media_buy_id: str = Field(..., description="Publisher media buy identifier")
+    Grounded on the library type, which makes the pinned item contract enforceable
+    at the construction site: ``confirmed_at`` and ``revision`` are REQUIRED on
+    media_buys[] in AdCP 3.1.1, and every caller must now supply them or fail to
+    typecheck. That is the point — they are populated from the persisted columns
+    rather than defaulted (GH #1928).
+
+    Inherited verbatim: media_buy_id, status, currency, total_budget, confirmed_at,
+    revision, created_at, updated_at, valid_actions.
+    """
+
+    # Not a library field — this seller carries the buyer's campaign reference back
+    # on the item so a buyer can correlate without a second lookup.
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
-    status: MediaBuyStatus = Field(..., description="Current media buy status")
-    valid_actions: list[MediaBuyValidAction] | None = Field(
-        default=None, description="Actions available for this media buy given its current status"
-    )
-    currency: str = Field(..., description="ISO 4217 currency code")
-    total_budget: float = Field(..., description="Total budget across all packages")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
-    created_at: datetime | None = Field(default=None, description="When this media buy was created")
-    updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)

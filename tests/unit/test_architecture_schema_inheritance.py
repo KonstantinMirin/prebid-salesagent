@@ -245,6 +245,13 @@ class TestSchemaInheritance:
             ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
+            # Pattern #4: the get_media_buys item chain. Both narrowings are load-bearing
+            # — our Targeting adds ~30 fields the library's TargetingOverlay lacks, and
+            # serializing through the library annotation would drop them. Note what is
+            # NOT here: snapshot, creative_approvals and snapshot_unavailable_reason are
+            # inherited outright, because those local subclasses add no fields.
+            ("GetMediaBuysPackage", "targeting_overlay"),
+            ("GetMediaBuysMediaBuy", "packages"),
             # Required-field tightening (#1399 Plan-B): pinned 3.1 marks these
             # success-arm fields required; the SDK base declares them optional, so
             # we redeclare required to match the spec.

@@ -1714,6 +1714,12 @@ class TestUpdateMediaBuySchemaCompliance:
             currency="USD",
             total_budget=5000.0,
             packages=[],
+            # Spec-required on media_buys[] at AdCP 3.1.1. Supplied here because the
+            # model is now grounded on the library item type and enforces them; this
+            # test's fixture predates that and was silently constructing an item the
+            # pinned schema would reject.
+            confirmed_at=datetime(2025, 2, 1, tzinfo=UTC),
+            revision=1,
         )
         dumped = mb.model_dump()
         assert dumped.get("buyer_campaign_ref") == "camp-ref-123"
@@ -4131,6 +4137,11 @@ class TestGetMediaBuysStatusComputation:
             updated_at=None,
             status=status,
             is_paused=is_paused,
+            # Required on the row object rather than defaulted: the only producer
+            # reads both off the persisted MediaBuy, and a default here would let a
+            # missing wire-up emit revision=1 while the database says otherwise.
+            confirmed_at=None,
+            revision=1,
         )
 
     def test_active_persisted_before_flight_refines_to_pending_start(self):
@@ -4248,6 +4259,10 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    # Spec-required on media_buys[] at 3.1.1, enforced by the model
+                    # now that it is grounded on the library item type.
+                    confirmed_at=datetime(2025, 2, 1, tzinfo=UTC),
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1"),
                     ],
@@ -4274,6 +4289,10 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    # Spec-required on media_buys[] at 3.1.1, enforced by the model
+                    # now that it is grounded on the library item type.
+                    confirmed_at=datetime(2025, 2, 1, tzinfo=UTC),
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1", budget=2500.0, product_id="p1"),
                         GetMediaBuysPackage(package_id="pkg_2", budget=2500.0, product_id="p2"),
