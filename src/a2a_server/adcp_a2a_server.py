@@ -2313,18 +2313,13 @@ def create_agent_card() -> AgentCard:
                 description="Search and query creative library with advanced filtering (AdCP spec)",
                 tags=["creative", "library", "search", "adcp", "spec"],
             ),
-            AgentSkill(
-                id="create_creative",
-                name="create_creative",
-                description="Create a creative asset in the centralized library (AdCP spec)",
-                tags=["creative", "create", "library", "adcp", "spec"],
-            ),
-            AgentSkill(
-                id="assign_creative",
-                name="assign_creative",
-                description="Assign a creative asset from the library to a media buy package (AdCP spec)",
-                tags=["creative", "assign", "library", "adcp", "spec"],
-            ),
+            # create_creative / assign_creative are deliberately NOT advertised: both
+            # are `raise UnsupportedOperationError("not yet implemented")` stubs, and
+            # neither is an AdCP task (no create-creative/assign-creative schema at any
+            # pinned version — see test_all_adcp_skills_have_schemas). Advertising a
+            # skill is a promise a buyer can call it; these would error on every call.
+            # They stay in SKILL_HANDLER_NAMES so dispatch keeps returning a typed
+            # "not implemented" rather than "unknown skill".
             # Creative Management & Approval
             AgentSkill(
                 id="approve_creative",

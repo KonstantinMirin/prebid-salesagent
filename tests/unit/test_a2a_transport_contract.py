@@ -33,10 +33,15 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
 
 # ---------------------------------------------------------------------------
 # The A2A skill roster, derived from production (src.a2a_server.adcp_a2a_server)
-# instead of hand-copied — a hand-copied literal silently went stale and
-# missed 5 real skills (list_accounts, sync_accounts, get_media_buys,
-# create_creative, assign_creative), so this regression gate never exercised
-# their boundary/auth contract (salesagent-1q8d.9).
+# instead of hand-copied — a hand-copied literal silently went stale and missed 5
+# dispatchable skills (list_accounts, sync_accounts, get_media_buys,
+# create_creative, assign_creative), so this regression gate never exercised their
+# boundary/auth contract (salesagent-1q8d.9).
+#
+# "Dispatchable" is not "implemented": create_creative and assign_creative reach a
+# handler that raises UnsupportedOperationError("not yet implemented"). They belong
+# in this roster — the boundary/auth contract below applies to them exactly as it
+# does to implemented skills — but deliberately NOT on the agent card.
 # ---------------------------------------------------------------------------
 ALL_SKILLS = list(SKILL_HANDLER_NAMES.keys())
 DISCOVERY_SKILLS = list(_PRODUCTION_DISCOVERY_SKILLS)
@@ -490,13 +495,27 @@ class TestAgentCardContract:
     """Verify agent card advertises all skills and has required structure."""
 
     def test_agent_card_skills_match_dispatch(self, client):
-        """Agent card must advertise at least the skills in the dispatch map."""
+        """Every ADVERTISED skill is dispatchable — advertised is a subset of the roster.
+
+        The containment runs advertised -> roster, not the reverse. Advertising a
+        skill is a promise a buyer can call it, so a card entry with no handler is
+        the real defect. The roster is deliberately the LARGER set: it also holds
+        skills that are wired for dispatch but are still
+        ``raise UnsupportedOperationError("not yet implemented")`` stubs
+        (create_creative, assign_creative), which are kept out of the card so
+        buyers aren't pointed at an endpoint that errors on every call — and which
+        have no AdCP schema at any pinned version, so advertising them also trips
+        ``test_all_adcp_skills_have_schemas``.
+
+        Asserting the reverse would force every stub onto the card, which is how
+        create_creative/assign_creative got advertised in the first place.
+        """
         response = client.get("/.well-known/agent-card.json")
         card = response.json()
         advertised_skills = {s["name"] for s in card.get("skills", [])}
 
-        for skill in ALL_SKILLS:
-            assert skill in advertised_skills, f"Skill '{skill}' in dispatch map but not advertised in agent card"
+        for skill in advertised_skills:
+            assert skill in ALL_SKILLS, f"Skill '{skill}' advertised in agent card but not in the dispatch map"
 
     def test_agent_card_url_no_trailing_slash(self, client):
         """Agent card URL must not have trailing slash (causes redirects)."""
