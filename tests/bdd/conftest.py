@@ -833,15 +833,22 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # (polling_only → reporting_delivery_methods/offline_delivery_protocols absent, webhook_signing
     # honest-tautology); the push-delivery rows fail because the capabilities builder never emits
     # media_buy.reporting_delivery_methods / offline_delivery_protocols / webhook_signing.
+    # Graduated 2026-08-12 (#1291 D2), PARTIALLY: webhook_only removed — reporting_delivery_methods
+    # is declarable and [webhook] is backed, so a keyed, publishable tenant now emits
+    # media_buy.reporting_delivery_methods=[webhook] with webhook_signing.supported=true, which is
+    # all three of that row's Thens. The remaining two rows never needed signing; their blocker is
+    # offline report delivery, which this epic does not build. Serial in-process run 2026-08-12:
+    # uc010 slice 341 -> 344 passed (+1 row x 3 transports), 255 -> 252 xfailed, 0 failed,
+    # 0 xpassed. In-network bdd_e2e test-results/innet_120826_1434: webhook_only PASSES on
+    # e2e_rest, offline_only and mixed_delivery still xfailed, 536 passed / 0 failed.
     (
         "T-UC-010-v31-reporting-delivery-methods",
-        {"webhook_only", "offline_only", "mixed_delivery"},
-        "media_buy.reporting_delivery_methods / offline_delivery_protocols are not declarable under "
-        "the STRICT capability policy, but the three rows have DIFFERENT blockers and do not "
-        "graduate together: webhook_only needs RFC 9421 signing, because declaring [webhook] fires "
-        "the schema must_equal_when forcing webhook_signing.supported=true — #1291; offline_only "
-        "needs real bucket report delivery (no reporting_bucket provisioning exists) — #1729; "
-        "mixed_delivery declares both members and needs BOTH — #1291 and #1729",
+        {"offline_only", "mixed_delivery"},
+        "no bucket report delivery is implemented — production refuses a method list containing "
+        "'offline' and carries no offline_delivery_protocols field at all, so neither row can be "
+        "realized without grading the unbacked-block refusal instead of this outline's rule. "
+        "mixed_delivery declares [webhook, offline] and is blocked by the offline member alone. "
+        "Both graduate when bucket report delivery lands — #1729",
     ),
     # Wired non-dormant + strengthened (salesagent-scgh): the no-emission row passes (no
     # must_equal_when trigger fires → webhook_signing absent is schema-valid); the emission rows

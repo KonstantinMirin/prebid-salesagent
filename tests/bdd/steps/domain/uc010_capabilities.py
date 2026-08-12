@@ -1635,17 +1635,35 @@ def given_brand_posture(ctx: dict) -> None:
     }
 
 
+def _declare_webhook_reporting(ctx: dict, methods: list[str]) -> None:
+    """Realize webhook report delivery: the declaration AND the key it obliges.
+
+    One helper for both outlines that need it, because the two halves are not separable —
+    ``must_equal_when`` grades the declaration against the DERIVED webhook_signing value,
+    so declaring webhook delivery without a key this deployment can open on a publishable
+    trust root is REJECTED, and the scenario would grade that refusal instead.
+    """
+    ctx["env"].declare_signing(keyed_alg=_WEBHOOK_SIGNING_ALG)
+    ctx["env"].declare_capabilities(reporting_delivery_methods=methods)
+
+
 @given(parsers.parse("the tenant declares reporting delivery methods {methods} with offline protocols {protocols}"))
 def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) -> None:
-    """Declare push-based reporting delivery methods + offline protocols. Records
-    intent; the declaration store deliberately carries no field for either under
-    the STRICT capability policy (#1291) — declaring [webhook] would fire the
-    schema must_equal_when forcing webhook_signing.supported=true, and no offline
-    report delivery is implemented."""
-    _config(ctx)["reporting_delivery_methods"] = None if methods.strip() == "omitted" else _parse_bracket_list(methods)
-    _config(ctx)["offline_delivery_protocols"] = (
-        None if protocols.strip() == "omitted" else _parse_bracket_list(protocols)
-    )
+    """Declare push-based reporting delivery, where this deployment backs it.
+
+    ``[webhook]`` is real and is declared as real state. ``offline`` is not: production
+    refuses a method list containing it and carries no ``offline_delivery_protocols`` field
+    at all, because no bucket report delivery exists (#1729). Those rows therefore declare
+    NOTHING — realizing them would mean grading the unbacked-block refusal, which is a
+    different rule from the one this outline is about.
+    """
+    declared_methods = None if methods.strip() == "omitted" else _parse_bracket_list(methods)
+    declared_protocols = None if protocols.strip() == "omitted" else _parse_bracket_list(protocols)
+    if not declared_methods:
+        return  # baseline polling: declaring nothing IS the state under test
+    if declared_protocols or "offline" in declared_methods:
+        return  # unbacked offline delivery — see the tag's entry in _SELECTIVE_XFAIL
+    _declare_webhook_reporting(ctx, declared_methods)
 
 
 #: The algorithm minted wherever a row needs webhook_signing.supported to DERIVE true.
@@ -1691,8 +1709,7 @@ def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
         return  # undeclarable trigger — see the tag's entry in _SELECTIVE_XFAIL
     if not blocks:
         return  # the no-emission row: declaring nothing IS the state under test
-    ctx["env"].declare_signing(keyed_alg=_WEBHOOK_SIGNING_ALG)
-    ctx["env"].declare_capabilities(**blocks)
+    _declare_webhook_reporting(ctx, blocks["reporting_delivery_methods"])
 
 
 #: The identity-block states the two identity outlines grade, in each outline's own
