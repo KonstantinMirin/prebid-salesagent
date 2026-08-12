@@ -195,7 +195,11 @@ def _render_issue_cell(entry: dict[str, Any] | None) -> str:
 
 LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
 
-_LEDGER_ID_RE = re.compile(r"test_storyboard_check\[([^:]*)::([^:]+)::(.+)\]\s*$")
+# Ledger ids are `protocol::track::storyboard::step` (the protocol segment arrived
+# with A2A grading). Storyboard is the THIRD segment; a three-group pattern silently
+# read the track as the storyboard and joined nothing -- caught by the zero-join
+# guard below rather than by rendering every row green.
+_LEDGER_ID_RE = re.compile(r"test_storyboard_check\[([^:]+)::([^:]*)::([^:]+)::(.+)\]\s*$")
 
 
 def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
@@ -226,7 +230,7 @@ def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
             # underscore spelling (webhook_emission) while coverage_map stems
             # are hyphenated for universal/ (webhook-emission). Joining raw
             # silently matched nothing and rendered every row as passing.
-            failures.setdefault(match.group(2).replace("-", "_"), []).append(match.group(3))
+            failures.setdefault(match.group(3).replace("-", "_"), []).append(match.group(4))
     return failures
 
 
