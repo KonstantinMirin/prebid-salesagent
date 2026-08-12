@@ -50,14 +50,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.audit import storyboard_coverage_map, storyboard_spec  # noqa: E402
 
-# The 20 on-path-uncovered storyboards sb5d-comply-test-controller-divergence.md
-# already triaged as a deliberate, closed divergence -- not a plain conformance
-# gap. DETERMINISTIC INJECTION storyboards stay dormant by design; PRIOR STATE
-# ONLY storyboards are reachable via real API sequencing instead of the missing
-# tool. Keyed by storyboard stem (matches storyboard_coverage_map's `stem`).
-# Source: .claude/notes/storyboard-conformance/sb5d-comply-test-controller-divergence.md
-# "Part 2 -- triage of the 20". Kept as an explicit, reviewable table here
-# (not re-derived from the prose) per the Core Invariant.
+COMPLY_TEST_CONTROLLER = "comply_test_controller"
+
+# The EDITORIAL half of the comply_test_controller triage, and only that half.
+#
+# WHETHER a storyboard is ungradable is not stored here -- it is derived from
+# the storyboard's own `required_tools` (see `build_row_status_fields`). This
+# table once doubled as that membership test, and measured against the 3.1.1
+# pin it was a strict SUBSET of the storyboards declaring the tool: 20 typed in
+# against 29 declaring it, so 9 -- 4 of them on-path -- rendered as "no ledger
+# entries", i.e. a permanent by-design divergence displayed as not-yet-measured
+# (salesagent-g6m2.1's sibling, salesagent-g6m2.2). Adding a stem here does not
+# make a storyboard ungradable and removing one does not make it gradable.
+#
+# What survives is the judgement no structure carries: DETERMINISTIC INJECTION
+# storyboards stay dormant by design; PRIOR STATE ONLY storyboards are reachable
+# via real API sequencing instead of the missing tool. Keyed by storyboard stem
+# (matches storyboard_coverage_map's `stem`). Source:
+# .claude/notes/storyboard-conformance/sb5d-comply-test-controller-divergence.md
+# "Part 2 -- triage of the 20". Storyboards requiring the tool with no entry
+# here render UNTRIAGED, which is a real answer: ungradable, kind not yet
+# triaged. Guarded by tests/unit/test_architecture_storyboard_controller_
+# divergence.py, which fails on a stem the pinned tree does not gate.
 _COMPLY_TEST_CONTROLLER_DIVERGENCE: dict[str, str] = {
     "audience_buy_flow": "DETERMINISTIC INJECTION",
     "billing_finality_delivery": "DETERMINISTIC INJECTION",
@@ -165,6 +179,28 @@ def check_issue_map_complete(repo: Path, on_path: list[str]) -> list[str]:
     return sorted(set(on_path) - set(_load_issue_map(repo)))
 
 
+def build_row_status_fields(stem: str, text: str) -> dict[str, Any]:
+    """The two status-bearing fields for one storyboard: ungradability + its kind.
+
+    `requires_controller` is DERIVED from the storyboard's own `required_tools`
+    — never from membership in the editorial table above, which is a strict
+    subset of the storyboards the tree gates and so silently misses whatever
+    nobody typed in. Deriving also handles the off-path ones for free, so they
+    stay correct if the coverage gate ever brings them on-path.
+
+    `divergence` is the editorial kind: the triaged label where one exists,
+    `UNTRIAGED` where the tool is required but no triage was recorded (a real
+    answer — ungradable, kind unknown — rather than a blank cell sitting next
+    to a Status that says otherwise), and None where the tool is irrelevant.
+    """
+    requires_controller = COMPLY_TEST_CONTROLLER in storyboard_spec.required_tools(text)
+    label = _COMPLY_TEST_CONTROLLER_DIVERGENCE.get(stem)
+    return {
+        "requires_controller": requires_controller,
+        "divergence": (label or "UNTRIAGED") if requires_controller else None,
+    }
+
+
 def _status_cell(row: dict[str, Any]) -> str:
     """Objective measured state for one storyboard, from the in-network CI ledger.
 
@@ -173,10 +209,14 @@ def _status_cell(row: dict[str, Any]) -> str:
     storyboard and nothing failed. `ungradable` means the job could not reach the
     assertions at all — a coverage hole that a naive "0 failures" reading would
     score as a pass.
+
+    Ledgered failures outrank ungradability deliberately: a ledgered failure is
+    proof the job DID reach the assertions, so reporting "ungradable" there
+    would throw away a real measurement.
     """
     if failures := row["ledgered_failures"]:
         return f"**FAILING** — {len(failures)} ledgered"
-    if row["divergence"]:
+    if row["requires_controller"]:
         return "ungradable (comply_test_controller)"
     return "no ledger entries"
 
@@ -319,7 +359,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "required_tools": sorted(storyboard_spec.required_tools(text)),
                 "checks": checks,
                 "measured": measured or {"status": "not_yet_run"},
-                "divergence": _COMPLY_TEST_CONTROLLER_DIVERGENCE.get(row["stem"]),
+                **build_row_status_fields(stem=row["stem"], text=text),
                 "gh_issues": gh_refs,
                 "tracking": _render_issue_cell(tracking),
                 "tracking_issues": (tracking or {}).get("issues") or [],
@@ -410,9 +450,14 @@ def render(result: dict[str, Any]) -> str:
         "- **Ticket** — `#N (partial)` is an EXISTING issue to reuse, covering some of this "
         "storyboard's checks; the map's `note:` says what it leaves out. **TO FILE** means "
         "nothing in the tracker covers it.",
-        "- **Divergence** — `DETERMINISTIC INJECTION` marks storyboards requiring "
-        "`comply_test_controller`, which will not be implemented (it is a production "
-        "test-control backdoor). Those checks are permanently ungradable here by design.",
+        "- **Divergence** — a storyboard whose `required_tools` name "
+        "`comply_test_controller` is permanently ungradable here by design: that tool "
+        "will not be implemented (it is a production test-control backdoor). Status says "
+        "so for every such storyboard, derived from the pinned tree rather than from a "
+        "list someone maintains. This column says which KIND of divergence it is — "
+        "`DETERMINISTIC INJECTION` (dormant by design) or `PRIOR STATE ONLY` (reachable "
+        "by real API sequencing instead) — and `UNTRIAGED` where that editorial call has "
+        "not been made yet.",
         "",
         "Scenario-level reconciliation (VERDICT/action per proposal) is a separate artifact — "
         "see `storyboard-reconciliation.md`; its rows key by proposal-file slug, not by "
