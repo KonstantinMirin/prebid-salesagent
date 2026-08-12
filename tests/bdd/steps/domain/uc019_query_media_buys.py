@@ -14,8 +14,12 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from src.core.schemas._base import GetMediaBuysRequest
+from tests.bdd.steps._outcome_helpers import _get_response_field
+from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
+from tests.bdd.steps.generic.then_schema import serialized_response
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -2506,4 +2510,123 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
                 return
     raise AssertionError(
         f"snapshot_unavailable_reason='{reason}' not found on any package across {len(buys)} media buy(s)"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Storyboard: post-create status poll (@T-UC-019-storyboard-post-create-status-poll)
+# ═══════════════════════════════════════════════════════════════════════
+# Grades the AdCP 3.1.1 storyboard step the scenario itself cites:
+# dist/compliance/3.1.1/domains/media-buy/index.yaml -> "check_buy_status".
+# The buyer polls get_media_buys with the media_buy_id create_media_buy returned;
+# its graded validations are response_schema (full document against
+# media-buy/get-media-buys-response.json), field_equals_context
+# media_buys[0].media_buy_id == the captured id, and field_present
+# media_buys[0].status — one per Then below, in order.
+#
+# The scenario ran dormant (auto-xfailed on missing step definitions,
+# tests/bdd/conftest.py) until its two real blockers closed: the envelope
+# status (GH #1900) and the item-level confirmed_at/revision gap (GH #1928).
+# conftest routes @post-create-poll to MediaBuyCreateListEnv so the create is a
+# REAL dispatch through the scenario's transport — a factory-seeded buy would
+# make the poll assert nothing.
+
+
+def _created_media_buy_id(ctx: dict) -> str:
+    """The media_buy_id the buyer received from the create_media_buy response.
+
+    Prefers the REAL WIRE: MediaBuyCreateEnv dispatches A2A/MCP through
+    _run_a2a_handler / _run_mcp_client, both of which stash the serialized
+    response, so on both transports UC-019 runs there IS a wire document. The
+    typed payload is the fallback (and a cross-check when both exist) — the step
+    text says the id came from the RESPONSE, so reading only the reconstructed
+    payload would grade the reconstruction instead.
+    """
+    payload_id = _get_response_field(ctx.get("response"), "media_buy_id")
+    wire = ctx.get("wire_response")
+    wire_id = wire.get("media_buy_id") if isinstance(wire, dict) else None
+
+    if wire_id is not None and payload_id is not None:
+        assert wire_id == payload_id, (
+            f"create_media_buy wire media_buy_id {wire_id!r} disagrees with the "
+            f"reconstructed payload {payload_id!r} — the poll would target a buy "
+            f"the buyer was never told about"
+        )
+    captured = wire_id if wire_id is not None else payload_id
+    assert captured, f"create_media_buy returned no media_buy_id; wire={wire!r} payload={ctx.get('response')!r}"
+    return str(captured)
+
+
+@given("the buyer captured a media_buy_id from a successful create_media_buy response")
+def given_captured_media_buy_id_from_create(ctx: dict) -> None:
+    """Perform a REAL create_media_buy through the scenario's transport and capture its id.
+
+    The Given's own success assertion is load-bearing: without it a failed create
+    would leave the create response in ctx, the When's query would early-return,
+    and the Then steps would grade the WRONG document.
+    """
+    kwargs = build_create_request_kwargs(ctx, po_number="PO-UC019-POST-CREATE-POLL")
+    dispatch_request(ctx, **kwargs)
+
+    assert ctx.get("error") is None, f"create_media_buy failed, so nothing was captured: {ctx.get('error')!r}"
+    ctx["created_media_buy_id"] = _created_media_buy_id(ctx)
+
+
+@when("the Buyer Agent calls get_media_buys with that media_buy_id under the same account")
+def when_query_captured_media_buy_id(ctx: dict) -> None:
+    """Poll get_media_buys for the captured id on the same env, transport and identity.
+
+    "Under the same account" holds by construction: both dispatches go through
+    one MediaBuyCreateListEnv, so the resolved identity (tenant + principal) is
+    the same object. The storyboard additionally echoes an explicit ``account``
+    on both calls; neither GetMediaBuysResponse nor its media_buys[] items carry
+    an account field today, so there is nothing to compare — grading the literal
+    account echo belongs with account management, not here.
+    """
+    media_buy_id = ctx.get("created_media_buy_id")
+    assert media_buy_id, "no media_buy_id was captured from create_media_buy"
+    _dispatch_query(ctx, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
+
+
+@then("the media_buys array should include the freshly-created buy")
+def then_media_buys_include_created_buy(ctx: dict) -> None:
+    """Assert the polled document carries exactly the buy that was just created.
+
+    Reads the same document the schema-valid Then grades (the real wire when a
+    dispatcher stashed one), so both Thens speak about one response.
+    """
+    media_buy_id = ctx["created_media_buy_id"]
+    document = serialized_response(ctx)
+    returned_ids = [buy.get("media_buy_id") for buy in document.get("media_buys", [])]
+    assert media_buy_id in returned_ids, (
+        f"get_media_buys did not return the freshly-created buy {media_buy_id!r}; media_buys carried {returned_ids!r}"
+    )
+
+
+@then("the included entry should expose the same media_buy_id and current status")
+def then_included_entry_exposes_id_and_status(ctx: dict) -> None:
+    """Assert the polled entry IS the created buy and reports a real lifecycle status.
+
+    The storyboard step this scenario cites (media-buy/index.yaml
+    ``check_buy_status``) grades exactly two things on the entry:
+    ``field_equals_context media_buys[0].media_buy_id`` against the id captured
+    from create_media_buy, and ``field_present media_buys[0].status``. Presence
+    alone would pass on a null or a typo, so the status is checked for membership
+    in the PINNED enums/media-buy-status.json enum rather than a literal list
+    copied into the test — the pin moves, this assertion moves with it.
+    """
+    from tests.helpers.pinned_schema import load
+
+    media_buy_id = ctx["created_media_buy_id"]
+    document = serialized_response(ctx)
+    matching = [buy for buy in document.get("media_buys", []) if buy.get("media_buy_id") == media_buy_id]
+    assert len(matching) == 1, (
+        f"expected exactly one entry for the freshly-created buy {media_buy_id!r}, "
+        f"got {len(matching)} in {[b.get('media_buy_id') for b in document.get('media_buys', [])]!r}"
+    )
+
+    allowed = load("enums/media-buy-status.json")["enum"]
+    status = matching[0].get("status")
+    assert status in allowed, (
+        f"media_buys[0].status {status!r} is not a pinned AdCP MediaBuyStatus; expected one of {allowed}"
     )

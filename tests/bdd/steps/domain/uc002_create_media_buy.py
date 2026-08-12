@@ -20,6 +20,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import _get_response_field
+from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1490,50 +1491,19 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 # then dispatch a full create_media_buy through the parametrized transport.
 
 
-def _idempotency_pricing_option_id(pricing_option) -> str:
-    """Synthetic pricing_option_id string from a PricingOption ORM row.
-
-    Matches the production/`given_media_buy` convention
-    ``{pricing_model}_{currency_lower}_{fixed|auction}``.
-    """
-    fixed_str = "fixed" if pricing_option.is_fixed else "auction"
-    return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
-
-
 def _build_idempotency_request_kwargs(ctx: dict) -> dict:
     """Assemble a valid create_media_buy request dict against the seeded product.
 
     Stored on ctx["request_kwargs"]; the When step and the "already created"
     Given step dispatch THIS exact dict (copied) so the canonical payload hash
     matches between the original create and the replay.
-    """
-    from datetime import UTC, datetime, timedelta
 
-    product = ctx["default_product"]
-    pricing_option = ctx["default_pricing_option"]
-    now = datetime.now(UTC)
-    ctx["request_kwargs"] = {
-        "brand": {"domain": "testbrand.com"},
-        # Explicit, stable po_number so the canonical payload is byte-identical
-        # between the original create and the replay across ALL transports. The
-        # A2A wrapper no longer mints a random po_number when the caller omits
-        # one (it stays None for idempotency-hash + cross-transport parity), so
-        # this value is set explicitly here to keep the canonical payload —
-        # and therefore the idempotency hash — identical between the original
-        # create and the replay. A real buyer replaying an idempotent request
-        # resends their own po_number.
-        "po_number": "PO-IDEMPOTENCY-REPLAY-001",
-        "start_time": (now + timedelta(days=1)).isoformat(),
-        "end_time": (now + timedelta(days=30)).isoformat(),
-        "packages": [
-            {
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": _idempotency_pricing_option_id(pricing_option),
-            }
-        ],
-    }
-    return ctx["request_kwargs"]
+    The explicit, stable po_number is what keeps the canonical payload — and
+    therefore the idempotency hash — byte-identical between the original create
+    and the replay across ALL transports. A real buyer replaying an idempotent
+    request resends their own po_number.
+    """
+    return build_create_request_kwargs(ctx, po_number="PO-IDEMPOTENCY-REPLAY-001")
 
 
 @given(parsers.parse('a valid create_media_buy request with idempotency_key "{key}"'))

@@ -3525,6 +3525,30 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["env"] = env
             yield
     elif uc == "UC-019":
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if "post-create-poll" in marker_names:
+            # The storyboard post-create poll needs create_media_buy AND
+            # get_media_buys in ONE scenario on ONE identity — a factory-seeded
+            # buy would make the poll vacuous. MediaBuyCreateListEnv extends
+            # MediaBuyCreateEnv with the shared get_media_buys dispatch and routes
+            # a GetMediaBuysRequest to it (same shape as UC-003's MediaBuyDualEnv
+            # fork above). setup_media_buy_data seeds the full create dependency
+            # chain (property tag, product, pricing option, authorized property).
+            from tests.harness.media_buy_create_list import MediaBuyCreateListEnv
+
+            with (
+                _db_scope_for(request, e2e_config),
+                MediaBuyCreateListEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
+            ):
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
+            return
+
         # get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
         # its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
         # read). Scenarios seed buys via factories under ctx["tenant"]/["principal"]
