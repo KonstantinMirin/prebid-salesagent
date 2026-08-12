@@ -62,12 +62,17 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         ctx["result"] = result
         if result.is_error:
             ctx["error"] = result.error
-            # Capture the real wire envelope (A2A/REST/MCP) and the
-            # synthesized envelope (IMPL has no wire) so Then steps can
-            # assert the two-layer AdCP shape per the Error Verification
-            # Policy. Both are None-safe; absent keys mean "no envelope".
+            # Capture the REAL wire envelope only (A2A/REST/MCP) so Then steps can
+            # assert the two-layer AdCP shape per the Error Verification Policy.
+            # The synthesized envelope is deliberately NOT published here: copying
+            # it into ctx let a step write `ctx.get("wire_error_envelope") or
+            # ctx.get("synthesized_error_envelope")` and thereby reinstate exactly
+            # the fallback McpDispatcher refuses (tests/harness/dispatchers.py —
+            # "a dead MCP wire path must yield None here"). The dataclass field
+            # TransportResult.synthesized_error_envelope still exists for the
+            # integration suites that legitimately grade the envelope BUILDER.
+            # None-safe; an absent key means "no envelope".
             ctx["wire_error_envelope"] = result.wire_error_envelope
-            ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
         else:
             ctx["response"] = result.payload
             # Propagate the real serialized success-path wire body so Then steps

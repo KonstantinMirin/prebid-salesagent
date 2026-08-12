@@ -14,6 +14,7 @@ Usage::
 from __future__ import annotations
 
 import functools
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -29,11 +30,13 @@ def _pinned_error_metadata() -> dict[str, dict[str, str]]:
 
     The SDK tree is the single source of truth for schema SHAPE
     (``tests/helpers/pinned_schema.py``). Sourcing this enum from it rather than
-    from the vendored ``tests/fixtures/adcp_schemas_pinned/`` copy is a no-op
-    today: both trees resolve to a byte-identical ``enumMetadata`` block (93
-    codes, ``recovery`` and ``suggestion`` equal for every one). The two sources
-    HAD diverged — the vendored copy sat at 65 codes — and were reconciled when
-    the fixture was regenerated against the pin.
+    from the vendored ``tests/fixtures/adcp_schemas_pinned/`` copy is a no-op on
+    every field any consumer reads: measured 2026-08-12, the two trees carry the
+    same 92 enum codes and 93 ``enumMetadata`` entries, with ZERO ``recovery``
+    and ZERO ``suggestion`` divergences. They are not byte-identical — the
+    ``$id`` differs, each naming its own tree — so the vendored copy is retained
+    deliberately as an INDEPENDENT pin (docs/adcp-spec-version.md "Pinned schema
+    sources"), not as a second source of shape.
 
     Only ``recovery`` is read here (see ``assert_wire_error``);
     ``extract_wire_suggestion`` below reads the WIRE's own suggestion text, not
@@ -161,6 +164,57 @@ class TransportResult:
     def is_error(self) -> bool:
         return self.error is not None
 
+    def wire_error_object(self) -> dict[str, Any] | None:
+        """The payload-layer error object (``errors[0]``) from the captured wire.
+
+        The sanctioned READER for the error region. It exists because the harness
+        previously published only assertions plus a raw envelope dict, leaving a
+        step that needed the code, message or details with nothing to call — so
+        every module hand-rolled ``(envelope.get("errors") or [{}])[0]`` its own
+        way. Resolves through the single locator in
+        ``tests/helpers/envelope_assertions.py``, so reader and assertion can
+        never disagree about where the spec puts a field.
+
+        Tolerant: ``None`` when no wire envelope was captured. Callers that must
+        NOT tolerate that use :meth:`assert_wire_error` or
+        :meth:`wire_error_details`.
+        """
+        from tests.helpers import locate_envelope_error
+
+        return locate_envelope_error(self.wire_error_envelope)
+
+    def wire_error_code(self) -> str | None:
+        """``errors[0].code`` from the captured wire, or ``None`` with no wire."""
+        error = self.wire_error_object()
+        return error.get("code") if error else None
+
+    def wire_error_message(self) -> str | None:
+        """``errors[0].message`` from the captured wire, or ``None`` with no wire."""
+        error = self.wire_error_object()
+        return error.get("message") if error else None
+
+    def wire_error_details(self, code: str, *, recovery: str | None = None) -> Mapping[str, Any]:
+        """The ``errors[0].details`` block, AFTER asserting the envelope carries ``code``.
+
+        The escape hatch for oracles that cannot be expressed as an equality
+        subset (non-empty array; every entry matches a regex; membership) — and
+        it is deliberately STRONGER than the ``details=`` kwarg, not a way around
+        it: taking the expected ``code`` means a details block from the wrong
+        error is unreadable. Without that, an oracle grades the details of
+        whatever envelope happened to be captured.
+
+        Required-not-optional: raises if there is no wire envelope or no details
+        block, so a caller never has to ``None``-check what the spec guarantees.
+        """
+        self.assert_wire_error(code, recovery=recovery)
+        error = self.wire_error_object() or {}
+        details = error.get("details")
+        assert isinstance(details, dict), (
+            f"expected a details object at errors[0].details for {code}, got {details!r}: "
+            f"{self.wire_error_envelope}"
+        )
+        return details
+
     def assert_wire_error(
         self,
         code: str,
@@ -169,6 +223,7 @@ class TransportResult:
         require_suggestion: bool = False,
         message_substr: str | None = None,
         field: str | None = None,
+        details: Mapping[str, Any] | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -181,9 +236,11 @@ class TransportResult:
         must not hand-roll envelope parsing.
 
         ``field`` pins ``errors[0].field``, the error.json pointer naming WHICH
-        request field was rejected. It is a kwarg here rather than a separate
-        wire_error_field() helper on purpose: one sanctioned error surface means a
-        step never has to decide which mechanism to reach for.
+        request field was rejected, and ``details`` subset-checks
+        ``errors[0].details``. They are kwargs here rather than separate
+        wire_error_field()/wire_error_details() assertions on purpose: one
+        sanctioned error surface means a step never has to decide which
+        mechanism to reach for.
         """
         from tests.helpers import assert_envelope_shape
 
@@ -201,7 +258,29 @@ class TransportResult:
             f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
             "succeeded or errored before reaching a transport."
         )
-        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr, field=field)
+        assert_envelope_shape(
+            envelope,
+            code,
+            recovery=expected_recovery,
+            message_substr=message_substr,
+            field=field,
+            details=details,
+        )
         if require_suggestion:
-            suggestion = extract_wire_suggestion(envelope)
-            assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
+            # Presence, not equality: error.json defines `suggestion` as free-form
+            # remediation text with no enumMetadata tie — unlike its sibling
+            # `recovery`, whose enum relationship the schema does spell out. The
+            # spec's own worked examples emit site-specific wording that differs
+            # from the enum default, so pinning the text would grade the emitter's
+            # prose rather than the contract.
+            #
+            # BOTH mirrored layers by name (#1547 item 3): an either-layer check
+            # (`errors[0].get(...) or adcp_error.get(...)`) lets an emitter that
+            # populates one layer satisfy every call site in the suite, making the
+            # only defect this assertion exists to catch — the mirror breaking —
+            # invisible.
+            for layer, error in (("adcp_error", envelope["adcp_error"]), ("errors[0]", envelope["errors"][0])):
+                assert error.get("suggestion"), (
+                    f"{layer} carries no buyer-facing suggestion for {code}; the spec places the "
+                    f"hint at the top level of the error object: {envelope}"
+                )

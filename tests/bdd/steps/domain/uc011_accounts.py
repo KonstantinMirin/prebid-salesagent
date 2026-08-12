@@ -17,7 +17,14 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from tests.bdd.steps._outcome_helpers import _require_response, wire_absent, wire_dict
+from tests.bdd.steps._outcome_helpers import (
+    _require_response,
+    wire_absent,
+    wire_dict,
+    wire_entry,
+    wire_entry_errors,
+    wire_field,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
@@ -381,8 +388,11 @@ def when_list_accounts_via_transport(ctx: dict, transport: str | None = None) ->
 def when_list_accounts_unfiltered(ctx: dict) -> None:
     """Send list_accounts request with no filters (matches multiple phrasings).
 
-    For cross-cutting scenarios (context-echo) that run under AccountSyncEnv,
-    calls _list_accounts_impl directly since the sync env doesn't dispatch list.
+    Dispatches over the scenario's transport on EVERY env: AccountSyncEnv now
+    carries the list verb too (AccountListDispatchMixin), so a cross-cutting
+    scenario running under the sync env grades the same wire every other
+    scenario does. The request is constructed explicitly so one request-type
+    discriminator covers both list When steps.
     Simulates DB failure when ctx["simulate_db_failure"] is set.
     """
     # DB failure simulation: mock AccountUoW to raise OperationalError
@@ -401,20 +411,9 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
                 ctx["error"] = exc
         return
 
-    from tests.harness.account_sync import AccountSyncEnv
+    from src.core.schemas.account import ListAccountsRequest
 
-    env = ctx["env"]
-    if isinstance(env, AccountSyncEnv):
-        # TRANSPORT-BYPASS: cross-cutting list under sync env
-        from src.core.tools.accounts import _list_accounts_impl
-
-        env._commit_factory_data()
-        try:
-            ctx["response"] = _list_accounts_impl(identity=env.identity)
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        dispatch_request(ctx)
+    dispatch_request(ctx, req=ListAccountsRequest())
 
 
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with status filter "{status}"'))
@@ -492,26 +491,13 @@ def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
 def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     """Send list_accounts with sandbox filter.
 
-    May run under AccountSyncEnv (sandbox tag). For cross-cutting scenarios
-    that need list dispatch on a sync env, calls _list_accounts_impl directly.
+    Dispatches over the scenario's transport on every env, including the sandbox
+    tag's AccountSyncEnv — which carries the list verb via
+    AccountListDispatchMixin.
     """
     from src.core.schemas.account import ListAccountsRequest
-    from tests.harness.account_sync import AccountSyncEnv
 
-    env = ctx["env"]
-    req = ListAccountsRequest(sandbox=value.lower() == "true")
-    if isinstance(env, AccountSyncEnv):
-        # Cross-cutting: sync env can't dispatch list requests
-        # TRANSPORT-BYPASS: sandbox list under sync env
-        from src.core.tools.accounts import _list_accounts_impl
-
-        env._commit_factory_data()
-        try:
-            ctx["response"] = _list_accounts_impl(req=req, identity=env.identity)
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        dispatch_request(ctx, req=req)
+    dispatch_request(ctx, req=ListAccountsRequest(sandbox=value.lower() == "true"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1320,9 +1306,7 @@ def then_account_payment_terms(ctx: dict, pt: str) -> None:
     ``net_45`` is in enums/payment-terms.json#/enum
     (["net_15","net_30","net_45","net_60","net_90","prepay"]).
     """
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    actual = getattr(acct, "payment_terms", None)
-    actual = _status_str(actual) if actual is not None else None
+    actual = _wire_account(ctx).get("payment_terms")
     assert actual == pt, f"Expected payment_terms '{pt}', got '{actual}'"
 
 
@@ -1337,12 +1321,8 @@ def then_settings_update_entry_action(ctx: dict, action: str) -> None:
     Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/action/enum
     = ["created","updated","unchanged","failed"].
     """
-    resp = _require_response(ctx)
-    assert resp.accounts, f"Expected a per-account result entry, got {resp.accounts!r}"
-    acct = resp.accounts[0]
-    actual = _action_str(acct.action)
+    actual = _wire_account(ctx).get("action")
     assert actual == action, f"Expected settings-update entry action '{action}', got '{actual}'"
-    ctx["last_account"] = acct
 
 
 @then(parsers.parse('the per-account error recovery is "{recovery}"'))
@@ -1352,10 +1332,9 @@ def then_per_account_error_recovery(ctx: dict, recovery: str) -> None:
     Spec: core/error.json#/properties/recovery/enum = ["transient","correctable","terminal"];
     enums/error-code.json#/enumMetadata/UNSUPPORTED_PROVISIONING recovery = "correctable".
     """
-    acct = ctx.get("last_account")
-    assert acct is not None, "No account referenced — need a prior settings-update entry step"
-    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
-    recoveries = [getattr(e, "recovery", None) for e in acct.errors]
+    errors = _sole_account_errors(ctx)
+    assert errors, "Expected a non-empty per-account errors array on the wire, got []"
+    recoveries = [e.get("recovery") for e in errors]
     assert recovery in recoveries, f"Expected per-account error recovery '{recovery}', got {recoveries}"
 
 
@@ -1412,8 +1391,7 @@ def then_echoed_account_id_stable(ctx: dict) -> None:
     """
     first = ctx.get("first_seller_account_id")
     assert first, "No first-call account_id captured — the first 'seller-assigned account_id' Then must run first"
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    second = getattr(acct, "account_id", None)
+    second = _wire_account(ctx).get("account_id")
     assert second == first, f"Expected the echoed account_id to stay '{first}', got '{second}'"
 
 
@@ -1706,9 +1684,14 @@ def then_account_operator(ctx: dict, operator: str) -> None:
 
 @then(parsers.parse('the account billing is "{billing}"'))
 def then_account_billing(ctx: dict, billing: str) -> None:
-    """Assert the last referenced account has the expected billing model."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    actual = _status_str(acct.billing) if acct.billing else None
+    """Assert the referenced account has the expected billing model, ON THE WIRE.
+
+    #1521's acceptance oracle: the obligation is what the BUYER receives, so this
+    reads the wire entry rather than the typed payload. Locating by wire dict does
+    not disturb ``_find_account_by_brand`` or the typed ``last_account`` stash that
+    the pre-existing Thens still share (#1880).
+    """
+    actual = _wire_account(ctx).get("billing")
     assert actual == billing, f"Expected billing '{billing}', got '{actual}'"
 
 
@@ -2079,12 +2062,9 @@ def then_per_account_error_code(ctx: dict, code: str) -> None:
     production response. A capture that cannot cross a quote makes the specific
     step win by construction rather than by registration order.
     """
-    acct = ctx.get("last_account")
-    if acct is None:
-        acct = _require_response(ctx).accounts[0]
-        ctx["last_account"] = acct
-    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
-    codes = [e.code for e in acct.errors]
+    errors = _sole_account_errors(ctx)
+    assert errors, "Expected a non-empty per-account errors array on the wire, got []"
+    codes = [e.get("code") for e in errors]
     assert code in codes, f"Expected error code '{code}' in {codes}"
 
 
@@ -2618,11 +2598,13 @@ def then_deactivation_result(ctx: dict, domain: str) -> None:
 
     Production code (BR-RULE-061) sets action='updated' and status='closed'
     for accounts removed by delete_missing.
+
+    The dry-run/delete_missing acceptance oracle: graded on the wire entry the
+    buyer receives, located by brand domain (the identifier the step text carries).
     """
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    actual_status = _status_str(acct.status)
-    actual_action = _action_str(acct.action)
+    acct = _wire_account(ctx, domain=domain)
+    actual_status = acct.get("status")
+    actual_action = acct.get("action")
     assert actual_status == "closed", f"Expected status 'closed' for deactivated {domain}, got '{actual_status}'"
     assert actual_action == "updated", f"Expected action 'updated' for deactivated {domain}, got '{actual_action}'"
 
@@ -2805,9 +2787,9 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
     """Send a list_accounts or sync_accounts request with inline context.
 
     Context-echo is cross-cutting: tests both list and sync operations.
-    The conftest harness provides AccountSyncEnv for context-echo tags.
-    For list_accounts, we call _list_accounts_impl directly (the sync env
-    shares the same DB session and identity infrastructure).
+    The conftest harness provides AccountSyncEnv for context-echo tags, which
+    dispatches BOTH verbs (AccountListDispatchMixin), so each operation is
+    graded on the scenario's real transport.
     """
     context_data = _parse_inline_context(ctx_json)
     ctx["sent_context"] = context_data
@@ -3433,12 +3415,18 @@ def _persisted_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
     Reuses the list read-back the register-paused scenario already exercises, so
     the credential scrub and the JSONType None-vs-[] round trip are graded on the
     same path a buyer would actually use.
+
+    Dispatches through the env's list verb over the SCENARIO'S transport, but via
+    env.call_via rather than dispatch_request: dispatch_request is the one writer
+    of ctx["result"], and this read-back must not clobber the result the scenario
+    is actually grading.
     """
-    from src.core.tools.accounts import _list_accounts_impl
+    from src.core.schemas.account import ListAccountsRequest
 
     env = ctx["env"]
-    env._commit_factory_data()
-    listed = _list_accounts_impl(identity=env.identity)
+    read_back = env.call_via(ctx["transport"], req=ListAccountsRequest())
+    assert read_back.is_success, f"list_accounts read-back failed: {read_back.error!r}"
+    listed = read_back.payload
     if domain is not None:
         acct = next((a for a in listed.accounts if a.brand and a.brand.domain == domain), None)
         assert acct is not None, (
@@ -4320,11 +4308,12 @@ def _dispatch_entry(ctx: dict, entry: dict[str, Any]) -> None:
 def _listed_account(ctx: dict, domain: str) -> Any:
     """The account with ``domain`` from the CURRENT list_accounts response.
 
-    Read-back legs assert on the typed list response rather than ``wire_dict``:
-    under AccountSyncEnv the list_accounts When is a documented transport bypass
-    (it calls _list_accounts_impl directly), so no success-path wire is stashed
-    and wire_dict would fail on harness wiring instead of on the obligation. The
-    sync legs, which DO go through the wire, assert on ``wire_dict``.
+    Read-back legs still assert on the typed list response: this is one of the
+    pre-existing typed-payload reads tracked by #1880, not a wiring constraint.
+    The bypass that used to justify it is gone — AccountSyncEnv dispatches the
+    list verb over the wire now — so the wire IS stashed, and this helper is
+    convertible to ``wire_entry(ctx, "accounts", ...)`` whenever #1880 retires
+    the typed cluster it belongs to. The sync legs assert on ``wire_dict``.
     """
     resp = _require_response(ctx)
     accounts = getattr(resp, "accounts", None) or []
@@ -4336,16 +4325,39 @@ def _listed_account(ctx: dict, domain: str) -> Any:
     return acct
 
 
-def _wire_account(ctx: dict, index: int = 0) -> dict[str, Any]:
-    """The per-account result at ``index`` on the success-path sync wire."""
-    body = wire_dict(ctx)
-    accounts = body.get("accounts")
-    assert isinstance(accounts, list) and len(accounts) > index, (
-        f"success wire body carries no accounts[{index}]: {body!r}"
-    )
-    acct = accounts[index]
-    assert isinstance(acct, dict), f"accounts[{index}] is not a JSON object on the wire: {acct!r}"
-    return acct
+def _sole_account_errors(ctx: dict) -> list[Any]:
+    """The per-account ``errors[]`` of the SOLE account entry on the success wire.
+
+    Goes through ``_wire_account`` first so the ``len(accounts) == 1`` pin applies
+    here too: an entry-errors oracle that silently graded row 0 of a multi-row
+    response would be exactly the vacuous pass the count pin exists to prevent.
+    """
+    _wire_account(ctx)
+    return wire_entry_errors(ctx, "accounts", index=0)
+
+
+def _wire_account(ctx: dict, index: int | None = None, *, domain: str | None = None) -> dict[str, Any]:
+    """The per-account result on the success wire — by brand domain, or the SOLE entry.
+
+    Delegates to the ``wire_entry`` primitive (tests/bdd/steps/_outcome_helpers.py)
+    rather than indexing the body itself, so the "name the entries actually present"
+    diagnostic and the loud missing-wire guard are shared, not re-derived here.
+
+    With neither argument it takes index 0 AND pins ``len(accounts) == 1``: an
+    index-0 default is only sound on a genuinely single-entry response, and pinning
+    it means a scenario that grows a second entry fails loudly instead of silently
+    grading the wrong row.
+    """
+    if domain is not None:
+        return wire_entry(ctx, "accounts", **{"brand.domain": domain})
+    if index is None:
+        entries = wire_field(ctx, "accounts")
+        assert len(entries) == 1, (
+            f"the sole-entry read needs exactly one account on the wire, got {len(entries)}; "
+            "locate the entry by brand domain instead"
+        )
+        index = 0
+    return wire_entry(ctx, "accounts", index=index)
 
 
 # ── When: entry-field disposition dispatches ───────────────────────────
@@ -4603,6 +4615,5 @@ def then_per_account_result_no_errors(ctx: dict) -> None:
     advisory hint a DECLARED no-op rather than a silent rejection: there is no
     channel to advise on a successful account, so acceptance is the contract.
     """
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    errors = getattr(acct, "errors", None)
+    errors = _sole_account_errors(ctx)
     assert not errors, f"Expected no per-account errors on a successful account, got {errors!r}"

@@ -76,6 +76,21 @@ def _wire_body(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def _dig(doc: Any, path: str) -> Any:
+    """Walk a dotted path through nested JSON objects, or :data:`WIRE_MISSING`.
+
+    The shared resolver behind :func:`wire_lookup` (whole-body reads) and
+    :func:`_locate_entry` (per-entry matches) — one dotted-path convention across
+    every wire helper, defined once.
+    """
+    cur: Any = doc
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return WIRE_MISSING
+        cur = cur[part]
+    return cur
+
+
 def wire_lookup(ctx: dict, path: str) -> Any:
     """Resolve a dotted path on the success-path wire, or :data:`WIRE_MISSING` if absent.
 
@@ -90,12 +105,7 @@ def wire_lookup(ctx: dict, path: str) -> Any:
     surface: whenever the oracle is binary, reach for wire_field/wire_absent instead,
     and never rebuild a private dotted-path resolver on top of this one.
     """
-    cur: Any = _wire_body(ctx)
-    for part in path.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return WIRE_MISSING
-        cur = cur[part]
-    return cur
+    return _dig(_wire_body(ctx), path)
 
 
 def wire_field(ctx: dict, field: str) -> Any:
@@ -136,6 +146,73 @@ def wire_dict(ctx: dict, path: str | None = None) -> dict:
     value = wire_field(ctx, path)
     assert isinstance(value, dict), f"{path!r} is not a JSON object on the wire: {value!r}"
     return value
+
+
+def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str, Any]) -> dict:
+    """The one locator for a per-entry read inside a SUCCESS envelope.
+
+    Sole implementation behind :func:`wire_entry` and :func:`wire_entry_errors` —
+    two copies of the "find the row, or say what rows there were" logic is exactly
+    the duplication the canonical-helper rule exists to prevent.
+
+    Strict on every miss, and the failure NAMES THE ENTRIES ACTUALLY PRESENT: a
+    bare "no match" sends the reader to the harness, while showing what the wire
+    did carry makes an off-by-one identifier or an unexpected partial-failure row
+    obvious from the output alone.
+    """
+    entries = wire_field(ctx, collection)
+    assert isinstance(entries, list), f"{collection!r} is not a JSON array on the wire: {entries!r}"
+
+    def _present() -> list:
+        return [{k: e.get(k) for k in ("account_id", "buyer_ref", "creative_id", "action") if k in e} for e in entries]
+
+    if index is not None:
+        assert 0 <= index < len(entries), (
+            f"{collection}[{index}] is out of range — the wire carried {len(entries)} entr(y/ies): {_present()}"
+        )
+        entry = entries[index]
+    else:
+        assert match, f"wire_entry({collection!r}) needs either index= or a field to match on"
+        matched = [e for e in entries if isinstance(e, dict) and all(_dig(e, k) == v for k, v in match.items())]
+        assert matched, f"no {collection} entry matching {match!r}; the wire carried: {_present()}"
+        assert len(matched) == 1, f"{match!r} matched {len(matched)} {collection} entries, expected exactly one"
+        entry = matched[0]
+    assert isinstance(entry, dict), f"{collection} entry is not a JSON object on the wire: {entry!r}"
+    return entry
+
+
+def wire_entry(ctx: dict, collection: str, *, index: int | None = None, **match: Any) -> dict:
+    """One entry of a per-entry SUCCESS response, located on the wire.
+
+    A partial-success response (e.g. sync-accounts-response oneOf/0) carries its
+    per-entry outcomes at ``accounts[]`` — INSIDE a success envelope — so
+    ``assert_wire_error`` / ``wire_error_envelope``, which grade the error-envelope
+    shape, structurally cannot serve them. Without this primitive the only way to
+    reach an entry is a typed-payload read or a hand-rolled index, which is how the
+    typed ``ctx["last_account"]`` stash grew 28 readers.
+
+    Locate by ``**match`` on the entry's own wire fields — flat
+    (``account_id="acct_1"``) or dotted for a nested one
+    (``**{"brand.domain": "nike.com"}``, the same dotted convention
+    :func:`wire_lookup` uses) — or, for a genuinely single-entry response, by ``index=0`` — in which case pin
+    the count (``len(wire_field(ctx, "accounts")) == 1``) so index 0 is asserted
+    rather than assumed. Built on :func:`wire_field`, so it inherits the loud guard.
+    """
+    return _locate_entry(ctx, collection, index, match)
+
+
+def wire_entry_errors(ctx: dict, collection: str, *, index: int | None = None, **match: Any) -> list:
+    """The per-entry ``errors[]`` array of one entry, located on the wire.
+
+    Per-entry errors are the partial-failure channel: a rejected row inside an
+    otherwise successful response. Defaults to ``[]`` — an entry that succeeded
+    carries no errors, and that absence is a legitimate outcome to assert on, not
+    a missing-wire defect.
+    """
+    entry = _locate_entry(ctx, collection, index, match)
+    errors = entry.get("errors") or []
+    assert isinstance(errors, list), f"{collection} entry errors is not a JSON array on the wire: {errors!r}"
+    return errors
 
 
 def wire_absent(ctx: dict, path: str) -> None:

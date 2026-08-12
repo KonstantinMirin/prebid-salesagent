@@ -36,20 +36,45 @@ Both allowlists can only SHRINK. Each entry documents the production gap that ke
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
+
+import pytest
 
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _TESTS_ROOT = _STEPS_DIR.parent.parent
 
-_WIRE_REFERENCES = (
-    "_wire_code",
-    "_wire_suggestion",
-    "_wire_error_object",
-    "assert_wire_error",
-    "wire_error_envelope",
-)
+def _derive_wire_references() -> frozenset[str]:
+    """The sanctioned wire primitives, DERIVED from the modules that define them.
+
+    A hand-typed tuple is a derived identifier that rots silently: it listed five
+    names while seven primitives existed, so a step calling one of the other two
+    counted as NOT using the wire. Importing the artifacts means a primitive added
+    to the harness is recognized here the day it lands, with no second list to
+    remember.
+    """
+    from tests.bdd.steps.generic import then_error
+    from tests.harness.transport import TransportResult
+
+    # ERROR-wire only. The SUCCESS-path helpers (wire_field/wire_dict/wire_lookup/
+    # wire_absent, TransportResult.wire_response) must NOT count: _uses_wire gates the
+    # reconstructed-error exemptions, so admitting them would exempt a step that reads a
+    # success field through a sanctioned helper and still hand-rolls its ERROR read.
+    # The hand-typed tuple this replaces was too narrow; a bare "wire" substring is too
+    # wide in the opposite direction.
+    names = {name for name in dir(TransportResult) if "wire_error" in name}
+    names.add("assert_wire_error")
+    names |= {
+        name
+        for name in vars(then_error)
+        if name.startswith("_wire_") and callable(getattr(then_error, name))
+    }
+    return frozenset(names)
+
+
+_WIRE_REFERENCES = _derive_wire_references()
 
 # -- Check A: test-side error construction ------------------------------------
 # Keyed by "<relative path> <enclosing func> <ErrorClass>" (NOT line numbers — those
@@ -68,7 +93,24 @@ _ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
 _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
 
 # -- Check C: hand-rolled envelope/error parsing -------------------------------
-_HAND_ROLLED_PARSING_ALLOWLIST: set[str] = set()
+# SEEDED (not grown) when the scan stopped being bound to the @then decorator and
+# gained the protocol-position form: every entry below is PRE-EXISTING on
+# origin/main and was invisible to the older scan, not newly introduced. Measured
+# AFTER this PR's own hand-rolls were deleted, so nothing this PR added is parked
+# here. Shrink-only from this seed — it may never grow.
+_HAND_ROLLED_PARSING_ALLOWLIST: set[str] = {
+    # FIXME(#1880): pre-existing typed/hand-rolled error reads in the step layer.
+    # Each digs errors[]/adcp_error out of a payload by hand instead of calling the
+    # harness readers (TransportResult.wire_error_object/_code/_message) or, for the
+    # per-entry arrays, wire_entry_errors(). Retire with the #1880 typed-Then cluster.
+    "bdd/steps/domain/uc002_nfr.py then_payload_size_limits",
+    "bdd/steps/domain/uc003_update_media_buy.py then_no_errors_field",
+    "bdd/steps/domain/uc004_delivery.py _assert_wire_rejection",
+    "bdd/steps/domain/uc006_sync_creatives.py _assert_per_creative_failure",
+    "bdd/steps/domain/uc006_sync_creatives.py _extract_error_code_and_suggestion",
+    "bdd/steps/domain/uc011_accounts.py _assert_error_has_code_and_message",
+    "bdd/steps/generic/then_media_buy.py then_response_no_errors_field",
+}
 
 
 def _iter_step_modules() -> list[tuple[str, ast.Module]]:
@@ -113,6 +155,47 @@ def _error_class_name(call: ast.Call) -> str | None:
     fn = call.func
     name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
     return name if name and name.endswith("Error") else None
+
+
+def _reads_ctx_result(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if the function reads ``ctx["result"]`` — the actual wire handle.
+
+    Not the bare name ``result``: any local variable spelled ``result`` (and, via
+    _func_names' string constants, any f-string mentioning one) used to satisfy
+    ``uses_wire``, which made the exemption reachable by accident. Only the
+    subscript on ``ctx`` is the TransportResult the dispatcher stashed.
+    """
+    for node in ast.walk(func):
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "ctx"
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "result"
+        ):
+            return True
+    return False
+
+
+def _wire_reference_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Wire primitives the function actually CALLS or reads — never string constants.
+
+    ``_func_names`` deliberately includes string constants (Check A needs them);
+    here a mere mention of ``"wire_error_envelope"`` inside a failure message must
+    not count as using the wire.
+    """
+    names: set[str] = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+    return names & set(_WIRE_REFERENCES)
+
+
+def _uses_wire(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the function reaches the wire through a sanctioned mechanism."""
+    return bool(_wire_reference_names(func)) or _reads_ctx_result(func)
 
 
 def _func_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
@@ -162,8 +245,7 @@ def _find_reconstructed_only_assertions() -> set[str]:
                 continue
             names = _func_names(func)
             uses_reconstructed = bool({"_get_error_code", "_get_error_dict"} & names)
-            uses_wire = bool(set(_WIRE_REFERENCES) & names) or "result" in names
-            if uses_reconstructed and not uses_wire:
+            if uses_reconstructed and not _uses_wire(func):
                 found.add(f"{rel} {func.name}")
     return found
 
@@ -183,7 +265,13 @@ def test_no_test_side_error_construction() -> None:
 
 
 def _is_ctx_wire_envelope_get(node: ast.AST) -> bool:
-    """True if node is ctx.get("wire_error_envelope" | "synthesized_error_envelope")."""
+    """True if node is ``ctx.get("wire_error_envelope")`` or the retired synthesized key.
+
+    ``synthesized_error_envelope`` is no longer published into ctx (the dispatcher
+    write was deleted), so a step reading it can only be reinstating the fallback
+    the MCP dispatcher refuses. It stays RECOGNIZED here — and, deliberately, is
+    NOT exemptible below — so the shape is reported rather than silently ignored.
+    """
     if not isinstance(node, ast.Call):
         return False
     fn = node.func
@@ -227,8 +315,15 @@ def _exempted_envelope_get_ids(func: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     for node in _own_nodes(func):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             operands = _flatten_or_operands(node.value)
+            # A DISJUNCTION of envelope reads is the synthesized-fallback disease and
+            # never earns the variable-hop exemption: `ctx.get(wire) or ctx.get(synth)`
+            # grades a test-side reconstruction wherever the real wire is missing.
+            # Only the single-source form (one read, hopped through a variable) is
+            # eligible for the presence-only / assert_envelope_shape exemptions.
+            if len(operands) != 1:
+                continue
             get_ids = {id(o) for o in operands if _is_ctx_wire_envelope_get(o)}
-            if get_ids and len(get_ids) == len(operands):
+            if get_ids:
                 var_sources[node.targets[0].id] = get_ids
         if isinstance(node, ast.JoinedStr):
             exempt.update(id(n) for n in ast.walk(node) if _is_ctx_wire_envelope_get(n))
@@ -256,6 +351,48 @@ def _exempted_envelope_get_ids(func: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     return exempt
 
 
+#: The individual FUNCTIONS inside the step tree that legitimately read an ``errors``
+#: key, keyed exactly like a violation entry ("<rel path> <func>").
+#:
+#: Function-scoped, never module-scoped: exempting a whole module would hand the step
+#: tree's most-imported shared helper file a blanket pass, pre-authorizing the single
+#: most attractive place for this disease to relocate to. The real error-envelope
+#: primitives (tests/helpers/envelope_assertions.py, tests/harness/transport.py) live
+#: OUTSIDE _STEPS_DIR and are never scanned, so they need no exemption at all.
+#:
+#: The one entry below is a NAME COLLISION, not an envelope read: ``wire_entry_errors``
+#: reads the PER-ENTRY ``errors[]`` array inside a SUCCESS envelope (a partial-failure
+#: row), which is a different region from the envelope-level ``errors[0]`` Check C
+#: targets — and it is itself the sanctioned primitive for that region.
+_PRIMITIVE_FUNCTIONS = frozenset({"bdd/steps/_outcome_helpers.py wire_entry_errors"})
+
+#: Envelope keys whose location in the wire shape is the harness's business.
+_PROTOCOL_POSITION_KEYS = frozenset({"errors", "adcp_error"})
+
+
+def _reads_protocol_position_by_hand(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if the function digs an envelope protocol position out of a dict itself."""
+    for node in _own_nodes(func):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value in _PROTOCOL_POSITION_KEYS
+            and not (isinstance(node.func.value, ast.Name) and node.func.value.id == "ctx")
+        ):
+            return True
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value in _PROTOCOL_POSITION_KEYS
+            and not (isinstance(node.value, ast.Name) and node.value.id == "ctx")
+        ):
+            return True
+    return False
+
+
 def _hand_rolled_calls_in_func(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True if func's own body (not nested defs) hand-rolls error/envelope parsing.
 
@@ -269,9 +406,18 @@ def _hand_rolled_calls_in_func(func: ast.FunctionDef | ast.AsyncFunctionDef) -> 
     (b) ctx.get("wire_error_envelope") / ctx.get("synthesized_error_envelope") --
         reading the envelope dict directly instead of through assert_wire_error,
         except the two exemptions in _exempted_envelope_get_ids.
+    (c) hand-rolled access to an envelope's PROTOCOL POSITIONS -- ``x.get("errors")``
+        / ``x["errors"]`` / ``x.get("adcp_error")`` -- the canonical
+        ``(envelope.get("errors") or [{}])[0]`` shape. Form (b) alone missed this the
+        moment the ctx read moved into a helper and only the INDEXING stayed behind.
+        Where the spec puts a field is the harness's business
+        (tests/helpers/envelope_assertions.locate_envelope_error and the readers on
+        TransportResult); a step re-deriving it is a second answer to the same
+        question. The individual functions that ARE the sanctioned primitive for a
+        region are exempted by the scanner (see _PRIMITIVE_FUNCTIONS), not here --
+        this detector grades every function it is handed.
     """
-    names = _func_names(func)
-    uses_wire = bool(set(_WIRE_REFERENCES) & names) or "result" in names
+    uses_wire = _uses_wire(func)
     exempt_get_ids = _exempted_envelope_get_ids(func)
 
     for node in _own_nodes(func):
@@ -289,19 +435,31 @@ def _hand_rolled_calls_in_func(func: ast.FunctionDef | ast.AsyncFunctionDef) -> 
             return True
         if _is_ctx_wire_envelope_get(node) and id(node) not in exempt_get_ids:
             return True
-    return False
+    return _reads_protocol_position_by_hand(func)
 
 
 def _find_hand_rolled_envelope_parsing() -> set[str]:
-    """Find @then steps that hand-roll error/envelope parsing (see
+    """Find step-module functions that hand-roll error/envelope parsing (see
     _hand_rolled_calls_in_func for the two forms) instead of using
     ctx['result'].assert_wire_error(...) or the _wire_code/_wire_suggestion helpers.
+
+    EVERY function in the step tree is scanned, not only @then-decorated ones. The
+    decorator was never the mechanism: a @then delegating to a module-local
+    ``_envelope(ctx)`` hand-rolls exactly as much as one that inlines it, and
+    binding enforcement to the decorator is what let the disease relocate one call
+    frame down while this guard's allowlist read empty. Scanning every function is
+    both simpler than a call-graph walk and strictly more complete (a helper
+    calling a helper, or one reached from a non-@then entry point, still slips a
+    one-level walk).
     """
     found: set[str] = set()
     for rel, tree in _iter_step_modules():
         for func in _enclosing_functions(tree):
-            if _is_then(func) and _hand_rolled_calls_in_func(func):
-                found.add(f"{rel} {func.name}")
+            entry = f"{rel} {func.name}"
+            if entry in _PRIMITIVE_FUNCTIONS:
+                continue
+            if _hand_rolled_calls_in_func(func):
+                found.add(entry)
     return found
 
 
@@ -319,6 +477,76 @@ def test_no_hand_rolled_envelope_parsing() -> None:
             "Use ctx['result'].assert_wire_error(code, recovery=..., message_substr=...) instead "
             "(tests/harness/transport.py) -- the single sanctioned envelope-parsing mechanism. "
             "See then_error_code / then_declaration_rejected for the reference pattern."
+        ),
+    )
+
+
+#: Two hand-rolling helpers in ONE file — the shape that distinguishes a function-scoped
+#: exemption from a module-scoped one. With a module-wide carve-out both disappear.
+_TWO_HELPER_MUTATION_MODULE = """
+def _sanctioned_reader(ctx):
+    body = ctx.get("wire_error_envelope")
+    return (body.get("errors") or [{}])[0]
+
+
+def _unsanctioned_neighbour(ctx):
+    body = ctx.get("wire_error_envelope")
+    return (body.get("errors") or [{}])[0]
+"""
+
+
+def test_exemption_is_function_scoped_not_module_scoped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Exempting one function must NOT exempt its neighbours in the same file.
+
+    The property the exemption exists to have, and the one a staleness check cannot
+    reach: staleness asks "does this entry still flag something", scope asks "does it
+    flag ONLY that something". They coincide on today's tree — ``wire_entry_errors`` is
+    the only Check C hit in its module — so a regression to a module-wide carve-out
+    would be invisible without this. It would not stay invisible: the day a second
+    function in the step tree's most-imported helper module hand-rolls, a module-wide
+    exemption swallows it silently.
+    """
+    rel = "bdd/steps/domain/uc999_mutation_fixture.py"
+    monkeypatch.setattr(sys.modules[__name__], "_PRIMITIVE_FUNCTIONS", frozenset({f"{rel} _sanctioned_reader"}))
+    reported = _scan_mutated_tree(monkeypatch, tmp_path, _TWO_HELPER_MUTATION_MODULE)
+
+    names = {entry.split()[-1] for entry in reported}
+    assert "_sanctioned_reader" not in names, f"the exempted function was reported anyway: {sorted(reported)}"
+    assert "_unsanctioned_neighbour" in names, (
+        "a NON-exempt function in the same file was not reported — the exemption is being "
+        f"applied module-wide, not per function: {sorted(reported)}"
+    )
+
+
+def test_primitive_function_exemptions_are_not_stale() -> None:
+    """Every Check C exemption must name a function that WOULD otherwise be flagged.
+
+    A stale exemption is invisible: it silently protects nothing while reading as a
+    sanctioned carve-out, and if the function is later renamed the carve-out quietly
+    covers no one. Same shrink-only discipline the allowlists get.
+    """
+    module = sys.modules[__name__]
+
+    exempted = set(_PRIMITIVE_FUNCTIONS)
+    assert exempted, "the exemption set is empty — delete the mechanism rather than keeping it dead"
+    original = module._PRIMITIVE_FUNCTIONS
+    try:
+        module._PRIMITIVE_FUNCTIONS = frozenset()
+        without_exemptions = _find_hand_rolled_envelope_parsing()
+    finally:
+        module._PRIMITIVE_FUNCTIONS = original
+
+    # Through the shared helper, never a hand-rolled set subtraction: its "stale entries"
+    # mode is exactly this check, and a second copy of the diff is what
+    # test_architecture_no_handrolled_allowlist_diff.py exists to prevent. Intersecting
+    # first scopes the comparison to the exemption set — other functions legitimately
+    # flag without being exempt, and they are Check C's business, not this test's.
+    assert_violations_match_allowlist(
+        without_exemptions & exempted,
+        exempted,
+        fix_hint=(
+            "An exemption entry flags nothing (renamed, deleted, or no longer parsing). "
+            "Remove it — exemptions only shrink."
         ),
     )
 
@@ -372,10 +600,33 @@ def then_something(ctx, token):
     assert _hand_rolled_calls_in_func(func) is True
 
 
-def test_negative_presence_check_via_variable_is_not_flagged() -> None:
-    """Meta-test: `envelope = ctx.get(A) or ctx.get(B); assert envelope is not None` is
-    exempt -- a presence-only check reached through one variable hop, same as the direct
-    form (see then_version_details_supported_versions for the real-code shape).
+def test_presence_check_via_variable_is_not_flagged() -> None:
+    """Meta-test: `envelope = ctx.get("wire_error_envelope"); assert envelope is not None`
+    is exempt -- a presence-only check reached through one variable hop, same as the
+    direct form. The variable-hop exemption itself is preserved; what changes below is
+    that the SYNTHESIZED-fallback disjunction no longer qualifies for it.
+    """
+    src = """
+@then("something")
+def then_something(ctx):
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None
+    assert_envelope_shape(envelope, "FOO", recovery="correctable")
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is False
+
+
+def test_synthesized_fallback_disjunction_is_flagged() -> None:
+    """Meta-test (INVERTED): `ctx.get(wire) or ctx.get(synthesized)` is the DISEASE.
+
+    This shape was the guard's blessed sample, which is precisely how the guard came to
+    teach the pattern it exists to forbid: the disjunction accepts a test-side
+    reconstruction wherever the real wire is missing, so every consumer of the resulting
+    variable grades the synthesized envelope on a transport that captured nothing. With
+    the ``synthesized_error_envelope`` ctx key gone, the fallback operand has no
+    legitimate reading left and the whole expression must be reported.
     """
     src = """
 @then("something")
@@ -383,6 +634,66 @@ def then_something(ctx):
     envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
     assert envelope is not None
     assert_envelope_shape(envelope, "FOO", recovery="correctable")
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is True
+
+
+def test_local_variable_named_result_is_not_a_wire_reference() -> None:
+    """Meta-test: ``uses_wire`` must require ``ctx["result"]``, not the bare name.
+
+    ``_func_names`` collects every Name id, so ANY local called ``result`` -- a loop
+    variable, a parsed response, an adapter return -- exempted the function from Check C.
+    A false-negative gate: nothing in the tree exploits it today, which is exactly why it
+    has to be closed before the widened scan starts relying on ``uses_wire``.
+    """
+    src = """
+@then("something")
+def then_something(ctx):
+    result = ctx["response"]
+    actual = getattr(ctx["error"], "error_code", None)
+    assert actual == result
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is True
+
+
+def test_string_constant_result_is_not_a_wire_reference() -> None:
+    """Meta-test: the string ``"result"`` keyed off something other than ``ctx``.
+
+    ``_func_names`` collects string Constants too, so ANY ``"result"`` literal --
+    a payload key, a dict lookup, a status word -- satisfied ``uses_wire``. The
+    wire reference is the ``ctx["result"]`` Subscript, not the token. Same
+    false-negative class as the bare ``result`` name above.
+    """
+    src = """
+@then("something")
+def then_something(ctx):
+    body = ctx["response"].model_dump()
+    actual = getattr(ctx["error"], "error_code", None)
+    assert actual == body["result"]
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is True
+
+
+def test_wire_first_with_reconstructed_fallback_stays_exempt() -> None:
+    """Meta-test (preserved): a genuine wire read still exempts the fallback getattr.
+
+    Tightening ``uses_wire`` must not start flagging the documented wire-first pattern
+    (see then_error.py then_error_code) -- the point is to stop counting incidental
+    names, not to remove the exemption.
+    """
+    src = """
+@then("something")
+def then_something(ctx):
+    code = _wire_code(ctx)
+    if code is None:
+        code = getattr(ctx["error"], "error_code", None)
+    assert code == "FOO"
 """
     tree = ast.parse(src)
     func = _enclosing_functions(tree)[0]
@@ -414,21 +725,67 @@ def then_something(ctx):
     assert _hand_rolled_calls_in_func(func) is False
 
 
-def test_regex_slip_non_then_step_is_not_scanned() -> None:
-    """Meta-test: a helper function (no @then decorator) using the hand-rolled pattern is
-    not scanned by _find_hand_rolled_envelope_parsing() -- only @then steps are (helpers
-    like _get_error() are allowed to hand-roll; the discipline is on the assertion site).
-    """
-    src = """
-def _helper(ctx):
+_MUTATION_MODULE = """
+from pytest_bdd import then
+
+
+def _envelope(ctx):
     return ctx.get("wire_error_envelope")
 
-@then("something")
-def then_something(ctx):
+
+def _message(ctx):
+    envelope = _envelope(ctx)
+    return (envelope.get("errors") or [{}])[0].get("message") or ""
+
+
+@then("something clean")
+def then_something_clean(ctx):
     ctx["result"].assert_wire_error("FOO", recovery="terminal")
 """
-    tree = ast.parse(src)
-    funcs = {f.name: f for f in _enclosing_functions(tree)}
-    assert _hand_rolled_calls_in_func(funcs["_helper"]) is True
-    assert _is_then(funcs["_helper"]) is False
-    assert _hand_rolled_calls_in_func(funcs["then_something"]) is False
+
+
+def _scan_mutated_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str) -> set[str]:
+    """Point the scanner at a synthetic step tree and return what it reports.
+
+    Mutating a real step module would leave a permanent violation in the tree; a
+    throwaway module tests the SCANNER (which functions it visits) rather than only
+    the detector (`_hand_rolled_calls_in_func`), which is where the blind spot lived.
+    """
+    steps = tmp_path / "bdd" / "steps" / "domain"
+    steps.mkdir(parents=True)
+    (steps / "uc999_mutation_fixture.py").write_text(source, encoding="utf-8")
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_STEPS_DIR", tmp_path / "bdd" / "steps")
+    monkeypatch.setattr(module, "_TESTS_ROOT", tmp_path)
+    return _find_hand_rolled_envelope_parsing()
+
+
+def test_non_then_helper_is_scanned(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Meta-test (INVERTED): a module-local helper that hand-rolls IS reported.
+
+    This previously asserted the opposite -- that a helper without a @then decorator is
+    out of scope, "the discipline is on the assertion site". It is not: a @then that
+    delegates to a module-local ``_envelope(ctx)`` hand-rolls envelope parsing exactly as
+    much as one that inlines it, and routing through a helper was how the pattern stayed
+    invisible while Check C's allowlist read empty. Every function in a step module is now
+    scanned; a helper may hand-roll only if no @then can reach it, which the scan does not
+    (and need not) try to prove.
+    """
+    reported = _scan_mutated_tree(monkeypatch, tmp_path, _MUTATION_MODULE)
+    names = {entry.split()[-1] for entry in reported}
+    assert "_envelope" in names, f"the hand-rolling helper was not reported: {sorted(reported)}"
+    assert "_message" in names, f"the helper's hand-rolling consumer was not reported: {sorted(reported)}"
+    assert "then_something_clean" not in names, f"the sanctioned @then was falsely reported: {sorted(reported)}"
+
+
+def test_mutation_a_hand_rolling_helper_reddens_the_guard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Mutation self-test: the guard itself must FAIL on the mutated tree.
+
+    ``_find_hand_rolled_envelope_parsing`` reporting the helper is necessary but not
+    sufficient -- the allowlist comparison is what turns a report into a failing build.
+    A guard with no mutation self-test is not done: it can pass forever on a scan that
+    silently visits nothing.
+    """
+    reported = _scan_mutated_tree(monkeypatch, tmp_path, _MUTATION_MODULE)
+    with pytest.raises(AssertionError):
+        assert_violations_match_allowlist(reported, _HAND_ROLLED_PARSING_ALLOWLIST, fix_hint="mutation self-test")

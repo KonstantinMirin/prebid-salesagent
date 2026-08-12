@@ -252,3 +252,298 @@ class TestEnvelopeFieldPointer:
         result.assert_wire_error("VALIDATION_ERROR", field="budget")
         with pytest.raises(AssertionError, match=r"errors\[0\].field='budget'"):
             result.assert_wire_error("VALIDATION_ERROR", field="promoted_offering")
+
+
+def _details_envelope(errors_details: dict | None, *, adcp_details: dict | None = None) -> dict:
+    """A VERSION_UNSUPPORTED envelope carrying ``details`` on the named layer(s) only."""
+    payload_error: dict = {
+        "code": "VERSION_UNSUPPORTED",
+        "message": "adcp 2.9 is not supported",
+        "recovery": "correctable",
+    }
+    envelope_error: dict = dict(payload_error)
+    if errors_details is not None:
+        payload_error["details"] = errors_details
+    if adcp_details is not None:
+        envelope_error["details"] = adcp_details
+    return {"adcp_error": envelope_error, "errors": [payload_error]}
+
+
+_SUPPORTED = {"supported_versions": ["3.0", "3.1"], "build_version": "3.1.1"}
+
+
+class TestEnvelopeDetailsSubset:
+    """``details=`` on the ONE sanctioned error surface, mirroring ``field=``.
+
+    ``details`` is an OPEN object in the pinned core/error.json (the error object
+    declares ``additionalProperties: true``; only ``code`` and ``message`` are
+    required), so the contract is a SUBSET check — each expected key present and
+    equal — never dict equality, which would break the moment production adds a
+    diagnostic key. The protocol position is ``errors[0].details``: a block that
+    lives only on the envelope-level mirror, or nested one level deeper, is not
+    at the position the schema defines and does not satisfy the assertion (same
+    burial rule as ``field`` and ``extract_wire_suggestion``).
+    """
+
+    def test_matching_subset_passes(self):
+        assert_envelope_shape(
+            _details_envelope(_SUPPORTED),
+            "VERSION_UNSUPPORTED",
+            recovery="correctable",
+            details={"supported_versions": ["3.0", "3.1"]},
+        )
+
+    def test_extra_keys_on_the_wire_do_not_break_the_subset(self):
+        """An open object: production may carry diagnostics the oracle does not name."""
+        wire = {**_SUPPORTED, "requested_version": "2.9"}
+        assert_envelope_shape(
+            _details_envelope(wire),
+            "VERSION_UNSUPPORTED",
+            recovery="correctable",
+            details={"build_version": "3.1.1"},
+        )
+
+    def test_mismatched_value_fails(self):
+        with pytest.raises(AssertionError, match=r"details"):
+            assert_envelope_shape(
+                _details_envelope(_SUPPORTED),
+                "VERSION_UNSUPPORTED",
+                recovery="correctable",
+                details={"build_version": "3.0.0"},
+            )
+
+    def test_expected_key_absent_from_the_wire_fails(self):
+        with pytest.raises(AssertionError, match=r"details"):
+            assert_envelope_shape(
+                _details_envelope(_SUPPORTED),
+                "VERSION_UNSUPPORTED",
+                recovery="correctable",
+                details={"requested_version": "2.9"},
+            )
+
+    def test_absent_details_block_fails(self):
+        with pytest.raises(AssertionError, match=r"details"):
+            assert_envelope_shape(
+                _details_envelope(None),
+                "VERSION_UNSUPPORTED",
+                recovery="correctable",
+                details={"supported_versions": ["3.0", "3.1"]},
+            )
+
+    def test_details_only_on_the_envelope_mirror_does_not_satisfy_the_protocol_position(self):
+        """``errors[0].details`` is the position; the ``adcp_error`` mirror alone is not it."""
+        with pytest.raises(AssertionError, match=r"details"):
+            assert_envelope_shape(
+                _details_envelope(None, adcp_details=_SUPPORTED),
+                "VERSION_UNSUPPORTED",
+                recovery="correctable",
+                details={"supported_versions": ["3.0", "3.1"]},
+            )
+
+    def test_value_buried_one_level_deeper_does_not_satisfy_the_protocol_position(self):
+        """The subset is over ``details``' own keys — not a recursive search."""
+        with pytest.raises(AssertionError, match=r"details"):
+            assert_envelope_shape(
+                _details_envelope({"version": _SUPPORTED}),
+                "VERSION_UNSUPPORTED",
+                recovery="correctable",
+                details={"supported_versions": ["3.0", "3.1"]},
+            )
+
+    def test_omitting_details_leaves_the_assertion_unchanged(self):
+        assert_envelope_shape(_details_envelope(None), "VERSION_UNSUPPORTED", recovery="correctable")
+
+    def test_assert_wire_error_forwards_details(self):
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        result.assert_wire_error("VERSION_UNSUPPORTED", details={"build_version": "3.1.1"})
+        with pytest.raises(AssertionError, match=r"details"):
+            result.assert_wire_error("VERSION_UNSUPPORTED", details={"build_version": "3.0.0"})
+
+
+class TestWireErrorDetailsReader:
+    """``wire_error_details(code, ...)`` — the escape hatch that is STRONGER than the kwarg.
+
+    Three of the five ``uc010`` details oracles are non-binary (non-empty array;
+    contains v1 and v2; every entry matches a regex), so they need a READER, not
+    a second assertion surface. Taking the expected ``code`` is what keeps the
+    reader from becoming a way AROUND the assertion: uc010:1309 today grades a
+    details block without ever asserting which error produced it, so a wrong
+    error carrying a right-shaped details block passes. The reader asserts the
+    full envelope (code + recovery) FIRST, then returns the located block.
+    """
+
+    def test_returns_the_details_block_at_the_protocol_position(self):
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        assert result.wire_error_details("VERSION_UNSUPPORTED") == _SUPPORTED
+
+    def test_asserts_the_code_before_returning(self):
+        """A details block from the WRONG error must not be readable."""
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        with pytest.raises(AssertionError, match="VALIDATION_ERROR"):
+            result.wire_error_details("VALIDATION_ERROR")
+
+    def test_asserts_the_recovery_it_is_given(self):
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        with pytest.raises(AssertionError, match="recovery"):
+            result.wire_error_details("VERSION_UNSUPPORTED", recovery="terminal")
+
+    def test_absent_details_block_raises_rather_than_returning_none(self):
+        """Required-not-optional: a caller must never have to None-check the block."""
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(None))
+        with pytest.raises(AssertionError, match=r"details"):
+            result.wire_error_details("VERSION_UNSUPPORTED")
+
+    def test_no_wire_envelope_raises(self):
+        """No wire bytes, no read — the same hard failure ``assert_wire_error`` gives."""
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=None)
+        with pytest.raises(AssertionError):
+            result.wire_error_details("VERSION_UNSUPPORTED")
+
+
+class TestWireErrorTolerantReaders:
+    """``wire_error_code`` / ``wire_error_object`` / ``wire_error_message`` on the harness.
+
+    The disease's root is that the harness offered ASSERTIONS but no READERS, so
+    hand-rolling ``(envelope.get("errors") or [{}])[0].get(...)`` in a step module
+    was the only option. These three are the sanctioned readers the step-layer
+    copies delegate to. They are deliberately TOLERANT of a missing envelope
+    (returning ``None``) — the step helpers built on them keep their ``| None``
+    contract for the no-wire branches that depend on it (then_error.py:348, :857,
+    :896). Strictness lives in ``wire_error_details`` / ``assert_wire_error``.
+    """
+
+    def _errored(self) -> TransportResult:
+        return TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+
+    def test_wire_error_code_reads_the_wire_code(self):
+        assert self._errored().wire_error_code() == "VERSION_UNSUPPORTED"
+
+    def test_wire_error_object_returns_the_payload_layer_error(self):
+        """``errors[0]`` is the layer carrying the per-error fields (field, details)."""
+        assert self._errored().wire_error_object() == _details_envelope(_SUPPORTED)["errors"][0]
+
+    def test_wire_error_message_reads_the_payload_layer_message(self):
+        assert self._errored().wire_error_message() == "adcp 2.9 is not supported"
+
+    @pytest.mark.parametrize("reader", ["wire_error_code", "wire_error_object"])
+    def test_no_envelope_reads_as_none_not_a_raise(self, reader):
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=None)
+        assert getattr(result, reader)() is None
+
+
+_ACCOUNTS_WIRE = {
+    "adcp_version": "3.1.1",
+    "accounts": [
+        {"account_id": "acct_nike", "action": "created", "errors": []},
+        {
+            "account_id": "acct_adidas",
+            "action": "failed",
+            "errors": [{"code": "VALIDATION_ERROR", "message": "brand.domain is malformed"}],
+        },
+    ],
+}
+
+
+class TestWireEntry:
+    """``wire_entry`` — per-entry reads inside a SUCCESS envelope.
+
+    A partial-success response (sync-accounts-response oneOf/0) carries its
+    per-entry outcomes at ``accounts[].errors[]`` — INSIDE a success envelope, so
+    ``assert_wire_error`` / ``wire_error_envelope`` (which grade the error-envelope
+    shape) structurally cannot serve them. Without this primitive the only way to
+    reach an entry is a typed-payload read or a hand-rolled index, which is how the
+    ``ctx["last_account"]`` typed stash grew 28 readers.
+    """
+
+    def test_match_locates_the_entry(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        entry = wire_entry(_ctx(_ACCOUNTS_WIRE), "accounts", account_id="acct_adidas")
+        assert entry["action"] == "failed"
+
+    def test_index_locates_the_entry(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        assert wire_entry(_ctx(_ACCOUNTS_WIRE), "accounts", index=0)["account_id"] == "acct_nike"
+
+    def test_dotted_match_locates_a_nested_identifier(self):
+        """The same dotted-path convention wire_lookup uses — a nested identifier
+        (brand.domain) is how the account scenarios name their entry."""
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        wire = {"accounts": [{"account_id": "a1", "brand": {"domain": "nike.com", "brand_id": "b1"}}]}
+        assert wire_entry(_ctx(wire), "accounts", **{"brand.domain": "nike.com"})["account_id"] == "a1"
+
+    def test_dotted_match_that_misses_names_the_entries_present(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        wire = {"accounts": [{"account_id": "acct_nike", "brand": {"domain": "nike.com"}}]}
+        with pytest.raises(AssertionError, match="acct_nike"):
+            wire_entry(_ctx(wire), "accounts", **{"brand.domain": "adidas.com"})
+
+    def test_no_match_names_the_entries_actually_present(self):
+        """Strict: the failure must show what the wire DID carry, not just that it missed.
+
+        A bare "no match" sends the reader to the harness; naming the entries makes
+        an off-by-one identifier or a partial-failure row obvious from the output.
+        """
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        with pytest.raises(AssertionError, match="acct_nike"):
+            wire_entry(_ctx(_ACCOUNTS_WIRE), "accounts", account_id="acct_missing")
+
+    def test_index_out_of_range_names_the_entries_actually_present(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        with pytest.raises(AssertionError, match="acct_nike"):
+            wire_entry(_ctx(_ACCOUNTS_WIRE), "accounts", index=7)
+
+    def test_absent_collection_raises(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        with pytest.raises(AssertionError, match="absent from wire response"):
+            wire_entry(_ctx(_ACCOUNTS_WIRE), "creatives", index=0)
+
+
+class TestWireEntryErrors:
+    def test_returns_the_entry_error_array(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry_errors
+
+        errors = wire_entry_errors(_ctx(_ACCOUNTS_WIRE), "accounts", account_id="acct_adidas")
+        assert [e["code"] for e in errors] == ["VALIDATION_ERROR"]
+
+    def test_locates_by_index_too(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry_errors
+
+        assert wire_entry_errors(_ctx(_ACCOUNTS_WIRE), "accounts", index=1)[0]["message"] == (
+            "brand.domain is malformed"
+        )
+
+
+class TestEntryHelpersInheritTheLoudGuard:
+    """The extension must not open a hole in ``_wire_body``'s guard.
+
+    ``wire_entry``/``wire_entry_errors`` build on ``_wire_body``/``wire_lookup``
+    precisely so a real-wire transport that stashed nothing raises instead of
+    silently serializing the typed payload — the same property
+    ``TestLoudGuardSurvivesTheExtension`` pins for the existing three helpers.
+    """
+
+    def test_wire_entry_raises_on_a_non_stashing_env(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        with pytest.raises(AssertionError, match="does not stash success-path wire"):
+            wire_entry({"transport": Transport.MCP}, "accounts", index=0)
+
+    def test_wire_entry_errors_raises_on_a_non_stashing_env(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry_errors
+
+        with pytest.raises(AssertionError, match="does not stash success-path wire"):
+            wire_entry_errors({"transport": Transport.A2A}, "accounts", index=0)
+
+    def test_an_errored_scenario_reports_the_error_not_a_missing_wire(self):
+        from tests.bdd.steps._outcome_helpers import wire_entry
+
+        ctx = {"transport": Transport.REST, "error": RuntimeError("AUTH_REQUIRED")}
+        with pytest.raises(AssertionError, match="expected a success response, got error"):
+            wire_entry(ctx, "accounts", index=0)

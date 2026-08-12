@@ -24,12 +24,15 @@ def _wire_code(ctx: dict) -> str | None:
     collapses distinct wire codes onto one exception class — e.g. yields
     ``RuntimeError`` for an unmapped code). Returns ``None`` on IMPL / no-wire
     scenarios so callers fall back to the reconstructed exception (#1417).
+
+    Parsing lives in the harness (``TransportResult.wire_error_code``), not here:
+    a step module that hand-rolls ``(envelope.get("errors") or [{}])[0]`` is the
+    disease this delegation removes. The ``| None`` tolerance stays because
+    callers branch on it (:348, :857, :896 and the uc019/uc006 sites); retiring
+    that tolerance belongs to the typed-Then cluster (#1880).
     """
     result = ctx.get("result")
-    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
-    if not envelope:
-        return None
-    return (envelope.get("adcp_error") or {}).get("code")
+    return result.wire_error_code() if result is not None else None
 
 
 def _wire_suggestion(ctx: dict) -> str | None:
@@ -59,18 +62,15 @@ def _wire_error_object(ctx: dict) -> dict | None:
     Mirrors ``_wire_code`` / ``_wire_suggestion``: when the scenario dispatched
     through a wire transport (REST/A2A/MCP), field-presence checks must read the
     real envelope's error object, not the lossy reconstructed ``ctx['error']``.
-    Prefers the ``errors[0]`` layer (per-error fields like ``field``) and falls
-    back to the envelope-level ``adcp_error``. Returns ``None`` on IMPL / no-wire
-    scenarios so callers fall back to the reconstructed exception (#1417).
+    Reads the ``errors[0]`` layer — the protocol position for per-error fields
+    (``field``, ``details``, ``suggestion``) — through the harness reader
+    ``TransportResult.wire_error_object``, so reader and assertion can never
+    disagree about where the spec puts a field. Returns ``None`` on IMPL /
+    no-wire scenarios so callers fall back to the reconstructed exception
+    (#1417).
     """
     result = ctx.get("result")
-    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
-    if not envelope:
-        return None
-    errors = envelope.get("errors") or []
-    if errors and errors[0]:
-        return errors[0]
-    return envelope.get("adcp_error") or {}
+    return result.wire_error_object() if result is not None else None
 
 
 def _get_error_code(error: object) -> str:
@@ -178,32 +178,19 @@ def _assert_meaningful_error(error: object) -> None:
 # ── Wire error envelope (Error Verification Policy) ─────────────────
 
 
-def _wire_envelope(ctx: dict) -> dict:
-    """The captured two-layer wire error envelope for this dispatch.
-
-    Prefers the real wire (REST body / MCP ToolError JSON / A2A DataPart);
-    falls back to the synthesized envelope only where no wire exists by
-    definition (IMPL). See tests/CLAUDE.md § Error Verification Policy.
-    """
-    envelope = ctx.get("wire_error_envelope")
-    if envelope is None:
-        envelope = ctx.get("synthesized_error_envelope")
-    assert isinstance(envelope, dict), (
-        f"no wire error envelope captured — error={ctx.get('error')!r}, "
-        f"response={'present' if ctx.get('response') is not None else 'absent'}"
-    )
-    return envelope
-
-
 @then(
     parsers.re(
         r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)" with recovery "(?P<recovery>[a-z]+)"$'
     )
 )
 def then_wire_envelope_code_and_recovery(ctx: dict, code: str, recovery: str) -> None:
-    from tests.helpers.envelope_assertions import assert_envelope_shape
+    """Graded on the REAL wire bytes only — the sanctioned single surface.
 
-    assert_envelope_shape(_wire_envelope(ctx), code, recovery=recovery)
+    BDD dispatches on a wire transport in every run, so a missing envelope is a
+    wiring bug to surface; the synthesized fallback this used to accept let the
+    assertion pass on MCP with zero wire bytes captured.
+    """
+    ctx["result"].assert_wire_error(code, recovery=recovery)
 
 
 @then(parsers.re(r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)"$'))
@@ -211,11 +198,11 @@ def then_wire_envelope_code(ctx: dict, code: str) -> None:
     """Code-only variant for scenarios that don't pin recovery semantics.
 
     Anchored regex (not parse) so it cannot shadow the with-recovery form.
+    Recovery is not dropped by being unnamed here: ``assert_wire_error`` defaults
+    it to the pinned enum's classification for ``code``, so the scenario pins the
+    code and the pin supplies the retry semantics.
     """
-    body = _wire_envelope(ctx)
-    assert "adcp_error" in body and "errors" in body and body["errors"], f"not a two-layer envelope: {body}"
-    assert body["adcp_error"]["code"] == code, f"adcp_error.code={body['adcp_error']['code']!r}, expected {code!r}"
-    assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
+    ctx["result"].assert_wire_error(code)
 
 
 @then("the error message should reference authentication or token validation")
@@ -233,9 +220,8 @@ def then_error_references_auth(ctx: dict) -> None:
     """
     import re as _re
 
-    body = _wire_envelope(ctx)
-    message = body["errors"][0].get("message") or ""
-    assert message, f"errors[0].message is empty on the wire envelope: {body}"
+    message = _wire_error_message(ctx)
+    assert message, f"errors[0].message is empty on the wire envelope: {ctx['result'].wire_error_envelope}"
     lowered = message.lower()
     names_credential = _re.search(r"\b(token|credential|authenticat\w*|authoriz\w*)\b", lowered)
     states_failure = _re.search(r"\b(invalid|failed|failure|rejected|not valid|verification|unrecognized)\b", lowered)
@@ -374,12 +360,13 @@ def _wire_error_message(ctx: dict) -> str:
     ``ctx['error']``: BDD always dispatches on a wire transport, so a missing
     envelope is a wiring bug to surface, not to paper over.
     """
-    obj = _wire_error_object(ctx)
-    assert obj is not None, (
+    result = ctx.get("result")
+    message = result.wire_error_message() if result is not None else None
+    assert message is not None, (
         "No wire error envelope captured — the scenario must dispatch through a wire "
         f"transport before asserting on the wire message. Recorded error: {ctx.get('error')!r}"
     )
-    return obj.get("message") or ""
+    return message
 
 
 @then(parsers.parse('the wire error message should contain "{text}"'))

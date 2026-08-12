@@ -1926,7 +1926,11 @@ def then_outcome(ctx: dict, outcome: str) -> None:
     require_suggestion = "with suggestion" in outcome
 
     result = ctx.get("result")
-    if is_pinned_error_code(expected_code) and result is not None and result.wire_error_envelope is not None:
+    # No `and result.wire_error_envelope is not None` conjunct: with it, a pinned-code
+    # scenario that captured NO wire bytes silently fell through to the reconstructed
+    # branch and passed. Routing on the code alone means assert_wire_error hard-fails
+    # when the wire is empty — which is the acceptance criterion for this lane.
+    if is_pinned_error_code(expected_code) and result is not None:
         result.assert_wire_error(expected_code, require_suggestion=require_suggestion)
         return
 
@@ -1947,13 +1951,13 @@ def then_outcome(ctx: dict, outcome: str) -> None:
     # Verify suggestion only when the error code matches the scenario expectation.
     codes_match = actual_code is not None and actual_code == expected_code
     if require_suggestion and is_adcp_error and codes_match:
+        # `suggestion` only — never falling back to `recovery`. They are distinct
+        # error.json fields (recovery is the enum-tied retry classification, carried by
+        # EVERY error), so accepting recovery here made "with suggestion" satisfiable by
+        # any error at all.
         suggestion = getattr(error, "suggestion", None)
         if suggestion is None and isinstance(error, dict):
             suggestion = error.get("suggestion")
-        if suggestion is None:
-            suggestion = getattr(error, "recovery", None)
-            if suggestion is None and isinstance(error, dict):
-                suggestion = error.get("recovery")
         assert suggestion is not None, f"Expected error with suggestion but none found. Error: {error}"
 
 

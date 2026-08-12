@@ -92,16 +92,6 @@ def _config(ctx: dict) -> dict:
     return ctx.setdefault("capabilities_config", {})
 
 
-def _error_details(ctx: dict) -> dict:
-    """details block of the wire error envelope (errors[0] preferred)."""
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
-    assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
-    errors = envelope.get("errors") or [{}]
-    details = errors[0].get("details") or envelope.get("adcp_error", {}).get("details")
-    assert isinstance(details, dict), f"error envelope carries no details block: {envelope}"
-    return details
-
-
 def _quoted_list(text: str) -> list[str]:
     """Parse '"a", "b"' / 'display, social' step fragments into a list."""
     quoted = re.findall(r'"([^"]+)"', text)
@@ -123,10 +113,9 @@ def _assert_capabilities_success(ctx: dict) -> None:
     """A valid (possibly degraded) capabilities response: no recorded error, no wire error
     envelope, and the top-level required blocks (adcp, supported_protocols) on the wire
     (get-adcp-capabilities-response.json#/required = [adcp, supported_protocols])."""
-    assert ctx.get("error") is None, f"expected a valid response, got error: {ctx.get('error')!r}"
-    assert ctx.get("wire_error_envelope") is None, (
-        f"expected a valid response, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
-    )
+    # No hand-rolled "did it error?" check: wire_field below reads through
+    # _wire_body, which already raises "expected a success response, got error: ..."
+    # naming the error — one primitive per envelope region.
     for path in ("adcp", "supported_protocols"):
         wire_field(ctx, path)
 
@@ -136,15 +125,7 @@ def _assert_capabilities_config_error(ctx: dict, message_substr: str | None = No
     surfaced CONFIGURATION_ERROR (recovery terminal — a deployment fault the buyer cannot fix
     and MUST NOT auto-retry; enums/error-code.json#/enumMetadata/CONFIGURATION_ERROR). When
     given, message_substr must appear in errors[0].message."""
-    from tests.helpers.envelope_assertions import assert_envelope_shape
-
-    assert ctx.get("error") is not None, "expected a CONFIGURATION_ERROR rejection, got a success response"
-    assert_envelope_shape(
-        ctx.get("wire_error_envelope"),
-        "CONFIGURATION_ERROR",
-        recovery="terminal",
-        message_substr=message_substr,
-    )
+    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal", message_substr=message_substr)
 
 
 # ── Givens: tenant / adapter / DB state ──────────────────────────────
@@ -1156,21 +1137,11 @@ def then_auth_outcome(ctx: dict, outcome: str) -> None:
         # spec-required top-level blocks are on the wire (top-level required is
         # [adcp, supported_protocols]). The fuller section shape is graded by the
         # companion "a success outcome should carry ..." Then.
-        assert ctx.get("error") is None, f"expected success, got error: {ctx.get('error')!r}"
-        assert ctx.get("wire_error_envelope") is None, (
-            f"expected success, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
-        )
+        # wire_field's loud guard reports the error itself (see _assert_capabilities_success).
         for path in ("adcp", "supported_protocols"):
             wire_field(ctx, path)
         return
-    from tests.helpers.envelope_assertions import assert_envelope_shape
-
-    assert ctx.get("error") is not None, "expected AUTH_INVALID, got a success response"
-    assert_envelope_shape(
-        ctx.get("wire_error_envelope"),
-        "AUTH_INVALID",
-        recovery="terminal",
-    )
+    ctx["result"].assert_wire_error("AUTH_INVALID", recovery="terminal")
 
 
 @then(
@@ -1237,11 +1208,9 @@ def then_wire_error_message_contains(ctx: dict, first: str, second: str) -> None
     for tenant '...'" and adcp_a2a_server.py "Authentication token is invalid or
     expired." both contain "token" and "invalid". Requiring both rejects the
     AUTH_REQUIRED missing-credential wording ("authentication required")."""
-    envelope = ctx["result"].wire_error_envelope
-    assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
-    errors = envelope.get("errors") or [{}]
-    message = errors[0].get("message") or ""
-    assert message, f"errors[0].message is empty on the wire envelope: {envelope}"
+    ctx["result"].assert_wire_error("AUTH_INVALID", recovery="terminal")
+    message = ctx["result"].wire_error_message() or ""
+    assert message, f"errors[0].message is empty on the wire envelope: {ctx['result'].wire_error_envelope}"
     lowered = message.lower()
     for substring in (first, second):
         assert substring.lower() in lowered, (
@@ -1298,7 +1267,9 @@ def then_wire_context_empty(ctx: dict) -> None:
 
 @then("the error details should include supported_versions as a non-empty array")
 def then_details_supported_versions(ctx: dict) -> None:
-    versions = _error_details(ctx).get("supported_versions")
+    """The code is asserted before the block is read (wire_error_details takes it):
+    otherwise this grades the details of whatever envelope happened to be captured."""
+    versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED").get("supported_versions")
     assert isinstance(versions, list) and versions, f"details.supported_versions not a non-empty array: {versions!r}"
 
 
@@ -1306,20 +1277,19 @@ def then_details_supported_versions(ctx: dict) -> None:
 def then_details_versions_pattern(ctx: dict, pattern: str) -> None:
     # The feature escapes backslashes for Gherkin — unescape before matching.
     unescaped = pattern.replace("\\\\", "\\")
-    for value in _error_details(ctx)["supported_versions"]:
+    for value in ctx["result"].wire_error_details("VERSION_UNSUPPORTED")["supported_versions"]:
         assert re.fullmatch(unescaped, value), f"supported_versions entry {value!r} does not match {unescaped!r}"
 
 
 @then(parsers.parse('the error details should include supported_versions containing "{v1}" and "{v2}"'))
 def then_details_versions_containing(ctx: dict, v1: str, v2: str) -> None:
-    versions = _error_details(ctx).get("supported_versions", [])
+    versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED").get("supported_versions", [])
     assert v1 in versions and v2 in versions, f"details.supported_versions {versions!r} missing {v1!r}/{v2!r}"
 
 
 @then(parsers.parse('the error details should include build_version equal to "{build_version}"'))
 def then_details_build_version(ctx: dict, build_version: str) -> None:
-    actual = _error_details(ctx).get("build_version")
-    assert actual == build_version, f"details.build_version {actual!r} != {build_version!r}"
+    ctx["result"].assert_wire_error("VERSION_UNSUPPORTED", details={"build_version": build_version})
 
 
 # ── Thens: targeting outline row→assertion dispatch (targeting-partitions) ──
@@ -2149,10 +2119,8 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
     #/properties/adcp_error — "the envelope MUST NOT carry adcp_error for non-
     failures"). For this status-less payload, "completed" is proven by no recorded
     error and no wire error envelope; the top-level required blocks stay on the wire."""
-    assert ctx.get("error") is None, f"expected a completed envelope, got error: {ctx.get('error')!r}"
-    assert ctx.get("wire_error_envelope") is None, (
-        f"expected a completed envelope, got a wire error envelope: {ctx.get('wire_error_envelope')!r}"
-    )
+    # wire_absent/wire_field read through _wire_body, which raises naming the error
+    # if this scenario errored — no separate hand-rolled envelope check needed.
     wire_absent(ctx, "adcp_error")
     for path in ("adcp", "supported_protocols"):
         wire_field(ctx, path)
@@ -2350,15 +2318,9 @@ def then_version_details_supported_versions(ctx: dict) -> None:
     non-empty supported_versions (version-unsupported.json#/required = [supported_versions],
     minItems 1) — here exactly the release-precision versions the seller speaks, ["3.0", "3.1"].
     An empty array or omitted field is a conformance violation."""
-    from tests.helpers.envelope_assertions import assert_envelope_shape
-
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
-    assert envelope is not None, (
-        "expected a VERSION_UNSUPPORTED error envelope, got a success response "
-        "(the capabilities builder runs no version negotiation)"
+    versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED", recovery="correctable").get(
+        "supported_versions"
     )
-    assert_envelope_shape(envelope, "VERSION_UNSUPPORTED", recovery="correctable")
-    versions = _error_details(ctx).get("supported_versions")
     assert isinstance(versions, list) and versions, (
         f"details.supported_versions is empty or omitted (required, minItems 1): {versions!r}"
     )

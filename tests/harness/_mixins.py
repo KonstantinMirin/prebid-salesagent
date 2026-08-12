@@ -652,3 +652,55 @@ class ProductMixin:
             **extra,
         )
         return await _get_products_impl(req, identity)
+
+
+class AccountListDispatchMixin:
+    """The ``list_accounts`` verb's four transport methods, shared by both account envs.
+
+    ``AccountListEnv`` dispatches only this verb; ``AccountSyncEnv`` dispatches it
+    as its SECOND verb, behind a request-type discriminator (the ``MediaBuyDualEnv``
+    pattern). They share these methods rather than each owning a copy, because a
+    second copy is how the two envs would drift into grading the same production
+    call two different ways.
+
+    The alternative — a step calling ``_list_accounts_impl`` directly because the
+    sync env "doesn't dispatch list" — is what this mixin exists to delete: such a
+    bypass grades ``_impl`` on EVERY transport, so the a2a/mcp/rest/e2e legs of a
+    scenario never touch the wire they claim to.
+    """
+
+    LIST_REST_ENDPOINT = "/api/v1/accounts"
+
+    @staticmethod
+    def is_list_request(kwargs: dict[str, Any]) -> bool:
+        """Whether this dispatch is the list verb rather than the env's primary one.
+
+        Discriminates on the request TYPE, so one uniform rule covers every call
+        site; a ``sync_accounts`` dispatch never carries a ``ListAccountsRequest``,
+        so there is no ambiguity.
+        """
+        from src.core.schemas.account import ListAccountsRequest
+
+        return isinstance(kwargs.get("req"), ListAccountsRequest)
+
+    def _call_list_impl(self, **kwargs: Any) -> Any:
+        from src.core.tools.accounts import _list_accounts_impl
+
+        self._commit_factory_data()  # type: ignore[attr-defined]
+        kwargs.setdefault("identity", self.identity)  # type: ignore[attr-defined]
+        return _list_accounts_impl(**kwargs)
+
+    def _call_list_a2a(self, **kwargs: Any) -> Any:
+        from src.core.schemas.account import ListAccountsResponse
+
+        return self._run_a2a_handler("list_accounts", ListAccountsResponse, **kwargs)  # type: ignore[attr-defined]
+
+    def _call_list_mcp(self, **kwargs: Any) -> Any:
+        from src.core.schemas.account import ListAccountsResponse
+
+        return self._run_mcp_client("list_accounts", ListAccountsResponse, **kwargs)  # type: ignore[attr-defined]
+
+    def _parse_list_rest_response(self, data: dict[str, Any]) -> Any:
+        from src.core.schemas.account import ListAccountsResponse
+
+        return ListAccountsResponse(**data)

@@ -77,7 +77,11 @@ from tests.helpers.adcp_factories import (
     create_test_property_dict,
 )
 from tests.helpers.admin_session import admin_auth_session
-from tests.helpers.envelope_assertions import assert_envelope_shape, assert_no_raw_validation_leak
+from tests.helpers.envelope_assertions import (
+    assert_envelope_shape,
+    assert_no_raw_validation_leak,
+    locate_envelope_error,
+)
 from tests.helpers.idempotency_seeds import (
     make_active_cached_success,
     seed_cached_success,
@@ -93,6 +97,7 @@ __all__ = [
     "assert_resolve_auth_dep_passes_token",
     # Envelope assertions
     "assert_envelope_shape",
+    "locate_envelope_error",
     "assert_no_raw_validation_leak",
     # Concurrency harness
     "concurrent_commit_in_write_window",

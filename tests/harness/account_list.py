@@ -32,9 +32,10 @@ from unittest.mock import MagicMock
 
 from src.core.schemas.account import ListAccountsResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._mixins import AccountListDispatchMixin
 
 
-class AccountListEnv(IntegrationEnv):
+class AccountListEnv(AccountListDispatchMixin, IntegrationEnv):
     """Integration test environment for _list_accounts_impl.
 
     Only mocks the audit logger. Everything else is real:
@@ -52,28 +53,28 @@ class AccountListEnv(IntegrationEnv):
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
+    # The four transport methods live in AccountListDispatchMixin — AccountSyncEnv
+    # dispatches the same verb as its second verb, and one shared implementation is
+    # what keeps the two envs from grading the same production call two ways.
+
     def call_impl(self, **kwargs: Any) -> ListAccountsResponse:
         """Call _list_accounts_impl with real DB.
 
         Accepts all _list_accounts_impl kwargs. The 'identity' kwarg
         defaults to self.identity if not provided.
         """
-        from src.core.tools.accounts import _list_accounts_impl
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return _list_accounts_impl(**kwargs)
+        return self._call_list_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> ListAccountsResponse:
         """Call list_accounts via real AdCPRequestHandler — full A2A pipeline."""
-        return self._run_a2a_handler("list_accounts", ListAccountsResponse, **kwargs)
+        return self._call_list_a2a(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListAccountsResponse:
         """Call list_accounts via Client(mcp) — full pipeline dispatch."""
-        return self._run_mcp_client("list_accounts", ListAccountsResponse, **kwargs)
+        return self._call_list_mcp(**kwargs)
 
-    REST_ENDPOINT = "/api/v1/accounts"
+    REST_ENDPOINT = AccountListDispatchMixin.LIST_REST_ENDPOINT
 
     def parse_rest_response(self, data: dict[str, Any]) -> ListAccountsResponse:
         """Parse REST JSON into ListAccountsResponse."""
-        return ListAccountsResponse(**data)
+        return self._parse_list_rest_response(data)

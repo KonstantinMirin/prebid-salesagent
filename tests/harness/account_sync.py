@@ -31,10 +31,11 @@ from unittest.mock import MagicMock
 
 from src.core.schemas.account import SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._mixins import AccountListDispatchMixin
 from tests.harness._realize import realize_e2e
 
 
-class AccountSyncEnv(IntegrationEnv):
+class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
     """Integration test environment for _sync_accounts_impl.
 
     Only mocks the audit logger. Everything else is real:
@@ -48,7 +49,16 @@ class AccountSyncEnv(IntegrationEnv):
 
     Constructor accepts ``supported_billing`` to configure billing policy
     on the identity (BR-RULE-059).
+
+    Dispatches TWO verbs: ``sync_accounts`` (primary) and ``list_accounts``, the
+    latter through ``AccountListDispatchMixin`` behind a request-type
+    discriminator. Scenarios that need to read accounts back therefore dispatch
+    list over the real transport instead of calling ``_list_accounts_impl``
+    directly, which would grade ``_impl`` on all four transports.
     """
+
+    #: Which verb the in-flight REST request is for — read by ``REST_ENDPOINT``.
+    _active_list: bool = False
 
     EXTERNAL_PATCHES = {
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
@@ -252,22 +262,51 @@ class AccountSyncEnv(IntegrationEnv):
         kwargs.setdefault("identity", self.identity)
         return await _sync_accounts_impl(**kwargs)
 
-    def call_impl(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call _sync_accounts_impl with real DB (sync wrapper).
+    def call_impl(self, **kwargs: Any) -> Any:
+        """Call _sync_accounts_impl — or _list_accounts_impl — with real DB.
 
         Bridges async _impl for sync callers (BDD steps, dispatchers).
         """
+        if self.is_list_request(kwargs):
+            return self._call_list_impl(**kwargs)
         return asyncio.run(self.call_impl_async(**kwargs))
 
-    def call_a2a(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call sync_accounts via real AdCPRequestHandler — full A2A pipeline."""
+    def call_a2a(self, **kwargs: Any) -> Any:
+        """Call sync_accounts (or list_accounts) via real AdCPRequestHandler."""
+        if self.is_list_request(kwargs):
+            return self._call_list_a2a(**kwargs)
         return self._run_a2a_handler("sync_accounts", SyncAccountsResponse, **kwargs)
 
-    def call_mcp(self, **kwargs: Any) -> SyncAccountsResponse:
-        """Call sync_accounts via Client(mcp) — full pipeline dispatch."""
+    def call_mcp(self, **kwargs: Any) -> Any:
+        """Call sync_accounts (or list_accounts) via Client(mcp) — full pipeline dispatch."""
+        if self.is_list_request(kwargs):
+            return self._call_list_mcp(**kwargs)
         return self._run_mcp_client("sync_accounts", SyncAccountsResponse, **kwargs)
 
-    REST_ENDPOINT = "/api/v1/accounts/sync"
+    SYNC_REST_ENDPOINT = "/api/v1/accounts/sync"
+
+    @property
+    def REST_ENDPOINT(self) -> str:  # noqa: N802 — matches the inherited class-attr name
+        """List scenarios POST the collection; sync scenarios POST its /sync sub-resource.
+
+        A @property (not a static attr) because the E2E dispatcher reads it directly,
+        and the verb is only known once the request is in hand. Safe because
+        RestE2EDispatcher calls build_rest_body() — which sets the flag below —
+        BEFORE reading this (tests/harness/dispatchers.py).
+        """
+        return self.LIST_REST_ENDPOINT if self._active_list else self.SYNC_REST_ENDPOINT
+
+    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+        """Route the in-process REST call to the endpoint of the verb being dispatched.
+
+        Necessary because the two REST paths read ``REST_ENDPOINT`` in OPPOSITE
+        orders: the e2e dispatcher calls ``build_rest_body`` first (so the flag is
+        already set), while the in-process ``call_rest`` reads ``REST_ENDPOINT``
+        BEFORE building the body. Setting the flag here — and recomputing the
+        endpoint from it — makes both orders correct.
+        """
+        self._active_list = self.is_list_request(kwargs)
+        return super()._run_rest_request(self.REST_ENDPOINT, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Serialize flat sync_accounts kwargs into the REST request body.
@@ -280,10 +319,24 @@ class AccountSyncEnv(IntegrationEnv):
         how a locally-constructed request model treats it — dispatch flat, so the
         flat form needs a faithful body here.
         """
+        # Set the verb flag HERE, unconditionally: the E2E dispatcher reads
+        # REST_ENDPOINT right after this call, and a sync request must clear a flag a
+        # preceding list request left set.
+        self._active_list = self.is_list_request(kwargs)
         if kwargs.get("req") is not None:
             return super().build_rest_body(**kwargs)
         return {key: value for key, value in kwargs.items() if value is not None}
 
-    def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
-        """Parse REST JSON into SyncAccountsResponse."""
+    def parse_rest_response(self, data: dict[str, Any]) -> Any:
+        """Parse REST JSON into the response model of whichever verb was dispatched.
+
+        Deliberately does NOT reset ``_active_list`` afterwards, unlike the
+        ``MediaBuyDualEnv`` precedent this otherwise follows: both writers above set the
+        flag UNCONDITIONALLY from ``is_list_request(kwargs)`` at the start of every
+        request, so a stale value cannot survive into the next one. A reset here would
+        additionally be wrong on the e2e error path, which routes to ``parse_rest_error``
+        and would leave the flag cleared mid-request.
+        """
+        if self._active_list:
+            return self._parse_list_rest_response(data)
         return SyncAccountsResponse(**data)
