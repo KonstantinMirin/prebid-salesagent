@@ -42,6 +42,9 @@ from adcp.types.generated_poc.creative.list_creatives_response import (
 from adcp.types.generated_poc.creative.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
 )
+from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+    CreativeApproval as LibraryGetMediaBuysCreativeApproval,
+)
 from pydantic import (
     ConfigDict,
     Field,
@@ -52,7 +55,6 @@ from pydantic import (
 from src.core.config import get_pydantic_extra_mode
 from src.core.enum_helpers import enum_value
 from src.core.schemas._base import (
-    ApprovalStatus,
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
@@ -758,9 +760,12 @@ class ApproveCreativeResponse(SalesAgentBaseModel):
     detail: str
 
 
-class CreativeApproval(SalesAgentBaseModel):
-    """Creative approval record for a package."""
+class CreativeApproval(LibraryGetMediaBuysCreativeApproval):
+    """Creative approval record for a package.
 
-    creative_id: str = Field(..., description="Creative identifier")
-    approval_status: ApprovalStatus = Field(..., description="Current approval status")
-    rejection_reason: str | None = Field(default=None, description="Reason for rejection (when rejected)")
+    All three fields — creative_id, approval_status, rejection_reason — match the
+    library type's exactly, so they are inherited rather than copied (Pattern #1).
+    The local ApprovalStatus enum this class used to reference has the same three
+    members as the library's CreativeApprovalStatus and both are StrEnums, so
+    existing call sites keep working: their members validate by value.
+    """
