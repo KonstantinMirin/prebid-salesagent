@@ -540,16 +540,41 @@ class CreativeAgentRegistry:
         The adcp SDK 3.6.0 requires structuredContent in MCP responses, but some
         creative agents return TextContent with JSON. This method calls the MCP
         endpoint directly via HTTP and parses the JSON response.
+
+        Because it dials the agent DIRECTLY rather than through the SDK transport,
+        it steps outside the SDK's destination policy too — so it applies the seam's
+        gate itself. Without that, this fallback is the one path on which an
+        operator-configured agent URL reaches the network on nobody's policy, while
+        siblings dialling the same class of URL do gate it
+        (``property_list_resolver._validate_agent_url``, ``signals_agents``).
         """
         import json
         import logging
 
         import httpx
 
+        from src.core.security.url_validator import check_url_ssrf
+
         logger = logging.getLogger(__name__)
         agent_url = str(agent.agent_url).rstrip("/")
         # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
         mcp_url = f"{agent_url}/mcp" if not agent_url.endswith("/mcp") else agent_url
+
+        # Fire-time check WITH DNS: this is the moment we dial, so where the name
+        # actually lands is what matters. No require_https and no testing carve-out —
+        # the e2e stack puts its compose network on a NON-private subnet
+        # (docker-compose.e2e.yml:550) precisely so the armed gate passes on
+        # http://creative-agent:8080 rather than needing an exemption.
+        is_safe, ssrf_error = check_url_ssrf(mcp_url)
+        if not is_safe:
+            # Log the reason, but do not return it: the detailed cause (which range,
+            # which resolved address) is a network-topology side channel — AdCP 3.1.1
+            # building/by-layer/L1/security.mdx:104-119 step 6.
+            logger.warning("[SECURITY] Creative agent %s raw-MCP fetch rejected unsafe URL: %s", agent.name, ssrf_error)
+            raise AdCPAdapterError(
+                f"Creative agent {agent.name} URL is not an allowed destination",
+                recovery="terminal",
+            )
 
         # Build headers with auth credentials if configured
         headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
