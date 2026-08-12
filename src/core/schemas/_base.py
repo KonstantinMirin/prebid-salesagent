@@ -23,7 +23,14 @@ from adcp import Error
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     ContextObject,
-    DeliveryStatus,  # noqa: F401 — used by Snapshot below
+    # DeliveryStatus / MediaBuyStatus are no longer referenced by a declaration in
+    # this module — Snapshot and GetMediaBuysMediaBuy inherit them from their library
+    # bases — but src.core.schemas re-exports this module with `import *`, so dropping
+    # them here silently breaks every `from src.core.schemas import MediaBuyStatus`
+    # caller. Unit tests do not catch that; a collection ImportError in the
+    # integration suite is how it surfaced.
+    DeliveryStatus,  # noqa: F401 — re-exported via src.core.schemas
+    MediaBuyStatus,  # noqa: F401 — re-exported via src.core.schemas
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
@@ -34,6 +41,7 @@ from adcp.types import Format as LibraryFormat
 
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
+from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
 from adcp.types import PackageRequest as LibraryPackageRequest
 
 # Import types from stable API (per adcp 2.9.0+ - all types now in stable)
@@ -60,6 +68,9 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
+from adcp.types.generated_poc.enums.media_buy_valid_action import (
+    MediaBuyValidAction,  # noqa: F401 — re-exported via src.core.schemas
+)
 from adcp.types.generated_poc.enums.snapshot_unavailable_reason import (
     SnapshotUnavailableReason as LibrarySnapshotUnavailableReason,
 )
@@ -2822,21 +2833,33 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
 
-class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
-    """Response from get_media_buys.
+class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse):
+    """Extends library GetMediaBuysResponse.
 
-    Matches the adcp 3.6.0 GetMediaBuysResponse spec.
+    Library provides: media_buys, errors, context, pagination, sandbox, ext, and the
+    protocol envelope — including ``status``, which AdCP 3.1.1
+    (core/protocol-envelope.json, required: ["status"]) marks REQUIRED on every task
+    response envelope and which this model carried on no wire at all while it
+    extended SalesAgentBaseModel (GH #1900).
+
+    Re-based rather than given a hand-declared status field, deliberately: the
+    alignment suite's coverage gate admits a response model by its BASES containing
+    an adcp.types class, so a locally-declared field would satisfy the letter of
+    #1900 while leaving this model invisible to grading — and the next spec-required
+    field would go missing exactly as silently. Following ListAccountsResponse
+    (src/core/schemas/account.py).
+
+    errors and context are dropped rather than redeclared: the library types them
+    identically (list[Error] | None, ContextObject | None), which is what every call
+    site already passes. The hand-written model_dump is gone too — it re-serialized
+    media_buys exactly as NestedModelSerializerMixin already does generically.
     """
 
-    media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")
-    errors: list[Error] | None = Field(default=None, description="Errors encountered during retrieval")
-    context: ContextObject | None = Field(default=None, description="Application-level context from the request")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    def model_dump(self, **kwargs):
-        result = super().model_dump(**kwargs)
-        if "media_buys" in result and self.media_buys:
-            result["media_buys"] = [mb.model_dump(**kwargs) for mb in self.media_buys]
-        return result
+    # Redeclared for Pattern #4 (nested serialization with the local item subclass);
+    # the library types it as a Sequence.
+    media_buys: list[GetMediaBuysMediaBuy]
 
 
 # Re-export product schemas for backward compatibility.

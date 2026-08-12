@@ -28,6 +28,7 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuySuccess,
     GetMediaBuyDeliveryRequest,
+    GetMediaBuysResponse,
     GetProductsRequest,
     GetProductsResponse,
     GetSignalsResponse,
@@ -787,6 +788,11 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         schema_ref="media-buy/update-media-buy-response.json",
         selector="media_buy_id",
         model=UpdateMediaBuySuccess,
+    ),
+    _RegistryRow(
+        schema_ref="media-buy/get-media-buys-response.json",
+        selector="media_buys",
+        model=GetMediaBuysResponse,
     ),
     _RegistryRow(
         schema_ref="media-buy/get-media-buy-delivery-response.json",

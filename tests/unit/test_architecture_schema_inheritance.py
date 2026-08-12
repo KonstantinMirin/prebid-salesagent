@@ -252,6 +252,7 @@ class TestSchemaInheritance:
             # inherited outright, because those local subclasses add no fields.
             ("GetMediaBuysPackage", "targeting_overlay"),
             ("GetMediaBuysMediaBuy", "packages"),
+            ("GetMediaBuysResponse", "media_buys"),
             # Required-field tightening (#1399 Plan-B): pinned 3.1 marks these
             # success-arm fields required; the SDK base declares them optional, so
             # we redeclare required to match the spec.
