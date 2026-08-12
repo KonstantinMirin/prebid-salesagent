@@ -170,6 +170,25 @@ fi
 # in-process. salesagent-mp53.8's counterparty walk is the first leg that actually
 # needs an origin up, and it failed exactly this way.) The guard
 # tests/unit/test_architecture_e2e_origin_services_start.py pins the pairing.
+# Pre-create logs/ AND the specific files src/core/audit_logger.py opens --
+# audit.log/error.log via FileHandler at IMPORT time (crashes collection
+# immediately on PermissionError), structured.jsonl/security.jsonl lazily via
+# open(path, "a"). setgid + 2775 on the directory only controls the GROUP of
+# NEW files, not their write bit, and it does nothing for files that already
+# exist. Worse: chmod cannot fix a file it doesn't own -- only the owner (or
+# root) may change a file's mode, being in the same group is not enough -- so
+# a stale ci:ci 0644 file left by a prior adcp-server run silently defeats
+# both this and the `chmod -R g+w .` sweep below (EPERM, swallowed by its own
+# `|| true`). Removing and recreating is what actually works: unlink is
+# governed by the DIRECTORY's write bit (which we own), not the file's own
+# owner, so `rm -f` succeeds even on a ci-owned file; the fresh file this
+# process then creates is ours. Verified live: ci:ci 0644 -> sacirunner:ci 0664.
+mkdir -p logs && chmod 2775 logs
+for f in audit.log error.log structured.jsonl security.jsonl; do
+    rm -f "logs/$f" 2>/dev/null || true
+    : > "logs/$f" && chmod 664 "logs/$f"
+done
+
 dc up -d postgres adcp-server proxy tls-proxy creative-pg creative-agent webhook-capture counterparty-origin
 
 echo "Waiting for Postgres + server health (in-network)..."
@@ -277,6 +296,15 @@ echo "Running suites in-network (serial): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
 RC=0
+# Best-effort backstop, NOT a guarantee: chmod only succeeds on paths this
+# user (the launcher) already owns -- it silently no-ops (EPERM, swallowed by
+# `|| true`) on anything a DIFFERENT uid created, e.g. files adcp-server (uid
+# 1001) writes into this bind mount. That case needs the file recreated by
+# us, not chmod'd -- see the logs/ block above for the pattern. This sweep
+# still earns its keep for paths WE created with a too-strict umask.
+chmod -R g+w . 2>/dev/null || true
+chmod -R go-w .git 2>/dev/null || true
+
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -e "$SUITES" || RC=$?
 
 # tox writes per-suite JSON into /app/.tox, which is a plain bind-mounted dir
