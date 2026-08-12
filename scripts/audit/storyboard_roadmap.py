@@ -294,13 +294,14 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         # differs from the filename for 69 of 121 storyboards at 3.1.1
         # (universal/security.yaml -> security_baseline; every media-buy
         # scenario is namespaced media_buy_seller/<name>). Joining on the
-        # filename stem matched only where the two happen to coincide.
-        id_match = re.search(r"^id:\s*(\S+)", text, re.M)
-        storyboard_id = id_match.group(1) if id_match else row["stem"].replace("-", "_")
-        checks: dict[str, int] = {}
-        for phase_id in storyboard_spec.phases(text):
-            for check_type in storyboard_spec.checks_for_phase(text, phase_id):
-                checks[check_type] = checks.get(check_type, 0) + 1
+        # filename stem matched only where the two happen to coincide; the
+        # stem is the fallback for an id-less storyboard, which is this
+        # table's policy rather than a fact about the tree.
+        storyboard_id = storyboard_spec.storyboard_id(text) or row["stem"].replace("-", "_")
+        # Never sum checks_for_phase() over phases() here: phase windows
+        # enclose their steps' windows, so that spelling counts every nested
+        # check twice (salesagent-g6m2.1).
+        checks = storyboard_spec.check_inventory(text)
 
         measured = _measured_status(row["stem"], runner_scenarios)
         if measured is not None:
@@ -316,7 +317,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "citation": f"repo=adcp ref={coverage['pinned_version']} path={row['storyboard']}",
                 "scenarios": row["covered_by"],
                 "required_tools": sorted(storyboard_spec.required_tools(text)),
-                "checks": dict(sorted(checks.items())),
+                "checks": checks,
                 "measured": measured or {"status": "not_yet_run"},
                 "divergence": _COMPLY_TEST_CONTROLLER_DIVERGENCE.get(row["stem"]),
                 "gh_issues": gh_refs,

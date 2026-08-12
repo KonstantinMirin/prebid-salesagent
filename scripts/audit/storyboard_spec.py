@@ -225,28 +225,97 @@ def phase_index(dist: Path) -> dict[str, list[str]]:
     return index
 
 
-def checks_for_phase(text: str, phase_id: str) -> list[str]:
-    """Check types graded under one phase — ``[]`` if absent or narrative-only.
+def _phase_window(text: str, phase_id: str) -> tuple[int, str] | None:
+    """The text a phase owns, as ``(absolute offset, window)`` — ``None`` if absent.
 
     Anchors on the phase's ``- id:`` line, then windows to the next SIBLING
     id at the same indent (not the next id at any depth — phases sit two
     spaces in and their steps six; stopping at the first six-space ``- id:``
     would truncate at the phase's first step and never reach a later
-    ``validations:`` block, misreporting a graded phase as prose). Matches
-    ``- check: X`` and the id-first sibling form ``check: X`` alike — the
-    leading-dash-only form used pre-migration missed every id-first
-    ordering (18 real checks in
-    ``protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml`` alone).
+    ``validations:`` block, misreporting a graded phase as prose).
+
+    A phase's window therefore ENCLOSES its own steps' windows. That overlap
+    is correct for "is this phase graded at all?" and fatal for "how many
+    checks does this storyboard grade?" — which is why the offset is returned
+    alongside the text: :func:`check_inventory` keys on it to count each
+    check line exactly once (salesagent-g6m2.1).
     """
     anchor = re.search(rf"^(?P<indent>\s*)-\s*id:\s*{re.escape(phase_id)}\s*$", text, re.M)
     if anchor is None:
-        return []
+        return None
     indent = len(anchor.group("indent"))
     sibling = re.compile(rf"^\s{{0,{indent}}}-\s*id:\s*\S+\s*$", re.M)
     rest = text[anchor.end() :]
     following = sibling.search(rest)
-    window = rest[: following.start()] if following else rest
-    return _CHECK_LINE_RE.findall(window)
+    return anchor.end(), (rest[: following.start()] if following else rest)
+
+
+def checks_for_phase(text: str, phase_id: str) -> list[str]:
+    """Check types graded under one phase — ``[]`` if absent or narrative-only.
+
+    Windows via :func:`_phase_window`, so a phase whose grading lives in a
+    later step still reads as graded. Matches ``- check: X`` and the id-first
+    sibling form ``check: X`` alike — the leading-dash-only form used
+    pre-migration missed every id-first ordering (18 real checks in
+    ``protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml`` alone).
+
+    Deliberately NOT summable across :func:`phases` — see
+    :func:`check_inventory`.
+    """
+    window = _phase_window(text, phase_id)
+    return _CHECK_LINE_RE.findall(window[1]) if window else []
+
+
+def check_inventory(text: str) -> dict[str, int]:
+    """Every check type this storyboard grades, counted once — ``{type: count}``.
+
+    The per-storyboard check inventory published by
+    ``docs/test-obligations/storyboard-roadmap.md``. Summing
+    :func:`checks_for_phase` over :func:`phases` — the obvious spelling, and
+    the one that shipped — double-counts every nested check: ``phases()``
+    returns ids at ANY depth, and a phase's window already encloses its
+    steps'. At the 3.1.1 pin that inflated 119 of 121 storyboards
+    (``universal/signed-requests.yaml`` published 2 field_present + 2
+    field_value against 1 of each in the file).
+
+    Counts by absolute OFFSET of each check line, so overlapping windows
+    contribute it once. Deliberately not a whole-text ``findall``: keeping
+    the "graded under a phase" semantic means the file-literal line count
+    stays an INDEPENDENT oracle for the regression tests, and a future pin
+    that grades a check outside every phase window fails them loudly instead
+    of being silently absorbed.
+    """
+    by_offset: dict[int, str] = {}
+    for phase_id in phases(text):
+        window = _phase_window(text, phase_id)
+        if window is None:
+            continue
+        offset, body = window
+        for match in _CHECK_LINE_RE.finditer(body):
+            by_offset[offset + match.start()] = match.group(1)
+
+    counts: dict[str, int] = {}
+    for check_type in by_offset.values():
+        counts[check_type] = counts.get(check_type, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+_STORYBOARD_ID_RE = re.compile(r"^id:\s*(\S+)", re.M)
+
+
+def storyboard_id(text: str) -> str | None:
+    """A storyboard's DECLARED top-level ``id:``, or ``None``.
+
+    Differs from the filename for 69 of 121 storyboards at 3.1.1
+    (``universal/security.yaml`` declares ``security_baseline``; every
+    media-buy scenario is namespaced ``media_buy_seller/<name>``), and the
+    runner keys its results on the declared id — joining on the filename stem
+    matches only where the two happen to coincide. Callers own the fallback:
+    what to do with an id-less storyboard is consumer policy, not a fact
+    about the tree.
+    """
+    match = _STORYBOARD_ID_RE.search(text)
+    return match.group(1) if match else None
 
 
 def phase_is_graded(text: str, phase_id: str) -> str | None:
@@ -380,6 +449,7 @@ __all__ = [
     "TAG",
     "Storyboard",
     "TaggedScenario",
+    "check_inventory",
     "checks_for_phase",
     "declared_capabilities",
     "dist_root",
@@ -394,6 +464,7 @@ __all__ = [
     "requires_capability",
     "requiring_indexes",
     "run_cli",
+    "storyboard_id",
     "storyboard_key",
     "storyboard_tier",
     "storyboards",

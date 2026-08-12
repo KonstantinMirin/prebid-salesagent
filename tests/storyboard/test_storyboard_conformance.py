@@ -259,7 +259,6 @@ def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
