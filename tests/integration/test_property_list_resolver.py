@@ -19,7 +19,7 @@ Two things do NOT move to the seam, so they are graded here:
 * The **wire class of a refusal**. Migrating onto the seam moves a refused
   buyer-supplied ``agent_url`` from ``AdCPAdapterError``
   (SERVICE_UNAVAILABLE / transient — "try again later") to
-  ``OutboundRequestBlocked`` (INVALID_REQUEST / correctable — "fix the URL").
+  ``OutboundRequestBlocked`` (VALIDATION_ERROR / correctable — "fix the URL").
   That is a buyer-visible contract change, so it is asserted on the wire
   envelope through ``get_products``, not on a reconstructed exception.
 
@@ -29,7 +29,7 @@ Spec grounding — AdCP 3.1.1, the version this repo PINS (``adcp==6.6.0``, see
 exist at that tag, the prose lives at ``docs/…``.
 
 **The pinned spec does not rule directly on ``property_list.agent_url``.**
-``INVALID_REQUEST`` / ``correctable`` is spec-CONSISTENT by analogy, not
+``VALIDATION_ERROR`` / ``correctable`` is spec-CONSISTENT by analogy, not
 spec-mandated, and is grounded on four passages:
 
 1. ``docs/building/by-layer/L1/security.mdx`` § "Webhook URL validation
@@ -38,19 +38,35 @@ spec-mandated, and is grounded on four passages:
    URLs (1) and reserved-range addresses (2), and MUST NOT "echo fetch errors
    to the agent that supplied the URL" (6). It prescribes the refusal and the
    silence — it names no wire code.
-2. ``docs/building/by-layer/L3/error-handling.mdx`` § "Request Validation":
+2. ``docs/building/by-layer/L3/error-handling.mdx`` § "Request Validation"
+   is a five-row table and ``VALIDATION_ERROR`` is NOT one of its rows — the
+   only request-validation row that could cover a refused URL is
    ``INVALID_REQUEST | correctable | Request is malformed or violates schema
-   constraints``; § "Recovery Classification": ``correctable`` = "Request can be
-   fixed and resent", ``transient`` = "Temporary failure … retry with
-   exponential backoff". The ``CONFIGURATION_ERROR`` row states the contrast
-   outright — "``SERVICE_UNAVAILABLE`` (transient) and ``INVALID_REQUEST``
+   constraints``. The code this repo emits is settled one level down, in the
+   pinned ``enums/error-code.json``, which defines both and separates them
+   verbatim: INVALID_REQUEST = "Request is malformed, missing required fields,
+   or violates schema constraints"; VALIDATION_ERROR = "Request contains
+   invalid field values or violates business rules beyond schema validation".
+   A ``format: "uri"``-valid URL that egress policy refuses is the latter — the
+   value is well-formed and violates a rule beyond the schema — so this repo
+   emits VALIDATION_ERROR (``AdCPBlockedUrlError``, the ONE refusal class both
+   the seam and the DNS-free registration gate raise). Both codes carry
+   ``recovery: "correctable"`` in the same enum, so the half the buyer acts on
+   is identical either way; the prose table's silence on VALIDATION_ERROR is
+   why this section says spec-CONSISTENT, not spec-mandated.
+   § "Recovery Classification": ``correctable`` = "Request can be fixed and
+   resent", ``transient`` = "Temporary failure … retry with exponential
+   backoff"; the ``CONFIGURATION_ERROR`` row states the contrast outright —
+   "``SERVICE_UNAVAILABLE`` (transient) and ``INVALID_REQUEST``
    (buyer-fixable)". A URL egress policy will refuse identically forever is not
    temporary, so ``transient`` would promise something false.
 3. ``docs/accounts/tasks/sync_accounts.mdx``: a counterparty-supplied
    notification URL that is malformed is refused with ``INVALID_REQUEST`` (and
    the reserved-range/metadata case synchronously with ``VALIDATION_ERROR``,
    per ``docs/learning/specialist/security.mdx``) — both ``correctable`` in
-   ``static/schemas/source/enums/error-code.json``.
+   ``static/schemas/source/enums/error-code.json``. That split is the same one
+   this repo now applies: malformed -> INVALID_REQUEST, policy-blocked -> the
+   VALIDATION_ERROR this file grades.
 4. ``CREATIVE_INACCESSIBLE`` in that same enum: a buyer-supplied asset URL the
    agent could not fetch is ``correctable``. Every time the pinned spec rules on
    an unfetchable counterparty URL, it grades it correctable.
@@ -62,7 +78,7 @@ nearest analogue is storyboard ``notification_config_rejections``, step
 ``sync_accounts_rejects_duplicate_subscriber_id``, which grades a buyer-supplied
 ``notification_configs[]`` field rejection as
 ``allowed_values: ["INVALID_REQUEST", "VALIDATION_ERROR"]`` — same family,
-different field.
+different field, and it accepts either of the two codes this section weighs.
 """
 
 from __future__ import annotations
@@ -278,7 +294,7 @@ class TestRefusedBuyerUrlOnTheWire:
     Before the seam migration this surfaced as ``AdCPAdapterError`` —
     SERVICE_UNAVAILABLE / transient — which tells the buyer to retry a request
     that will be refused identically every time. The refusal is a property of
-    the URL the buyer sent, so INVALID_REQUEST / correctable is the honest
+    the URL the buyer sent, so VALIDATION_ERROR / correctable is the honest
     grading and is what this pins, on the wire, per transport — together with
     the ``error.field`` path that says WHICH URL, since the message itself may
     say nothing (L1 point 6).
@@ -288,7 +304,7 @@ class TestRefusedBuyerUrlOnTheWire:
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     @pytest.mark.parametrize("agent_url", _REFUSED_AGENT_URLS)
     def test_refused_agent_url_is_a_correctable_buyer_error(self, integration_db, transport, agent_url, monkeypatch):
-        """The refusal is INVALID_REQUEST / correctable AND names the field to fix.
+        """The refusal is VALIDATION_ERROR / correctable AND names the field to fix.
 
         ``correctable`` without ``error.field`` tells the buyer "your request is
         fixable" and not what to fix — and ``get_products`` carries several URLs
@@ -320,7 +336,7 @@ class TestRefusedBuyerUrlOnTheWire:
         )
         assert_envelope_shape(
             result.wire_error_envelope,
-            "INVALID_REQUEST",
+            "VALIDATION_ERROR",
             recovery="correctable",
             field=_REFUSED_FIELD_PATH,
         )

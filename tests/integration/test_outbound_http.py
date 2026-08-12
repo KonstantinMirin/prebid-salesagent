@@ -704,8 +704,8 @@ def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, m
     reserved_envelope = build_two_layer_error_envelope(reserved)
     unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
 
-    assert_envelope_shape(reserved_envelope, "INVALID_REQUEST", recovery="correctable")
-    assert_envelope_shape(unresolvable_envelope, "INVALID_REQUEST", recovery="correctable")
+    assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
+    assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
 
     reserved_message = reserved_envelope["errors"][0]["message"]
     unresolvable_message = unresolvable_envelope["errors"][0]["message"]
@@ -763,7 +763,7 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
     reserved_envelope = build_two_layer_error_envelope(reserved)
     unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
 
-    assert_envelope_shape(reserved_envelope, "INVALID_REQUEST", recovery="correctable", field=_CALLER_FIELD_PATH)
+    assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable", field=_CALLER_FIELD_PATH)
     assert reserved_envelope == unresolvable_envelope, (
         "the refusal envelope distinguishes an unresolvable host from a reserved address: "
         f"{unresolvable_envelope} vs {reserved_envelope}"
@@ -817,7 +817,7 @@ def test_a_jsonpath_lite_field_is_carried(seam_call, monkeypatch):
 
     assert_envelope_shape(
         build_two_layer_error_envelope(error),
-        "INVALID_REQUEST",
+        "VALIDATION_ERROR",
         recovery="correctable",
         field=_CALLER_FIELD_PATH,
     )
@@ -995,8 +995,8 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
     reserved_envelope = build_two_layer_error_envelope(reserved_info.value)
     unresolvable_envelope = build_two_layer_error_envelope(unresolvable_info.value)
 
-    assert_envelope_shape(reserved_envelope, "INVALID_REQUEST", recovery="correctable")
-    assert_envelope_shape(unresolvable_envelope, "INVALID_REQUEST", recovery="correctable")
+    assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
+    assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
 
     reserved_message = reserved_envelope["errors"][0]["message"]
     assert reserved_message == unresolvable_envelope["errors"][0]["message"]

@@ -52,7 +52,7 @@ Spec grounding — pinned AdCP 3.1.1, read with ``git -C <adcp> show v3.1.1:<pat
   at the seller — the buyer cannot resolve a seller-side deployment
   misconfiguration and MUST NOT auto-retry"}. That is the grounding for the
   refused-URL arm: the creative agent's URL is the OPERATOR's registered
-  endpoint, so INVALID_REQUEST / correctable would tell a buyer to fix a field
+  endpoint, so VALIDATION_ERROR / correctable would tell a buyer to fix a field
   they never sent. ``RATE_LIMITED`` = transient, "retry after the retry_after
   interval"; ``SERVICE_UNAVAILABLE`` = transient.
 
@@ -285,7 +285,7 @@ class TestTaxonomy:
         This is a NEW failure mode at this call site: before the migration the
         registry connected to whatever was configured. The seam refuses a
         non-HTTPS or reserved-range destination before opening a socket, and the
-        default INVALID_REQUEST / correctable would hand the buyer of
+        default VALIDATION_ERROR / correctable would hand the buyer of
         ``create_media_buy`` an error only a seller-side admin can act on. The
         pinned enumMetadata says so outright — "the buyer cannot resolve a
         seller-side deployment misconfiguration and MUST NOT auto-retry".

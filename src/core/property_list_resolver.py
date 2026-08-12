@@ -46,7 +46,7 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
     Raises:
         OutboundRequestBlocked: The buyer-supplied ``agent_url`` was refused by
             egress policy (non-HTTPS scheme, or an address the SDK validator
-            rejects). INVALID_REQUEST / correctable: the buyer supplied the URL,
+            rejects). VALIDATION_ERROR / correctable: the buyer supplied the URL,
             so the buyer is the only party who can fix it. The refusal carries
             ``error.field = "property_list.agent_url"`` on both envelope layers,
             which is the only channel that can name the offending input — the

@@ -44,7 +44,7 @@ from urllib.parse import urlparse
 
 from adcp.types import ContextObject, TaskType
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPBlockedUrlError, AdCPValidationError
 
 # ``_scheme_error`` is imported (not restated): ``_maybe_allow_localhost`` must
 # recognise a scheme refusal without re-implementing the scheme rule, or the
@@ -134,7 +134,10 @@ def reject_unsafe_webhook_registration_url(
     field: str,
     context: ContextObject | dict[str, Any] | None = None,
 ) -> None:
-    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate.
+    """Raise AdCPBlockedUrlError when ``url`` fails the registration SSRF gate.
+
+    The same class the dial-time egress seam raises (``OutboundRequestBlocked``):
+    a refused buyer URL gets one wire answer regardless of which gate noticed it.
 
     Blank / whitespace-only / ``None`` URLs are a no-op (not a rejection) so
     callers can extract-then-call unconditionally.
@@ -143,7 +146,7 @@ def reject_unsafe_webhook_registration_url(
         return
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
     if not is_valid:
-        raise AdCPValidationError(
+        raise AdCPBlockedUrlError(
             f"Invalid {field}: {error_msg}",
             field=field,
             suggestion=webhook_ssrf_suggestion(),

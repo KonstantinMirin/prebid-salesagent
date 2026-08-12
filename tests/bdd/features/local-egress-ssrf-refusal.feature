@@ -20,13 +20,35 @@
 # feature. Reconcile upstream in adcp-req (a get_products scenario carrying a
 # refused property_list), then retire this file for the regenerated one.
 #
-# The wire grading is INVALID_REQUEST / correctable / field
+# The wire grading is VALIDATION_ERROR / correctable / field
 # "property_list.agent_url": the refusal is a property of the URL the buyer
 # sent, so it is buyer-fixable, and `field` is the only channel that can say
 # WHICH input to fix without disclosing anything (the message must not).
 # Grounded on docs/building/by-layer/L3/error-handling.mdx § "Request
-# Validation" + § "Recovery Classification"; INVALID_REQUEST is in the pinned
-# static/schemas/source/enums/error-code.json.
+# Validation" + § "Recovery Classification"; the code choice itself is
+# grounded on the pinned enum's OWN descriptions (v3.1.1
+# static/schemas/source/enums/error-code.json):
+#   INVALID_REQUEST — "Request is malformed, missing required fields, or
+#     violates schema constraints. Recovery: correctable (check request
+#     parameters and fix)."
+#   VALIDATION_ERROR — "Request contains invalid field values or violates
+#     business rules beyond schema validation. Recovery: correctable (review
+#     error details and fix field values)."
+# A `format: "uri"`-valid https URL that lands in a policy-blocked range is
+# not malformed and violates no schema constraint — it is a well-formed field
+# VALUE that our egress business rule refuses. That is squarely the second
+# description, so VALIDATION_ERROR is the reconciled answer.
+#
+# These scenarios USED to grade INVALID_REQUEST, and the ingest scenario below
+# graded VALIDATION_ERROR, for the same buyer mistake — the wire code told the
+# buyer which of our gates happened to notice, which is meaningless to them.
+# The reconciliation is to the code the ingest twin already used, and the
+# storyboard-adjacent extension scenario already reached independently:
+# BR-UC-002-create-media-buy.feature:432 (@T-UC-002-ext-webhook-ssrf) grades a
+# blocked webhook URL as VALIDATION_ERROR / correctable / suggestion, with the
+# same v3.1.1 @source cite. Both codes are `correctable` in the pin, so no
+# buyer's retry behavior changes — only a buyer branching on the code sees the
+# unification.
 #
 # Why THESE causes: with the private-range escape hatch open — which is the
 # posture of docker-compose.e2e.yml and of run_all_tests_host.sh, and the ONLY
@@ -55,14 +77,17 @@
 # ingest paths (update_media_buy, sync_creatives, reporting_webhook.url) are
 # graded at tests/integration/test_webhook_url_ingest_refusal.py.
 #
-# The ingest verdict is NOT the seam's, and the last scenario is graded
-# accordingly. `reject_unsafe_webhook_registration_url`
-# (src/core/webhook_validator.py) raises AdCPValidationError — VALIDATION_ERROR
-# / correctable / field / suggestion, message shaped `Invalid <field>:
-# <reason>` — and it is deliberately DNS-FREE: an unresolvable-but-public
+# The ingest gate is not the seam, but it now returns the SAME wire code, BY
+# CONSTRUCTION rather than by coincidence: both raise the one refusal class for
+# a refused buyer-supplied URL, so what still differs between them is WHEN they
+# refuse and on what evidence — not what the buyer is told.
+# `reject_unsafe_webhook_registration_url` (src/core/webhook_validator.py)
+# refuses as VALIDATION_ERROR / correctable / field / suggestion, message shaped
+# `Invalid <field>: <reason>` — and it is deliberately DNS-FREE: an unresolvable-but-public
 # hostname is ACCEPTED at ingest and re-checked when the callback is dialled
-# (gh-#1589 / gh-#1697). So the ingest scenario carries its own wire code and
-# its own causes; an unresolvable host is not one of them. The <reason> itself
+# (gh-#1589 / gh-#1697). So the ingest scenario carries its own CAUSES even
+# though it no longer carries its own code; an unresolvable host is not one of
+# them, and its message is the registration gate's own. The <reason> itself
 # is now the SAME fixed, non-disclosing text for every address cause
 # (`url_validator._RESTRICTED_RANGE_MESSAGE`) — no CIDR, no resolved address —
 # matching the seam's one-message-for-every-cause posture, so every row below
@@ -78,7 +103,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     Given a tenant is configured for product discovery
     And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "<agent_url>"
-    Then the request is rejected with INVALID_REQUEST naming field "property_list.agent_url"
+    Then the request is rejected with VALIDATION_ERROR naming field "property_list.agent_url"
 
     Examples:
       | agent_url                    |
@@ -110,7 +135,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     Given a tenant is configured for product discovery
     And the outbound private-range egress hatch is closed
     When the buyer requests products with a property list agent at "http://example.com"
-    Then the request is rejected with INVALID_REQUEST naming field "property_list.agent_url"
+    Then the request is rejected with VALIDATION_ERROR naming field "property_list.agent_url"
 
   # The third buyer-supplied URL on the protocol surface, and the one with the
   # LOWEST privilege bar: creatives[].format_id.agent_url names the creative
@@ -135,7 +160,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   Scenario: a refused creative-agent agent_url is a correctable buyer error at sync ingest
     Given the outbound private-range egress hatch is open
     When the buyer syncs a creative whose format agent is at "https://169.254.169.254"
-    Then the creative is rejected with INVALID_REQUEST naming field "creatives[0].format_id.agent_url"
+    Then the creative is rejected with VALIDATION_ERROR naming field "creatives[0].format_id.agent_url"
 
   # The ingest twin: the same obligation — a buyer-supplied URL we refuse comes
   # back as a correctable, non-disclosing error naming the field to fix —

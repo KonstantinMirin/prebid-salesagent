@@ -22,9 +22,13 @@ that expect an ingest refusal must therefore pick a cause the DNS-free gate
 actually rejects — a reserved-address literal — not an unresolvable name; and,
 to keep the non-disclosure obligation gradable, one the gate does not report by
 naming the blocked hostname or a dotted-quad range (see the Examples rationale
-in the feature). The two gates also differ on the wire: the seam surfaces as
-INVALID_REQUEST, the registration gate as VALIDATION_ERROR (it raises
-``AdCPValidationError``), both correctable and both naming the field.
+in the feature). What the two gates DO NOT differ on is the wire: both refuse a
+buyer-supplied URL as VALIDATION_ERROR / correctable / field, because both raise
+the one refusal class for that semantic. That is by construction, not
+coincidence — the wire code is a function of what the buyer did wrong, never of
+which gate noticed it (the pinned enum calls VALIDATION_ERROR "invalid field
+values or violates business rules beyond schema validation", which is what a
+well-formed URL landing in a blocked range is).
 
 Steps store in ctx (on top of what ``dispatch_request`` stores):
     ctx["supplied_agent_url"] — the URL the buyer sent, so the non-disclosure
@@ -40,7 +44,7 @@ from urllib.parse import urlparse
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require, assert_wire_rejection
+from tests.bdd.steps._outcome_helpers import _require
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 # The list_id is irrelevant to a refusal — the seam refuses before a connection
@@ -176,17 +180,16 @@ def when_create_media_buy_with_push_url(ctx: dict, webhook_url: str) -> None:
 # ── Then steps ──────────────────────────────────────────────────────
 
 
-@then(parsers.parse('the request is rejected with INVALID_REQUEST naming field "{field}"'))
-def then_rejected_invalid_request_field(ctx: dict, field: str) -> None:
-    """Assert the wire envelope is INVALID_REQUEST / correctable and names the field.
-
-    ``correctable`` is the load-bearing half: before the seam migration this
-    surfaced as SERVICE_UNAVAILABLE / transient, which tells the buyer to retry a
-    request that will be refused identically forever. ``field`` is the other
-    half — with a message that must disclose nothing, it is the only channel that
-    can say WHICH of the request's URLs to fix.
-    """
-    assert_wire_rejection(ctx, "INVALID_REQUEST", recovery="correctable", field=field)
+# NOTE: the request-level rejection Then for these scenarios does NOT live here.
+# Its sentence is now identical to the one already defined at
+# ``tests/bdd/steps/domain/uc_get_products_inventory.py`` (``the request is
+# rejected with VALIDATION_ERROR naming field "{field}"``), and every step module
+# in tests/bdd/conftest.py's ``pytest_plugins`` shares ONE global namespace — so
+# a second definition of that literal would be an ambiguous, first-wins binding
+# (exactly what ``test_guards_bdd_duplicate_step_literals`` forbids). The seam
+# scenarios above therefore bind the shared step, which asserts the identical
+# triple through the identical helper; its docstring carries the rationale that
+# used to live here.
 
 
 @then(parsers.parse('the refusal message on both envelope layers is exactly "{message}"'))
@@ -239,7 +242,7 @@ def then_envelope_discloses_nothing(ctx: dict) -> None:
     assert leaked == [], f"refusal disclosed IP address(es) {leaked} to the buyer: {serialized}"
 
 
-@then(parsers.parse('the creative is rejected with INVALID_REQUEST naming field "{field}"'))
+@then(parsers.parse('the creative is rejected with VALIDATION_ERROR naming field "{field}"'))
 def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
     """Assert the PER-ITEM failure carries the seam's own classification.
 
@@ -268,6 +271,6 @@ def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
     code = error["code"] if isinstance(error, dict) else error.code
     recovery = error["recovery"] if isinstance(error, dict) else error.recovery
     got_field = error["field"] if isinstance(error, dict) else error.field
-    assert code == "INVALID_REQUEST", f"errors[0].code={code!r} — a buyer-supplied URL is buyer-correctable"
+    assert code == "VALIDATION_ERROR", f"errors[0].code={code!r} — a buyer-supplied URL is buyer-correctable"
     assert recovery == "correctable", f"errors[0].recovery={recovery!r}"
     assert got_field == field, f"errors[0].field={got_field!r}, expected {field!r}"

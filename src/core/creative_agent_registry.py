@@ -441,7 +441,7 @@ class CreativeAgentRegistry:
 
         ``field`` carries PROVENANCE, and it is the only thing that decides how a
         refusal is reported. Present = the URL came out of the caller's request
-        document, so the seam's own ``OutboundRequestBlocked`` (INVALID_REQUEST /
+        document, so the seam's own ``OutboundRequestBlocked`` (VALIDATION_ERROR /
         correctable, naming that field) is already the right answer and is
         re-raised untouched. Absent = an operator-registered endpoint, where
         ``raise_mapped_outbound_error`` is right: the buyer did not choose the

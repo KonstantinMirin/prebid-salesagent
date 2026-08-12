@@ -51,10 +51,11 @@ def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger:
     endpoint, a vendor host — not something the buyer supplied.
 
     A refusal becomes ``CONFIGURATION_ERROR``/terminal rather than
-    ``INVALID_REQUEST``/correctable: the buyer did not choose this address and
+    ``VALIDATION_ERROR``/correctable: the buyer did not choose this address and
     cannot fix it, so telling them to correct their request would be false. (The
     opposite case — a buyer-supplied URL — keeps the seam's own
-    ``INVALID_REQUEST`` and names the offending field instead.)
+    ``AdCPBlockedUrlError`` (``VALIDATION_ERROR``) and names the offending field
+    instead.)
 
     A 429 becomes ``RATE_LIMITED`` carrying the origin's ``retry_after``, which
     the seam has already bounded and clamped to the spec's [1, 3600].

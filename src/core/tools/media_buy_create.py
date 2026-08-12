@@ -324,7 +324,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str, *, field: str | None =
     ``field`` carries BUYER provenance for a stored creative's ``agent_url`` (it
     came out of the buyer's own prior sync_creatives call, not this deployment's
     configuration) — passing it routes a refusal through the seam's counterparty-
-    aware path (INVALID_REQUEST/correctable) instead of the operator path
+    aware path (VALIDATION_ERROR/correctable) instead of the operator path
     (CONFIGURATION_ERROR/terminal), UNLESS the url happens to also be a real
     tenant-registered operator agent, which stays terminal regardless (salesagent-ypgd).
     """

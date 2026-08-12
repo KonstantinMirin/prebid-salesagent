@@ -152,7 +152,7 @@ from adcp.signing import (
     resolve_and_validate_host,
 )
 
-from src.core.exceptions import AdCPInvalidRequestError, AdCPServiceUnavailableError, clamp_retry_after
+from src.core.exceptions import AdCPBlockedUrlError, AdCPServiceUnavailableError, clamp_retry_after
 
 logger = logging.getLogger(__name__)
 
@@ -273,7 +273,7 @@ class OutboundError(Exception):
     attempts: int | None = None
 
 
-class OutboundRequestBlocked(OutboundError, AdCPInvalidRequestError):
+class OutboundRequestBlocked(OutboundError, AdCPBlockedUrlError):
     """The URL was refused before any connection was attempted.
 
     Scheme or address policy said no. Terminal — never retried, because nothing

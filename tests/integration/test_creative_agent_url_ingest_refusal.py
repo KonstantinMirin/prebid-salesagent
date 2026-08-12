@@ -27,8 +27,8 @@ retry, and is given no ``field`` naming the input that was actually refused.
 Provenance, not module, decides the classification —
 ``src/core/helpers/outbound_error_mapping.py`` says so in its own docstring
 ("The opposite case — a buyer-supplied URL — keeps the seam's own
-INVALID_REQUEST and names the offending field instead") — and this path is the
-buyer arm it names.
+AdCPBlockedUrlError (VALIDATION_ERROR) and names the offending field instead")
+— and this path is the buyer arm it names.
 
 Spec grounding — AdCP 3.1.1, the version this repo PINS (``adcp==6.6.0``,
 ``docs/adcp-spec-version.md``; prose via ``git -C <adcp-checkout> show
@@ -40,13 +40,21 @@ v3.1.1:<path>``):
    point 2 (reject reserved-range addresses, ``169.254.169.254`` named
    outright), point 6 (disclose nothing about our network — which leaves
    ``error.field`` as the only channel naming WHICH input to fix).
-2. ``docs/building/by-layer/L3/error-handling.mdx`` § "Request Validation"
-   (``INVALID_REQUEST | correctable``) + § "Recovery Classification": egress
-   policy refuses this URL identically forever, so ``terminal`` addressed to
-   the SELLER strands a buyer who could fix it by sending a different
-   ``agent_url``. ``INVALID_REQUEST`` and ``CONFIGURATION_ERROR`` are both in
-   the pinned ``dist/schemas/3.1.1/enums/error-code.json``; the enumMetadata
+2. ``docs/building/by-layer/L3/error-handling.mdx`` § "Recovery
+   Classification" (§ "Request Validation" is a five-row table that lists
+   ``INVALID_REQUEST``, not ``VALIDATION_ERROR``): egress policy refuses this
+   URL identically forever, so ``terminal`` addressed to the SELLER strands a
+   buyer who could fix it by sending a different ``agent_url``.
+   ``VALIDATION_ERROR`` and ``CONFIGURATION_ERROR`` are both in the pinned
+   ``dist/schemas/3.1.1/enums/error-code.json``; the enumMetadata
    recovery/suggestion pair quoted above is what makes them non-interchangeable.
+   VALIDATION_ERROR rather than the sibling INVALID_REQUEST because that enum
+   defines the two apart, verbatim: INVALID_REQUEST = "Request is malformed,
+   missing required fields, or violates schema constraints"; VALIDATION_ERROR =
+   "Request contains invalid field values or violates business rules beyond
+   schema validation" — a ``format: "uri"``-valid URL in a blocked range is the
+   latter. Both are correctable, so the buyer's retry
+   behaviour is identical either way.
 3. ``format_id`` is a property of ``dist/schemas/3.1.1/core/creative-asset.json``
    (``$ref`` ``core/format-id.json``, "Always a structured object
    {agent_url, id}"), and ``creatives`` is a top-level array on
@@ -151,7 +159,7 @@ def _assert_refused_per_item(result, creative_id: str) -> None:
     )
     assert entry.errors, f"a failed creative must carry an error; got {entry!r}"
     error = entry.errors[0]
-    assert error.code == "INVALID_REQUEST", (
+    assert error.code == "VALIDATION_ERROR", (
         f"errors[0].code={error.code!r} — a URL the BUYER supplied is their correctable input, "
         "not a seller misconfiguration or a transient outage"
     )
@@ -171,14 +179,14 @@ class TestRefusedCreativeAgentUrlOnTheWire:
     ``field`` (``raise_mapped_outbound_error``'s operator arm, reached via
     ``CreativeAgentRegistry``), which tells the buyer a SELLER is misconfigured
     and that nothing they send can fix it — about a URL they chose. The honest
-    grading is the seam's own ``INVALID_REQUEST`` / correctable naming the
+    grading is the seam's own ``VALIDATION_ERROR`` / correctable naming the
     field, which is what these pin, on the wire, per transport.
     """
 
     @pytest.mark.parametrize("transport", _ALL_TRANSPORTS, ids=lambda t: t.value)
     @pytest.mark.parametrize("agent_url", _REFUSED_AGENT_URLS)
     def test_refused_agent_url_is_a_correctable_buyer_error(self, integration_db, transport, agent_url, monkeypatch):
-        """INVALID_REQUEST / correctable / field=creatives[].format_id.agent_url, and nothing synced.
+        """VALIDATION_ERROR / correctable / field=creatives[].format_id.agent_url, and nothing synced.
 
         ``correctable`` without ``error.field`` would tell the buyer "your
         request is fixable" and not what to fix — a sync request carries up to

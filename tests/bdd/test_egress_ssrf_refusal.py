@@ -2,7 +2,7 @@
 
 Covers the buyer-visible half of AdCP 3.1.1 L1 § "Webhook URL validation
 (SSRF)" — a counterparty-supplied URL the egress seam refuses reaches the buyer
-as INVALID_REQUEST / correctable naming the field to fix, and discloses nothing
+as VALIDATION_ERROR / correctable naming the field to fix, and discloses nothing
 about our network. The conformance storyboard does not grade it, so there is no
 BR-UC-* scenario to inherit; retire this file together with the local feature
 once the upstream storyboard (adcp-req) grows the equivalent scenario.

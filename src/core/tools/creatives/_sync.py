@@ -95,7 +95,7 @@ def _sync_creatives_impl(
 
     # Registration SSRF gate on the buyer-supplied webhook URL, taken HERE: before
     # any DB / workflow write stashes the URL, and before the per-creative loop,
-    # whose per-item `try` would turn this correctable INVALID_REQUEST into a
+    # whose per-item `try` would turn this correctable VALIDATION_ERROR into a
     # per-item transient failure and tell the buyer to retry a URL that will never
     # be allowed. The AI-review callback fires from a background worker, so ingest
     # is the only gate with a request left to refuse into.

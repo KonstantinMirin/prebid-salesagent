@@ -215,7 +215,22 @@ def then_has_products(ctx: dict) -> None:
 
 @then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
 def then_rejected_validation_field(ctx: dict, field: str) -> None:
-    """Assert the wire envelope is VALIDATION_ERROR and names the field structurally."""
+    """Assert the wire envelope is VALIDATION_ERROR and names the field structurally.
+
+    Shared beyond this use case: it also binds the brand-shorthand scenarios and
+    every request-level refusal in ``local-egress-ssrf-refusal.feature`` (the
+    egress module used to carry a twin of this sentence for INVALID_REQUEST; the
+    seam and the DNS-free registration gate now answer with one code, so there is
+    one step). The rationale that came with it, and applies to every caller:
+
+    ``correctable`` is the load-bearing half. For the egress callers, the refusal
+    once surfaced as SERVICE_UNAVAILABLE / transient, which tells the buyer to
+    retry a request that will be refused identically forever; generally, it is the
+    assertion that says the buyer can fix this themselves. ``field`` is the other
+    half — where the message must disclose nothing (AdCP 3.1.1 L1 § "Webhook URL
+    validation (SSRF)" point 6), it is the ONLY channel that can say WHICH of the
+    request's inputs to fix.
+    """
     assert_wire_rejection(ctx, "VALIDATION_ERROR", recovery="correctable", field=field)
 
 
