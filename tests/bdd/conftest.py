@@ -847,12 +847,24 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # must_equal_when trigger fires → webhook_signing absent is schema-valid); the emission rows
     # grade the conditional invariant (supported MUST equal true) and fail because the
     # capabilities builder emits no webhook_signing block.
+    # Graduated 2026-08-12 (#1291 D2), PARTIALLY: reporting_webhook_emission removed — a keyed,
+    # publishable tenant declaring reporting_delivery_methods=[webhook] now derives
+    # webhook_signing.supported=true, which is the must_equal_when invariant the row grades, and
+    # its Given declares that state instead of recording it. The other two rows stay: their
+    # triggers are not declarable HERE, and the blocker is not signing. Serial in-process run
+    # 2026-08-12: uc010 slice 338 -> 341 passed (+1 row x 3 transports), 258 -> 255 xfailed,
+    # 0 failed, 0 xpassed. In-network (the authority, and the leg where a runner-minted key must
+    # be openable by the live server): bdd_e2e test-results/innet_120826_1420 has
+    # reporting_webhook_emission PASSING on e2e_rest with the two rows below still xfailed,
+    # 535 passed / 0 failed.
     (
         "T-UC-010-v31-webhook-signing-required-when",
-        {"reporting_webhook_emission", "content_standards_webhook", "wholesale_feed_webhook"},
-        "no webhook-emitting field is declarable under the STRICT capability policy, so the "
-        "must_equal_when(webhook emission → webhook_signing.supported=true) invariant has no trigger "
-        "to fire on; it becomes gradable when signing makes the postures declarable — #1291",
+        {"content_standards_webhook", "wholesale_feed_webhook"},
+        "the other two must_equal_when triggers name blocks this deployment does not implement, so "
+        "there is no honest way to make either fire: media_buy.content_standards has no surface at "
+        "all (#1855) and wholesale_feed_webhooks has no model field (#1867). Declaring either is "
+        "refused NAMING THAT BLOCK, so realizing them would grade these rows by the wrong refusal "
+        "rather than by the webhook-signing invariant. They graduate when those surfaces land",
     ),
     # Graduated 2026-08-12 (#1291 D2): T-UC-010-v31-identity-required-when-signing (rows
     # posture_declared_identity_absent, posture_declared_identity_empty) and

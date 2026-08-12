@@ -1648,17 +1648,51 @@ def given_reporting_delivery_methods(ctx: dict, methods: str, protocols: str) ->
     )
 
 
+#: The algorithm minted wherever a row needs webhook_signing.supported to DERIVE true.
+#: webhook_signing is derived platform state, so "the seller emits signed webhooks" is
+#: realized by holding a key this deployment can open on a trust root it can publish —
+#: never by declaring the block, which production refuses outright.
+_WEBHOOK_SIGNING_ALG = "ed25519"
+
+#: mutating-webhook emission labels -> the declaration blocks that make the trigger real.
+#: All four labels are listed so a label that drifts from the feature fails loudly here
+#: instead of silently realizing nothing and grading a tenant that declared nothing.
+#:
+#: ``None`` marks a trigger this deployment cannot declare at all: content_standards and
+#: wholesale_feed_webhooks are in production's ``_UNBACKED_BLOCKS`` (#1855 / #1867), and
+#: declaring either is refused NAMING THAT BLOCK — so realizing them would grade the row by
+#: the wrong refusal. With no trigger and no key, webhook_signing.supported is false and the
+#: row fails on the honest reading its selective-xfail entry records.
+_WEBHOOK_EMISSION_STATES: dict[str, dict[str, Any] | None] = {
+    "media_buy.reporting_delivery_methods=[webhook]": {"reporting_delivery_methods": ["webhook"]},
+    "media_buy.content_standards.supports_webhook_delivery=true": None,
+    "wholesale_feed_webhooks.supported=true": None,
+    "no mutating-webhook emission": {},
+}
+
+
 @given(
     parsers.re(
         r"the tenant declares (?P<emission_state>(?:media_buy\.|wholesale_feed_webhooks\.).+|no mutating-webhook emission)$"
     )
 )
 def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
-    """Declare a mutating-webhook emission posture (or its absence) for the
-    webhook-signing required_when invariant. Records intent; the declaration store
-    deliberately carries no webhook_signing field under the STRICT capability policy
-    (#1291) so the must_equal_when invariant is ungraded."""
-    _config(ctx)["webhook_emission_state"] = emission_state.strip()
+    """Realize a mutating-webhook emission posture (or its absence) as real tenant state.
+
+    The declared trigger and the key are one act: rule (d) checks the declaration against
+    the DERIVED webhook_signing value, so declaring webhook report delivery on a keyless
+    tenant is REJECTED rather than resolved — the scenario would grade a refusal instead of
+    the invariant it names.
+    """
+    emission_state = emission_state.strip()
+    assert emission_state in _WEBHOOK_EMISSION_STATES, f"unmapped webhook emission state: {emission_state!r}"
+    blocks = _WEBHOOK_EMISSION_STATES[emission_state]
+    if blocks is None:
+        return  # undeclarable trigger — see the tag's entry in _SELECTIVE_XFAIL
+    if not blocks:
+        return  # the no-emission row: declaring nothing IS the state under test
+    ctx["env"].declare_signing(keyed_alg=_WEBHOOK_SIGNING_ALG)
+    ctx["env"].declare_capabilities(**blocks)
 
 
 #: The identity-block states the two identity outlines grade, in each outline's own
