@@ -36,7 +36,7 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
 # instead of hand-copied — a hand-copied literal silently went stale and missed 5
 # dispatchable skills (list_accounts, sync_accounts, get_media_buys,
 # create_creative, assign_creative), so this regression gate never exercised their
-# boundary/auth contract (salesagent-1q8d.9).
+# boundary/auth contract (GH #1940).
 #
 # "Dispatchable" is not "implemented": create_creative and assign_creative reach a
 # handler that raises UnsupportedOperationError("not yet implemented"). They belong

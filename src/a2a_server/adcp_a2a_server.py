@@ -193,7 +193,7 @@ DISCOVERY_SKILLS = frozenset(
 # _handle_explicit_skill). Module-level so it's the single source of truth
 # for "which A2A skills exist" — tests import this instead of hand-copying
 # the roster, which silently went stale and missed 5 real skills
-# (salesagent-1q8d.9).
+# (GH #1940).
 SKILL_HANDLER_NAMES: dict[str, str] = {
     # Core AdCP Discovery Skills
     "get_adcp_capabilities": "_handle_get_adcp_capabilities_skill",

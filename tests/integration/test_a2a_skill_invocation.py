@@ -613,7 +613,7 @@ class TestA2ASkillInvocation:
         from the real dispatch map (missing create_creative/assign_creative,
         and carrying a phantom "get_creative_delivery" that was never a real
         skill), so this assertion silently stopped meaning anything
-        (salesagent-1q8d.9).
+        (GH #1940).
         """
         from src.a2a_server.adcp_a2a_server import SKILL_HANDLER_NAMES, create_agent_card
 
