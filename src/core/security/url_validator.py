@@ -44,16 +44,44 @@ BLOCKED_HOSTNAMES = {
 # real host, so a URL under one can be judged unreachable WITHOUT a DNS lookup --
 # which is what makes "this endpoint cannot be proven" deterministic instead of
 # dependent on whether the local resolver happens to hijack NXDOMAIN.
-# Single source: _check_domain_validity (src/core/tools/accounts.py) rejects brand
-# domains under these, and the notification activation prover treats them as
-# unprovable. Two copies would drift.
-RESERVED_TLDS: frozenset[str] = frozenset({".test", ".invalid", ".example", ".localhost"})
+#
+# The six names AdCP 3.1.1 enumerates for this refusal, exhaustively:
+# dist/docs/3.1.1/creative/canonical-formats.mdx:222 -- "RFC 6761 special-use names
+# (`.local`, `.localhost`, `.internal`, `.test`, `.example`, `.invalid`)".
+#
+# This module OWNS the decision; it is not a shared constant callers re-match for
+# themselves. Match through ``reserved_tld_for_host`` / ``is_reserved_tld_host``,
+# never by iterating this set at a call site -- a call-site ``endswith`` skips the
+# normalization those functions apply and silently accepts a host the owner
+# refuses (the sync_accounts provisioning bug, GH #1291).
+#
+# Deliberately NOT applied inside ``check_url_syntax`` / ``check_url_ssrf``: the
+# normative webhook-SSRF section (building/by-layer/L1/security.mdx:104-119) is a
+# reserved-IP-RANGE rule and does not carry this name list, and folding it into the
+# general gate would refuse the e2e stack's own ``adcp.test`` origins. Callers that
+# need "can this endpoint ever be proven?" ask for it explicitly.
+RESERVED_TLDS: frozenset[str] = frozenset({".test", ".invalid", ".example", ".localhost", ".local", ".internal"})
+
+
+def reserved_tld_for_host(hostname: str) -> str | None:
+    """Which RFC 2606/6761 reserved TLD *hostname* sits under, or None.
+
+    The single matcher for this policy. Normalizes case and a trailing root dot,
+    and matches a bare reserved LABEL (``"test"``) as well as a suffix
+    (``"acme.test"``) -- all three are spellings a caller's plain ``endswith``
+    misses. Returns WHICH tld matched so callers can name it in a refusal
+    message without re-deriving it.
+    """
+    lowered = hostname.lower().rstrip(".")
+    for tld in RESERVED_TLDS:
+        if lowered == tld.lstrip(".") or lowered.endswith(tld):
+            return tld
+    return None
 
 
 def is_reserved_tld_host(hostname: str) -> bool:
     """Whether *hostname* sits under an RFC 2606/6761 reserved TLD."""
-    lowered = hostname.lower().rstrip(".")
-    return any(lowered == tld.lstrip(".") or lowered.endswith(tld) for tld in RESERVED_TLDS)
+    return reserved_tld_for_host(hostname) is not None
 
 
 def _scheme_error(parsed: ParseResult, *, require_https: bool) -> str | None:

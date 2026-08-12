@@ -889,24 +889,32 @@ def _check_domain_validity(brand_domain: str) -> list["Error"] | None:
     """Check if the brand domain is valid for account provisioning.
 
     Returns a list of Error objects if invalid, None if valid.
-    Reserved TLDs (.test, .invalid, .example, .localhost) are rejected.
+
+    A domain under an RFC 2606/6761 reserved TLD can never host a real brand
+    document and its endpoint can never be proven, so provisioning refuses it
+    here rather than letting the notification prover refuse it later.
+
+    The match is the seam's (``reserved_tld_for_host``), not a local one: this
+    site previously iterated ``RESERVED_TLDS`` with a plain ``endswith``, which
+    accepted the bare label ``"test"`` the owning predicate refuses -- so an
+    account was created for a domain the prover would then reject.
     """
     from adcp.types import Error
 
-    from src.core.security.url_validator import RESERVED_TLDS
+    from src.core.security.url_validator import reserved_tld_for_host
 
-    for tld in RESERVED_TLDS:
-        if brand_domain.endswith(tld):
-            return [
-                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
-                    code="VALIDATION_ERROR",
-                    message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
-                    f"and cannot be used for account provisioning.",
-                    suggestion="Use a real domain name for production accounts.",
-                    field="brand.domain",
-                    recovery="correctable",
-                )
-            ]
+    tld = reserved_tld_for_host(brand_domain)
+    if tld is not None:
+        return [
+            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                code="VALIDATION_ERROR",
+                message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
+                f"and cannot be used for account provisioning.",
+                suggestion="Use a real domain name for production accounts.",
+                field="brand.domain",
+                recovery="correctable",
+            )
+        ]
     return None
 
 
