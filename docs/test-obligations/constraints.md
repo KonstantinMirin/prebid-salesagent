@@ -1,24 +1,40 @@
-# Constraints -- Test Obligations
+# Constraints -- Test Obligations — AdCP 3.1.1
 
-## 3.6 Upgrade Impact
+## Spec grounding — AdCP 3.1.1
 
-The following constraint groups are directly affected by the adcp 3.2.0 -> 3.6.0 upgrade:
+Grounded against the version this repo pins, resolved from
+`docs/adcp-spec-version.md` (never hardcoded here). Citations use the form
+`repo=adcp ref=3.1.1 path=<compliance-tree path>`.
 
-| Constraint Area | Impact | Related Bugs |
-|----------------|--------|--------------|
-| product.yaml | `additional_properties: true`; 6 new fields (channels, catalog_match, catalog_types, conversion_tracking, data_provider_signals, forecast, signal_targeting_allowed); publisher_properties uses new selector schema | salesagent-qo8a (FIXED) |
-| pricing-option.yaml | 9 pricing models (cpm, vcpm, cpc, cpcv, cpv, cpp, cpa, time, flat_rate); delivery is now a reference object, not an integer | salesagent-mq3n (delivery lookup string vs int PK) |
-| media-buy.yaml | New fields: account_id, proposal_id, buyer_campaign_ref, creative_deadline, ext | salesagent-7gnv (boundary drops fields) |
-| create-media-buy-request.yaml | New fields: account_id, proposal_id, brand (BrandReference), artifact_webhook; packages conditionally required | salesagent-7gnv |
-| create-media-buy-response.yaml | New fields: warnings, ext | -- |
-| update-media-buy-request.yaml | New fields: account_id, buyer_campaign_ref, ext | salesagent-7gnv |
-| async-response-*.yaml | Entirely new schemas for per-status async responses | -- |
-| All account_* constraints | Entire accounts domain is new in v3 | -- |
-| All content_standards_* constraints | Entire content standards domain is new in v3 | -- |
-| All property_list_* constraints | Entire property lists domain is new in v3 | -- |
-| All signal_* constraints | Entire signals domain is new in v3 | -- |
-| capabilities_* constraints | Capabilities endpoint is new in v3 | -- |
-| auth/principal_id.yaml | Discovery auth pattern now covers capabilities + accounts | -- |
+This section replaces a "3.6 Upgrade Impact" table that assessed the
+`adcp 3.2.0 -> 3.6.0` SDK upgrade. That framing was two spec lines stale, and
+some of its claims are false at the pin — corrected below, with what was checked.
+
+| Constraint area | Verified at 3.1.1 | Related |
+|---|---|---|
+| `core/product.json` | HOLDS. `additionalProperties: true`, and all 7 named fields exist: channels, catalog_match, catalog_types, conversion_tracking, data_provider_signals, forecast, signal_targeting_allowed | salesagent-qo8a (FIXED) |
+| `core/pricing-option.json` | HOLDS, with a shape correction: 9 pricing models, but expressed as a `oneOf` over `pricing-options/*.json` discriminated on `pricing_model` — cpm, vcpm, cpc, cpcv, cpv, cpp, cpa, flat_rate, time. It has no `properties` of its own; a constraint asserting a field "on pricing-option" must name the branch | salesagent-mq3n |
+| `core/media-buy.json` | **CORRECTED — 2 of 5 claimed fields exist.** `creative_deadline` and `ext` are present; `account_id`, `proposal_id` and `buyer_campaign_ref` are NOT. The entity carries `account` (an `account.json` ref), not `account_id`. Its 17 properties are the complete set — the `allOf` is a conditional (`if`/`then` on `confirmed_at`) and contributes no fields | salesagent-7gnv |
+| `media-buy/create-media-buy-request.json` | **CORRECTED.** `proposal_id`, `brand`, `artifact_webhook` and `packages` exist; `account_id` does NOT — the field is `account`. Required at the pin: account, brand, end_time, idempotency_key, start_time. Note `account` is REQUIRED here while our implementation treats it as temporarily optional | salesagent-7gnv |
+| `media-buy/create-media-buy-response.json` | **CORRECTED — the claim is unverifiable as stated.** The response is composed: `allOf` of `core/version-envelope.json` + `core/protocol-envelope.json`, then a `oneOf` over success/failure variants. `warnings`/`ext` are not top-level properties, so a constraint must name the variant it means | -- |
+| `media-buy/update-media-buy-request.json` | **CORRECTED.** `ext` exists; `account_id` and `buyer_campaign_ref` do NOT. Required at the pin: account, idempotency_key, media_buy_id | salesagent-7gnv |
+| per-status async responses | HOLDS, and there are more than the old row implies: 15 `*-async-response-{submitted,working,input-required}.json` under `media-buy/` | -- |
+| account_* | HOLDS. 10 schemas under `account/` | -- |
+| content_standards_* | HOLDS. 17 schemas under `content-standards/` | -- |
+| property_list_* | HOLDS. 24 schemas under `property/` | -- |
+| signal_* | HOLDS. 6 schemas under `signals/` | -- |
+| capabilities_* | HOLDS. `protocol/get-adcp-capabilities-{request,response}.json` both exist | -- |
+| auth/principal_id | Unchanged by this audit — an auth convention of ours, not a pinned schema | -- |
+
+**One finding worth carrying out of this table.** Every request AND response
+schema composes `core/version-envelope.json` via `allOf`, so `adcp_version` /
+`adcp_major_version` are part of the shape on both directions of the wire. Our
+MCP tools reject those fields today — see salesagent-g6m2.6 / GH #1512, which
+measured 31 graded conformance checks failing on exactly that.
+
+Per-constraint verdicts below carry `**Grounded at 3.1.1:**`. Where a verdict
+still reads `**Affected by 3.6:**`, it has NOT yet been re-decided against the
+pin and must not be trusted — see salesagent-g6m2.4 for the remaining audit.
 
 ## Constraints
 
@@ -37,7 +53,7 @@ When serialized to AdCP schema
 Then channels array is included with uniqueItems enforcement
 ```
 **Priority:** P0
-**Affected by 3.6:** Yes -- additional_properties changed, 6+ new fields
+**Grounded at 3.1.1:** HOLDS. `repo=adcp ref=3.1.1 path=core/product.json` has `additionalProperties: true` and carries all 7 named optional fields (channels, catalog_match, catalog_types, conversion_tracking, data_provider_signals, forecast, signal_targeting_allowed). Verified field-by-field against the pinned schema.
 
 ---
 
@@ -56,7 +72,7 @@ When processed in v3
 Then the system must handle the delivery field as an object reference, not integer PK
 ```
 **Priority:** P0
-**Affected by 3.6:** Yes -- 9 pricing models, delivery field type change. Directly relates to salesagent-mq3n.
+**Grounded at 3.1.1:** HOLDS with a shape correction. `repo=adcp ref=3.1.1 path=core/pricing-option.json` is a `oneOf` over 9 branch schemas discriminated on `pricing_model` (cpm, vcpm, cpc, cpcv, cpv, cpp, cpa, flat_rate, time) — it declares no `properties` itself, so an obligation naming a field "on pricing-option" must name the branch. The delivery-lookup defect this cites (salesagent-mq3n) is ours, not the spec's.
 
 ---
 
@@ -75,7 +91,7 @@ When serialized to AdCP schema
 Then ext object is preserved unchanged
 ```
 **Priority:** P0
-**Affected by 3.6:** Yes -- new fields. Directly relates to salesagent-7gnv (boundary drops buyer_campaign_ref, creative_deadline, ext).
+**Grounded at 3.1.1:** PARTLY FALSE as previously written. `repo=adcp ref=3.1.1 path=core/media-buy.json` carries `creative_deadline` and `ext`, but NOT `account_id`, `proposal_id` or `buyer_campaign_ref` — the entity has `account` (an account.json ref). Its 17 properties are the complete set: the schema's `allOf` is a conditional on `confirmed_at` and contributes no fields. salesagent-7gnv stands for creative_deadline and ext; the buyer_campaign_ref half of it does not describe this entity at the pin.
 
 ---
 
@@ -94,7 +110,7 @@ When update schema validates
 Then product_id is rejected (immutable field, not in update schema)
 ```
 **Priority:** P0
-**Affected by 3.6:** Yes -- delivery field type change
+**Grounded at 3.1.1:** FALSE as previously written. `repo=adcp ref=3.1.1 path=core/package.json` has no `delivery` field at all — there is nothing here whose type could have changed. The package carries `pricing_option_id` (a reference to the product's chosen pricing option), 29 properties in total, `additionalProperties: true`, and `package_id` as its only required field.
 
 ---
 

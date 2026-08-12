@@ -1,8 +1,34 @@
-# Business Rules -- Test Obligations
+# Business Rules -- Test Obligations — AdCP 3.1.1
 
-## 3.6 Upgrade Impact
+## Spec grounding — AdCP 3.1.1
 
-The following rules are directly affected by the adcp 3.2.0 -> 3.6.0 upgrade:
+Grounded against the version this repo pins, resolved from
+`docs/adcp-spec-version.md` (never hardcoded here). Citations use the form
+`repo=adcp ref=3.1.1 path=<compliance-tree path>`.
+
+This replaces a "3.6 Upgrade Impact" table framed against the `adcp 3.2.0 ->
+3.6.0` SDK upgrade. Each row below was re-checked against the pinned schema
+bundle; the verdict column says what was verified, not what the upgrade did.
+
+| Rule | Verified at 3.1.1 | Bug |
+|------|-------------------|-----|
+| BR-RULE-006 | HOLDS. `core/pricing-option.json` is a `oneOf` over exactly 9 branches (cpm, vcpm, cpc, cpcv, cpv, cpp, cpa, flat_rate, time), discriminated on `pricing_model`. `pricing-options/cpa-option.json` does carry `exclusiveMinimum: 0` on `fixed_price` | salesagent-mq3n |
+| BR-RULE-007 | HOLDS. `core/product.json` has `additionalProperties: true` and all 7 named fields | salesagent-qo8a (FIXED) |
+| BR-RULE-011 | HOLDS. `min_spend_per_package` is present on the pricing-option branches (spot-checked cpm and cpa) | salesagent-mq3n |
+| BR-RULE-015 | HOLDS. `core/creative-asset.json` exists at the pin | salesagent-goy2 |
+| BR-RULE-021 | Re-check pending — the row's own citation (salesagent-7gnv, "MediaBuy boundary drops buyer_campaign_ref") is false at the pin: `core/media-buy.json` has no `buyer_campaign_ref`. See constraints.md's grounding table | salesagent-7gnv |
+| BR-RULE-008, 043, 048, 051-078 | Not yet re-decided against the pin — see the note below | -- |
+
+**Rows not listed above, and any per-rule verdict still reading
+`**Affected by 3.6:**`, have NOT been re-decided against the pin and must not be
+trusted.** Re-grounding the remaining per-rule verdicts is tracked as
+salesagent-g6m2.7; the deterministic fact-extractor used here is attached to it.
+
+The superseded upgrade table is kept below for provenance, since several rows
+name real defects that are still open.
+
+<details>
+<summary>Superseded: 3.6 Upgrade Impact table (framing only — verdicts above are authoritative)</summary>
 
 | Rule | Impact | Bug |
 |------|--------|-----|
@@ -15,6 +41,8 @@ The following rules are directly affected by the adcp 3.2.0 -> 3.6.0 upgrade:
 | BR-RULE-043 | Context echo now applies to capabilities and accounts endpoints | -- |
 | BR-RULE-048 | Signal activation is new in v3 | -- |
 | BR-RULE-051-078 | Performance feedback, capabilities, accounts, content standards, property lists are all new v3 domains | -- |
+
+</details>
 
 ## Rules
 
