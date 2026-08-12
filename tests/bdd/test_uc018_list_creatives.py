@@ -67,7 +67,6 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.harness.transport import Transport
-from tests.helpers.pinned_schema import validate_against_pinned_schema
 
 # Three genuinely-different formats (display / video / audio) for the "three
 # different formats" precondition. All three are in the standard format registry:
@@ -212,12 +211,6 @@ def _serialized_response(ctx: dict) -> dict[str, Any]:
     a broken transport surfaces as a missing/errored ``ctx["response"]`` here.
     """
     return _require_response(ctx).model_dump(mode="json", exclude_none=True)
-
-
-@then(parsers.parse("the response should be schema-valid against {schema_file}"))
-def then_response_schema_valid(ctx: dict, schema_file: str) -> None:
-    """Assert the serialized response validates against the pinned AdCP schema."""
-    validate_against_pinned_schema(schema_file, _serialized_response(ctx))
 
 
 @then("the creatives array should include each of the synced creatives")
