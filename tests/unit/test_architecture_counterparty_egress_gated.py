@@ -35,7 +35,7 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import format_failure, parse_module, repo_root
+from tests.unit._architecture_helpers import called_function_names, format_failure, parse_module, repo_root
 
 #: Callables that dial a counterparty-supplied URL, and the seam call each must make.
 #: Adding a row is how a new egress path gets classified; removing one needs the
@@ -67,20 +67,6 @@ MAX_RAW_HTTP_MODULES = 14
 _RAW_HTTP_MARKERS = ("requests.get", "requests.post", "requests.put", "requests.patch", "requests.delete")
 
 
-def _called_names(node: ast.AST) -> set[str]:
-    """Every function name called anywhere inside *node* (bare or dotted)."""
-    names: set[str] = set()
-    for child in ast.walk(node):
-        if not isinstance(child, ast.Call):
-            continue
-        func = child.func
-        if isinstance(func, ast.Name):
-            names.add(func.id)
-        elif isinstance(func, ast.Attribute):
-            names.add(func.attr)
-    return names
-
-
 def _find_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
@@ -98,7 +84,7 @@ def test_counterparty_egress_entry_point_calls_the_seam(path: str, func_name: st
         f"{path}::{func_name} no longer exists. If the egress path was removed, drop its row from "
         "GATED_ENTRY_POINTS; if it was renamed, update the row — do not delete the coverage."
     )
-    called = _called_names(func)
+    called = called_function_names(func)
     missing = [name for name in required if name not in called]
     assert not missing, format_failure(
         summary=f"{path}::{func_name} dials a counterparty URL without the seam's destination policy",
@@ -157,7 +143,7 @@ def test_detector_catches_an_ungated_entry_point() -> None:
     )
     func = _find_function(ungated, "_fetch")
     assert func is not None
-    assert "check_url_ssrf" not in _called_names(func)
+    assert "check_url_ssrf" not in called_function_names(func)
 
     gated = ast.parse(
         "async def _fetch(agent):\n"
@@ -169,4 +155,4 @@ def test_detector_catches_an_ungated_entry_point() -> None:
     )
     func = _find_function(gated, "_fetch")
     assert func is not None
-    assert "check_url_ssrf" in _called_names(func)
+    assert "check_url_ssrf" in called_function_names(func)

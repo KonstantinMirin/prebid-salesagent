@@ -373,6 +373,28 @@ def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[as
             yield node
 
 
+def called_function_names(node: ast.AST) -> set[str]:
+    """Every function name called anywhere inside *node*, bare or dotted.
+
+    ``foo()`` contributes ``"foo"`` and ``obj.foo()`` contributes ``"foo"`` — the
+    ATTRIBUTE, not the receiver — because guards using this ask "was this policy
+    consulted?", and the same policy is reached both as a bare import and as a
+    classmethod on its owner.
+
+    Built on :func:`iter_call_expressions` rather than its own ``ast.walk``: two
+    guards independently grew this loop, which is what
+    ``test_architecture_no_handrolled_call_walk`` exists to prevent.
+    """
+    names: set[str] = set()
+    for call in iter_call_expressions(node):
+        func = call.func
+        if isinstance(func, ast.Name):
+            names.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            names.add(func.attr)
+    return names
+
+
 def iter_statement_scoped_nodes(stmt: ast.stmt) -> Iterator[ast.AST]:
     """Yield the nodes of *stmt* WITHOUT descending into nested statements.
 
