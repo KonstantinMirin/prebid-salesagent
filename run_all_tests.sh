@@ -348,12 +348,46 @@ echo "Collecting JSON reports..."
 # insurance against $RESULTS_DIR having been removed or never created for
 # any reason) and let a real failure actually say something instead of
 # vanishing 23 minutes of work without a trace.
+#
+# Copy ONLY the suites THIS invocation ran, never `.tox/*.json` wholesale.
+# That wildcard was safe while `.tox` was the tox_data NAMED VOLUME, because
+# the cleanup trap's `down -v` destroyed it every run, so nothing stale could
+# survive to be copied. Removing that volume (so the non-root runner could
+# write `.tox/<env>` at all) made `.tox` an ordinary bind-mounted directory
+# that PERSISTS between runs -- and silently turned the same wildcard into a
+# stale-report generator: a suite this run never executed still contributes
+# its previous report, and every downstream reader renders it as freshly
+# measured.
+#
+# Not hypothetical, and not caught by any count check: `storyboard` is an
+# opt-in tox env (absent from env_list), so a bare `./run_all_tests.sh` never
+# runs it -- yet three consecutive runs in a sibling worktree published a
+# storyboard.json from hours earlier, read as current until an SDK version
+# INSIDE the report contradicted the SDK actually installed. Timestamps cannot
+# separate the cases either: a genuine early suite in a long serial run and a
+# stale report from the previous run fall in overlapping age bands.
+#
+# A missing report for a suite that DID run is an ERROR, not an omission: it
+# means the suite died before writing one, which is precisely when its absence
+# most needs to be loud.
 mkdir -p "$RESULTS_DIR"
-if ! cp .tox/*.json "$RESULTS_DIR/"; then
-    echo "WARNING: failed to copy JSON reports into $RESULTS_DIR/ -- see error above." >&2
-    echo "         Reports are still in .tox/*.json inside $(pwd) if you need them by hand." >&2
+# The manifest is what makes the directory self-describing -- a consumer can
+# tell "this run measured these suites" without inferring it from mtimes.
+printf '%s\n' "$SUITES" > "$RESULTS_DIR/.suites"
+_missing_reports=""
+for _suite in ${SUITES//,/ }; do
+    if [ -f ".tox/${_suite}.json" ]; then
+        cp ".tox/${_suite}.json" "$RESULTS_DIR/" || _missing_reports="$_missing_reports ${_suite}(copy-failed)"
+    else
+        _missing_reports="$_missing_reports $_suite"
+    fi
+done
+if [ -n "$_missing_reports" ]; then
+    echo "WARNING: no JSON report for suite(s):$_missing_reports" >&2
+    echo "         Those suites ran but produced no report -- each likely died before" >&2
+    echo "         writing one. Anything still present is in .tox/ inside $(pwd)." >&2
 fi
-echo "Reports: $RESULTS_DIR/"
+echo "Reports: $RESULTS_DIR/  (suites: $SUITES)"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
 # Security audit (uv-secure) — runs on the HOST (scans uv.lock; no Docker). The
