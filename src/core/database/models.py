@@ -911,6 +911,32 @@ MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
 )
 
 
+def resolve_media_buy_confirmed_at(media_buy: "MediaBuy") -> "datetime | None":
+    """The seller-commitment instant to report for a buy, including legacy rows.
+
+    The repository stamps ``confirmed_at`` the first time a buy reaches a committed
+    status, so buys created from now on carry it. Rows that predate the column do
+    not: the migration deliberately leaves them NULL rather than doing a large data
+    rewrite inside one Alembic transaction.
+
+    That matters on the wire and not just cosmetically. The pinned
+    get-media-buys-response schema does more than require the key — it forbids an
+    item whose status is ``active`` from having a null ``confirmed_at``, because an
+    active buy is by definition one the seller committed to. Reporting NULL for a
+    legacy active buy would emit a response that fails its own schema.
+
+    So a confirmed buy with no stamp falls back the way PR #1544 defines the field:
+    the approval instant on the manual-approval path, creation on the synchronous
+    auto-approve path. Read-only — it never writes, so it cannot disturb the
+    write-once guarantee.
+    """
+    if media_buy.confirmed_at is not None:
+        return media_buy.confirmed_at
+    if not is_media_buy_seller_confirmed(media_buy.status):
+        return None
+    return media_buy.approved_at or media_buy.created_at
+
+
 def is_media_buy_seller_confirmed(status: str | None) -> bool:
     """True once the seller has committed to running the buy (confirmed_at is set).
 

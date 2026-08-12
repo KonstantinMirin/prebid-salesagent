@@ -144,6 +144,19 @@ Feature: BR-UC-011 Manage Accounts
     # @bva authentication (account operations): valid token on sync
     # @bva accounts (sync operation): 1 account (minimum)
     # @bva accounts (sync operation): all same action
+
+  @T-UC-011-sync-schema-valid @sync @schema @v3-1 @envelope
+  Scenario: A sync_accounts response validates against its pinned AdCP schema
+    # GH #1900: account/sync-accounts-response.json composes core/protocol-envelope.json
+    # via a top-level allOf, and that arm marks `status` REQUIRED on every task
+    # response envelope. Nothing graded this schema on any transport before, so the
+    # missing envelope status reached live wires unnoticed.
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator        | billing  |
+    | acme-corp.com   | acme-corp.com   | operator |
+    Then the response should be schema-valid against sync-accounts-response.json
+    And the response envelope carries status completed
     # @bva brand (brand-ref): single_brand_domain -- brand with domain only (single brand)
     # POST-S5: Buyer knows the seller-assigned account_id
     # POST-S6: Buyer knows the action taken per account

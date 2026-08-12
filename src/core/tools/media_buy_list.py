@@ -63,7 +63,7 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object, require_identity, require_tenant
-from src.core.database.models import CreativeAssignment, MediaBuy
+from src.core.database.models import CreativeAssignment, MediaBuy, resolve_media_buy_confirmed_at
 from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
@@ -427,7 +427,7 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
             status=buy.status,
             is_paused=buy.is_paused,
-            confirmed_at=buy.confirmed_at,
+            confirmed_at=resolve_media_buy_confirmed_at(buy),
             revision=buy.revision,
         )
         for buy in buys

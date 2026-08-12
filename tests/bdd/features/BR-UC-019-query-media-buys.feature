@@ -38,6 +38,17 @@ Feature: BR-UC-019 Query Media Buys
     # POST-S3: Creative approval state present
     # POST-S6: buyer_campaign_ref present for correlation
 
+  @T-UC-019-envelope-status @envelope @schema @v3-1
+  Scenario: A get_media_buys response carries the spec-required envelope status
+    # GH #1900: core/protocol-envelope.json marks `status` REQUIRED on every task
+    # response envelope, and get-media-buys-response.json composes that arm via a
+    # top-level allOf. GetMediaBuysResponse extended no library base, so a live
+    # response carried no status at all and nothing on any transport noticed.
+    Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
+    And today is "2026-03-15"
+    When the Buyer Agent sends a get_media_buys request with no filters
+    Then the response envelope carries status completed
+
   @T-UC-019-main-filter-ids @main-flow @filtering
   Scenario: Query media buys by specific media_buy_ids
     Given the principal "buyer-001" owns media buys "mb-001", "mb-002", and "mb-003"

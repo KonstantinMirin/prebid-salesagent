@@ -6693,6 +6693,12 @@ mappings:
       upstream_refs: ["BR-RULE-054"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-sync-schema-valid"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["core/protocol-envelope.json", "account/sync-accounts-response.json"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-sync-create"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
@@ -10601,6 +10607,12 @@ mappings:
       business_rules: ["BR-RULE-209"]
       status: new
   UC-019:
+    - adcp_scenario_id: "T-UC-019-envelope-status"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["core/protocol-envelope.json", "media-buy/get-media-buys-response.json"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-019-main-filter-ids"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null

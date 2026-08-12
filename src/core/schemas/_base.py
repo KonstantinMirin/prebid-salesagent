@@ -2813,9 +2813,25 @@ class GetMediaBuysMediaBuy(LibraryGetMediaBuysMediaBuy):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
 
     def model_dump(self, **kwargs):
+        """Keep spec-required fields on the wire even when their value is null.
+
+        The library base defaults to ``exclude_none=True``, which is right for
+        OPTIONAL fields (AdCP omits them rather than sending null) and wrong for a
+        field the schema lists in ``required`` while typing it nullable.
+        ``confirmed_at`` is exactly that: ``{"type": ["string", "null"]}`` and in
+        ``required``, because it "may be null until seller commitment occurs in
+        deferred/manual approval flows". Dropping it produced a response that failed
+        item-level validation for every not-yet-confirmed buy — the same class of
+        silent omission as the missing envelope status (GH #1900), caught by the
+        wire-graded UC-019 scenario rather than by review.
+        """
         result = super().model_dump(**kwargs)
         if "packages" in result and self.packages:
+            # Pattern #4: this class carries no NestedModelSerializerMixin, so the
+            # local package subclass's own serializer has to be invoked explicitly.
             result["packages"] = [pkg.model_dump(**kwargs) for pkg in self.packages]
+        if "confirmed_at" not in result:
+            result["confirmed_at"] = None
         return result
 
 
