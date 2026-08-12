@@ -64,6 +64,9 @@ from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.generated_poc.enums.media_buy_valid_action import (
     MediaBuyValidAction,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+    Snapshot as LibraryGetMediaBuysSnapshot,
+)
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
@@ -2730,25 +2733,16 @@ class ApprovalStatus(StrEnum):
     rejected = "rejected"
 
 
-class Snapshot(SalesAgentBaseModel):
+class Snapshot(LibraryGetMediaBuysSnapshot):
     """Near-real-time delivery snapshot for a package.
 
-    Matches the adcp 3.6.0 Snapshot type spec.
-    as_of is required so consumers know the data freshness.
+    Every field this class used to declare — as_of, impressions, spend,
+    staleness_seconds, clicks, pacing_index, delivery_status, currency — is a
+    verbatim match for the library type's, so they are inherited rather than
+    copied (Pattern #1). Kept as a local subclass rather than a plain alias so
+    the name stays stable for the ~2 adapter construction sites and so
+    GetMediaBuysPackage can narrow to it.
     """
-
-    as_of: datetime = Field(..., description="ISO 8601 timestamp when this snapshot was captured by the platform")
-    impressions: float = Field(..., ge=0.0, description="Total impressions delivered since package start")
-    spend: float = Field(..., ge=0.0, description="Total spend since package start")
-    staleness_seconds: int = Field(..., ge=0, description="Maximum age of this data in seconds")
-    clicks: float | None = Field(default=None, ge=0.0, description="Total clicks since package start (when available)")
-    pacing_index: float | None = Field(
-        default=None, ge=0.0, description="Current delivery pace relative to expected (1.0 = on track)"
-    )
-    delivery_status: DeliveryStatus | None = Field(
-        default=None, description="Operational delivery state of this package"
-    )
-    currency: str | None = Field(default=None, description="ISO 4217 currency code for spend in this snapshot")
 
 
 class GetMediaBuysPackage(SalesAgentBaseModel):
