@@ -5,7 +5,7 @@
   "description": "SB-1b measurement sidecar: runs the real @adcp/sdk runStoryboard/adcp-CLI conformance runner against the salesagent e2e MCP endpoint. Not part of the application build; ephemeral scaffold committed for reproducibility (salesagent-exbf).",
   "type": "commonjs",
   "dependencies": {
-    "@adcp/sdk": "9.3.0"
+    "@adcp/sdk": "11.0.0"
   },
   "scripts": {
     "postinstall": "patch-package"
