@@ -2513,10 +2513,20 @@ class ActivateSignalResponse(SalesAgentBaseModel):
     """Response from signal activation.
 
     NOT migrated to library base (evaluated in salesagent-xeb):
-    1. Library uses RootModel[SuccessVariant | ErrorVariant] — cannot add fields
+    1. Historically "library uses RootModel[SuccessVariant | ErrorVariant] — cannot
+       add fields". That reason is STALE at adcp 6.6: ActivateSignalResponse is a
+       union TypeAlias, not a RootModel, so the SyncAccountsResponse approach
+       (subclass the success variant directly — src/core/schemas/account.py:141)
+       would work. It is no longer what keeps this model local.
     2. Library has no signal_id field (no request correlation in response)
     3. Library uses structured list[Deployment] vs our generic activation_details dict
     4. Library enforces atomic success/error; we allow both simultaneously
+
+    Reasons 2-4 still hold, and together they say something stronger than "missing
+    the envelope status": this model is spec-divergent in SHAPE. So when #1353
+    registers activate_signal on a transport, the fix is to rebuild it on the library
+    success variant — never to patch a status field onto this shape, which would
+    manufacture false conformance against an arm that requires deployments.
     """
 
     signal_id: str = Field(..., description="Activated signal ID")
