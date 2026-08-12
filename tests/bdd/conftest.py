@@ -800,18 +800,22 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # unsupported posture) pass; "invalid" rows (requiring the builder to REJECT a
     # relation-violating/out-of-bounds posture with CONFIGURATION_ERROR) still fail — no
     # per-tenant signing-posture config surface exists to reject against.
-    (
-        "T-UC-010-v31-request-signing-monotonicity",
-        {
-            "required_for adds one operation not in supported_for",
-            "warn_for and required_for share exactly one operation",
-            "protocol_methods_required_for adds one method not in protocol_methods_supported_for",
-        },
-        "the declaration store deliberately carries NO request_signing field under the STRICT "
-        "capability policy, so there is no relation-violating posture to reject: declaring one is "
-        "refused up front with CONFIGURATION_ERROR naming the block. Rejecting a relation VIOLATION "
-        "requires the posture to be declarable first, which lands with RFC 9421 signing — #1291",
-    ),
+    # Graduated 2026-08-12 (#1291 D2): T-UC-010-v31-request-signing-monotonicity removed ENTIRELY
+    # (rows: required_for adds one operation not in supported_for; warn_for and required_for share
+    # exactly one operation; protocol_methods_required_for adds one method not in
+    # protocol_methods_supported_for). request_signing became declarable with the signing family,
+    # so CapabilityDeclarations._validate_bucket_monotonicity now has a posture to reject: each row
+    # raises AdCPConfigurationError naming capability_declarations.request_signing.<bucket>, graded
+    # on the wire as CONFIGURATION_ERROR / recovery terminal / message naming request_signing. The
+    # Given declares the concrete posture instead of recording the label, writing the narrowing
+    # bucket EXPLICITLY (the rule keys on model_fields_set, so an omitted superset would skip the
+    # check and the row would grade nothing). Inspected per xpass-graduation.md against feature
+    # :1438-1471; the three rejections were measured directly against production before the
+    # conversion. No assertion weakened. Serial in-process run 2026-08-12: uc010 slice 329 -> 338
+    # passed (+3 rows x 3 transports), 267 -> 258 xfailed, 0 failed, 0 xpassed. e2e_rest (not
+    # gated for these entries, so un-xfailed too) verified in-network: bdd_e2e run
+    # test-results/innet_120826_1403 has all SIX rows of the outline passing on e2e_rest,
+    # 534 passed / 0 failed.
     (
         "T-UC-010-v31-webhook-signing-bounds",
         {

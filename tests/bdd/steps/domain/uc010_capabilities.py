@@ -2248,13 +2248,67 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 # ── Givens: declared-intent recorders (production has no config surface) ──
 
 
+#: monotonicity boundary rows -> the concrete declaration they name. The narrowing bucket
+#: (``supported_for`` / ``protocol_methods_supported_for``) is ALWAYS written explicitly,
+#: because the rule keys on ``model_fields_set``: an absent superset means "wherever a
+#: signature appears" and is skipped, so a row that omitted it would not reject at all and
+#: would grade nothing while looking like it graded the subset rule.
+#:
+#: No bucket names ``get_adcp_capabilities``. With a declared ``supported_for`` that omits
+#: it, ``_bucket_for`` puts the operation under test in the ``none`` bucket — otherwise the
+#: in-process rest leg (the only transport traversing RequestSignatureMiddleware) would
+#: reject the very request the scenario is about, and the row would grade a signature
+#: refusal instead of the relation.
+_MONOTONICITY_BOUNDARY_POSTURES: dict[str, dict[str, Any]] = {
+    "required_for = supported_for (full subset, equal sets)": {
+        "supported": True,
+        "supported_for": ["create_media_buy"],
+        "required_for": ["create_media_buy"],
+    },
+    "required_for adds one operation not in supported_for": {
+        "supported": True,
+        "supported_for": ["create_media_buy"],
+        "required_for": ["create_media_buy", "update_media_buy"],
+    },
+    "warn_for and required_for share zero operations": {
+        "supported": True,
+        "supported_for": ["create_media_buy", "update_media_buy"],
+        "required_for": ["create_media_buy"],
+        "warn_for": ["update_media_buy"],
+    },
+    "warn_for and required_for share exactly one operation": {
+        "supported": True,
+        "supported_for": ["create_media_buy", "update_media_buy"],
+        "required_for": ["create_media_buy"],
+        "warn_for": ["create_media_buy"],
+    },
+    "protocol_methods_required_for ⊆ protocol_methods_supported_for, equal sets": {
+        "supported": True,
+        "protocol_methods_supported_for": ["tasks/cancel"],
+        "protocol_methods_required_for": ["tasks/cancel"],
+    },
+    "protocol_methods_required_for adds one method not in protocol_methods_supported_for": {
+        "supported": True,
+        "protocol_methods_supported_for": ["tasks/cancel"],
+        "protocol_methods_required_for": ["tasks/cancel", "tasks/get"],
+    },
+}
+
+
 @given(parsers.parse("the tenant declares request_signing posture sets for {boundary_point}"))
 def given_request_signing_posture_sets(ctx: dict, boundary_point: str) -> None:
-    """Declare a request_signing posture-set boundary (supported_for/required_for/
-    warn_for and their protocol_methods_* siblings). Records intent; the declaration
-    store deliberately carries no request_signing field under the STRICT capability
-    policy (#1291)."""
-    _config(ctx)["request_signing_boundary"] = boundary_point.strip()
+    """Declare the concrete request_signing posture one boundary label names.
+
+    Real state, not recorded intent: the invalid rows grade the builder REJECTING a
+    relation-violating posture, which only exists to be rejected if it was actually
+    declared. ``declare_signing`` also attaches the derived ``brand_json_url`` a
+    bucket-naming posture obliges, so an invalid row is rejected by the relation rule it
+    names rather than by the identity rule (which production evaluates second).
+    """
+    boundary_point = boundary_point.strip()
+    posture = _MONOTONICITY_BOUNDARY_POSTURES.get(boundary_point)
+    assert posture is not None, f"unmapped request_signing boundary_point: {boundary_point!r}"
+    ctx["env"].declare_signing(request_signing=posture)
 
 
 #: idempotency-ttl boundary rows → the concrete declared posture they name.
