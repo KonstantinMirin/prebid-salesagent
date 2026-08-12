@@ -6,8 +6,35 @@
 - Files: BR-UC-007.md, BR-UC-007-main-mcp.md, BR-UC-007-main-rest.md, BR-UC-007-ext-a.md, BR-UC-007-ext-b.md, BR-UC-007-ext-c.md
 - Referenced Rules: BR-RULE-041, BR-RULE-042, BR-RULE-043, BR-RULE-044, BR-RULE-045
 
-## 3.6 Upgrade Impact
-Low direct impact. This use case is a read-only discovery endpoint. The primary concern is ensuring the `ListAuthorizedPropertiesResponse` schema remains compatible with adcp 3.6 schema definitions. If the `list-authorized-properties-response.json` schema added or renamed fields in 3.6, the Pydantic model must be updated accordingly. The `media-channel` enum (18 types) should be verified against the 3.6 enum definition.
+## Spec grounding — AdCP 3.1.1
+
+**`list_authorized_properties` does not exist at the pin. It was RETIRED in v3.**
+The previous "3.6 Upgrade Impact" section assessed whether the
+`list-authorized-properties-response.json` schema had gained or renamed fields —
+a question with no answer, because there is no such schema at 3.1.1.
+
+Evidence at the pin:
+- `repo=adcp ref=3.1.1 path=specialisms/signal-owned/index.yaml` — "the v2
+  `list_authorized_properties` task is retired; portfolio advertising now lives
+  on `get_adcp_capabilities`."
+- `repo=adcp ref=3.1.1 path=docs/protocol/get_adcp_capabilities.mdx` — a
+  "Migration from list_authorized_properties (v2)" section stating the task "was
+  removed in v3", with an old-field → new-location table.
+- No `list-authorized-properties-*.json` exists anywhere in the 3.1.1 schema
+  bundle (0 matches).
+- The `adcp==6.6.0` SDK exports no `ListAuthorized*` type.
+
+**What the obligations below therefore grade.** Our `list_authorized_properties`
+surface (`src/core/tools/properties.py`) is a **legacy local extension**, not a
+spec tool — its models are locally defined rather than `Library*` subclasses,
+which is what a retired task looks like when the code outlives the spec. The
+scenarios below are retained and still valid *as the contract for that local
+surface*. They must not be read as AdCP conformance obligations, and a scenario
+derived from them grades us against ourselves, not against 3.1.1.
+
+Whether to keep, deprecate, or migrate the surface onto `get_adcp_capabilities`
+is a roadmap decision this audit does not make. Re-grounded at 3.1.1 by
+salesagent-g6m2.4.
 
 ## Test Scenarios
 

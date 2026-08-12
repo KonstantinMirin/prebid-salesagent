@@ -1188,9 +1188,32 @@ Source: BR-UC-006-ext-k.md
 
 ### Provenance Validation (EU AI Act Article 50)
 
-Source: salesagent extension (not in AdCP spec). EU AI Act Article 50 requires
-disclosure of AI-generated content. Publishers can require provenance metadata
-on creatives via `creative_policy.provenance_required`.
+EU AI Act Article 50 requires disclosure of AI-generated content. Publishers can
+require provenance metadata on creatives via `creative_policy.provenance_required`.
+
+**This section grades OUR production behavior, which DIVERGES from the pinned
+spec — read both halves before deriving a scenario from it.**
+
+*What the pin grades* (`repo=adcp ref=3.1.1
+path=protocols/media-buy/scenarios/provenance_enforcement.yaml`): four
+provenance failures, each a per-creative **rejection** carrying `action: failed`
+and an error code — `PROVENANCE_REQUIRED` (no provenance object at all),
+`PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING`, `PROVENANCE_VERIFIER_NOT_ACCEPTED`
+(`verify_agent` outside `accepted_verifiers`), and `PROVENANCE_DISCLOSURE_MISSING`.
+The storyboard also describes a truth-of-claim contract
+(`PROVENANCE_CLAIM_CONTRADICTED`). So this is emphatically **not** a
+salesagent-only extension, as this section previously stated.
+
+*What we implement, and what the obligations below grade*: a **warning** on the
+sync result, never a rejection — the creative is accepted with
+`action != "failed"`. UC-006-PROV-01..04 keep that meaning deliberately; they
+are the contract for our current production behavior, and the tests that cover
+them assert warning semantics.
+
+*The gap*: nothing here grades the four spec rejections. Closing it is scenario
+work this audit deliberately does not do — writing obligations for the graded
+codes would mint coverage demands that no test satisfies. Re-grounded at 3.1.1
+by salesagent-g6m2.4.
 
 #### Scenario: Provenance required but missing — warning added
 **Obligation ID** UC-006-PROV-01
