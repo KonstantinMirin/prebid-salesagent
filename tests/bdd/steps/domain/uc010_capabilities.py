@@ -26,6 +26,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_dict, wire_field, wire_lookup
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
 BILLING_PARTY_ENUM = {"operator", "agent", "advertiser"}
@@ -1660,15 +1661,64 @@ def given_webhook_emission_state(ctx: dict, emission_state: str) -> None:
     _config(ctx)["webhook_emission_state"] = emission_state.strip()
 
 
+#: The identity-block states the two identity outlines grade, in each outline's own
+#: vocabulary — the ONE axis they vary. ``identity-required-when-signing`` names the state
+#: in its ``<identity_state>`` column, ``identity.brand_json_url boundary`` inside its
+#: ``<boundary_point>`` label; they are the same three states, so they share one table
+#: rather than two step bodies that drift apart.
+#:
+#: OMIT vs ``{}`` is not a distinction without a difference: the pinned identity block's
+#: own description says an agent declaring a signing posture with an EMPTY identity must
+#: be rejected as missing ``brand_json_url``, so ``{}`` has to be declarable to be graded.
+_IDENTITY_STATES: dict[str, dict[str, Any] | IdentityMode] = {
+    "absent": OMIT_IDENTITY,
+    "url absent": OMIT_IDENTITY,
+    "empty object": {},
+    "identity: {}": {},
+    "url present": DERIVE_IDENTITY,
+}
+
+#: The posture the boundary outline describes only as "request_signing.supported_for
+#: non-empty". ONE operation, and deliberately NOT ``get_adcp_capabilities``: a bucket
+#: covering the operation under test would make the in-process rest leg (which traverses
+#: RequestSignatureMiddleware, unlike a2a/mcp) reject the very request the scenario is
+#: about, grading a signature refusal instead of the identity rule.
+_TRUST_ROOT_POSTURE: dict[str, Any] = {"supported": True, "supported_for": ["create_media_buy"]}
+
+#: ``identity.brand_json_url boundary`` rows: leading partition token -> the posture and
+#: identity state that realize the label's prose.
+_IDENTITY_BOUNDARY_ROWS: dict[str, tuple[dict[str, Any] | None, str]] = {
+    "no_posture": (None, "absent"),
+    "posture_url_present": (_TRUST_ROOT_POSTURE, "url present"),
+    "posture_url_absent": (_TRUST_ROOT_POSTURE, "url absent"),
+    "posture_identity_empty": (_TRUST_ROOT_POSTURE, "identity: {}"),
+}
+
+
+def _declare_signing_identity(ctx: dict, posture: dict[str, Any] | None, identity_state: str) -> None:
+    """Realize one (signing posture, identity state) pair as real tenant state.
+
+    The whole point of the two outlines is that the trust-root pointer can be MISSING, so
+    the state has to reach the declaration store — a Given that only recorded which state
+    it meant could never make production reject anything.
+    """
+    state = _IDENTITY_STATES.get(identity_state)
+    assert state is not None, f"unmapped identity state: {identity_state!r}"
+    ctx["env"].declare_signing(request_signing=posture, identity=state)
+
+
 @given(parsers.parse("the tenant declares {signing_posture} with identity block {identity_state}"))
 def given_signing_posture_with_identity(ctx: dict, signing_posture: str, identity_state: str) -> None:
-    """Declare a signing posture + identity-block state for the identity
-    required_when invariant. Records intent; the declaration store deliberately
-    carries no identity or request_signing field under the STRICT capability policy
-    (#1291), so a signing posture missing brand_json_url cannot be declared and the
-    required_when rejection has nothing to fire on."""
-    _config(ctx)["signing_posture"] = signing_posture.strip()
-    _config(ctx)["identity_state"] = identity_state.strip()
+    """Declare a signing posture together with the identity-block state it is paired with.
+
+    The posture is parsed from the row's OWN ``request_signing.<bucket>=[...]`` fragment
+    rather than taken from a table, so the declaration that reaches the wire is the one the
+    row wrote; ``no signing posture`` declares none at all, which is what makes its valid
+    row grade the baseline response instead of a refusal.
+    """
+    signing_posture = signing_posture.strip()
+    posture = None if signing_posture == "no signing posture" else _parse_request_signing_buckets(signing_posture)
+    _declare_signing_identity(ctx, posture, identity_state.strip())
 
 
 @given(parsers.parse('the tenant declares measurement.metrics with metric_id "{metric_id}"'))
@@ -2274,12 +2324,19 @@ def given_error_details_builder(ctx: dict, boundary_point: str) -> None:
 
 @given(parsers.parse("the tenant identity and signing posture are configured for {boundary_point}"))
 def given_identity_signing_posture(ctx: dict, boundary_point: str) -> None:
-    """Declare an identity + signing-posture boundary for the brand_json_url
-    required_when rule. Records intent; the declaration store deliberately carries
-    no identity or request_signing field under the STRICT capability policy (#1291),
-    so a signing posture missing brand_json_url cannot be declared and the
-    required_when rejection has nothing to fire on."""
-    _config(ctx)["identity_signing_boundary"] = boundary_point.strip()
+    """Realize one ``identity.brand_json_url`` boundary label as real tenant state.
+
+    The label carries the partition name first (``posture_url_absent …``), so the leading
+    token selects the row; the prose after it is the same state described for a reader.
+    Shares :data:`_IDENTITY_STATES` and :func:`_declare_signing_identity` with the
+    ``identity-required-when-signing`` outline, which grades the same production rule from
+    the other angle.
+    """
+    partition = boundary_point.strip().split()[0]
+    row = _IDENTITY_BOUNDARY_ROWS.get(partition)
+    assert row is not None, f"unmapped identity boundary_point: {boundary_point!r}"
+    posture, identity_state = row
+    _declare_signing_identity(ctx, posture, identity_state)
 
 
 # ── Thens: request_signing subset/disjoint relations ─────────────────────
@@ -2585,6 +2642,20 @@ def given_request_signing_posture(ctx: dict, posture: str) -> None:
     ctx["env"].declare_signing(request_signing=_parse_posture_fragment(posture))
 
 
+def _parse_request_signing_buckets(fragment: str) -> dict[str, Any]:
+    """A ``request_signing.<bucket>=[...]`` fragment as a declaration.
+
+    Shared by the bucket-set Given below and the identity outline's Given, which writes
+    the same fragment shape in its ``<signing_posture>`` column — one parser, so a row
+    that names a bucket declares exactly the buckets it names in both outlines.
+    """
+    declaration: dict[str, Any] = {"supported": True}
+    for field, raw_list in re.findall(r"(?:request_signing\.)?(\w+)=(\[[^\]]*\])", fragment):
+        declaration[field] = _parse_declared_list(raw_list)
+    assert len(declaration) > 1, f"no request_signing buckets parsed from {fragment!r}"
+    return declaration
+
+
 @given(parsers.re(r"the tenant declares (?P<fragment>request_signing\.\w+=\[.+)$"))
 def given_request_signing_buckets(ctx: dict, fragment: str) -> None:
     """Store a ``request_signing`` declaration written as ``request_signing.<bucket>=[...]``.
@@ -2603,11 +2674,7 @@ def given_request_signing_buckets(ctx: dict, fragment: str) -> None:
     reached the wire with empty ``required_for``/``warn_for`` — caught by the
     grades-nothing guards in the Thens below, which is what they are for.
     """
-    declaration: dict[str, Any] = {"supported": True}
-    for field, raw_list in re.findall(r"(?:request_signing\.)?(\w+)=(\[[^\]]*\])", fragment):
-        declaration[field] = _parse_declared_list(raw_list)
-    assert len(declaration) > 1, f"no request_signing buckets parsed from {fragment!r}"
-    ctx["env"].declare_signing(request_signing=declaration)
+    ctx["env"].declare_signing(request_signing=_parse_request_signing_buckets(fragment))
 
 
 @given(parsers.re(r"the tenant declares webhook_signing posture (?P<posture>supported=.+)$"))

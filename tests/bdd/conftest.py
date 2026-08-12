@@ -850,30 +850,28 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "must_equal_when(webhook emission → webhook_signing.supported=true) invariant has no trigger "
         "to fire on; it becomes gradable when signing makes the postures declarable — #1291",
     ),
-    # Wired non-dormant + strengthened (salesagent-scgh): the no-posture row passes (a valid
-    # capabilities response is emitted); the signing-posture-without-brand_json_url rows grade the
-    # required_when rejection (CONFIGURATION_ERROR, recovery terminal) and fail because the builder
-    # never builds identity/the signing posture and so never rejects the invalid config.
-    (
-        "T-UC-010-v31-identity-required-when-signing",
-        {"posture_declared_identity_absent", "posture_declared_identity_empty"},
-        "the store deliberately carries NO identity or request_signing field under the STRICT "
-        "capability policy (identity.brand_json_url/key_origins exist only to anchor signing keys we "
-        "do not publish), so a signing posture missing brand_json_url cannot be declared and the "
-        "required_when rejection has nothing to fire on — #1291",
-    ),
-    # Wired non-dormant + strengthened (salesagent-jd6a): the no-posture / brand_json_url-present
-    # valid rows pass (a degraded-but-schema-valid baseline response is emitted and no malformed
-    # brand_json_url is on the wire); the signing-posture-without-brand_json_url invalid rows grade
-    # the required_when rejection (CONFIGURATION_ERROR, recovery terminal, naming brand_json_url)
-    # and fail because the builder never builds identity/the signing posture and so never rejects.
-    (
-        "T-UC-010-v31-identity-brand-json-url-bounds",
-        {"posture_url_absent", "posture_identity_empty"},
-        "same as -identity-required-when-signing: no identity/request_signing field exists in the "
-        "declaration store under the STRICT capability policy, so the required_when boundary rows "
-        "have no declarable posture to violate — #1291",
-    ),
+    # Graduated 2026-08-12 (#1291 D2): T-UC-010-v31-identity-required-when-signing (rows
+    # posture_declared_identity_absent, posture_declared_identity_empty) and
+    # T-UC-010-v31-identity-brand-json-url-bounds (rows posture_url_absent,
+    # posture_identity_empty) removed ENTIRELY — both outlines grade one rule and it is now
+    # real. The identity block became declarable with the signing family (IdentityDeclaration,
+    # src/core/signing/posture.py), and CapabilityDeclarations._validate_identity_relations
+    # rule (e) rejects a bucket-naming posture whose trust-root pointer is missing or empty
+    # with AdCPConfigurationError naming capability_declarations.identity.brand_json_url —
+    # which the Thens grade on the wire via assert_envelope_shape(CONFIGURATION_ERROR,
+    # recovery='terminal', message_substr='brand_json_url'). The Givens now realize the
+    # posture and the identity state (absent / {} / derived) as real tenant declarations
+    # through CapabilitiesEnv.declare_signing instead of recording intent, so the four rows
+    # fail for the reason they name. Inspected per .claude/rules/workflows/xpass-graduation.md
+    # (feature :1215-1240 and :1551-1580 are the authority; obligation re-verified against the
+    # pinned 3.1.1 required_when; no assertion weakened). Verified serially on a2a/mcp/rest,
+    # 2026-08-12: tests/bdd/test_uc010_discover_seller_capabilities.py +
+    # test_uc010_declaration_backing.py -rxX went 317 -> 329 passed (+4 rows x 3 transports),
+    # 279 -> 267 xfailed, 0 failed, 0 xpassed. These entries are NOT gated for e2e_rest
+    # (:1314-1322), so graduation was decided on the in-network leg, which is the authority:
+    # bdd_e2e run sa-0a76f566 (test-results/innet_120826_1349) has all 7 rows of both outlines
+    # PASSING on e2e_rest, 0 failed. tests/bdd/e2e_rest_known_failures.txt carries no UC-010
+    # entry for either outline, so nothing to graduate there.
 ]
 
 
