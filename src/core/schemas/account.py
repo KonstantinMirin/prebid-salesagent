@@ -12,7 +12,7 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
   Architectural; permanent.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from adcp.types import Account as LibraryAccountDomain
 from adcp.types import ContextObject as LibraryContextObject
@@ -150,6 +150,24 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Protocol-envelope status (core/protocol-envelope.json at the pinned AdCP 3.1.1):
+    # `required: ["status"]`, "REQUIRED on every task response envelope", and
+    # account/sync-accounts-response.json composes that arm via a top-level allOf.
+    #
+    # Declared here because the SDK diverges from its own schema: at adcp 6.6
+    # SyncAccountsSuccessResponse has no ProtocolEnvelope in its MRO and no status
+    # field, so this is ADDITIVE subclassing, not an override — nothing to wait on
+    # upstream to ship correctly, and this declaration deletes as a no-op once the
+    # SDK is fixed.
+    #
+    # "completed" is invariant rather than a TaskStatus: the pinned response's oneOf
+    # arms are [['accounts'], ['errors']] with NO submitted arm, the error variant is
+    # never constructed here, and sync_accounts models approval PER ACCOUNT
+    # (src/core/tools/accounts.py) rather than per task — so the task itself always
+    # completes. Same shape and same fix as SyncCreativesResponse
+    # (src/core/schemas/creative.py, GH #1710).
+    status: Literal["completed"] = "completed"
 
     # SDK 5.7 removed these from the parent — declare locally.
     # Typed as SyncResponseAccount for proper deserialization on transport roundtrip.
