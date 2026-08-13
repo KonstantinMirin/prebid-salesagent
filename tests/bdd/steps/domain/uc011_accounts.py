@@ -360,6 +360,49 @@ def given_existing_account_billing_and_pt(ctx: dict, domain: str, billing: str, 
     _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing=billing, payment_terms=pt)
 
 
+@given(parsers.parse('the previously synced account for brand domain "{domain}" has no brand recorded'))
+def given_named_persisted_account_without_brand(ctx: dict, domain: str) -> None:
+    """Clear ``brand`` on a NAMED already-synced account.
+
+    Sibling of "the persisted account has no brand recorded", which clears the
+    account the immediately-preceding Given created. This one names its target,
+    so a scenario that seeded several accounts can put exactly one of them into
+    the brand-less state -- which is what the delete_missing arm needs, since it
+    walks accounts the request did NOT mention.
+    """
+    from src.core.database.models import Account
+    from src.core.helpers.brand_key import brand_key_parts
+
+    env = ctx["env"]
+    # brand is a JSONType column, but the ORM may hand back a BrandReference
+    # model rather than a plain dict depending on how the row was written, so go
+    # through the project's own accessor instead of assuming either shape.
+    account = next(
+        (a for a in env.query(Account, tenant_id=ctx["tenant"].tenant_id) if brand_key_parts(a.brand)[0] == domain),
+        None,
+    )
+    assert account is not None, f"no persisted account for brand domain {domain!r} to clear"
+    env.clear_account_brand(account.account_id)
+
+
+@given("the persisted account has no brand recorded")
+def given_persisted_account_without_brand(ctx: dict) -> None:
+    """Clear ``brand`` on the account the preceding "already exists" Given created.
+
+    A REAL persisted state, not an injected mock: ``accounts.brand`` is nullable,
+    and ``env.clear_account_brand`` writes the row through the env session bound to
+    the same database every transport (including e2e) reads. The row is otherwise
+    untouched, so the settings-update reference still resolves to it — which is what
+    makes the brand read reachable at all.
+    """
+    account_id = ctx.get("original_field_values", {}).get("account_id")
+    assert account_id, (
+        "Given must pre-create an account (and capture its account_id in "
+        "original_field_values) before its brand can be cleared"
+    )
+    ctx["env"].clear_account_brand(account_id)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # WHEN steps — list_accounts requests
 # ═══════════════════════════════════════════════════════════════════════
@@ -2746,8 +2789,17 @@ def given_sandbox_supported(ctx: dict) -> None:
     3.1.1 locates the sandbox capability at account.sandbox on the capabilities
     response (get-adcp-capabilities-response.json#/properties/account/properties/sandbox);
     the features.sandbox alias is kept for any un-migrated feature text.
+
+    Writes the REAL tenant column the gate reads (resolve_account_sandbox,
+    src/core/billing_policy.py). It previously set only a ctx flag that no
+    production code path consulted, and passed anyway because the gate defaulted
+    a missing value to "supported" -- so the Given was dormant and the scenario
+    graded the default, not the declaration. #1721 flipped that default to False
+    (a seller advertises sandbox by configuring it, never by omission), which is
+    what surfaced this.
     """
     _setup_tenant_and_principal(ctx)
+    ctx["env"].configure_tenant_field("account_sandbox", True)
     ctx["sandbox_supported"] = True
 
 
@@ -3299,10 +3351,18 @@ def then_per_account_error_field(ctx: dict, field: str) -> None:
     """Assert the referenced account's error names WHICH request field was rejected.
 
     Spec: core/error.json#/properties/field — the JSONPath-lite pointer at the
-    offending request field (e.g. 'accounts[0].sandbox').
+    offending request field, ENTRY-RELATIVE (e.g. 'sandbox',
+    'notification_configs[0].event_types[0]'), which is the rooting the graded
+    contract pins.
+
+    Read off the WIRE, not the reconstructed response model: the pointer's
+    rooting is a claim about the bytes the buyer receives, so grading it on a
+    typed object would leave the wire spelling unpinned -- the co-located
+    error-code and error-recovery Thens already read the wire, and this one
+    read the model.
     """
-    errors = _last_account_errors(ctx)
-    fields = [getattr(e, "field", None) for e in errors]
+    errors = _sole_account_errors(ctx)
+    fields = [e.get("field") for e in errors]
     assert field in fields, f"Expected a per-account error field pointing at {field!r}, got {fields}"
 
 
@@ -3764,34 +3824,6 @@ def then_account_keeps_prior_notif_set(ctx: dict) -> None:
     assert _sub_attr(match, "active") is prior["active"], (
         f"Prior active flag changed: expected {prior['active']!r}, got {_sub_attr(match, 'active')!r}"
     )
-
-
-@then(parsers.re(r'the per-account errors array contains an error with code "(?P<code1>[^"]+)" or "(?P<code2>[^"]+)"'))
-def then_per_account_error_code_or(ctx: dict, code1: str, code2: str) -> None:
-    """Assert the failed account's errors contain either of two spec-permitted codes.
-
-    The spec permits INVALID_REQUEST OR VALIDATION_ERROR for these per-account
-    notification validation failures (core/notification-config.json event_types and
-    subscriber_id descriptions), so the scenario pins the disjunction. A dedicated
-    or-variant step is required because the greedy single-code binding
-    (then_per_account_error_code, ``code "{code}"`` via parse) would capture the
-    literal string 'INVALID_REQUEST" or "VALIDATION_ERROR' as one code and never match.
-
-    Spec: enums/error-code.json#/enum — both INVALID_REQUEST and VALIDATION_ERROR are
-    canonical members; #/enumMetadata — both carry recovery 'correctable'.
-    """
-    acct = ctx.get("last_account")
-    if acct is None:
-        acct = _require_response(ctx).accounts[0]
-        ctx["last_account"] = acct
-    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
-    codes = [e.code for e in acct.errors]
-    assert code1 in codes or code2 in codes, f"Expected error code {code1!r} or {code2!r} in {codes}"
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# THEN steps — governance_agents + dry-run update assertions
-# ═══════════════════════════════════════════════════════════════════════
 
 
 @then(parsers.parse('the governance_agents are stored for brand domain "{domain}"'))

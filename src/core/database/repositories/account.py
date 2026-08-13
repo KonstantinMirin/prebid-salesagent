@@ -8,6 +8,10 @@ beads: salesagent-m44
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -36,6 +40,31 @@ class NaturalKeyConflict(ValueError):
     def __init__(self, message: str, *, existing_account_id: str | None = None) -> None:
         super().__init__(message)
         self.existing_account_id = existing_account_id
+
+
+@dataclass(frozen=True)
+class NaturalKey:
+    """The identity a sync_accounts entry resolves to: (brand_domain, brand_id, operator, sandbox).
+
+    The FULL key the unique index and every resolver use. A partial key would
+    collapse accounts that differ only by brand_id or sandbox, which are
+    legitimately distinct -- this type exists so the four-tuple cannot be built
+    two different ways at three call sites and quietly disagree about its order.
+    """
+
+    brand_domain: str
+    brand_id: str | None
+    operator: str
+    sandbox: bool | None
+
+    @classmethod
+    def from_reference(cls, ref: Any) -> NaturalKey:
+        brand_domain, brand_id = brand_key_parts(ref.brand)
+        return cls(brand_domain or "", brand_id, ref.operator or "", ref.sandbox)
+
+    @classmethod
+    def from_parts(cls, brand_domain: str, brand_id: str | None, operator: str, sandbox: bool | None) -> NaturalKey:
+        return cls(brand_domain, brand_id, operator, sandbox)
 
 
 class AccountRepository:
@@ -91,17 +120,18 @@ class AccountRepository:
             )
         ).first()
 
-    def get_by_natural_key(
-        self,
-        operator: str,
-        brand_domain: str,
-        brand_id: str | None = None,
-        sandbox: bool | None = None,
-    ) -> Account | None:
-        """Get an account by its natural key (operator + brand + sandbox).
+    def get_by_natural_key(self, key: NaturalKey) -> Account | None:
+        """Get an account by its :class:`NaturalKey` (operator + brand + sandbox).
+
+        Takes the key as ONE value rather than four loose positional parts: the
+        four are meaningless apart, and passing them separately let a caller
+        reorder or drop one (brand_id and sandbox are both optional, so a
+        three-arg call still type-checked while silently querying a different
+        key).
 
         The brand field is JSONType containing {"domain": ..., "brand_id": ...}.
         """
+        operator, brand_domain, brand_id, sandbox = key.operator, key.brand_domain, key.brand_id, key.sandbox
         stmt = select(Account).where(
             Account.tenant_id == self._tenant_id,
             Account.operator == operator,
@@ -245,6 +275,42 @@ class AccountRepository:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def persisted_value(account: Account, field: str) -> object:
+        """The persisted value of *field*, serialized for comparison with a resolved one.
+
+        Serialization is a REPOSITORY concern: these columns are JSONType, and how
+        a stored model round-trips to its JSON shape is a property of how this
+        repository persists it. It lived in the tools layer, which meant a caller
+        comparing "what is stored" against "what was requested" had to know the
+        storage encoding -- and account_serialization.py stayed public for that
+        one caller instead of being the repository's private business.
+        """
+        from src.core.database.repositories.account_serialization import (
+            serialize_business_entity,
+            serialize_governance_agents,
+            serialize_notification_configs,
+        )
+
+        current = getattr(account, field, None)
+        if field == "notification_configs":
+            return serialize_notification_configs(current)
+        if field == "governance_agents":
+            return serialize_governance_agents(current)
+        if field == "billing_entity":
+            return serialize_business_entity(current)
+        return current
+
+    @staticmethod
+    def mint_account_id() -> str:
+        """Mint a new account_id.
+
+        The repository owns account identity. This used to be minted in two
+        places -- the sync tool and the admin blueprint -- each free to drift in
+        format, which is how an id scheme becomes two id schemes.
+        """
+        return f"acc_{uuid.uuid4().hex[:12]}"
+
+    @staticmethod
     def build_row(
         *,
         tenant_id: str,
@@ -259,13 +325,11 @@ class AccountRepository:
     ) -> Account:
         """Build the Account row a provisioning entry would create.
 
-        Pure, non-persisting factory -- no DB access. Shared by the live create
-        and the dry_run preview (``src/core/tools/accounts.py``) so the two
-        cannot describe different rows -- a preview built from its own field
-        list is how the two arms drift (#1721). The dry_run caller deliberately
-        never adds the result to the session; it only needs an object to
-        compare LATER entries in the same request against, the way the live
-        arm compares them against the flushed row.
+        Pure, non-persisting factory -- no DB access. THE row-construction site
+        for every caller: sync_accounts' provisioning arm and the admin create
+        form (src/admin/blueprints/accounts.py), which used to hand-build its own
+        Account with its own id mint. Two independent definitions of what an
+        account row is, is how they drift (#1721).
 
         Natural-key assembly (``build_row`` OWNS the row's identity columns --
         ``tenant_id``/``account_id``/``brand``/``operator``) lives here rather

@@ -290,6 +290,8 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
     if "push_notification_config" in ctx:
         kwargs["push_notification_config"] = ctx["push_notification_config"]
+    if "dry_run" in ctx:
+        kwargs["dry_run"] = ctx["dry_run"]
     if ctx.get("has_auth") is False:
         dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
     else:
@@ -556,18 +558,25 @@ def given_tenant_approval_mode_creative(ctx: dict, approval_mode: str) -> None:
 
 
 def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
-    """Shared helper to set approval_mode on the tenant ORM instance."""
+    """Shared helper to set approval_mode for BOTH auth paths.
+
+    Writing only the ORM row is not enough: ``_sync_creatives_impl`` reads
+    ``approval_mode`` off the resolved identity's tenant dict (_sync.py logs
+    "Tenant approval_mode field: NOT FOUND" when it is absent) and falls back to
+    require-human, so an ORM-only Given silently graded the default mode instead
+    of the one the scenario names. ``configure_tenant_field`` is the env-owned
+    writer that updates the tenant overrides AND the DB column and clears the
+    identity cache.
+    """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
 
-    if mode in ("auto-approve", "require-human", "ai-powered"):
-        tenant.approval_mode = mode
-    else:
+    if mode not in ("auto-approve", "require-human", "ai-powered"):
         raise ValueError(f"Unknown approval mode: {mode}")
 
+    env.configure_tenant_field("approval_mode", mode)
     if mode == "require-human":
-        tenant.slack_webhook_url = "https://hooks.slack.test/approval"
+        env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.test/approval")
 
     env._commit_factory_data()
 
@@ -2822,11 +2831,10 @@ def given_tenant_no_approval_mode(ctx: dict) -> None:
 
 @given("the tenant has a slack_webhook_url configured")
 def given_tenant_has_slack_webhook(ctx: dict) -> None:
-    """Set a slack_webhook_url on the tenant."""
+    """Set a slack_webhook_url for both auth paths (see _set_tenant_approval_mode)."""
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    tenant.slack_webhook_url = "https://hooks.slack.test/approval"
+    env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.test/approval")
     env._commit_factory_data()
 
 
@@ -3243,6 +3251,271 @@ def then_background_ai_review_submitted(ctx: dict) -> None:
         "(submit_ai_review or ai_review) to verify INV-4 ai-powered behavior"
     )
     mock_submit.assert_called_once()
+
+
+# --- local-uc006-dry-run-out-of-transaction-effects: the AI-review submit seam ---
+#
+# The ai-powered arm of _processing.py hands a job to `_ai_review_executor`; that
+# job opens its OWN AdminCreativeUoW, COMMITS `status` + `data["ai_review"]`, and
+# then sends Slack and the push webhook. None of it is inside the sync
+# transaction, so a preview cannot undo it by rolling back — the submit itself is
+# the thing that must not happen. CreativeSyncEnv mocks the executor
+# (EXTERNAL_PATCHES "ai_review_executor"), which turns "no AI review happened"
+# into a value comparison instead of a race against a background thread.
+
+
+def _ai_review_submitted_creative_ids(ctx: dict) -> list[str]:
+    """creative_ids the sync handed to the background AI-review executor."""
+    executor = ctx["env"].mock.get("ai_review_executor")
+    assert executor is not None, (
+        "CreativeSyncEnv must patch src.admin.blueprints.creatives._ai_review_executor "
+        "for the AI-review submit seam to be observable"
+    )
+    return [call.kwargs.get("creative_id") for call in executor.submit.call_args_list]
+
+
+@when("the Buyer Agent previews the creative with dry_run true")
+def when_preview_creative_dry_run(ctx: dict) -> None:
+    """Dispatch the SAME sync_creatives request under dry_run=true.
+
+    Spec: creative/sync-creatives-request.json#/properties/dry_run — "preview
+    changes without applying them."
+    """
+    ctx["dry_run"] = True
+    when_sync_creative(ctx)
+
+
+@then("the AI review submissions name exactly the synced creative")
+def then_ai_review_submitted_for_synced_creative(ctx: dict) -> None:
+    """Control: the live ai-powered arm submits one review, for THIS creative.
+
+    Naming the creative_id (rather than counting calls) is what makes the sibling
+    preview scenario's empty-list assertion non-vacuous: a wrong patch target or a
+    dead ai-powered branch fails here first.
+    """
+    _assert_success_response(ctx)
+    expected = [c["creative_id"] for c in ctx["creatives"]]
+    assert _ai_review_submitted_creative_ids(ctx) == expected, (
+        f"expected the ai-powered live sync to submit an AI review for {expected}, "
+        f"got {_ai_review_submitted_creative_ids(ctx)}"
+    )
+
+
+@then("no AI review is submitted")
+def then_no_ai_review_submitted(ctx: dict) -> None:
+    """A preview must not submit a review whose job commits outside its transaction."""
+    _assert_success_response(ctx)
+    submitted = _ai_review_submitted_creative_ids(ctx)
+    assert submitted == [], (
+        f"dry_run submitted AI review(s) for {submitted} — that job opens its own "
+        "AdminCreativeUoW and commits a verdict, which the preview's rollback cannot undo"
+    )
+
+
+def _creative_agent_calls(ctx: dict) -> list[str]:
+    """Outbound creative-agent calls the sync made, as method names.
+
+    ``registry`` is the patched external service
+    (CreativeSyncEnv.EXTERNAL_PATCHES), so build_creative / preview_creative
+    land on it as recorded calls. This is the ONLY way to grade the four
+    outbound gates: they exist to make a preview DIFFER from a live run in side
+    effects, and the dry_run parity oracle compares preview against live, so by
+    construction it can never see them (a parity oracle scores un-gating as MORE
+    parity, not less).
+    """
+    registry = ctx["env"].mock.get("registry")
+    assert registry is not None, (
+        "CreativeSyncEnv must patch src.core.creative_agent_registry.get_creative_agent_registry "
+        "for the outbound creative-agent calls to be observable"
+    )
+    # Read the two methods directly rather than parent.method_calls: the env
+    # ASSIGNS build_creative as its own AsyncMock, which replaces the auto-created
+    # child and so never lands in the parent's method_calls -- an accessor reading
+    # only method_calls would report "no calls" for a live run and grade nothing.
+    agent_registry = registry.return_value
+    return [
+        name
+        for name in ("build_creative", "preview_creative")
+        if getattr(getattr(agent_registry, name, None), "call_count", 0)
+    ]
+
+
+@given("a generative creative whose format is served by a creative agent")
+def given_generative_creative_served_by_agent(ctx: dict) -> None:
+    """A creative whose format actually REACHES the creative agent.
+
+    The plain "known format_id" creative is static, and a static creative never
+    calls build_creative/preview_creative at all -- so a preview asserting "no
+    agent request" against it would pass without the gates existing. Generative
+    is the shape that exercises them.
+    """
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    fmt = env.setup_generative_build(format_id="gen_banner")
+    creative_id = "creative-generative-001"
+    ctx.setdefault("creatives", []).append(
+        {
+            "creative_id": creative_id,
+            "name": "Generative Creative",
+            "format_id": fmt,
+            # Built through the canonical AssetSpec mechanism, never hand-rolled:
+            # 3.1 assets are a discriminated union keyed by role, and a hand-built
+            # dict misses the asset_type discriminator (GH #1391).
+            "assets": build_assets(text_spec("prompt", content="a headline about running shoes")),
+        }
+    )
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["creative_agent_url"] = fmt["agent_url"]
+    ctx["expected_creative_ids"] = [creative_id]
+
+
+def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
+    """A per-row FINGERPRINT of the tenant's library: {creative_id: (status, data)}.
+
+    Not the id SET. An id set can only see a row being ADDED, so a preview that
+    commits an in-place UPDATE to a row that already existed is invisible to it
+    -- and the update arm is exactly where that happens. Measured: with the
+    transaction disposal inverted, the seeded rows came back carrying
+    generative_build_result / preview_response and an id-set oracle still passed.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.creatives is not None
+        return {
+            c.creative_id: (c.status, repr(c.data))
+            for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
+        }
+
+
+@given(parsers.parse("a {creative_state} creative on a {format_kind} format served by a creative agent"))
+def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kind: str) -> None:
+    """A creative payload that reaches EXACTLY ONE of production's four outbound sites.
+
+    The four ``registry.build_creative`` / ``registry.preview_creative`` calls in
+    _processing.py partition on two independent dimensions, and a payload only
+    ever reaches one cell:
+
+        new      x generative  -> build_creative   (create arm)
+        new      x static      -> preview_creative (create arm)
+        existing x generative  -> build_creative   (update arm)
+        existing x static      -> preview_creative (update arm)
+
+    Which is why one scenario cannot grade all four: an outline over both
+    dimensions is the only shape that reaches every site. ``static`` here means
+    agent-served but non-generative -- ``output_format_ids`` empty is precisely
+    what sends production down the preview branch instead of the build branch.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from adcp.types import FormatId as LibraryFormatId
+
+    env = ctx["env"]
+    _ensure_tenant_principal(ctx, env)
+
+    if format_kind == "generative":
+        fmt = env.setup_generative_build(format_id="gen_banner")
+    else:
+        format_id = "static_300x250"
+        mock_format = MagicMock()
+        mock_format.format_id = LibraryFormatId(agent_url=env.DEFAULT_AGENT_URL, id=format_id)
+        mock_format.agent_url = env.DEFAULT_AGENT_URL
+        mock_format.output_format_ids = []  # non-generative -> preview_creative branch
+        env.set_run_async_result([mock_format])
+        registry = env.mock["registry"].return_value
+        registry.preview_creative = AsyncMock(
+            return_value={"previews": [{"url": "https://preview.example.com/p.html"}]}
+        )
+        registry.get_format = AsyncMock(return_value=mock_format)
+        fmt = {"agent_url": env.DEFAULT_AGENT_URL, "id": format_id}
+
+    creative_id = f"creative-{creative_state}-{format_kind}-001"
+    ctx.setdefault("creatives", []).append(
+        {
+            "creative_id": creative_id,
+            "name": "Agent-served Creative",
+            "format_id": fmt,
+            "assets": build_assets(text_spec("prompt", content="a headline about running shoes")),
+        }
+    )
+    ctx["creative_format_id"] = fmt["id"]
+    ctx["creative_agent_url"] = fmt["agent_url"]
+    ctx["expected_creative_ids"] = [creative_id]
+
+    if creative_state == "existing":
+        # The update arm is unreachable for a creative that is not already on
+        # file, so two of the four sites can only be graded from a seeded row.
+        given_creative_already_exists(ctx)
+
+    # The persisted set BEFORE the request. A preview must leave it exactly as
+    # it found it -- which for a new creative means "still empty" and for an
+    # existing one means "still just that row", not "empty".
+    ctx["pre_request_library"] = _persisted_creative_fingerprints(ctx)
+
+
+@then("no creative agent request is made")
+def then_no_creative_agent_request(ctx: dict) -> None:
+    """A preview must not fire a request at a creative agent's endpoint.
+
+    Same rule the accounts arm states for activation proofs
+    (src/core/tools/accounts.py: "a preview must not fire a request at a buyer's
+    endpoint") and that plan section 6 keeps _resolve_activation_proofs' own
+    dry_run branch for. An outbound HTTP call is not undone by the transaction's
+    rollback, so a preview that makes one has already had a real effect on a
+    third party.
+    """
+    _assert_success_response(ctx)
+    calls = _creative_agent_calls(ctx)
+    assert calls == [], (
+        f"dry_run called the creative agent: {calls} — an outbound request is not "
+        "reachable by the preview's rollback, so the preview has already acted"
+    )
+
+
+@then("the creative agent is called to build or preview the creative")
+def then_creative_agent_called(ctx: dict) -> None:
+    """Non-vacuity control for the preview assertion above.
+
+    Without this, "no creative agent request is made" would also pass against a
+    renamed method, a wrong patch target, or a format that never reaches the
+    agent at all -- i.e. it would grade nothing.
+    """
+    _assert_success_response(ctx)
+    calls = _creative_agent_calls(ctx)
+    assert calls != [], (
+        "the live arm made no creative-agent call, so the preview scenario's 'no request' assertion proves nothing"
+    )
+
+
+@then("no creative is persisted for the tenant")
+def then_no_creative_persisted_for_tenant(ctx: dict) -> None:
+    """The other half of the same claim: the preview left the library untouched.
+
+    Compared against the set captured BEFORE the request, not against empty: on
+    the update cells the Given legitimately seeds a row, and asserting emptiness
+    there would fail an honest preview. What must hold either way is that the
+    request added nothing.
+    """
+    _assert_success_response(ctx)
+    before = ctx.get("pre_request_library", {})
+    after = _persisted_creative_fingerprints(ctx)
+    added = sorted(set(after) - set(before))
+    removed = sorted(set(before) - set(after))
+    modified = sorted(cid for cid in set(after) & set(before) if after[cid] != before[cid])
+    # MODIFIED is what covers this lane's riskiest deletion: delete_missing lost
+    # its `if not dry_run:` guard, so a preview now performs the deactivation
+    # write and relies entirely on the rollback. That write ARCHIVES (sets
+    # status), and list_by_principal does not filter on status, so an
+    # un-rolled-back deactivation shows up as a MODIFIED row, never a missing
+    # one -- measured, by injecting exactly that write out-of-transaction.
+    # REMOVED is defence-in-depth: nothing in the sync path can make a row
+    # disappear today, so it guards against a future hard delete rather than
+    # against delete_missing.
+    assert added == [] and removed == [] and modified == [], (
+        f"dry_run wrote to the library — added {added}, removed {removed}, modified {modified}; "
+        "a preview must leave it exactly as it found it"
+    )
 
 
 @then("Slack notification should be deferred until AI review completes")
@@ -7008,7 +7281,21 @@ def then_success_variant_with_creatives(ctx: dict) -> None:
 
 @then(parsers.parse('every creative result has action "{action}"'))
 def then_every_creative_action(ctx: dict, action: str) -> None:
-    """Every per-creative result carries the given action (e.g. 'failed')."""
+    """Every per-creative result carries the given action (e.g. 'failed').
+
+    Also the dry_run parity grader: suppressing the outbound creative-agent call
+    must not change WHAT the preview reports. dry_run "returns what would be
+    created/updated/deleted" (sync-creatives-request.json#/properties/dry_run @
+    v3.1.1), so a preview of a create still says "created" -- never a
+    SERVICE_UNAVAILABLE blaming the agent for a call the gate never made. The
+    live control binds this same step, so preview and live are compared on the
+    same field.
+
+    Read off the typed success payload: CreativeSyncEnv stashes no success-path
+    wire envelope on a2a (verified). Deliberately NOT an either-layer
+    wire-or-typed fallback -- that is the antipattern that lets a one-layer
+    regression pass every call site. One locus, stated.
+    """
     response = ctx.get("response")
     assert response is not None, "expected a sync_creatives response payload"
     assert response.creatives, "expected at least one per-creative result"

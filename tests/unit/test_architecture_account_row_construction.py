@@ -1,26 +1,27 @@
 """Guard: an Account row is constructed in exactly ONE place: AccountRepository.build_row.
 
-Disease (#1721): the dry_run preview and the live create each described the row
-they were about to write with their own field list. Nothing forced them to agree,
-and they did not — the preview arm returned before any write, so a payload
-carrying one natural key TWICE previewed "created" twice under two account_ids,
-an outcome no real run can produce (BR-RULE-062). The buyer would use a preview
-to rule out exactly that.
+This is a LAYER-PLACEMENT ratchet (CLAUDE.md Pattern #3): natural-key assembly
+belongs on the layer that owns Account's identity, never in a caller. It is NOT
+a dry_run guard, which is why it survives #1721's deletion of the shadow preview
+path -- three sibling guards went with that path because they pinned its shape;
+this one pins where row construction may live, a rule that has nothing to do with
+dry_run and stays load-bearing after it.
 
-The fix originally routed both arms through a same-module builder
-(``_new_account_row``); #1721 (M2) relocated it to
-``AccountRepository.build_row`` — a pure, non-persisting factory on the
-repository, so natural-key assembly lives on the layer that owns Account's
-identity, not in the tools layer (CLAUDE.md Pattern #3). This guard now checks
-TWO things: ``src/core/tools/accounts.py`` never constructs an ``Account`` row
-directly (every row comes from the repository), and
-``src/core/database/repositories/account.py`` constructs one only inside
-``build_row`` (a second builder there is the same drift risk, just moved).
+The invariant WIDENED in #1721 rather than narrowing: the admin create form
+(``src/admin/blueprints/accounts.py``) used to mint its own account_id and
+hand-build an ``Account``, a second definition of what an account row is. It now
+routes through ``build_row`` + ``create()``, so this guard covers it too.
+
+Checks THREE modules:
+- ``src/core/tools/accounts.py`` never constructs an ``Account`` row directly
+- ``src/admin/blueprints/accounts.py`` likewise
+- ``src/core/database/repositories/account.py`` constructs one only inside
+  ``build_row`` (a second builder there is the same drift risk, just moved)
 
 Note what this guard does NOT do: it pins the mechanism, not the behaviour. The
 behavioural protection is the set of dry_run tests that run the SAME payload
-through preview and through a live sync and compare — the live run is the oracle,
-so those tests cannot drift from the behaviour they mirror either.
+through preview and through a live sync and compare -- the live run is the
+oracle, so those tests cannot drift from the behaviour they mirror either.
 """
 
 import ast
@@ -28,6 +29,7 @@ import ast
 from tests.unit._architecture_helpers import REPO_ROOT, parse_module
 
 TOOLS_MODULE = "src/core/tools/accounts.py"
+ADMIN_MODULE = "src/admin/blueprints/accounts.py"
 REPO_MODULE = "src/core/database/repositories/account.py"
 BUILDER = "build_row"
 ORM_MODULE = "src.core.database.models"
@@ -108,9 +110,24 @@ def test_accounts_tools_module_never_constructs_a_row_directly():
     violations = find_any_row_construction(parse_module(path))
     assert not violations, (
         f"{TOOLS_MODULE} constructs an Account row directly at line(s) {violations}. "
-        "Route it through AccountRepository.build_row(...) instead -- a second builder "
-        "in the tools layer is how the dry_run preview and the live create drift apart "
-        "again (#1721)."
+        "Route it through AccountRepository.build_row(...) instead -- ORM row construction "
+        "in the tools layer is the Pattern #3 violation this guard ratchets (#1721 M2)."
+    )
+
+
+def test_admin_blueprint_never_constructs_a_row_directly():
+    """The admin create form must route through the repository like every other caller.
+
+    It hand-built an Account with its own ``acc_{uuid}`` mint until #1721. A form
+    that assembles its own row is a second answer to "what is an account row",
+    and the two answers drift -- which is the whole reason this file exists.
+    A module that does not import the ORM model at all trivially satisfies this
+    (no names resolved -> nothing to construct), which is the desired end state.
+    """
+    violations = find_any_row_construction(parse_module(REPO_ROOT / ADMIN_MODULE))
+    assert not violations, (
+        f"{ADMIN_MODULE} constructs an Account row directly at line(s) {violations}. "
+        "Route it through AccountRepository.build_row(...) + create() instead (#1721)."
     )
 
 
@@ -119,9 +136,8 @@ def test_account_repository_builds_its_row_in_one_place():
     violations = find_row_constructions_outside_builder(parse_module(path))
     assert not violations, (
         f"{REPO_MODULE} constructs an Account row outside {BUILDER}() at line(s) {violations}. "
-        "The dry_run preview and the live create must describe the SAME row — two field "
-        "lists is how the preview came to claim an outcome a real run cannot produce "
-        "(#1721). Route it through the shared builder."
+        "Every caller must describe the SAME row -- two field lists in one module is the "
+        "drift this builder exists to prevent. Route it through the shared builder."
     )
 
 

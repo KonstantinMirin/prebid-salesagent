@@ -38,13 +38,13 @@ _ALWAYS_CHANGED = ("url", "click_url", "width", "height", "duration")
 
 @dataclass(frozen=True)
 class PriorCreativeState:
-    """The values an update is compared AGAINST, from either of its two sources.
+    """The values an update is compared AGAINST: the persisted row, pre-update.
 
-    A live update compares the incoming asset against the persisted row. A
-    dry_run preview of an in-request duplicate has no row — the "prior" state is
-    whatever an earlier entry in the same payload already previewed. Both produce
-    this same value object, which is what lets one comparison serve both arms;
-    deriving the preview's ``changes`` any other way is how the two drift.
+    Snapshotted before the row is mutated, so ``comparison_changes`` can report
+    what an update actually changed. There is one source and one arm --
+    ``dry_run`` no longer builds a parallel "previewed" state (#1721: it is a
+    transaction-disposal decision at the UoW boundary), so the second
+    constructor this class used to carry is gone with it.
     """
 
     name: str | None
@@ -61,23 +61,13 @@ class PriorCreativeState:
             format_parameters=existing_creative.format_parameters,
         )
 
-    @classmethod
-    def from_asset(cls, creative: CreativeAsset, format_value) -> PriorCreativeState:
-        format_info = _extract_format_info(format_value)
-        return cls(
-            name=creative.name,
-            agent_url=format_info["agent_url"],
-            format=format_info["format_id"],
-            format_parameters=cast(dict | None, format_info["parameters"]),
-        )
-
 
 def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, format_value) -> list[str]:
-    """The part of ``changes`` derived purely by comparison — no mutation, no agent.
+    """The part of ``changes`` derived purely by comparison -- no mutation, no agent.
 
     Deliberately decoupled from the field assignments it used to be interleaved
-    with, so the dry_run arm can run the identical comparison without writing
-    anything. The ``name`` quirk is preserved exactly as the live path had it: a
+    with, which is what makes an update's reported ``changes`` derivable from a
+    before/after pair rather than from the mutation code. The ``name`` quirk is preserved exactly as the live path had it: a
     ``None`` incoming name that differs from the prior one still reports ``name``
     as changed even though the live arm assigns nothing (the assignment keeps its
     ``is not None`` guard at the call site).
@@ -176,6 +166,7 @@ def _update_existing_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
+    dry_run: bool = False,
 ) -> tuple[SyncCreativeResult, bool]:
     """Update an existing creative with upsert semantics (AdCP 2.5).
 
@@ -256,33 +247,43 @@ def _update_existing_creative(
             existing_creative.status = CreativeStatusEnum.pending_review.value
             needs_approval = True
 
-            # Submit background task
-            task_id = f"ai_review_{existing_creative.creative_id}_{uuid.uuid4().hex[:8]}"
+            # OUT-OF-TRANSACTION EFFECT — gated, and only this. status and
+            # needs_approval above stay ungated: they are the preview's response
+            # content, and the workflow write they feed is gated separately.
+            # The submitted job opens its OWN AdminCreativeUoW and COMMITS a
+            # review verdict, then sends Slack and the push webhook. None of that
+            # is inside this transaction, so a preview's rollback cannot undo it:
+            # on this arm it would commit a verdict onto a real pre-existing row.
+            if not dry_run:
+                # Submit background task
+                task_id = f"ai_review_{existing_creative.creative_id}_{uuid.uuid4().hex[:8]}"
 
-            # Need to flush to ensure creative_id is available
-            creative_repo.flush()
+                # Need to flush to ensure creative_id is available
+                creative_repo.flush()
 
-            # Import the async function
-            from src.admin.blueprints.creatives import _ai_review_creative_async
+                # Import the async function
+                from src.admin.blueprints.creatives import _ai_review_creative_async
 
-            future = _ai_review_executor.submit(
-                _ai_review_creative_async,
-                creative_id=existing_creative.creative_id,
-                tenant_id=tenant["tenant_id"],
-                webhook_url=webhook_url,
-                slack_webhook_url=tenant.get("slack_webhook_url"),
-                principal_name=principal_id,
-            )
+                future = _ai_review_executor.submit(
+                    _ai_review_creative_async,
+                    creative_id=existing_creative.creative_id,
+                    tenant_id=tenant["tenant_id"],
+                    webhook_url=webhook_url,
+                    slack_webhook_url=tenant.get("slack_webhook_url"),
+                    principal_name=principal_id,
+                )
 
-            # Track the task
-            with _ai_review_lock:
-                _ai_review_tasks[task_id] = {
-                    "future": future,
-                    "creative_id": existing_creative.creative_id,
-                    "created_at": time.time(),
-                }
+                # Track the task
+                with _ai_review_lock:
+                    _ai_review_tasks[task_id] = {
+                        "future": future,
+                        "creative_id": existing_creative.creative_id,
+                        "created_at": time.time(),
+                    }
 
-            logger.info(f"[sync_creatives] Submitted AI review for {existing_creative.creative_id} (task: {task_id})")
+                logger.info(
+                    f"[sync_creatives] Submitted AI review for {existing_creative.creative_id} (task: {task_id})"
+                )
         else:  # require-human
             existing_creative.status = CreativeStatusEnum.pending_review.value
             needs_approval = True
@@ -358,15 +359,23 @@ def _update_existing_creative(
                             f"context_id={context_id}"
                         )
 
-                        build_result = run_async_in_sync_context(
-                            registry.build_creative(
-                                agent_url=format_obj.agent_url,
-                                format_id=creative_format,
-                                message=message,
-                                gemini_api_key=gemini_api_key,
-                                promoted_offerings=promoted_offerings,
-                                context_id=context_id,
-                                finalize=getattr(creative, "approved", False),
+                        # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                        # creative agent's endpoint (same rule accounts.py states for
+                        # activation proofs). None here is already the no-result case the
+                        # consumer below guards for, so no second result path appears.
+                        build_result = (
+                            None
+                            if dry_run
+                            else run_async_in_sync_context(
+                                registry.build_creative(
+                                    agent_url=format_obj.agent_url,
+                                    format_id=creative_format,
+                                    message=message,
+                                    gemini_api_key=gemini_api_key,
+                                    promoted_offerings=promoted_offerings,
+                                    context_id=context_id,
+                                    finalize=getattr(creative, "approved", False),
+                                )
                             )
                         )
 
@@ -464,11 +473,19 @@ def _update_existing_creative(
                         f"has_url={bool(data.get('url'))}"
                     )
 
-                    preview_result = run_async_in_sync_context(
-                        registry.preview_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            creative_manifest=creative_manifest,
+                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                    # creative agent's endpoint (same rule accounts.py states for
+                    # activation proofs). None here is already the no-result case the
+                    # consumer below guards for, so no second result path appears.
+                    preview_result = (
+                        None
+                        if dry_run
+                        else run_async_in_sync_context(
+                            registry.preview_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                creative_manifest=creative_manifest,
+                            )
                         )
                     )
 
@@ -584,6 +601,7 @@ def _create_new_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
+    dry_run: bool = False,
 ) -> tuple[SyncCreativeResult, bool]:
     """Create a new creative and persist it to the database (AdCP 2.5).
 
@@ -668,15 +686,23 @@ def _create_new_creative(
                         f"message_length={len(message) if message else 0}"
                     )
 
-                    build_result = run_async_in_sync_context(
-                        registry.build_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            message=message,
-                            gemini_api_key=gemini_api_key,
-                            promoted_offerings=promoted_offerings,
-                            context_id=getattr(creative, "context_id", None),
-                            finalize=getattr(creative, "approved", False),
+                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                    # creative agent's endpoint (same rule accounts.py states for
+                    # activation proofs). None here is already the no-result case the
+                    # consumer below guards for, so no second result path appears.
+                    build_result = (
+                        None
+                        if dry_run
+                        else run_async_in_sync_context(
+                            registry.build_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                message=message,
+                                gemini_api_key=gemini_api_key,
+                                promoted_offerings=promoted_offerings,
+                                context_id=getattr(creative, "context_id", None),
+                                finalize=getattr(creative, "approved", False),
+                            )
                         )
                     )
 
@@ -752,11 +778,19 @@ def _create_new_creative(
                         f"has_url={bool(data.get('url'))}"
                     )
 
-                    preview_result = run_async_in_sync_context(
-                        registry.preview_creative(
-                            agent_url=format_obj.agent_url,
-                            format_id=format_id_str,
-                            creative_manifest=creative_manifest,
+                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                    # creative agent's endpoint (same rule accounts.py states for
+                    # activation proofs). None here is already the no-result case the
+                    # consumer below guards for, so no second result path appears.
+                    preview_result = (
+                        None
+                        if dry_run
+                        else run_async_in_sync_context(
+                            registry.preview_creative(
+                                agent_url=format_obj.agent_url,
+                                format_id=format_id_str,
+                                creative_manifest=creative_manifest,
+                            )
                         )
                     )
 
@@ -797,6 +831,22 @@ def _create_new_creative(
                         f"width={data.get('width')}, "
                         f"height={data.get('height')}, "
                         f"variants={len(preview_result.get('previews', []))}"
+                    )
+                elif dry_run:
+                    # dry_run SUPPRESSED the call (an outbound request is not
+                    # undoable by the transaction's rollback), so a falsy result
+                    # here means "we did not ask", NOT "the agent had none".
+                    # Failing the entry would report a fault that does not exist
+                    # and would break the pinned dry_run contract: a preview
+                    # "returns what would be created/updated/deleted"
+                    # (sync-creatives-request.json#/properties/dry_run), not a
+                    # SERVICE_UNAVAILABLE blaming the creative agent. The
+                    # agent-derived fields are simply absent from the preview --
+                    # the known residual divergence build_update_sync_result's
+                    # docstring already records, not a failure.
+                    logger.info(
+                        f"[sync_creatives] dry_run: skipped preview generation for "
+                        f"{creative_id}; the preview reports the create it would make."
                     )
                 else:
                     # Preview generation returned no previews
@@ -877,32 +927,38 @@ def _create_new_creative(
         db_creative.status = CreativeStatusEnum.pending_review.value
         needs_approval = True
 
-        # Submit background task
-        task_id = f"ai_review_{db_creative.creative_id}_{uuid.uuid4().hex[:8]}"
+        # OUT-OF-TRANSACTION EFFECT — gated, and only this. status and
+        # needs_approval above stay ungated (preview response content). The
+        # submitted job opens its own AdminCreativeUoW and commits, then sends
+        # Slack and the push webhook; on THIS arm it would fire the LLM call and
+        # those notifications for a creative_id the preview's rollback erases.
+        if not dry_run:
+            # Submit background task
+            task_id = f"ai_review_{db_creative.creative_id}_{uuid.uuid4().hex[:8]}"
 
-        # Import the async function
-        from src.admin.blueprints.creatives import _ai_review_creative_async
+            # Import the async function
+            from src.admin.blueprints.creatives import _ai_review_creative_async
 
-        future = _ai_review_executor.submit(
-            _ai_review_creative_async,
-            creative_id=db_creative.creative_id,
-            tenant_id=tenant["tenant_id"],
-            webhook_url=webhook_url,
-            slack_webhook_url=tenant.get("slack_webhook_url"),
-            principal_name=principal_id,
-        )
+            future = _ai_review_executor.submit(
+                _ai_review_creative_async,
+                creative_id=db_creative.creative_id,
+                tenant_id=tenant["tenant_id"],
+                webhook_url=webhook_url,
+                slack_webhook_url=tenant.get("slack_webhook_url"),
+                principal_name=principal_id,
+            )
 
-        # Track the task
-        with _ai_review_lock:
-            _ai_review_tasks[task_id] = {
-                "future": future,
-                "creative_id": db_creative.creative_id,
-                "created_at": time.time(),
-            }
+            # Track the task
+            with _ai_review_lock:
+                _ai_review_tasks[task_id] = {
+                    "future": future,
+                    "creative_id": db_creative.creative_id,
+                    "created_at": time.time(),
+                }
 
-        logger.info(
-            f"[sync_creatives] Submitted AI review for new creative {db_creative.creative_id} (task: {task_id})"
-        )
+            logger.info(
+                f"[sync_creatives] Submitted AI review for new creative {db_creative.creative_id} (task: {task_id})"
+            )
     else:  # require-human
         db_creative.status = CreativeStatusEnum.pending_review.value
         needs_approval = True

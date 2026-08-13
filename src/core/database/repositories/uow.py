@@ -58,12 +58,27 @@ class BaseUoW:
     The session is private (``_session``). Business logic should use
     repository methods, not raw session access.
 
+    ``dry_run`` makes the whole unit a PREVIEW: the identical write path runs
+    and every read inside the block sees its own uncommitted writes (they are
+    flushed in-session), but the transaction is ROLLED BACK instead of
+    committed on clean exit. Preview/live parity therefore holds by
+    construction -- there is no second "simulated" write path to keep in sync,
+    which is the class of bug a shadow preview state machine reintroduces
+    every time it drifts from the real one.
+
+    It disposes of the TRANSACTION only. An effect that escapes this session --
+    outbound HTTP, a background job that opens its own UoW, a write through a
+    different UoW -- is NOT undone by the rollback and must be gated at its own
+    call site by the caller.
+
     Args:
         tenant_id: Tenant scope for all repository queries.
+        dry_run: Roll back on clean exit instead of committing.
     """
 
-    def __init__(self, tenant_id: str) -> None:
+    def __init__(self, tenant_id: str, dry_run: bool = False) -> None:
         self._tenant_id = tenant_id
+        self._dry_run = dry_run
         self._session_cm: Any = None
         self._session: Session | None = None
 
@@ -102,7 +117,13 @@ class BaseUoW:
         assert self._session_cm is not None
         try:
             if exc_type is None:
-                self._session.commit()
+                # dry_run is a preview: discard the identical write path's work
+                # rather than skipping it, so the results the caller already
+                # built describe exactly what a live run would have persisted.
+                if self._dry_run:
+                    self._session.rollback()
+                else:
+                    self._session.commit()
         finally:
             # Always close the session CM and clear references, even if
             # commit() raises.  Without this, the get_db_session() generator

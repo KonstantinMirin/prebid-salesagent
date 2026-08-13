@@ -7,14 +7,13 @@ beads: salesagent-7kn
 """
 
 import logging
-import uuid
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from src.core.database.models import Account
+from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.uow import AccountUoW
 
 logger = logging.getLogger(__name__)
@@ -76,23 +75,27 @@ def create_account(tenant_id):
         flash("Account name is required.", "error")
         return redirect(request.url)
 
-    account_id = f"acc_{uuid.uuid4().hex[:12]}"
-    brand = {"domain": brand_domain} if brand_domain else None
-    if brand and brand_id:
-        brand["brand_id"] = brand_id
-
+    # Identity and row assembly BOTH belong to the repository: this form used to
+    # mint its own account_id and hand-build the Account, so the admin surface
+    # and sync_accounts were two independent definitions of what an account row
+    # is. The gate divergence below is deliberate and documented; the row shape
+    # is not.
     try:
         with AccountUoW(tenant_id) as uow:
-            new_account = Account(
+            new_account = AccountRepository.build_row(
                 tenant_id=tenant_id,
-                account_id=account_id,
+                account_id=AccountRepository.mint_account_id(),
                 name=name,
                 status="active",
-                brand=brand,
-                operator=operator or None,
-                billing=billing,
-                payment_terms=payment_terms,
-                sandbox=sandbox or None,
+                brand_domain=brand_domain,
+                brand_id=brand_id,
+                operator=operator or "",
+                principal_id=None,
+                created_fields={
+                    "billing": billing,
+                    "payment_terms": payment_terms,
+                    "sandbox": sandbox or None,
+                },
             )
             uow.accounts.create(new_account)
     except ValueError as exc:

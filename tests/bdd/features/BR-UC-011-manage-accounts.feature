@@ -443,6 +443,57 @@ Feature: BR-UC-011 Manage Accounts
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_PROVISIONING
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/recovery/enum
 
+  @T-UC-011-delete-missing-brandless @sync @delete-missing @error @partition @boundary
+  Scenario: delete_missing over a persisted brand-less account returns a typed error, never a crash
+    Given the Buyer Agent has an authenticated connection
+    And the agent previously synced accounts for brand domain "acme-corp.com" and "old-brand.com"
+    And the previously synced account for brand domain "old-brand.com" has no brand recorded
+    When the Buyer Agent sends a sync_accounts request with delete_missing true and:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the wire error envelope should carry code "CONFIGURATION_ERROR" with recovery "terminal"
+    # The DEACTIVATION arm reads brand off every account the request did not mention,
+    # to report it as closed. That read has the same seller-side-inconsistency
+    # exposure as the settings-update echo -- accounts.brand is NULLABLE -- and it is
+    # a SEPARATE code path: the settings-update scenario never reaches it, because a
+    # settings-update entry names its target and delete_missing walks the ones it
+    # does not. Both were bare `assert ... "should be unreachable"` before #1721,
+    # i.e. an AssertionError and an untyped 500 with no code, recovery or suggestion.
+    # NOT-IN-SPEC (code choice, same reasoning as the settings-update sibling): the
+    # pinned 3.1.1 enum defines no INTERNAL_ERROR and no "the seller's own stored
+    # state is inconsistent" code; CONFIGURATION_ERROR's enumMetadata describes
+    # exactly this posture (seller-side fault, buyer cannot resolve, MUST NOT
+    # auto-retry), hence recovery "terminal".
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/1
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
+
+  @T-UC-011-sync-settings-update-brandless @sync @settings-update @error @partition @boundary
+  Scenario: Settings-update against a persisted brand-less account returns a typed error, never a crash
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    And the persisted account has no brand recorded
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the wire error envelope should carry code "CONFIGURATION_ERROR" with recovery "terminal"
+    # accounts.brand is a NULLABLE column, so a brand-less persisted row is a state the
+    # seller's own storage permits. The settings-update arm reads that row's brand to echo it
+    # back, and today it guards the read with a bare `assert ... "should be unreachable"`
+    # (src/core/tools/accounts.py) — an AssertionError, which is not an AdCP error at all:
+    # the buyer gets an untyped 500 through the generic transport lane, with no code, no
+    # recovery, and no suggestion. Whatever the seller does about its own corrupt row, the
+    # response MUST still be a conformant error object: sync-accounts-response.json's error
+    # variant (oneOf/1) with a canonical code, and core/error.json makes `recovery` the
+    # normative carrier of retry semantics.
+    # NOT-IN-SPEC (the code choice, stated so it is not read as a spec quotation): the pinned
+    # 3.1.1 enum defines no INTERNAL_ERROR, and none of its codes name "the seller's own
+    # persisted state is inconsistent". CONFIGURATION_ERROR is the one pinned code whose
+    # enumMetadata describes exactly this posture — a seller-side fault the buyer cannot
+    # resolve and MUST NOT auto-retry ("surface to a human at the seller") — hence recovery
+    # "terminal". A transient/correctable code would be a lie: retrying, or editing the
+    # request, cannot make a brand appear on the stored row.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/1
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/recovery
+
   @T-UC-011-sync-mode-exclusive @sync @settings-update @validation @partition @boundary
   Scenario: Entry carrying both an account reference and the provisioning trio is rejected
     Given the Buyer Agent has an authenticated connection
@@ -716,7 +767,7 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "delivery-reports" for url "https://buyer.example/webhooks/adcp/account" and event_types "scheduled"
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
+    And the per-account errors array contains an error with code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].event_types[0]"
     # Graduated (T2 increment F4b): _check_notification_configs rejects
     # media-buy-anchored event types on the account surface pre-persist.
@@ -732,7 +783,7 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with two notification config entries both using subscriber "buyer-primary"
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
+    And the per-account errors array contains an error with code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[1].subscriber_id"
     # Graduated (T2 increment F4b): _check_notification_configs rejects duplicate
     # subscriber_id values within one submitted array pre-persist.
@@ -809,7 +860,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the settings-update entry has action "failed"
     And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
     And the per-account error recovery is "correctable"
-    And the per-account error field points at "accounts[0].sandbox"
+    And the per-account error field points at "sandbox"
     When the Buyer Agent sends a list_accounts request
     Then the listed account for brand domain "acme-corp.com" has sandbox false
     # Schema-LEGAL on this arm (sandbox is absent from the settings-update `not:` list) but
@@ -925,6 +976,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the response is a success variant
     And the response includes dry_run true
     And the account for brand domain "acme-corp.com" has action "updated"
+    And the account payment_terms is "net_45"
     And the persisted account for brand domain "acme-corp.com" has no payment_terms set
     # Locally added (GH: settings-update entries ignored dry_run and persisted the write).
     # The provisioning-trio preview scenario above never reaches the settings-update
@@ -1243,7 +1295,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
     And the per-account error recovery is "correctable"
-    And the per-account error field points at "accounts[0].sandbox"
+    And the per-account error field points at "sandbox"
     And the per-account error suggestion mentions "get_adcp_capabilities"
     # @bva sandbox: capability not declared, sandbox provisioning requested
     # BR-RULE-209 INV-6: only a seller with account.sandbox: true supports sandbox provisioning

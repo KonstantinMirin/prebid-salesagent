@@ -39,11 +39,12 @@ Generative creative usage::
         }])
 
 Available mocks via env.mock:
-    "registry"           -- get_creative_agent_registry (lazy import in _sync.py)
-    "run_async"          -- run_async_in_sync_context (module-level import in _sync.py)
-    "send_notifications" -- _send_creative_notifications (from _workflow)
-    "audit_log"          -- _audit_log_sync (from _workflow)
-    "config"             -- get_config (lazy import in _processing.py)
+    "registry"            -- get_creative_agent_registry (lazy import in _sync.py)
+    "run_async"           -- run_async_in_sync_context (module-level import in _sync.py)
+    "send_notifications"  -- _send_creative_notifications (from _workflow)
+    "audit_log"           -- _audit_log_sync (from _workflow)
+    "config"              -- get_config (lazy import in _processing.py)
+    "ai_review_executor"  -- _ai_review_executor (lazy import in _processing.py, ai-powered arm)
 """
 
 from __future__ import annotations
@@ -71,6 +72,17 @@ class CreativeSyncEnv(IntegrationEnv):
         "send_notifications": "src.core.tools.creatives._sync._send_creative_notifications",
         "audit_log": "src.core.tools.creatives._sync._audit_log_sync",
         "config": "src.core.config.get_config",
+        # The ai-powered arm of _processing.py hands a job to a real
+        # ThreadPoolExecutor that opens its OWN AdminCreativeUoW, COMMITS a review
+        # verdict, and then fires Slack + the push webhook
+        # (src/admin/blueprints/creatives.py). That is an effect which escapes the
+        # sync transaction entirely, so it belongs in this env's "only mocks
+        # external services" set alongside send_notifications — and mocking it is
+        # what makes "no AI-review side effect" an observable rather than a race
+        # against a background thread. Per-test patches of the same target (e.g.
+        # tests/integration/test_creative_sync_transport.py TestAIReviewTrigger)
+        # nest inside this one and still win.
+        "ai_review_executor": "src.admin.blueprints.creatives._ai_review_executor",
     }
     DEFAULT_AGENT_URL = "https://creative.test.example.com"
     REST_ENDPOINT = "/api/v1/creatives/sync"
@@ -97,6 +109,11 @@ class CreativeSyncEnv(IntegrationEnv):
 
         # Audit log: no-op
         self.mock["audit_log"].return_value = None
+
+        # AI review executor: accept the submit and hand back an inert future.
+        # _processing.py stores the returned future in _ai_review_tasks; nothing
+        # in the sync path reads it back.
+        self.mock["ai_review_executor"].submit.return_value = MagicMock()
 
         # Config: default with no gemini key (safe for static creatives)
         mock_config = MagicMock()

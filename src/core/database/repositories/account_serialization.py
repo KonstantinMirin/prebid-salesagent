@@ -26,11 +26,27 @@ from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 __all__ = [
+    "as_json_dict",
     "serialize_business_entity",
     "serialize_governance_agents",
     "serialize_notification_configs",
     "serialize_typed_list",
 ]
+
+
+def as_json_dict(value: object, *, exclude_none: bool = False) -> dict[str, object]:
+    """A pydantic model or a mapping, as a JSON-serializable dict.
+
+    The ONE place the "model or plain mapping?" question is answered. Four sites
+    across accounts.py and this module each asked it with their own
+    ``hasattr(x, "model_dump")``, which is four chances for one of them to
+    forget a flag (``mode="json"``, ``exclude_none``) and serialize differently
+    from the others.
+    """
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json", exclude_none=exclude_none)
+    return dict(value)  # type: ignore[call-overload]
 
 
 def serialize_typed_list(
@@ -53,10 +69,8 @@ def serialize_typed_list(
         if isinstance(item, dict):
             # Validate through the model to normalize types (AnyUrl -> str, etc.)
             result.append(model.model_validate(item).model_dump(mode="json"))
-        elif hasattr(item, "model_dump"):
-            result.append(item.model_dump(mode="json"))
         else:
-            result.append(dict(item))
+            result.append(as_json_dict(item))
     return result
 
 
@@ -80,6 +94,4 @@ def serialize_business_entity(entity: BusinessEntity | Mapping[str, object] | No
     """Normalize a ``billing_entity`` (model or dict) to a JSON-serializable dict."""
     if entity is None:
         return None
-    if hasattr(entity, "model_dump"):
-        return entity.model_dump(mode="json", exclude_none=True)
-    return dict(entity)
+    return as_json_dict(entity, exclude_none=True)

@@ -44,7 +44,7 @@ when every resolver treats them as one.
 
 import pytest
 
-from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.account import AccountRepository, NaturalKey
 from src.core.schemas.account import SyncAccountsRequest
 from tests.harness.account_sync import AccountSyncEnv
 from tests.harness.admin_accounts import AdminAccountEnv
@@ -141,6 +141,10 @@ class TestAdminCreateCannotDuplicateANaturalKey:
             AdminAccountEnv(mode="integration", tenant_id="nku_t2") as admin,
         ):
             env.setup_default_data()
+            # The seller must DECLARE sandbox support before it can provision a
+            # sandbox account (#1721 flipped tenants.account_sandbox to default
+            # False: support is opted into, never assumed from an unset column).
+            env.configure_tenant_field("account_sandbox", True)
             req = SyncAccountsRequest(
                 accounts=[{"brand": {"domain": _DOMAIN}, "operator": _OPERATOR, "billing": "operator", "sandbox": True}]
             )
@@ -203,7 +207,7 @@ class TestAdminCreateCannotDuplicateANaturalKey:
                 f"a create on a FREE natural key must still succeed, got {response.status_code}"
             )
             repo = AccountRepository(env.get_session(), tenant_id="nku_t3")
-            beta = repo.get_by_natural_key(operator="other.com", brand_domain="beta.com")
+            beta = repo.get_by_natural_key(NaturalKey.from_parts("beta.com", None, "other.com", None))
             assert beta is not None, "the non-colliding admin create did not persist an account"
 
 

@@ -1,0 +1,87 @@
+# Hand-authored feature — not compiled from adcp-req.
+#
+# LOCALLY-ADDED (survives BR-*.feature regeneration).
+#
+# Upstream gap: BR-UC-006-sync-creatives.feature carries NO dry_run scenario at
+# all (its only "preview" scenarios are agent-render ones), and every one of its
+# ai-powered rows (:506, :782, :1014) drives the LIVE arm. So the intersection
+# that matters here — dry_run ON an ai-powered tenant — is graded by nothing,
+# upstream or locally. The conformance storyboard cannot close it either:
+# `dry_run` appears nowhere in dist/compliance/3.1.1.
+#
+# What the pinned schema mandates: dry_run is "preview changes without applying
+# them. Returns what would be created/updated/deleted". An AI review is not a
+# preview of anything — the job opens its own transaction, COMMITS a review
+# verdict onto the creative row, and then sends Slack and the push webhook
+# (src/admin/blueprints/creatives.py). None of that is reachable by a rollback,
+# so a preview that submits one has applied a change it only promised to show.
+#
+# Why the pair: the live scenario is the NON-VACUITY CONTROL. Without it, the
+# preview scenario's "no submission" assertion would also pass against a wrong
+# patch target, a renamed executor, or an ai-powered branch that stopped firing
+# — i.e. it would grade nothing. The two scenarios differ in exactly one input.
+#
+# Reconcile upstream in adcp-req (a dry_run × approval_mode partition), then
+# retire this file in favour of the regenerated one.
+#
+# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/creative/sync-creatives-request.json pointer=/properties/dry_run
+Feature: UC-006 sync_creatives — a dry_run preview fires no effect the transaction cannot undo (local)
+
+  @T-UC-006-local-dryrun-ai-review-live @dry-run @creative-approval @invariant
+  Scenario Outline: a live sync on an ai-powered tenant submits the AI review and calls the agent (control)
+    Given the Buyer is authenticated with a valid principal_id
+    And the tenant has approval_mode "ai-powered"
+    And the tenant has a slack_webhook_url configured
+    And a <creative_state> creative on a <format_kind> format served by a creative agent
+    When the Buyer Agent syncs the creative
+    Then the response is the success variant carrying a creatives array
+    And every creative result has action "<expected_action>"
+    And the AI review submissions name exactly the synced creative
+    And the creative agent is called to build or preview the creative
+
+    Examples:
+      | partition_boundary                              | creative_state | format_kind | expected_action |
+      | new_generative new creative, build_creative     | new            | generative  | created         |
+      | new_static new creative, preview_creative       | new            | static      | created         |
+      | existing_generative update arm, build_creative  | existing       | generative  | updated         |
+      | existing_static update arm, preview_creative    | existing       | static      | updated         |
+
+  @T-UC-006-local-dryrun-ai-review-preview @dry-run @creative-approval @invariant
+  Scenario Outline: a dry_run preview on an ai-powered tenant fires no effect the transaction cannot undo
+    Given the Buyer is authenticated with a valid principal_id
+    And the tenant has approval_mode "ai-powered"
+    And the tenant has a slack_webhook_url configured
+    And a <creative_state> creative on a <format_kind> format served by a creative agent
+    When the Buyer Agent previews the creative with dry_run true
+    Then the response is the success variant carrying a creatives array
+    And every creative result has action "<expected_action>"
+    And no AI review is submitted
+    And no creative agent request is made
+    And no Slack notification should be sent
+    And no creative is persisted for the tenant
+    # "no creative agent request is made" covers the four outbound
+    # build_creative/preview_creative calls, which NOTHING else in the lane can
+    # grade: they exist to make a preview differ from a live run in side effects,
+    # and the dry_run parity oracle compares preview against live -- so un-gating
+    # them reads as MORE parity to that oracle, never less. Only an
+    # effect-observation assertion sees them, and the live scenario's mirror Then
+    # is what keeps this one non-vacuous.
+    #
+    # The outline exists because production has FOUR such call sites, partitioned
+    # on two independent dimensions (new vs existing creative x generative vs
+    # agent-served-static format), and any single payload reaches exactly one of
+    # them. A single scenario grades one gate and leaves three un-gated sites
+    # invisible -- which is precisely what a first version of this file did.
+    #
+    # The three AI-review Thens are the three things that job does that a preview's
+    # rollback cannot reach: it COMMITS `status` + `data["ai_review"]` through its
+    # own AdminCreativeUoW, it sends Slack, and it fires the push webhook. Asserting
+    # the submit never happened is what covers all three at their single source; the
+    # Slack and persistence Thens pin the two halves that are separately observable.
+
+    Examples:
+      | partition_boundary                              | creative_state | format_kind | expected_action |
+      | new_generative new creative, build_creative     | new            | generative  | created         |
+      | new_static new creative, preview_creative       | new            | static      | created         |
+      | existing_generative update arm, build_creative  | existing       | generative  | updated         |
+      | existing_static update arm, preview_creative    | existing       | static      | updated         |

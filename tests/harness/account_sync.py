@@ -144,6 +144,31 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
             self._require_tenant_row("set_billing_policy")
         self.configure_tenant_field("supported_billing", supported)
 
+    def clear_account_brand(self, account_id: str) -> None:
+        """Null out a persisted account's ``brand``, leaving the row otherwise intact.
+
+        ``accounts.brand`` is a NULLABLE JSON column (src/core/database/models.py) —
+        this writes a state the schema permits and the seller's own read path
+        declares "should be unreachable". It is a REAL persisted-state surface, not
+        a mock: the write goes through the env session bound to the same Postgres
+        the live server reads over e2e (the same mechanism ``configure_tenant_field``
+        uses), so every transport observes the same row.
+
+        No-Quiet-Failures: an account_id that does not resolve raises rather than
+        leaving the scenario to grade an untouched row.
+        """
+        from src.core.database.models import Account
+
+        session = self.get_session()
+        account = session.get(Account, (self._tenant_id, account_id))
+        if account is None:
+            raise RuntimeError(
+                f"clear_account_brand() found no account {account_id!r} in tenant "
+                f"{self._tenant_id!r}. The Given must pre-create the account first."
+            )
+        account.brand = None
+        session.commit()
+
     def _realize_notification_proof_result(self, *, succeeds: bool, url: str | None = None) -> None:
         """e2e realization: verify the REAL prover will produce the requested verdict.
 

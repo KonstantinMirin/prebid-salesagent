@@ -1,6 +1,7 @@
 """Creative-to-package assignment processing."""
 
 import logging
+from contextlib import ExitStack
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
@@ -11,33 +12,20 @@ from src.core.exceptions import (
 )
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
-from src.core.tools.creatives._processing import PriorCreativeState, _failed_sync_result
+from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_creative_for_assignment(
-    assignment_repo,
-    creative_id: str,
-    principal_id: str,
-    dry_run: bool,
-    previewed: dict[str, PriorCreativeState] | None,
-):
+def _resolve_creative_for_assignment(assignment_repo, creative_id: str, principal_id: str):
     """Resolve the creative state this assignment must be graded against.
 
-    Under ``dry_run`` the request-local previewed state takes PRECEDENCE over
-    the DB row: on the live arm the outer CreativeUoW commits creative writes
-    before assignments run, so grading reads the post-sync state — and
-    ``previewed`` carries exactly that state for creatives created or updated
-    in THIS payload (the accounts ``previewed_by_key`` discipline). Falling
-    back to the row only on a previewed miss keeps a same-payload format
-    update graded against its NEW format, not the stale row. Live runs read
-    only the DB. Returns an object with ``agent_url``/``format`` (a DB row or
-    a ``PriorCreativeState``), or ``None`` when the creative doesn't exist on
-    the grading arm.
+    One lookup for both arms. The creative writes this request made are visible
+    either way: live reads them as committed rows (the sync transaction closed
+    before this stage), preview reads them as flushed rows in the shared,
+    to-be-rolled-back transaction. Returns the DB row, or ``None`` when the
+    creative does not exist.
     """
-    if dry_run and previewed and creative_id in previewed:
-        return previewed[creative_id]
     return assignment_repo.get_creative_by_id(creative_id, principal_id)
 
 
@@ -47,8 +35,7 @@ def _process_assignments(
     tenant: dict[str, Any],
     validation_mode: str,
     principal_id: str,
-    dry_run: bool = False,
-    previewed: dict[str, PriorCreativeState] | None = None,
+    uow: CreativeUoW | None = None,
 ) -> list:
     """Process creative-to-package assignments and update results in-place.
 
@@ -57,16 +44,19 @@ def _process_assignments(
     transitions.  Mutates *results* in-place to populate ``assigned_to``
     and ``assignment_errors`` on matching ``SyncCreativeResult`` entries.
 
-    ``dry_run`` runs the SAME resolution/validation/strict-raise mechanism but
-    writes nothing (one-mechanism preview): the assignment upsert, the weight
-    normalization, and the media-buy status transition are the only gated
-    statements. ``previewed`` supplies request-local post-sync creative state
-    for the preview arm (see :func:`_resolve_creative_for_assignment`).
+    ONE write path. There is no preview arm here: the same resolution,
+    validation, strict-raise, upsert, weight normalization and media-buy status
+    transition run for every caller.
+
+    ``uow`` lets the caller supply an ALREADY-OPEN unit of work to join instead
+    of opening one. sync_creatives passes its own under ``dry_run`` so the
+    creative writes and these assignment writes share a single transaction that
+    is rolled back as a unit — which is also what lets this stage read those
+    creatives as flushed rows. Passing nothing opens (and commits) a transaction
+    of its own, the live behavior.
 
     Returns:
-        List of ``CreativeAssignment`` schema objects created or updated
-        (always empty under ``dry_run`` — it feeds audit/message, never the
-        response).
+        List of ``CreativeAssignment`` schema objects created or updated.
     """
     from src.core.schemas import CreativeAssignment
 
@@ -93,7 +83,11 @@ def _process_assignments(
     failed_creative_ids = {r.creative_id for r in results if getattr(r, "action", None) == "failed"}
 
     if assignments and isinstance(assignments, dict):
-        with CreativeUoW(tenant["tenant_id"]) as uow:
+        with ExitStack() as stack:
+            # Join the caller's transaction when given one; otherwise own a
+            # transaction for the duration, exactly as before.
+            if uow is None:
+                uow = stack.enter_context(CreativeUoW(tenant["tenant_id"]))
             assert uow.assignments is not None
             assignment_repo = uow.assignments
 
@@ -130,9 +124,7 @@ def _process_assignments(
                 # FK insert below would then violate) or read their fields.
                 # Resolve the creative once up front and report the skipped packages
                 # via assignment_errors (same convention as package-not-found below).
-                creative_row = _resolve_creative_for_assignment(
-                    assignment_repo, creative_id, principal_id, dry_run, previewed
-                )
+                creative_row = _resolve_creative_for_assignment(assignment_repo, creative_id, principal_id)
                 if creative_row is None:
                     error_msg = f"Creative not found: {creative_id}"
                     not_found_creative_ids.add(creative_id)
@@ -264,75 +256,69 @@ def _process_assignments(
                     # actual_package_id is always set when media_buy_id is set (guard above)
                     assert actual_package_id is not None
 
-                    # The persistence block is the ONLY dry_run-gated code: the
-                    # upsert (get_existing read included — it feeds nothing but
-                    # the write), the weight normalization (an attribute write
-                    # on a live ORM row would flush on UoW commit), and the
-                    # assignment_list append (its `assignment` binding only
-                    # exists on the live arm; the list feeds audit/message, not
-                    # the response). The assigned_to tracking below stays
-                    # unconditional — it IS the preview's response content.
-                    if not dry_run:
-                        existing_assignment = assignment_repo.get_existing(
+                    # Persisted unconditionally: one write path. Under a
+                    # caller-supplied dry_run UoW these writes land in that
+                    # transaction and are rolled back with it, so the preview
+                    # reports exactly what a live run would have written.
+                    existing_assignment = assignment_repo.get_existing(
+                        media_buy_id=media_buy_id,
+                        package_id=actual_package_id,
+                        creative_id=creative_id,
+                        principal_id=principal_id,
+                    )
+
+                    if existing_assignment:
+                        # Assignment already exists - update weight if needed
+                        if existing_assignment.weight != 100:
+                            existing_assignment.weight = 100
+                            logger.info(
+                                log_safe(
+                                    f"Updated existing assignment: creative={creative_id}, "
+                                    f"package={actual_package_id}, media_buy={media_buy_id}"
+                                )
+                            )
+                        assignment = existing_assignment
+                    else:
+                        # Create new assignment
+                        assignment = assignment_repo.create(
                             media_buy_id=media_buy_id,
                             package_id=actual_package_id,
                             creative_id=creative_id,
                             principal_id=principal_id,
                         )
-
-                        if existing_assignment:
-                            # Assignment already exists - update weight if needed
-                            if existing_assignment.weight != 100:
-                                existing_assignment.weight = 100
-                                logger.info(
-                                    log_safe(
-                                        f"Updated existing assignment: creative={creative_id}, "
-                                        f"package={actual_package_id}, media_buy={media_buy_id}"
-                                    )
-                                )
-                            assignment = existing_assignment
-                        else:
-                            # Create new assignment
-                            assignment = assignment_repo.create(
-                                media_buy_id=media_buy_id,
-                                package_id=actual_package_id,
-                                creative_id=creative_id,
-                                principal_id=principal_id,
-                            )
-                            logger.info(
-                                log_safe(
-                                    f"Created new assignment: creative={creative_id}, "
-                                    f"package={actual_package_id}, media_buy={media_buy_id}"
-                                )
-                            )
-
-                        # Track media buy for potential status update (for any assignment, new or existing)
-                        if media_buy_id and db_media_buy and media_buy_id not in media_buys_with_new_assignments:
-                            media_buys_with_new_assignments[media_buy_id] = db_media_buy
-
-                        assignment_list.append(
-                            CreativeAssignment(
-                                assignment_id=assignment.assignment_id,
-                                media_buy_id=assignment.media_buy_id,
-                                package_id=assignment.package_id,
-                                creative_id=assignment.creative_id,
-                                weight=assignment.weight,
+                        logger.info(
+                            log_safe(
+                                f"Created new assignment: creative={creative_id}, "
+                                f"package={actual_package_id}, media_buy={media_buy_id}"
                             )
                         )
+
+                    # Track media buy for potential status update (for any assignment, new or existing)
+                    if media_buy_id and db_media_buy and media_buy_id not in media_buys_with_new_assignments:
+                        media_buys_with_new_assignments[media_buy_id] = db_media_buy
+
+                    assignment_list.append(
+                        CreativeAssignment(
+                            assignment_id=assignment.assignment_id,
+                            media_buy_id=assignment.media_buy_id,
+                            package_id=assignment.package_id,
+                            creative_id=assignment.creative_id,
+                            weight=assignment.weight,
+                        )
+                    )
 
                     # Track successful assignment
                     if actual_package_id is not None:
                         assignments_by_creative[creative_id].append(actual_package_id)
 
             # Update media buy status if needed (draft -> pending_creatives).
-            # Only ever populated on the live arm (tracking sits in the gated
-            # persistence block), so this writes nothing under dry_run.
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
                     mb_obj.status = "pending_creatives"
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
 
-            # UoW auto-commits on clean exit (a no-op under dry_run: zero writes)
+            # An owned UoW commits on clean exit; a caller-supplied one is the
+            # caller's to dispose of (rolled back under dry_run).
 
     # Update creative results with assignment information (per AdCP spec)
     for sync_result in results:
