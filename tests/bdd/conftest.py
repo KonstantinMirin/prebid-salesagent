@@ -1197,10 +1197,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-got8): E2E_REST — webhook/circuit assertions observe
-        # env.mock['post'] or CircuitBreaker state, neither of which is visible
-        # through the Docker HTTP path. Remove when an E2E webhook receiver or
-        # circuit-breaker introspection is available.
+        # FIXME(#1291): E2E_REST — these Thens observe env.mock['post'] or
+        # CircuitBreaker state, neither of which is visible through the Docker HTTP
+        # path.
+        #
+        # The cited id used to be a beads id that DOES NOT RESOLVE
+        # ('bd show' returns no issue found). This project's rule is that code
+        # comments cite a GitHub issue number precisely so they resolve for outside
+        # contributors — a dangling internal id is worse than no reference, because
+        # it reads as tracked.
+        #
+        # The stated unblock condition is now MET: a TLS-fronted receiver exists
+        # (tests/e2e/webhook_capture_service.py) and the e2e webhook suites deliver
+        # to it. What remains is per-scenario work, NOT a bulk removal: each Then
+        # must be rewritten to read that receiver's captures instead of the
+        # in-process mock, and each scenario re-checked for vacuity under
+        # .claude/rules/workflows/xpass-graduation.md. Removing the tags without
+        # that would turn 12 scenarios green against assertions that can no longer
+        # observe anything.
         _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
             "T-UC-004-webhook-bearer",
             "T-UC-004-webhook-hmac",
