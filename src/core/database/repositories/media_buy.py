@@ -19,10 +19,20 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
+from src.core.database.models import (
+    MediaBuy,
+    MediaPackage,
+    PersistedMediaBuyStatus,
+    is_media_buy_seller_confirmed,
+)
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
+
+
+# The values the status column may hold. Frozen once at import from the vocabulary
+# so the check is a set membership, not a per-call enum construction.
+_PERSISTED_STATUS_VALUES: frozenset[str] = frozenset(PersistedMediaBuyStatus)
 
 
 class MediaBuyRepository:
@@ -49,6 +59,24 @@ class MediaBuyRepository:
         {"tenant_id", "media_buy_id", "created_at", "revision", "confirmed_at"}
     )
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
+
+    @staticmethod
+    def _validated_status(status: str) -> str:
+        """The canonical spelling of ``status``, or ``ValueError``.
+
+        Every door that writes the column goes through here. The vocabulary is
+        closed, so a value with no member is refused where it would ENTER rather
+        than interpreted by each reader: the wire projection maps persisted statuses
+        to protocol ones, and a value it has no row for cannot be described at all.
+        Casing is normalized rather than tolerated downstream — it is spelling, not
+        meaning.
+        """
+        normalized = (status or "").lower()
+        if normalized not in _PERSISTED_STATUS_VALUES:
+            raise ValueError(
+                f"{status!r} is not a persisted media-buy status; expected one of {sorted(_PERSISTED_STATUS_VALUES)}"
+            )
+        return normalized
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -399,7 +427,7 @@ class MediaBuyRepository:
             "end_date": end_time.date(),
             "start_time": start_time,
             "end_time": end_time,
-            "status": status,
+            "status": self._validated_status(status),
             "raw_request": raw,
             # Canonical request hash as computed by the idempotency probe —
             # raw_request is not canonicalizable (injected package_ids,
@@ -443,6 +471,7 @@ class MediaBuyRepository:
                 f"Tenant mismatch: media_buy.tenant_id={media_buy.tenant_id!r} "
                 f"!= repository tenant_id={self._tenant_id!r}"
             )
+        media_buy.status = self._validated_status(media_buy.status)
         self._stamp_confirmation_if_needed(media_buy)
         self._session.add(media_buy)
         self._session.flush()
@@ -490,11 +519,22 @@ class MediaBuyRepository:
         """Update the status of a media buy within this tenant.
 
         Returns the updated MediaBuy, or None if not found in this tenant.
+
+        The status must be a member of the persisted vocabulary. Rejecting an
+        unknown value HERE is what lets every reader stop guessing: the wire
+        projection maps persisted statuses to protocol ones, and a value it has no
+        row for would otherwise be reported as a generic serving state — publishing
+        ``active`` for a state nobody defined, with no commitment instant to go with
+        it, which the pinned response schema forbids. A closed vocabulary is enforced
+        where values enter, not interpreted where they are read.
         """
+        normalized = self._validated_status(status)
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             return None
-        media_buy.status = status
+        # Store the canonical spelling: casing is not meaning, so it is normalized
+        # once here rather than tolerated by every downstream reader.
+        media_buy.status = normalized
         if approved_at is not None:
             media_buy.approved_at = approved_at
         if approved_by is not None:
@@ -519,6 +559,11 @@ class MediaBuyRepository:
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
             raise ValueError(f"Cannot update immutable field(s): {', '.join(sorted(blocked))}")
+        # status is mutable here, so this door needs the same vocabulary check
+        # update_status applies — otherwise the closed vocabulary is enforced on one
+        # write path and bypassable on another.
+        if "status" in kwargs:
+            kwargs["status"] = self._validated_status(kwargs["status"])
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             return None

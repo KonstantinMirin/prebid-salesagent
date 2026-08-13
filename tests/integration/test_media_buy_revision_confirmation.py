@@ -12,7 +12,11 @@ What this file grades, precisely:
     counter, and the counter is strictly increasing across successive writes;
   - both repository create paths seed it at 1;
   - confirmed_at is stamped at the seller-commitment instant, once, and is
-    immutable to callers.
+    immutable to callers;
+  - the commitment lookup fails CLOSED — a status the vocabulary does not contain
+    stamps nothing, and does not raise out of the write path either;
+  - MediaBuyFactory, which persists without the repository, seeds the same
+    confirmed_at the repository would have written (the fixture seam).
 
 What it does NOT grade: that the bump is emitted as a SQL expression
 (``revision = revision + 1``) rather than a Python read-modify-write. That form
@@ -33,15 +37,17 @@ rather than deciding independently):
 """
 
 import datetime
+from contextlib import contextmanager
 from decimal import Decimal
 
 import pytest
 from sqlalchemy.orm import Session as SASession
 
 from src.core.database.database_session import get_engine
-from src.core.database.models import MediaBuy
+from src.core.database.models import MediaBuy, is_media_buy_seller_confirmed
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import CreateMediaBuyRequest
+from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -51,23 +57,35 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # 2020 and fail the window, where a presence-only assertion would not notice.
 _PAST = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
 
+# A value no writer in this tree produces and the commitment vocabulary therefore
+# does not contain. Short enough for the varchar(20) status column.
+_UNRECOGNISED_STATUS = "some_new_status"
 
-@pytest.fixture
-def repo_env(integration_db):
-    """A pending_approval media buy plus a repository scoped to its tenant."""
-    from tests.factories import ALL_FACTORIES, MediaBuyFactory
+
+@contextmanager
+def _factory_session():
+    """A real session with the ORM factories bound to it, unbound again on exit."""
+    from tests.factories import ALL_FACTORIES
 
     session = SASession(bind=get_engine())
     try:
         for factory in ALL_FACTORIES:
             factory._meta.sqlalchemy_session = session
-        media_buy = MediaBuyFactory(status="pending_approval", created_at=_PAST, approved_at=_PAST)
-        repo = MediaBuyRepository(session, media_buy.tenant_id)
-        yield repo, media_buy
+        yield session
     finally:
         session.close()
         for factory in ALL_FACTORIES:
             factory._meta.sqlalchemy_session = None
+
+
+@pytest.fixture
+def repo_env(integration_db):
+    """A pending_approval media buy plus a repository scoped to its tenant."""
+    from tests.factories import MediaBuyFactory
+
+    with _factory_session() as session:
+        media_buy = MediaBuyFactory(status="pending_approval", created_at=_PAST, approved_at=_PAST)
+        yield MediaBuyRepository(session, media_buy.tenant_id), media_buy
 
 
 def _reread(repo: MediaBuyRepository, media_buy_id: str) -> MediaBuy:
@@ -154,6 +172,13 @@ def _create_prebuilt(repo: MediaBuyRepository, media_buy: MediaBuy) -> MediaBuy:
             status="active",
             created_at=_PAST,
             approved_at=_PAST,
+            # The factory stamps confirmed_at for committed statuses (it persists
+            # without the repository elsewhere, so it has to). Here the repository
+            # IS under test: a pre-stamped row short-circuits
+            # _stamp_confirmation_if_needed, and the create-path stamp assertion
+            # would then grade the FACTORY's value and stay green even with
+            # create()'s stamp deleted. Opt out so the oracle keeps its subject.
+            confirmed_at=None,
         )
     )
 
@@ -337,6 +362,112 @@ class TestConfirmedAtStamp:
 
         assert _confirmed_at(repo, media_buy.media_buy_id) is None
 
+    def test_an_unrecognised_status_is_refused_at_the_write_boundary(self, repo_env):
+        """A status outside the vocabulary cannot be persisted at all.
+
+        The obligation is unchanged — an undefined status must never mint a
+        seller-commitment instant — but it is met by REFUSING the write rather than
+        by reading the value charitably. That is the stronger form: a value the
+        vocabulary has never heard of stops at the boundary, so no reader downstream
+        has to decide what it means.
+
+        It has to stop here. The wire projection maps persisted statuses to protocol
+        ones, and an unmapped value used to be reported as a generic serving state:
+        the buyer received ``active`` for a state nobody defined, with no
+        ``confirmed_at`` to go with it — a combination the pinned response schema
+        forbids. Refusing the write is what makes that document unrepresentable
+        rather than merely unlikely.
+
+        Both halves are asserted because each catches what the other cannot: that the
+        write is refused, and that the row is untouched by the attempt.
+        """
+        repo, media_buy = repo_env
+        before = _reread(repo, media_buy.media_buy_id)
+
+        with pytest.raises(ValueError, match="not a persisted media-buy status"):
+            repo.update_status(media_buy.media_buy_id, _UNRECOGNISED_STATUS)
+
+        after = _reread(repo, media_buy.media_buy_id)
+        assert after.status == before.status, f"the refused write still moved the status to {after.status!r}"
+        assert after.confirmed_at is None, (
+            f"{_UNRECOGNISED_STATUS!r} is not in the vocabulary, yet a seller-commitment instant "
+            f"was stamped — a refused write must leave the row entirely alone"
+        )
+        assert after.revision == before.revision, (
+            f"the refused write bumped the concurrency token {before.revision} -> {after.revision}; "
+            "a write that did not happen must not move the buyer's token"
+        )
+
+    @pytest.mark.parametrize("door", ["update_fields", "create_from_request", "create"])
+    def test_every_write_door_refuses_a_status_outside_the_vocabulary(self, repo_env, door):
+        """The vocabulary is closed at EVERY door that writes the column, not just one.
+
+        update_status is graded above. These are the other three. A vocabulary enforced
+        on one path and bypassable on another is not enforced: a row that got in through
+        an unguarded door is one the wire projection cannot describe, so the buyer would
+        receive either an invented serving state or a 500 — the reader's problem either
+        way, created by a write nobody checked.
+        """
+        repo, media_buy = repo_env
+
+        with pytest.raises(ValueError, match="not a persisted media-buy status"):
+            if door == "update_fields":
+                repo.update_fields(media_buy.media_buy_id, status=_UNRECOGNISED_STATUS)
+            elif door == "create_from_request":
+                repo.create_from_request(
+                    media_buy_id="mb_bad_status_door",
+                    req=_make_request("revision-confirmation-bad-status-door"),
+                    principal_id=media_buy.principal_id,
+                    advertiser_name="Test Advertiser",
+                    budget=Decimal("5000.00"),
+                    currency="USD",
+                    start_time=datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1),
+                    end_time=datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=8),
+                    status=_UNRECOGNISED_STATUS,
+                )
+            else:
+                from tests.factories import MediaBuyFactory
+
+                repo.create(
+                    MediaBuyFactory.build(
+                        tenant=media_buy.tenant,
+                        principal=media_buy.principal,
+                        media_buy_id="mb_bad_status_create",
+                        status=_UNRECOGNISED_STATUS,
+                    )
+                )
+
+    def test_a_status_already_in_the_column_is_read_defensively(self, repo_env):
+        """The stamp predicate still tolerates an unknown value it merely READS.
+
+        The write boundary stops new unknown values, but the predicate is also
+        consulted for whatever a row already holds, and a read must not raise — a
+        legacy row with an unexpected status should be reported, not crash the
+        reader. It answers "not committed", which is the safe half of fail-closed.
+        """
+        from src.core.database.models import is_media_buy_seller_confirmed
+
+        assert is_media_buy_seller_confirmed(_UNRECOGNISED_STATUS) is False
+        assert is_media_buy_seller_confirmed(None) is False
+
+    def test_status_matching_is_case_insensitive(self, repo_env):
+        """A committed status stamps regardless of the column's casing.
+
+        The lookup is documented case-insensitive and rows written by earlier code
+        are not guaranteed lower-cased. Pinned here because the fail-closed
+        direction above and this one pull opposite ways: a membership test that
+        drops the case fold turns every mixed-case committed row into a silent
+        not-committed, which is the same missing-``confirmed_at`` defect arriving
+        from the other side.
+        """
+        repo, media_buy = repo_env
+
+        t0 = datetime.datetime.now(datetime.UTC)
+        repo.update_status(media_buy.media_buy_id, "ACTIVE")
+        t1 = datetime.datetime.now(datetime.UTC)
+
+        _assert_stamped_between(_confirmed_at(repo, media_buy.media_buy_id), t0, t1)
+
     def test_confirmed_at_is_immutable_to_callers(self, repo_env):
         """Write-once is only a guarantee if the generic field writer refuses it too.
 
@@ -355,3 +486,83 @@ class TestConfirmedAtStamp:
             repo.update_fields(media_buy.media_buy_id, confirmed_at=_PAST)
 
         assert _confirmed_at(repo, media_buy.media_buy_id) == stamped
+
+
+class TestFactorySeedsWhatTheRepositoryWouldWrite:
+    """MediaBuyFactory bypasses the repository, so it must reproduce the stamp rule.
+
+    ``MediaBuyFactory`` persists straight to the session
+    (``sqlalchemy_session_persistence = "commit"``) — no ``MediaBuyRepository``, so
+    none of the write-seam guarantees the rest of this file grades apply to a
+    factory-seeded row. A factory that leaves ``confirmed_at`` NULL on a committed
+    status therefore seeds a row PRODUCTION CANNOT PRODUCE, and every wire document
+    built from it (the whole BDD get_media_buys surface seeds this way) is a
+    document the pinned item schema rejects: it forbids ``status: "active"`` with a
+    null ``confirmed_at``. Those documents validate today only because a read-time
+    fallback fabricates the missing instant — delete the fallback and the fixtures,
+    not production, are what goes red.
+
+    This class pins the seam so a future factory edit cannot silently reintroduce
+    NULL committed rows.
+    """
+
+    @pytest.mark.parametrize("status", sorted(PERSISTED_STATUS_TO_CANONICAL))
+    def test_factory_row_agrees_with_the_writer_for_every_persisted_status(self, integration_db, status):
+        """For each status the column can hold, the factory stamps iff the writer would.
+
+        Asserted against the writer's OWN predicate rather than a transcribed list
+        of statuses: a second listing is a second thing to maintain, and the defect
+        being guarded is precisely two listings disagreeing.
+        """
+        from tests.factories import MediaBuyFactory
+
+        with _factory_session() as session:
+            media_buy = MediaBuyFactory(status=status)
+            repo = MediaBuyRepository(session, media_buy.tenant_id)
+
+            stamped = _confirmed_at(repo, media_buy.media_buy_id) is not None
+
+        assert stamped is is_media_buy_seller_confirmed(status), (
+            f"factory-seeded {status!r} carries confirmed_at={'set' if stamped else 'NULL'}, but the "
+            f"repository would write it {'set' if is_media_buy_seller_confirmed(status) else 'NULL'} — "
+            f"the fixture seam and the write seam disagree, so tests are running against a row "
+            f"production cannot produce"
+        )
+
+    def test_factory_stamp_is_a_fresh_clock_reading_not_a_copied_column(self, integration_db):
+        """The factory reads the clock the way the repository does.
+
+        Deriving the value from ``approved_at``/``created_at`` instead is the
+        read-time fabricator's own rule; reproducing it in the factory would import
+        that fabrication into every fixture in the suite.
+        """
+        from tests.factories import MediaBuyFactory
+
+        with _factory_session() as session:
+            t0 = datetime.datetime.now(datetime.UTC)
+            media_buy = MediaBuyFactory(status="active", created_at=_PAST, approved_at=_PAST)
+            t1 = datetime.datetime.now(datetime.UTC)
+            repo = MediaBuyRepository(session, media_buy.tenant_id)
+
+            stamped = _confirmed_at(repo, media_buy.media_buy_id)
+
+        _assert_stamped_between(stamped, t0, t1)
+
+    def test_explicit_none_still_wins_over_the_derived_stamp(self, integration_db):
+        """The opt-out this file's create-path graders depend on stays available.
+
+        ``_create_prebuilt`` hands an UNSTAMPED row to ``repo.create()`` so that
+        ``test_create_in_a_committed_status_stamps_the_create_instant`` grades the
+        REPOSITORY's stamp. If an explicit ``confirmed_at=None`` ever stopped
+        beating the derived default, that test would silently start grading the
+        factory's value instead — passing even with create()'s stamp removed. A
+        green-and-vacuous failure mode is invisible, so it is pinned here.
+        """
+        from tests.factories import MediaBuyFactory
+
+        built = MediaBuyFactory.build(status="active", confirmed_at=None)
+
+        assert built.confirmed_at is None, (
+            "an explicit confirmed_at=None no longer overrides the factory's derived stamp — "
+            "every test that hands an unstamped committed row to the repository is now vacuous"
+        )

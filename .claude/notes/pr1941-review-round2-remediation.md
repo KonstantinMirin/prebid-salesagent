@@ -583,3 +583,36 @@ files** against those 89 typed usages.
    owns.
 
 **Invariant this establishes:** a closed vocabulary is a type, not a set of strings guarded by a test.
+
+### A3 — Owner ruling (2026-08-13): the vocabulary is enforced at the write boundary
+
+**Raised by:** L3's test-layer gate proved a claim in this lane FALSE. The retired UC-019 row
+`confirmed_at_null_column_on_active_buy` was retired as premise-impossible; the premise is reachable,
+and *this lane made it so*. F2 (fail-closed commitment predicate) and F3 (delete the read-time
+resolver) are each correct, and together they open a path neither opened alone:
+
+```
+PERSISTED status='some_new_status' confirmed_at=None
+WIRE      status=active            confirmed_at=None   <- pinned schema FORBIDS this
+```
+
+`update_status` accepts any string; `resolve_canonical_status` treats an unmapped status as a generic
+serving state and date-refines it to `active`; the now-correct fail-closed predicate leaves
+`confirmed_at` NULL. Before this lane the fail-OPEN predicate read the unknown status as committed and
+the resolver substituted `approved_at`/`created_at`, hiding it.
+
+**Ruling.** Fix it where the bad value enters, not where it is read:
+
+1. **`MediaBuyRepository.update_status` validates its `status` argument** against
+   `PersistedMediaBuyStatus` and raises on an unknown value. This is "verification at the boundary"
+   (§6-A1's sibling principle) applied to writes.
+2. **`resolve_canonical_status` stops guessing.** With writes validated, an unmapped persisted status
+   is unrepresentable, so the read map is indexed directly rather than defaulting to a serving state.
+   A `KeyError` there is a real defect, not a case to absorb.
+3. **L3's `test_an_unrecognised_status_never_stamps` is rewritten, not deleted.** It currently asserts
+   the write SUCCEEDS with an unknown status — that contract is now wrong. The obligation it carried
+   (an unknown value must never mint a seller-commitment instant) survives as: the write is REFUSED,
+   so no stamp can occur. The stamp predicate keeps its defensive read for values already in a row.
+
+**Invariant this establishes:** a closed vocabulary is enforced where values enter the system; a
+reader that has to guess is a boundary that was never enforced.

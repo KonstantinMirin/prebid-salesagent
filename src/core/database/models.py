@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from uuid import uuid4
 
 from adcp.types import BrandReference
@@ -906,46 +907,124 @@ class AgentAccountAccess(Base):
 # than deciding these semantics independently), minus its `finalizing` member —
 # that status belongs to #1544's finalize-lease/recovery machinery, which this
 # branch does not carry.
-MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
-    {"draft", "pending", "pending_approval", "rejected", "failed"}
+class PersistedMediaBuyStatus(StrEnum):
+    """The closed vocabulary the ``media_buys.status`` column may hold.
+
+    A superset of the pinned wire enum (``adcp.types.MediaBuyStatus``): every wire
+    member is persistable, plus the states this seller keeps that the protocol has
+    no word for (an approval queue, a draft, an adapter failure). The wire
+    projection lives in ``src.core.tools._media_buy_status`` — presentation, and
+    one of several possible ones.
+
+    ``StrEnum``, so a member IS its value: existing ``== "draft"`` comparisons,
+    set/dict membership, SQLAlchemy binds against the ``String`` column and JSON
+    serialization all behave exactly as the bare string did.
+    """
+
+    # Wire-visible — these are also members of adcp.types.MediaBuyStatus.
+    PENDING_CREATIVES = "pending_creatives"
+    PENDING_START = "pending_start"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    REJECTED = "rejected"
+    CANCELED = "canceled"
+    # Persisted-only — no protocol member; the wire projection maps them.
+    DRAFT = "draft"
+    PENDING = "pending"
+    PENDING_APPROVAL = "pending_approval"
+    PENDING_ACTIVATION = "pending_activation"
+    SCHEDULED = "scheduled"
+    APPROVED = "approved"
+    READY = "ready"
+    FAILED = "failed"
+
+    @property
+    def seller_confirmed(self) -> bool:
+        """Whether reaching this status means the seller committed to running the buy.
+
+        This is domain, not presentation: it is *why* ``confirmed_at`` gets stamped,
+        and its consumer is the writer.
+
+        Fail-closed by construction. The COMMITTED members are listed and everything
+        else is the complement, so a member added to this enum without a decision
+        counts as NOT committed — the safe answer, because reading an unknown state
+        as committed would mint a seller-commitment instant that reaches the buyer's
+        wire. Adopted from PR #1544 (GH #1928 reconciles rather than re-decides),
+        minus its ``finalizing`` member, which belongs to finalize-lease machinery
+        this branch does not carry.
+        """
+        return self in _SELLER_COMMITTED_STATUSES
+
+
+# Listed, not derived: see PersistedMediaBuyStatus.seller_confirmed for why the
+# COMMITTED side is the one written out.
+_SELLER_COMMITTED_STATUSES: frozenset[PersistedMediaBuyStatus] = frozenset(
+    {
+        PersistedMediaBuyStatus.ACTIVE,
+        PersistedMediaBuyStatus.APPROVED,
+        PersistedMediaBuyStatus.READY,
+        PersistedMediaBuyStatus.SCHEDULED,
+        PersistedMediaBuyStatus.PENDING_ACTIVATION,
+        PersistedMediaBuyStatus.PENDING_CREATIVES,
+        PersistedMediaBuyStatus.PENDING_START,
+        PersistedMediaBuyStatus.PAUSED,
+        PersistedMediaBuyStatus.COMPLETED,
+        PersistedMediaBuyStatus.CANCELED,
+    }
 )
 
 
-def resolve_media_buy_confirmed_at(media_buy: "MediaBuy") -> "datetime | None":
-    """The seller-commitment instant to report for a buy, including legacy rows.
+# Keyed by the vocabulary TYPE rather than by bare strings, so a member with no
+# projection row is a missing key here rather than a value nobody notices. The
+# keys are members and StrEnum members ARE their values, so every existing
+# ``.get(status_string)`` lookup keeps working unchanged.
+PERSISTED_STATUS_TO_CANONICAL: dict[PersistedMediaBuyStatus, str] = {
+    PersistedMediaBuyStatus.ACTIVE: "active",
+    PersistedMediaBuyStatus.APPROVED: "active",
+    PersistedMediaBuyStatus.READY: "active",
+    PersistedMediaBuyStatus.SCHEDULED: "active",
+    PersistedMediaBuyStatus.PENDING_ACTIVATION: "pending_start",
+    PersistedMediaBuyStatus.PAUSED: "paused",
+    PersistedMediaBuyStatus.COMPLETED: "completed",
+    PersistedMediaBuyStatus.REJECTED: "rejected",
+    PersistedMediaBuyStatus.CANCELED: "canceled",
+    PersistedMediaBuyStatus.FAILED: "failed",
+    PersistedMediaBuyStatus.DRAFT: "pending_creatives",
+    PersistedMediaBuyStatus.PENDING: "pending_start",
+    PersistedMediaBuyStatus.PENDING_APPROVAL: "pending_start",
+    PersistedMediaBuyStatus.PENDING_CREATIVES: "pending_creatives",
+    PersistedMediaBuyStatus.PENDING_START: "pending_start",
+}
 
-    The repository stamps ``confirmed_at`` the first time a buy reaches a committed
-    status, so buys created from now on carry it. Rows that predate the column do
-    not: the migration deliberately leaves them NULL rather than doing a large data
-    rewrite inside one Alembic transaction.
-
-    That matters on the wire and not just cosmetically. The pinned
-    get-media-buys-response schema does more than require the key — it forbids an
-    item whose status is ``active`` from having a null ``confirmed_at``, because an
-    active buy is by definition one the seller committed to. Reporting NULL for a
-    legacy active buy would emit a response that fails its own schema.
-
-    So a confirmed buy with no stamp falls back the way PR #1544 defines the field:
-    the approval instant on the manual-approval path, creation on the synchronous
-    auto-approve path. Read-only — it never writes, so it cannot disturb the
-    write-once guarantee.
-    """
-    if media_buy.confirmed_at is not None:
-        return media_buy.confirmed_at
-    if not is_media_buy_seller_confirmed(media_buy.status):
-        return None
-    return media_buy.approved_at or media_buy.created_at
+# The complete set of values ``resolve_canonical_status`` may return, derived
+# from the map so the two can never drift. Used by get_media_buy_delivery as its
+# valid internal-filter vocabulary. Its equivalence to the pinned SDK
+# ``MediaBuyStatus`` enum (plus the delivery-only ``failed``) is pinned by
+# ``tests/unit/test_media_buy_status_consistency.py`` so an SDK bump that widens
+# the lifecycle enum fails loudly instead of silently making a new status
+# unfilterable.
+CANONICAL_STATUSES: frozenset[str] = frozenset(PERSISTED_STATUS_TO_CANONICAL.values())
 
 
 def is_media_buy_seller_confirmed(status: str | None) -> bool:
     """True once the seller has committed to running the buy (confirmed_at is set).
 
-    The inverse of :data:`MEDIA_BUY_UNCONFIRMED_STATUSES`. Case-insensitive; a
-    missing/empty status reads as not-confirmed (we never emit confirmed_at when
-    the state is unknown).
+    The coercion boundary between the ``String`` column and the vocabulary. The
+    column is not yet typed and callers still pass raw strings, so a value with no
+    member can arrive here — and it must read as NOT committed rather than raising
+    or defaulting to committed. Both failure modes are real: raising would abort a
+    legitimate status write over a value the writer did not choose, and defaulting
+    to committed would mint a seller-commitment instant for a state nobody defined.
+
+    Case-insensitive, and an empty/missing status reads as not-confirmed — we never
+    claim commitment from an unknown state.
+
+    A plain membership test: ``StrEnum`` members hash and compare equal to their
+    values, so a raw column string tests against the member set directly, and a
+    value with no member is simply absent from it.
     """
-    normalized = (status or "").lower()
-    return bool(normalized) and normalized not in MEDIA_BUY_UNCONFIRMED_STATUSES
+    return (status or "").lower() in _SELLER_COMMITTED_STATUSES
 
 
 class MediaBuy(Base):

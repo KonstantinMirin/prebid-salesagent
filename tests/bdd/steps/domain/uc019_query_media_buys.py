@@ -2555,8 +2555,10 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
 # Every Then in this section reads the BUYER'S WIRE (wire_dict / wire_field), not
 # the re-serialized typed payload. These two fields are exactly what this change
 # publishes, and a model round-trip cannot observe whether they reached the wire
-# at all — which is how they went unnoticed while three separate mutations of
-# resolve_media_buy_confirmed_at left the suite green.
+# at all — which is how they went unnoticed while three separate mutations of the
+# since-deleted read-time confirmed_at resolver left the suite green. That resolver
+# is gone: the column is authoritative, so these Thens now grade what the writer
+# stamped and the reader emitted.
 #
 # Givens seed persisted COLUMN values through _seed_simple_media_buy (the module's
 # own factory path) so production reads a real row, and the writes that move
@@ -2753,24 +2755,6 @@ def given_owns_media_buy_with_confirmed_at(ctx: dict, principal_id: str, mb_id: 
     which is what makes a non-null confirmed_at the correct reading.
     """
     _seed_simple_media_buy(ctx, principal_id, mb_id, confirmed_at=_parse_iso8601(timestamp))
-
-
-@given(
-    parsers.parse(
-        'the principal "{principal_id}" owns media buy "{mb_id}" '
-        'with status "{status}" and a NULL persisted confirmed_at'
-    )
-)
-def given_owns_media_buy_null_confirmed_at(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
-    """Seed a buy whose confirmed_at COLUMN is NULL — the legacy-row state.
-
-    Reachable, and the reason resolve_media_buy_confirmed_at exists: the column is
-    nullable and rows written before it was added carry NULL. On an "active" buy
-    that combination is what the pinned item schema's allOf/if guard forbids on the
-    wire, so the read path must resolve it rather than publish it.
-    """
-    mb = _seed_simple_media_buy(ctx, principal_id, mb_id, status=status, confirmed_at=None)
-    assert mb.confirmed_at is None, f"Seed did not leave confirmed_at NULL; column holds {mb.confirmed_at!r}"
 
 
 # ── WHEN: two reads, with or without a write between them ─────────────
@@ -2980,28 +2964,6 @@ def then_confirmed_at_at_moment_equals(ctx: dict, moment: str, timestamp: str) -
     assert actual is not None, f"confirmed_at at {moment} is null; expected {timestamp}"
     assert _parse_iso8601(actual) == _parse_iso8601(timestamp), (
         f"Expected confirmed_at {timestamp} at {moment}, got {actual!r}"
-    )
-
-
-@then(parsers.parse('the media buy "{mb_id}" should carry a non-null confirmed_at in a schema-valid response'))
-def then_confirmed_at_resolved_on_schema_valid_wire(ctx: dict, mb_id: str) -> None:
-    """The resolver's explicit oracle for an active buy whose COLUMN is NULL.
-
-    Two assertions because the contract has two halves and each catches what the
-    other cannot: the whole document must satisfy the pinned response schema —
-    whose allOf/if guard rejects a null confirmed_at on an ``active`` buy — and the
-    entry must actually carry a timestamp, so a regression that dropped the field
-    entirely (schema-valid only because ``if`` needs the key present to fire) still
-    fails.
-    """
-    from tests.helpers.pinned_schema import validate_against_pinned_schema
-
-    document = wire_dict(ctx)
-    validate_against_pinned_schema("media-buy/get-media-buys-response.json", document)
-    buy = _wire_media_buy_entry(ctx, mb_id, document)
-    assert buy.get("confirmed_at") is not None, (
-        f"media buy '{mb_id}' is active with a NULL confirmed_at column and the response reported "
-        "confirmed_at null — resolve_media_buy_confirmed_at did not resolve it"
     )
 
 

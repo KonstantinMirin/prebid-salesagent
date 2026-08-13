@@ -42,6 +42,13 @@ import logging
 from datetime import date
 from typing import Any
 
+from src.core.database.models import (
+    CANONICAL_STATUSES as CANONICAL_STATUSES,  # re-export: callers look for it here
+)
+from src.core.database.models import (
+    PERSISTED_STATUS_TO_CANONICAL,
+)
+
 logger = logging.getLogger(__name__)
 
 # NOTE: ``buy`` is typed ``Any`` rather than a structural Protocol because the
@@ -71,6 +78,7 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({"paused", "completed", "rejected"
 # truthful promise for it.
 NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
 
+
 # Persisted ``MediaBuy.status`` -> canonical status. Written by
 # media_buy_create.py, the lifecycle transitions, the status scheduler, and the
 # admin blueprints. Includes the legacy aliases still resident in production
@@ -91,34 +99,11 @@ NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
 #     The literal reading of pending_start ("ready") slightly overstates an
 #     awaiting-approval buy; the spec offers no better pre-serving bucket. If a
 #     future spec adds an approval-queue status, revisit this row.
-PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
-    "active": "active",
-    "approved": "active",
-    "ready": "active",
-    "scheduled": "active",
-    "pending_activation": "pending_start",
-    "paused": "paused",
-    "completed": "completed",
-    "rejected": "rejected",
-    "canceled": "canceled",
-    "failed": "failed",
-    "draft": "pending_creatives",
-    "pending": "pending_start",
-    "pending_approval": "pending_start",
-    "pending_creatives": "pending_creatives",
-    "pending_start": "pending_start",
-}
-
-# The complete set of values ``resolve_canonical_status`` may return, derived
-# from the map so the two can never drift. Used by get_media_buy_delivery as its
-# valid internal-filter vocabulary. Its equivalence to the pinned SDK
-# ``MediaBuyStatus`` enum (plus the delivery-only ``failed``) is pinned by
-# ``tests/unit/test_media_buy_status_consistency.py`` so an SDK bump that widens
-# the lifecycle enum fails loudly instead of silently making a new status
-# unfilterable.
-CANONICAL_STATUSES: frozenset[str] = frozenset(PERSISTED_STATUS_TO_CANONICAL.values())
-
-
+# The persisted->canonical projection and its value set live with the vocabulary
+# in ``src.core.database.models``: mapping a persisted status to its wire word is a
+# property of the vocabulary itself, not of this module's date refinement. Re-exported
+# here because this module is where callers already look for them, and because
+# ``resolve_canonical_status`` below is their only refinement.
 def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool = False) -> str:
     """Resolve a media buy's canonical status from its persisted column.
 
@@ -149,12 +134,13 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
         One of ``CANONICAL_STATUSES``.
     """
     persisted = (buy.status or "").lower()
-    if persisted and persisted not in PERSISTED_STATUS_TO_CANONICAL:
-        # Not a failure (the buy is still described, date-refined as serving), but
-        # a writer has introduced a persisted value this map doesn't know about —
-        # surface it so the map can be updated rather than silently guessing.
-        logger.warning("Unmapped persisted media-buy status %r; treating as serving state", persisted)
-    canonical = PERSISTED_STATUS_TO_CANONICAL.get(persisted, CANONICAL_SERVING)
+    # Indexed, not defaulted. MediaBuyRepository.update_status rejects a status
+    # outside the vocabulary, so an unmapped value cannot be persisted and this
+    # lookup cannot miss. Guessing a serving state here is what previously let an
+    # undefined status reach the buyer as "active" with no commitment instant —
+    # a document the pinned schema forbids. A KeyError is a real defect surfacing,
+    # not a case to absorb.
+    canonical = PERSISTED_STATUS_TO_CANONICAL[persisted] if persisted else CANONICAL_SERVING
 
     should_refine = canonical == CANONICAL_SERVING or (simulate and canonical not in TERMINAL_STATUSES)
     if not should_refine:

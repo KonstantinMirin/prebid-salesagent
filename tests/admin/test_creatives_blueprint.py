@@ -427,7 +427,7 @@ class TestCreativeApprovalUnblocksMediaBuy:
     through MediaBuyRepository.update_status is what carries both.
     """
 
-    def test_unblocked_buy_bumps_revision_and_stamps_confirmation(self, client, test_tenant, factory_session):
+    def test_unblocked_buy_bumps_revision_and_preserves_confirmation(self, client, test_tenant, factory_session):
         """Approving the last pending creative moves a pending_creatives buy to active."""
         from src.core.database.repositories import MediaBuyRepository
 
@@ -439,7 +439,16 @@ class TestCreativeApprovalUnblocksMediaBuy:
         repo = MediaBuyRepository(factory_session, test_tenant)
         before = repo.get_by_id(media_buy_id)
         before_revision = before.revision
-        assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
+        # The buy starts ALREADY stamped, and that is correct: "pending_creatives" is a
+        # seller-committed status, so the commitment instant was recorded when the buy
+        # entered it — not when its creatives were later approved. What this site owes
+        # is therefore the revision bump plus write-once stability across the move to
+        # "active". The first-commitment stamp is graded where a buy actually crosses
+        # into commitment, in the workflow-approval tests (pending_approval -> scheduled).
+        before_confirmed_at = before.confirmed_at
+        assert before_confirmed_at is not None, (
+            "fixture must start from a seller-committed status carrying its commitment instant"
+        )
 
         # The adapter execution is a different concern; this test grades the status write
         # that follows a successful one.
@@ -466,8 +475,10 @@ class TestCreativeApprovalUnblocksMediaBuy:
             f"the buy moved pending_creatives -> active but revision went "
             f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
         )
-        assert after.confirmed_at is not None, (
-            "creative approval moved the buy to the seller-confirmed status 'active' without stamping confirmed_at"
+        assert after.confirmed_at == before_confirmed_at, (
+            f"the move to 'active' rewrote the commitment instant "
+            f"{before_confirmed_at} -> {after.confirmed_at}; confirmed_at is write-once and records "
+            f"the FIRST commitment, not the most recent transition"
         )
 
 

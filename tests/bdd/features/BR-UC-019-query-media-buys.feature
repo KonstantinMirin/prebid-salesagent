@@ -563,17 +563,34 @@ Feature: BR-UC-019 Query Media Buys
       | pending_creatives |
       | pending_start     |
 
-  @T-UC-019-inv-150-11 @invariant @BR-RULE-150 @schema-v3.1
-  Scenario: INV-11 holds - unknown persisted status defaults to active then flight-refines
-    # Unmapped status must fit the status column (varchar(20)); the exact
-    # string is irrelevant — any value absent from PERSISTED_STATUS_TO_CANONICAL
-    # exercises the defensive default-to-active path.
-    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "unmapped_state" and is_paused false
-    And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
-    And today is "2026-03-15"
-    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "active"
-    # BR-RULE-150 INV-11: unknown persisted strings default to active and run flight-window refinement (defensive)
+  # RETIRED SCENARIO (T-UC-019-inv-150-11): "unknown persisted status defaults to
+  # active then flight-refines". It graded the defensive default-to-active path, and
+  # that path is deleted.
+  #
+  # The default was not merely redundant, it was harmful. An unmapped persisted
+  # status was reported to the buyer as a SERVING buy, and — once the commitment
+  # vocabulary was made fail-closed — with no confirmed_at to go with it. The pinned
+  # item schema forbids exactly that pair (confirmed_at is [string, null] with an
+  # allOf/if guard that rejects null when status is "active"), so honouring INV-11
+  # meant publishing a document that fails its own schema. The scenario passed only
+  # because its Then checks the status field alone.
+  #
+  # Per the owner ruling in the remediation plan's ALTERATIONS section, a closed
+  # vocabulary is enforced where values ENTER: MediaBuyRepository now refuses a status
+  # outside PersistedMediaBuyStatus at all four write doors (update_status,
+  # update_fields, create_from_request, create), so an unmapped value cannot be
+  # persisted and the reader no longer has to invent a meaning for one.
+  #
+  # The obligation this scenario was reaching for — an unmapped status never yields a
+  # nonsense buyer-visible state — is graded against a real write in
+  # tests/integration/test_media_buy_revision_confirmation.py::
+  # test_an_unrecognised_status_is_refused_at_the_write_boundary, and every value the
+  # column CAN hold is swept through the projection by
+  # tests/unit/test_media_buy_status_consistency.py.
+  #
+  # BR-RULE-150 INV-11 needs reconciling upstream in adcp-req so --merge does not
+  # re-add it: the invariant as written mandates a defensive default that the pinned
+  # response schema cannot represent.
 
   @T-UC-019-inv-151-5 @invariant @BR-RULE-151 @schema-v3.1
   Scenario: INV-5 holds - status_filter omitted AND media_buy_ids supplied applies no implicit filter
@@ -852,23 +869,34 @@ Feature: BR-UC-019 Query Media Buys
       | partition                       | buy_state                                                  | expected_outcome                                                                                  |
       | confirmed_buy_carries_timestamp | a successful create stamping confirmed_at "2026-05-01T12:00:00Z" | the media buy "mb-001" confirmed_at should equal "2026-05-01T12:00:00Z"                          |
       | confirmed_at_includes_timezone  | confirmed_at "2026-05-01T12:00:00+00:00"                   | the media buy "mb-001" confirmed_at should be an ISO 8601 string with a timezone designator       |
-      | confirmed_at_null_column_on_active_buy | status "active" and a NULL persisted confirmed_at   | the media buy "mb-001" should carry a non-null confirmed_at in a schema-valid response            |
 
-  # REWRITTEN ROW (T-UC-019-partition-confirmed-at): "confirmed_at_missing_on_buy"
-  # became "confirmed_at_null_column_on_active_buy" above, and its expectation is
-  # INVERTED — schema-VALID with a non-null confirmed_at, not SCHEMA_VIOLATION.
-  # The NULL column IS reachable (MediaBuy.confirmed_at is nullable,
-  # src/core/database/models.py:981 — rows predating the column are exactly this),
-  # so unlike "revision absent" the state is real and must stay graded. What the
-  # old text got backwards is the OUTCOME. The pinned item schema
+  # RETIRED ROW (T-UC-019-partition-confirmed-at): "confirmed_at_missing_on_buy",
+  # briefly rewritten as "confirmed_at_null_column_on_active_buy". Both spellings are
+  # gone, and the second one is why this note is long: it was a correct rewrite of a
+  # backwards row, retired one lane later because the state it graded stopped
+  # existing.
+  #
+  # The original demanded SCHEMA_VIOLATION for an active buy with a null
+  # confirmed_at. That graded a BUG's presence: the pinned item schema
   # (media-buy/get-media-buys-response.json) types confirmed_at [string, null] and
-  # requires the key, with an allOf/if guard that forbids null only when status is
-  # "active". resolve_media_buy_confirmed_at (models.py:914) exists precisely to keep
-  # that forbidden combination off the wire by falling back to approved_at/created_at
-  # for a confirmed buy. Demanding SCHEMA_VIOLATION therefore graded the resolver's
-  # ABSENCE: it passed only if the bug shipped. The rewrite asserts what the resolver
-  # owes the buyer — a schema-valid document carrying a real timestamp — so a
-  # resolver regression fails on both halves instead of on neither.
+  # requires the key, with an allOf/if guard forbidding null only when status is
+  # "active" — so the row passed only if a schema-invalid document shipped. It was
+  # rewritten to assert the opposite: a schema-valid document carrying a real
+  # timestamp, which is what the read-time resolver owed the buyer.
+  #
+  # That resolver is now DELETED. Per the owner ruling recorded in the remediation
+  # plan's ALTERATIONS section, legacy data is corrected by migration rather than by
+  # a compatibility path in code: existing rows were backfilled, the repository
+  # stamps at every write, and the test factory stamps for confirmed statuses. So an
+  # active buy with a null confirmed_at is no longer producible — by production or by
+  # a fixture — and the row joins "revision absent" as premise-impossible.
+  #
+  # The OBLIGATION it carried is not retired and is not weakened. That an active buy
+  # reaches the buyer with a non-null confirmed_at is graded by the envelope-status
+  # scenario above, which validates the whole document against the same pinned schema
+  # and so fires the same allOf/if guard, and by the repository's own stamp tests.
+  # What is gone is only the premise. Reconcile upstream in adcp-req so --merge does
+  # not re-add it.
   #
   # RETIRED ROW: "confirmed_at_not_iso8601" (persisted confirmed_at
   # "2026-05-01 12:00:00", no T, no TZ). Unreachable: the column is

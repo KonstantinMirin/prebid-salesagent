@@ -174,12 +174,29 @@ class TestAdcpProjectionAgreesWithCanonicalMap:
     }
 
     def test_expected_rows_cover_the_canonical_key_universe(self):
-        """The literal expectations themselves cover exactly the canonical keys.
+        """The literal expectations, the persisted vocabulary and the map are one set.
 
         Guards the oracle: adding a persisted value to the canonical map without
         deciding its lifecycle projection fails here first.
+
+        The vocabulary is the third side of the comparison because it is a TYPE
+        (``PersistedMediaBuyStatus``) and a type gives no exhaustiveness guarantee
+        over a dict or set literal — mypy checks that only for ``match`` +
+        ``assert_never``. So a member added to the enum with no projection row is
+        invisible to the type checker and must fail loudly here instead. Comparing
+        all three in one assert keeps it direct: pinning the enum only against the
+        literals above would route the map through a chain of other tests.
+
+        Imported inside the test on purpose: this is the only assertion in the
+        module that depends on the vocabulary type, and a module-level import would
+        red every unrelated test here while the type is absent.
         """
-        assert set(self.EXPECTED_ADCP_ROWS) == set(PERSISTED_STATUS_TO_CANONICAL)
+        from src.core.database.models import PersistedMediaBuyStatus
+
+        assert set(self.EXPECTED_ADCP_ROWS) == set(PersistedMediaBuyStatus) == set(PERSISTED_STATUS_TO_CANONICAL), (
+            "the persisted status vocabulary, its lifecycle projection and this module's literal "
+            "expectations must describe exactly the same set of persisted values"
+        )
 
     def test_adcp_map_covers_every_persisted_status(self):
         """No persisted value may ever be omitted from the lifecycle projection.
@@ -214,14 +231,23 @@ class TestLegacyAndUnknownStatusesNotDropped:
     persisted value through verbatim, so a legacy "ready" row (written by
     PR #375) or an admin "scheduled" row failed the internal-status filter and
     made even fetch-by-ID report MEDIA_BUY_NOT_FOUND for a buy that exists —
-    while get_media_buys mapped the same row to a valid status. Both tools now
-    treat any unmapped/legacy value as a generic serving state and date-refine
-    it, so it always lands in CANONICAL_STATUSES (== the delivery fetch-by-ID
-    filter set) and both tools agree.
+    while get_media_buys mapped the same row to a valid status.
+
+    Those aliases are vocabulary members, so both tools map and date-refine them
+    and they always land in CANONICAL_STATUSES (== the delivery fetch-by-ID filter
+    set). That is the regression this class exists for and it is unchanged.
+
+    What changed: a value OUTSIDE the vocabulary is no longer absorbed. It used to
+    be treated as a generic serving state, which is how an undefined status could
+    reach the buyer as "active" with no commitment instant — a document the pinned
+    schema forbids. It is now refused where it would enter (see
+    ``MediaBuyRepository.update_status``), so the resolver indexes the map instead
+    of guessing.
     """
 
-    def test_legacy_and_unknown_statuses_resolve_to_valid_status(self):
-        for persisted in ("ready", "scheduled", "totally_unknown_legacy"):
+    def test_legacy_aliases_resolve_to_valid_status(self):
+        """The legacy aliases the regression was about are mapped, not dropped."""
+        for persisted in ("ready", "scheduled"):
             buy = _buy(persisted)  # inside the flight window
             delivery_status = resolve_canonical_status(buy, _REF)
 
@@ -231,6 +257,33 @@ class TestLegacyAndUnknownStatusesNotDropped:
             assert delivery_status == "active", persisted
             # And the two tools still agree.
             assert _compute_status(buy, _REF).value == delivery_status, persisted
+
+    def test_every_status_the_column_can_hold_resolves_into_the_delivery_filter_set(self):
+        """Each vocabulary member resolves to a value the delivery filter accepts.
+
+        This is the surviving half of an assertion that used to feed the resolver
+        an invented status and demand it resolve to "active". That absorption was
+        the mechanism by which a state nobody defined reached the buyer as a
+        serving buy carrying no ``confirmed_at`` — invalid against the pinned
+        response schema — so the invented value is now refused where it would
+        enter, and only its ABSENCE from the vocabulary is checked here.
+
+        The refusal itself is a persistence behaviour and is graded against a real
+        write, not from this module: ``tests/integration/
+        test_media_buy_revision_confirmation.py::
+        test_an_unrecognised_status_is_refused_at_the_write_boundary``.
+
+        What remains here is the original obligation — "an unmapped value is never
+        dropped by the delivery filter" — narrowed to the values that can actually
+        occur. That narrowing only holds while the set of occurring values IS the
+        vocabulary, which is why the sentinel's absence is asserted alongside the
+        sweep.
+        """
+        from src.core.database.models import PersistedMediaBuyStatus
+
+        assert "totally_unknown_legacy" not in set(PersistedMediaBuyStatus)
+        for member in PersistedMediaBuyStatus:
+            assert resolve_canonical_status(_buy(member.value), _REF) in CANONICAL_STATUSES, member
 
     def test_legacy_ready_alias_date_refines_like_active(self):
         """A legacy "ready"/"scheduled" buy follows the flight window like any serving buy."""

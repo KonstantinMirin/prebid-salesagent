@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import MediaBuy, MediaPackage
+from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
 from tests.factories.core import TenantFactory
 from tests.factories.principal import PrincipalFactory
 
@@ -32,6 +32,26 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     start_date = date(2025, 1, 1)
     end_date = date(2027, 12, 31)
     status = "pending_approval"
+    # This factory persists STRAIGHT to the session (sqlalchemy_session_persistence
+    # = "commit"), bypassing MediaBuyRepository — so it must reproduce the writer's
+    # confirmation stamp itself. The repository writes confirmed_at the instant a buy
+    # reaches a seller-committed status (_stamp_confirmation_if_needed), and the
+    # pinned get-media-buys-response item schema forbids status "active" with a null
+    # confirmed_at. Without this, every factory-seeded confirmed buy is a row
+    # production cannot produce, and the wire documents built from it validate only
+    # while a read-time fallback fabricates the missing value.
+    #
+    # Two properties are deliberate and must survive edits:
+    #   - CONDITIONAL, calling the SAME predicate the writer calls rather than
+    #     re-listing statuses — a second listing drifts, and an unconditional stamp
+    #     would manufacture committed instants on draft/rejected/failed rows that no
+    #     production path can produce.
+    #   - a FRESH clock reading, like the writer's, never derived from another column
+    #     (approved_at/created_at) — that derivation is the read-time fabricator, and
+    #     reproducing it here would re-import it into every fixture.
+    # Opt out with an explicit ``confirmed_at=None`` (an explicit kwarg beats a
+    # LazyAttribute in factory_boy) when the test grades the repository's own stamp.
+    confirmed_at = LazyAttribute(lambda o: datetime.now(UTC) if is_media_buy_seller_confirmed(o.status) else None)
     raw_request = LazyAttribute(
         lambda o: {
             "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],

@@ -619,10 +619,15 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     """
 
     # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
-    # Invariant for a synchronous applied update, so declare spec-correct defaults here
-    # rather than threading identical literals through every constructor (see the twin
-    # note on CreateMediaBuySuccess). revision defaults to 1; real per-buy revision
-    # tracking is separate media-buy lifecycle work.
+    # status is invariant for a synchronous applied update, so it is declared here
+    # rather than threaded through every constructor (see the twin note on
+    # CreateMediaBuySuccess).
+    #
+    # revision is NOT invariant — it is the buy's live optimistic-concurrency token,
+    # and every update path passes the persisted value. The default remains only
+    # because this model has construction sites outside the update tool; a caller
+    # that lets it default is reporting a token it did not read, so pass the row's
+    # revision rather than relying on this.
     status: Literal["completed"] = "completed"
     revision: int = 1
 
