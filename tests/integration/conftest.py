@@ -516,15 +516,9 @@ def mcp_server(integration_db):
     import tempfile
     import time
 
-    # Find an available port
-    def get_free_port():
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            s.listen(1)
-            port = s.getsockname()[1]
-        return port
+    from tests.helpers.ports import free_port
 
-    port = get_free_port()
+    port = free_port()
 
     # Use the integration_db (PostgreSQL database name already created by the integration_db fixture)
     db_name = integration_db

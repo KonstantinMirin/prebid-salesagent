@@ -31,7 +31,6 @@ mistake into a TypeError at the call site (salesagent-og9k.12 A2).
 
 import contextlib
 import json
-import socket
 import uuid
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -40,6 +39,7 @@ from threading import Thread
 import httpx
 
 from tests.e2e.webhook_capture_service import decode_body, header_value, webhook_path
+from tests.helpers.ports import free_port
 from tests.helpers.webhook_wire import CapturedWebhook
 
 #: Where the SERVER delivers. A real HTTPS origin, resolvable only inside the
@@ -256,10 +256,7 @@ def run_webhook_capture_server(
     # this receiver by its compose network alias, so a loopback-only bind would be
     # unreachable from the server container. The callback host (below) is what
     # narrows reachability for loopback-only callers, not the listen address.
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("0.0.0.0", 0))
-    port = sock.getsockname()[1]
-    sock.close()
+    port = free_port()
 
     server = HTTPServer(("0.0.0.0", port), handler_class)
     Thread(target=server.serve_forever, daemon=True).start()

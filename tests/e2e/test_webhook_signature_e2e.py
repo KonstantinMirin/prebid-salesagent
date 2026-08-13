@@ -74,7 +74,7 @@ from tests.e2e._webhook_capture import (
 )
 from tests.e2e.adcp_request_builder import build_a2a_message_send, build_adcp_media_buy_request, get_test_date_range
 from tests.e2e.conftest import e2e_in_network
-from tests.helpers.signing import verify_as_conformant_receiver
+from tests.helpers.signing import verify_as_conformant_receiver, walk_discovery_to_jwks
 from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label
 
 #: Distinct from ``jwkspub_e2e`` (E2E-0), ``tr_e2e_tls`` (the trust-root module) and
@@ -403,63 +403,21 @@ async def test_an_outbound_webhook_is_signed_and_verifies_against_the_published_
 async def _walk_discovery_to_jwks(
     client: httpx.AsyncClient, capabilities: dict[str, Any], declared_identity: dict[str, Any]
 ) -> tuple[dict[str, Any], str]:
-    """The buyer's discovery chain, walked from the SERVED documents only.
+    """This module's leg of the discovery walk: the shared walk, plus what only it demands.
 
-    capabilities → ``identity.brand_json_url`` → ``brand.json`` → the ``agents[]`` entry
-    whose url BYTE-EQUALS the agent card's interface url → ``jwks_uri`` → JWKS. Every hop
-    reads its next address out of the previous document; the JWKS URL is never written
-    down. Step 7 of the discovery algorithm runs through the SDK's own
-    ``check_key_origin_consistency`` rather than being re-implemented — it is the check a
-    real verifier performs, and its absence is what "delete the key_origins emission →
-    red" bites on.
+    The hops live in ``tests.helpers.signing.walk_discovery_to_jwks`` (shared with
+    ``test_jwks_publication_e2e``, salesagent-z6nr.36). What stays here is the pair
+    of assertions this module owns: that the served trust root is the one the tenant
+    DECLARED, and that the JWKS carries exactly the one provisioned key.
     """
-    from adcp.signing import check_key_origin_consistency
-    from adcp.signing.errors import SignatureVerificationError
-
     identity = capabilities.get("identity") or {}
     assert identity.get("brand_json_url") == declared_identity["brand_json_url"], (
         f"the served identity.brand_json_url must be the trust root this tenant declared and the server "
         f"derives; served {identity.get('brand_json_url')!r}, declared {declared_identity['brand_json_url']!r}"
     )
-    advertised_origin = (identity.get("key_origins") or {}).get("request_signing")
-    assert advertised_origin, (
-        "once the tenant owns a publishable key, the served document must advertise "
-        f"identity.key_origins.request_signing, or no counterparty can locate our keys. Served: {identity!r}"
-    )
 
-    brand_response = await client.get(identity["brand_json_url"])
-    assert brand_response.status_code == 200, (
-        f"the trust root the served document points at must resolve over TLS at "
-        f"{identity['brand_json_url']!r}; got HTTP {brand_response.status_code}"
-    )
-    brand = brand_response.json()
+    jwks, _resolved = await walk_discovery_to_jwks(client, identity)
 
-    card = (await client.get("/.well-known/agent-card.json")).json()
-    agent_url = card["supportedInterfaces"][0]["url"]
-    matching = [entry for entry in brand["agents"] if entry.get("type") == "sales" and entry["url"] == agent_url]
-    assert len(matching) == 1, (
-        "the served brand.json must carry exactly one sales agents[] entry whose url byte-equals the agent "
-        f"card's interface URL {agent_url!r} — that is the match the discovery algorithm performs; served "
-        f"{[entry['url'] for entry in brand['agents']]}"
-    )
-    resolved_jwks_uri = matching[0]["jwks_uri"]
-
-    try:
-        check_key_origin_consistency(
-            jwks_uri=resolved_jwks_uri, key_origins=identity.get("key_origins"), purpose="request_signing"
-        )
-    except SignatureVerificationError as exc:
-        pytest.fail(
-            "the JWKS the served trust root resolves to must satisfy the verifier's key-origin consistency "
-            f"check against the served identity.key_origins; declared {advertised_origin!r}, resolved "
-            f"{resolved_jwks_uri!r} — {exc}"
-        )
-
-    jwks_response = await client.get(resolved_jwks_uri)
-    assert jwks_response.status_code == 200, (
-        f"the advertised JWKS must resolve over TLS at {resolved_jwks_uri!r}; got HTTP {jwks_response.status_code}"
-    )
-    jwks = jwks_response.json()
     keys = jwks.get("keys") or []
     assert len(keys) == 1, (
         f"the JWKS at the advertised origin must carry exactly the one key this tenant was provisioned with; "

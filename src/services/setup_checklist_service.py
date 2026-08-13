@@ -29,6 +29,23 @@ from src.core.signing import KeyBacking, signing_key_backed
 logger = logging.getLogger(__name__)
 
 
+def _mock_adapter_config_state() -> tuple[bool, str]:
+    """Whether the mock adapter counts as configured, and the operator-facing reason.
+
+    The mock adapter is not production-ready, so it only counts as configured
+    under ``ADCP_TESTING``. Extracted because this decision was byte-duplicated at
+    two call sites, local ``import os`` and both message strings included — the
+    kind of copy that lets one site's wording drift from the other's silently
+    (salesagent-og9k.10).
+
+    Note this gates ad-server CONFIGURATION state, not egress; it shares only the
+    environment variable with the SSRF hatch, not the policy.
+    """
+    if os.environ.get("ADCP_TESTING") == "true":
+        return True, "Mock adapter configured (test mode)"
+    return False, "Mock adapter - Configure a real ad server for production"
+
+
 def _is_multi_tenant_mode() -> bool:
     """Check if running in multi-tenant mode.
 
@@ -365,16 +382,7 @@ class SetupChecklistService:
                 else:
                     config_details = "GAM selected but not authenticated - Complete OAuth flow and test connection"
             elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
+                ad_server_fully_configured, config_details = _mock_adapter_config_state()
             elif tenant.ad_server in ["kevel", "triton"]:
                 # Other adapters (Kevel, Triton) - assume configured once selected
                 ad_server_fully_configured = True
@@ -802,16 +810,7 @@ class SetupChecklistService:
                 ad_server_fully_configured = True
                 config_details = "GAM configured - Test connection to verify"
             elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
+                ad_server_fully_configured, config_details = _mock_adapter_config_state()
             elif tenant.ad_server in ["kevel", "triton"]:
                 ad_server_fully_configured = True
                 config_details = f"{tenant.ad_server} adapter configured"

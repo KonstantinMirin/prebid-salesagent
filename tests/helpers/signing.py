@@ -397,13 +397,93 @@ def brand_authz_resolver(brand_json_url: str, brand_json: dict[str, Any]) -> Any
     asserting on itself; substituting the transport leaves every line of the
     binding logic under test.
     """
-    import httpx
     from adcp.signing.brand_authz import BrandJsonAuthorizationResolver
 
-    def factory(_url: str) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=brand_json)))
+    return BrandJsonAuthorizationResolver(brand_json_url, _client_factory=json_seeded_client_factory(brand_json))
 
-    return BrandJsonAuthorizationResolver(brand_json_url, _client_factory=factory)
+
+async def walk_discovery_to_jwks(client: Any, identity: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """The buyer's discovery chain, walked from the SERVED documents only.
+
+    ``identity`` (from the served capabilities) -> ``brand_json_url`` -> brand.json
+    -> the ``agents[]`` entry whose url BYTE-EQUALS the agent card's interface url
+    -> ``jwks_uri`` -> JWKS. Every hop reads its next address out of the previous
+    document; the JWKS URL is never written down by the caller, which is the whole
+    point — a test that names it proves nothing about discovery.
+
+    Step 7 runs through the SDK's own ``check_key_origin_consistency`` rather than
+    being re-implemented: it is the check a real verifier performs, and its absence
+    is what "delete the key_origins emission -> red" bites on.
+
+    Returns ``(jwks, resolved_jwks_uri)``. Callers keep their OWN assertions about
+    what the JWKS should contain — the two original copies differed there (one
+    demands exactly one key, the other grades the document member by member), and
+    fusing those would be the mistake DRY is invoked to prevent. What is shared is
+    the WALK (salesagent-z6nr.36).
+    """
+    from adcp.signing import check_key_origin_consistency
+    from adcp.signing.errors import SignatureVerificationError
+
+    advertised_origin = (identity.get("key_origins") or {}).get("request_signing")
+    assert advertised_origin, (
+        "once the tenant owns a publishable key, the served document must advertise "
+        f"identity.key_origins.request_signing, or no counterparty can locate our keys. Served: {identity!r}"
+    )
+
+    brand_response = await client.get(identity["brand_json_url"])
+    assert brand_response.status_code == 200, (
+        f"the trust root the served document points at must resolve over TLS at "
+        f"{identity['brand_json_url']!r}; got HTTP {brand_response.status_code}"
+    )
+    brand = brand_response.json()
+
+    card = (await client.get("/.well-known/agent-card.json")).json()
+    agent_url = card["supportedInterfaces"][0]["url"]
+    matching = [entry for entry in brand["agents"] if entry.get("type") == "sales" and entry["url"] == agent_url]
+    assert len(matching) == 1, (
+        "the served brand.json must carry exactly one sales agents[] entry whose url byte-equals the agent "
+        f"card's interface URL {agent_url!r} — that is the match the discovery algorithm performs; served "
+        f"{[entry['url'] for entry in brand['agents']]}"
+    )
+    resolved_jwks_uri = matching[0]["jwks_uri"]
+
+    try:
+        check_key_origin_consistency(
+            jwks_uri=resolved_jwks_uri, key_origins=identity.get("key_origins"), purpose="request_signing"
+        )
+    except SignatureVerificationError as exc:
+        raise AssertionError(
+            "the JWKS the served trust root resolves to must satisfy the verifier's key-origin consistency "
+            f"check against the served identity.key_origins; declared {advertised_origin!r}, resolved "
+            f"{resolved_jwks_uri!r} — {exc}"
+        ) from exc
+
+    jwks_response = await client.get(resolved_jwks_uri)
+    assert jwks_response.status_code == 200, (
+        f"the advertised JWKS must resolve over TLS at {resolved_jwks_uri!r}; got HTTP {jwks_response.status_code}"
+    )
+    return jwks_response.json(), resolved_jwks_uri
+
+
+def json_seeded_client_factory(body: dict[str, Any]):
+    """An ``httpx.AsyncClient`` factory that answers EVERY request with *body*.
+
+    The SDK resolvers take a ``_client_factory``/``factory`` seam and use the
+    result as an async context manager, so a ``MockTransport`` client is a drop-in
+    with no monkeypatching of the resolver itself — which matters, because
+    substituting the resolver would make an assertion against it a mock asserting
+    on itself, while substituting the TRANSPORT leaves every line of the binding
+    logic under test.
+
+    One implementation for both the integration and e2e sides: these were
+    byte-identical closures in two files (salesagent-og9k.10).
+    """
+    import httpx
+
+    def factory(_url: str) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=body)))
+
+    return factory
 
 
 def authorizing_brand_json(agent_url: str) -> dict[str, Any]:

@@ -49,6 +49,7 @@ from tests.e2e._signing_e2e import (
     provision_signing_key_via_admin,
     tls_base_url,
 )
+from tests.helpers.signing import walk_discovery_to_jwks
 
 _SLUG = "jwkspub_e2e"
 _TENANT_ID = "jwkspub_e2e"
@@ -82,8 +83,6 @@ async def test_advertised_key_origin_serves_a_key_the_tenant_actually_has(
     name, which the stack does not alias — and because a before/after of the SAME
     server is a stronger instrument than two servers' worth of coincidence.
     """
-    from adcp.signing import check_key_origin_consistency
-    from adcp.signing.errors import SignatureVerificationError
 
     base_url = tls_base_url(live_server)
     verify = ca_verified_ssl_context()
@@ -151,51 +150,14 @@ async def test_advertised_key_origin_serves_a_key_the_tenant_actually_has(
             f"all. Served identity: {identity_after!r}"
         )
 
-        # Hop 2's entry point comes from the SERVED document, never from a helper.
-        brand_response = await client.get(identity_after["brand_json_url"])
-        assert brand_response.status_code == 200, (
-            f"the trust root the served document points at must resolve over TLS at "
-            f"{identity_after['brand_json_url']!r}; got HTTP {brand_response.status_code}"
-        )
-        brand = brand_response.json()
-
-        # Step 5 of the discovery algorithm: the agents[] entry whose url
-        # BYTE-EQUALS the endpoint the counterparty invoked, with no
-        # canonicalization. Both sides are served documents.
-        card = (await client.get("/.well-known/agent-card.json")).json()
-        agent_url = card["supportedInterfaces"][0]["url"]
-        matching = [entry for entry in brand["agents"] if entry.get("type") == "sales" and entry["url"] == agent_url]
-        assert len(matching) == 1, (
-            "the served brand.json must carry exactly one sales agents[] entry whose url byte-equals the "
-            f"agent card's interface URL {agent_url!r} — that is the match the discovery algorithm "
-            f"performs; served {[entry['url'] for entry in brand['agents']]}"
-        )
-        resolved_jwks_uri = matching[0]["jwks_uri"]
-
-        # Step 7, run by the SDK's own verifier helper rather than re-implemented:
-        # the resolved jwks_uri's host must match the declared origin after IDNA
-        # canonicalization. Its absence is what raises
-        # request_signature_key_origin_mismatch / _missing in a real verifier, so
-        # this is the assertion that makes "delete the key_origins emission -> red"
-        # bite.
-        try:
-            check_key_origin_consistency(
-                jwks_uri=resolved_jwks_uri,
-                key_origins=identity_after.get("key_origins"),
-                purpose="request_signing",
-            )
-        except SignatureVerificationError as exc:
-            pytest.fail(
-                "the JWKS the served trust root resolves to must satisfy the verifier's key-origin "
-                f"consistency check against the served identity.key_origins; declared "
-                f"{advertised_origin!r}, resolved {resolved_jwks_uri!r} — {exc}"
-            )
-
-        jwks_response = await client.get(resolved_jwks_uri)
-        assert jwks_response.status_code == 200, (
-            f"the advertised JWKS must resolve over TLS at {resolved_jwks_uri!r}; got HTTP {jwks_response.status_code}"
-        )
-        jwks = jwks_response.json()
+        # The walk itself is shared with test_webhook_signature_e2e
+        # (tests.helpers.signing.walk_discovery_to_jwks, salesagent-z6nr.36): hop 2's
+        # entry point comes from the SERVED document, step 5 matches the agents[]
+        # entry byte-equal to the agent card's interface url, and step 7 runs through
+        # the SDK's own check_key_origin_consistency rather than being re-implemented.
+        # What stays HERE is what only this module demands of the resulting document,
+        # graded member by member below.
+        jwks, resolved_jwks_uri = await walk_discovery_to_jwks(client, identity_after)
 
     # The published document, graded member by member. {"keys": []} fails the first
     # of these by construction, not by hope — and "delete the JWKS route -> red"

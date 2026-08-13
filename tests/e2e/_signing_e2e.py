@@ -41,6 +41,7 @@ from sqlalchemy import delete
 
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import live_db_env
+from tests.helpers.signing import json_seeded_client_factory
 
 #: The super-admin the e2e stack seeds, and the endpoint that logs it in.
 #: ``/test/auth`` needs ``ADCP_AUTH_TEST_MODE`` (docker-compose.e2e.yml) AND the
@@ -121,10 +122,7 @@ def seeded_capabilities_factory(body: dict):
     a drop-in — no monkeypatching of the SDK.
     """
 
-    def factory(_url: str) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=body)))
-
-    return factory
+    return json_seeded_client_factory(body)
 
 
 def drop_tenant(live_server: dict, tenant_id: str) -> None:

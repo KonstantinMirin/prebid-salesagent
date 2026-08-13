@@ -57,6 +57,7 @@ from tests.e2e._signing_e2e import (
     seeded_capabilities_factory,
     tls_base_url,
 )
+from tests.helpers.signing import published_kids
 
 _SLUG = "trustroot_e2e"
 _TENANT_ID = "tr_e2e"
@@ -195,7 +196,7 @@ async def test_counterparty_resolves_our_jwks_through_our_published_brand_json(
         f"{seeded_identity['key_origins']['request_signing']!r}, resolved {origin(resolution.jwks_uri)!r}"
     )
 
-    assert {jwk["kid"] for jwk in resolution.jwks["keys"]} == {key.kid}, (
+    assert published_kids(resolution.jwks["keys"]) == {key.kid}, (
         f"the resolved JWKS must carry exactly this tenant's stored key; got "
         f"{sorted(jwk['kid'] for jwk in resolution.jwks['keys'])}, stored {key.kid!r}"
     )
@@ -289,7 +290,7 @@ async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, 
 
     # 4. The key that comes back over TLS is the key this tenant was provisioned
     #    with — so the chain resolved OUR trust root, not some other tenant's.
-    assert {jwk["kid"] for jwk in jwks["keys"]} == {key.kid}, (
+    assert published_kids(jwks["keys"]) == {key.kid}, (
         f"the JWKS served over TLS must carry exactly this tenant's stored key; got "
         f"{sorted(jwk['kid'] for jwk in jwks['keys'])}, provisioned {key.kid!r}"
     )
