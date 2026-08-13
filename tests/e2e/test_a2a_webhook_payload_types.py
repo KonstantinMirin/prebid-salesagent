@@ -9,6 +9,7 @@ Per AdCP A2A spec (https://docs.adcontextprotocol.org/docs/protocols/a2a-guide#p
 This test validates that our A2A server sends the correct payload type based on status.
 """
 
+import json
 import uuid
 from time import sleep
 from typing import Any
@@ -17,14 +18,16 @@ import httpx
 import pytest
 
 from tests.e2e._tenant_state import set_mock_approval
-from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
+from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server, tls_capture
 from tests.e2e.adcp_request_builder import (
     build_a2a_message_send,
     build_adcp_media_buy_request,
     get_test_date_range,
     parse_tool_result,
 )
+from tests.e2e.conftest import e2e_in_network
 from tests.e2e.utils import make_mcp_client
+from tests.e2e.webhook_capture_service import decode_body
 
 
 async def _discover_product_and_pricing(live_server: dict, test_auth_token: str) -> tuple[str, str]:
@@ -116,6 +119,42 @@ def assert_no_classification_errors(received: list[dict[str, Any]]) -> None:
     )
 
 
+def classified_capture(payload: dict[str, Any], path: str) -> dict[str, Any]:
+    """One capture, classified — the shape every assertion in this module reads.
+
+    A module-level function rather than a handler method so the SAME classification
+    runs whether the payload came from the in-process receiver (unit-style leg) or
+    was read back from the TLS capture service, instead of the two legs grading
+    subtly different things.
+
+    A2A wire contract is camelCase (proto json_name): taskId, contextId, messageId.
+    snake_case (task_id, context_id) is a spec violation — the a2a-sdk protobuf
+    descriptor declares the JSON names explicitly. The classification (or its
+    failure) is recorded rather than raised so a regression in
+    protocol_webhook_service is observable to the test instead of being swallowed
+    by an "unknown" classification (gh-#1299 follow-up).
+    """
+    status = None
+    if "status" in payload:
+        status_obj = payload["status"]
+        status = status_obj.get("state") if isinstance(status_obj, dict) else str(status_obj)
+
+    classification_error = None
+    payload_type = None
+    try:
+        payload_type = classify_a2a_payload(payload)
+    except AssertionError as classify_exc:
+        classification_error = str(classify_exc)
+
+    return {
+        "payload": payload,
+        "payload_type": payload_type,
+        "classification_error": classification_error,
+        "status": status,
+        "path": path,
+    }
+
+
 class WebhookPayloadCapture(WebhookCaptureHandler):
     """Webhook receiver that captures each payload with its A2A classification.
 
@@ -126,44 +165,47 @@ class WebhookPayloadCapture(WebhookCaptureHandler):
     received_webhooks: list[dict[str, Any]] = []
 
     def record(self, payload):
-        # Extract status
-        status = None
-        if "status" in payload:
-            status_obj = payload["status"]
-            if isinstance(status_obj, dict):
-                status = status_obj.get("state")
-            else:
-                status = str(status_obj)
+        return classified_capture(payload, self.path)
 
-        # A2A wire contract is camelCase (proto json_name): taskId, contextId,
-        # messageId. snake_case (task_id, context_id) is a spec violation — the
-        # a2a-sdk protobuf descriptor declares the JSON names explicitly. Record
-        # the classification (or its failure) BEFORE responding so a regression
-        # in protocol_webhook_service is observable to the test instead of being
-        # swallowed by an "unknown" classification (gh-#1299 follow-up).
-        classification_error = None
-        payload_type = None
-        try:
-            payload_type = classify_a2a_payload(payload)
-        except AssertionError as classify_exc:
-            classification_error = str(classify_exc)
 
-        return {
-            "payload": payload,
-            "payload_type": payload_type,
-            "classification_error": classification_error,
-            "status": status,
-            "path": self.path,
-        }
+class _ClassifiedCaptureHandle:
+    """A :class:`CaptureHandle` whose ``received`` is CLASSIFIED, not raw.
+
+    Keeps this module's assertions ("payload_type", "status", "classification_error")
+    reading the same shape they always did, while the bytes now come from the TLS
+    capture origin. ``received()`` re-reads on every call — the capture service is a
+    separate process, so a poll loop must call it each turn rather than hold a list.
+    """
+
+    def __init__(self, handle) -> None:
+        self._handle = handle
+        self.url = handle.url
+
+    def received(self) -> list[dict[str, Any]]:
+        return [classified_capture(json.loads(decode_body(entry)), entry["path"]) for entry in self._handle.raw()]
 
 
 @pytest.fixture
 def webhook_capture_server():
-    """Start a local HTTP server to capture webhook payloads."""
-    with run_webhook_capture_server(WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks) as info:
-        yield info
+    """A capture key on the TLS receiver, yielding classified captures."""
+    with tls_capture("a2a-payload-e2e") as handle:
+        yield _ClassifiedCaptureHandle(handle)
 
 
+#: Only the classes that capture through the TLS receiver are in-network gated.
+#: ``TestProtocolWebhookWireFormat`` below runs the service IN-PROCESS against a
+#: loopback callback and needs no compose network, so a module-level mark would
+#: wrongly skip it.
+_IN_NETWORK_ONLY = pytest.mark.skipif(
+    not e2e_in_network(),
+    reason=(
+        "in-network only: the webhook-capture service publishes no host port, so its readback "
+        "control plane is reachable by compose service name alone (set ADCP_TEST_HOST)"
+    ),
+)
+
+
+@_IN_NETWORK_ONLY
 class TestA2AWebhookPayloadTypes:
     """Test A2A webhook payload type compliance with AdCP spec."""
 
@@ -205,7 +247,7 @@ class TestA2AWebhookPayloadTypes:
             parameters=media_buy_params,
             context_id=context_id,
             push_notification_config={
-                "url": webhook_capture_server["url"],
+                "url": webhook_capture_server.url,
                 "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
             },
         )
@@ -229,12 +271,12 @@ class TestA2AWebhookPayloadTypes:
         poll_interval = 0.5
         elapsed = 0
 
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+        while elapsed < timeout_seconds and not webhook_capture_server.received():
             sleep(poll_interval)
             elapsed += poll_interval
 
         # Verify webhook was received
-        received = webhook_capture_server["received"]
+        received = webhook_capture_server.received()
         assert received, "Expected at least one webhook delivery"
 
         # No received webhook may carry a snake_case wire violation (gh-#1299).
@@ -312,7 +354,7 @@ class TestA2AWebhookPayloadTypes:
                 parameters=media_buy_params,
                 context_id=context_id,
                 push_notification_config={
-                    "url": webhook_capture_server["url"],
+                    "url": webhook_capture_server.url,
                     "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
                 },
             )
@@ -340,12 +382,12 @@ class TestA2AWebhookPayloadTypes:
             # races against that ordering — poll until the submitted webhook is
             # actually captured (or timeout).
             while elapsed < timeout_seconds and not any(
-                w["status"] == "submitted" for w in webhook_capture_server["received"]
+                w["status"] == "submitted" for w in webhook_capture_server.received()
             ):
                 sleep(poll_interval)
                 elapsed += poll_interval
 
-            received = webhook_capture_server["received"]
+            received = webhook_capture_server.received()
             assert received, "Expected at least one webhook delivery"
 
             # No received webhook may carry a snake_case wire violation (gh-#1299).
@@ -413,7 +455,7 @@ class TestA2AWebhookPayloadTypes:
             skill="create_media_buy",
             parameters=media_buy_params,
             context_id=context_id,
-            push_notification_config={"url": webhook_capture_server["url"]},
+            push_notification_config={"url": webhook_capture_server.url},
         )
 
         headers = {
@@ -429,11 +471,11 @@ class TestA2AWebhookPayloadTypes:
         timeout_seconds = 15
         elapsed = 0
 
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+        while elapsed < timeout_seconds and not webhook_capture_server.received():
             sleep(0.5)
             elapsed += 0.5
 
-        received = webhook_capture_server["received"]
+        received = webhook_capture_server.received()
         assert received, "Expected at least one webhook delivery"
 
         # No received webhook may carry a snake_case wire violation (gh-#1299).
@@ -468,6 +510,7 @@ class TestA2AWebhookPayloadTypes:
         assert asserted > 0, "No webhook with a classifiable status was received"
 
 
+@_IN_NETWORK_ONLY
 class TestWebhookPayloadStructure:
     """Test webhook payload structure compliance."""
 
@@ -499,7 +542,7 @@ class TestWebhookPayloadStructure:
         message = build_a2a_message_send(
             skill="create_media_buy",
             parameters=media_buy_params,
-            push_notification_config={"url": webhook_capture_server["url"]},
+            push_notification_config={"url": webhook_capture_server.url},
         )
 
         headers = {
@@ -514,11 +557,11 @@ class TestWebhookPayloadStructure:
         # Wait for webhook
         timeout_seconds = 15
         elapsed = 0
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+        while elapsed < timeout_seconds and not webhook_capture_server.received():
             sleep(0.5)
             elapsed += 0.5
 
-        received = webhook_capture_server["received"]
+        received = webhook_capture_server.received()
         assert received, "Expected at least one webhook delivery"
         assert_no_classification_errors(received)
 
@@ -581,7 +624,7 @@ class TestWebhookPayloadStructure:
             message = build_a2a_message_send(
                 skill="create_media_buy",
                 parameters=media_buy_params,
-                push_notification_config={"url": webhook_capture_server["url"]},
+                push_notification_config={"url": webhook_capture_server.url},
             )
 
             headers = {
@@ -596,11 +639,11 @@ class TestWebhookPayloadStructure:
             # Wait for webhook
             timeout_seconds = 15
             elapsed = 0
-            while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+            while elapsed < timeout_seconds and not webhook_capture_server.received():
                 sleep(0.5)
                 elapsed += 0.5
 
-            received = webhook_capture_server["received"]
+            received = webhook_capture_server.received()
             assert received, "Expected at least one webhook delivery"
             assert_no_classification_errors(received)
 

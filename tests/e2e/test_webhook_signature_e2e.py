@@ -5,7 +5,9 @@ salesagent-mp53.3 (#1291) — the SIGNING half of the RFC 9421 instrument, and t
 
 **PROVES.** A real outbound delivery — fired by driving ``create_media_buy`` over A2A
 against the live stack, delivered asynchronously by the production webhook sender to a
-real HTTP receiver on a real socket — carries an RFC 9421 signature that verifies, and
+real HTTPS receiver on a real socket — the compose ``webhook-capture`` origin behind the
+shared TLS front, whose address production's UNPATCHED SSRF gate accepts on its own
+terms — carries an RFC 9421 signature that verifies, and
 the public key that verifies it was obtained from nothing but TLS fetches of the
 server's OWN published documents (capabilities → ``identity.brand_json_url`` →
 ``brand.json`` → ``jwks_uri`` → JWKS). The JWKS URL is never written down here. The
@@ -48,6 +50,7 @@ carry no signature and why assertions could not simply be added to them.
 from __future__ import annotations
 
 import copy
+import uuid
 from time import sleep
 from typing import Any
 
@@ -64,8 +67,13 @@ from tests.e2e._signing_e2e import (
     provision_signing_key_via_admin,
     tls_base_url,
 )
-from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
+from tests.e2e._webhook_capture import (
+    assert_capture_service_is_live,
+    captured_deliveries,
+    delivery_url,
+)
 from tests.e2e.adcp_request_builder import build_a2a_message_send, build_adcp_media_buy_request, get_test_date_range
+from tests.e2e.conftest import e2e_in_network
 from tests.helpers.signing import verify_as_conformant_receiver
 from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label
 
@@ -93,17 +101,17 @@ _ALG = "ed25519"
 _DELIVERY_TIMEOUT_SECONDS = 45.0
 _POLL_INTERVAL_SECONDS = 0.5
 
-
-class _SignedWebhookCapture(WebhookCaptureHandler):
-    """This module's own receiver, with its own capture lists.
-
-    Both lists are declared here rather than inherited: they are CLASS attributes on the
-    shared handler, so a subclass that declares neither would append into — and read —
-    every other e2e suite's captures.
-    """
-
-    received_webhooks: list = []
-    received_raw: list = []
+#: In-network only: deliveries land on the compose ``webhook-capture`` service and are
+#: read back over its control plane, which publishes NO host port. ``run_all_tests.sh``
+#: runs every suite in-network (tests/e2e/conftest.py), so this costs only the
+#: host-path developer convenience — not CI coverage.
+pytestmark = pytest.mark.skipif(
+    not e2e_in_network(),
+    reason=(
+        "in-network only: the webhook-capture service publishes no host port, so its readback "
+        "control plane is reachable by compose service name alone (set ADCP_TEST_HOST)"
+    ),
+)
 
 
 def _signing_declarations(tenant: Any) -> dict[str, Any]:
@@ -143,7 +151,7 @@ def signing_capable_tenant(live_server):
         yield provision
 
 
-async def _fire_one_delivery(client: httpx.AsyncClient, receiver: dict) -> None:
+async def _fire_one_delivery(client: httpx.AsyncClient, callback_url: str) -> None:
     """Drive a real ``create_media_buy`` over A2A so production posts a webhook back.
 
     The ``push_notification_config`` carries NO ``authentication`` block, and that
@@ -165,7 +173,7 @@ async def _fire_one_delivery(client: httpx.AsyncClient, receiver: dict) -> None:
             pricing_option_id=pricing_option_id,
             context={"e2e": "webhook_signature"},
         ),
-        push_notification_config={"url": receiver["url"]},
+        push_notification_config={"url": callback_url},
     )
     result = await post_a2a(client, message, leg="create_media_buy", token=_BUYER_TOKEN)
     assert "error" not in result, f"the A2A create_media_buy returned an error: {result['error']!r}"
@@ -190,34 +198,21 @@ async def _discover_product_and_pricing(client: httpx.AsyncClient) -> tuple[str,
     return products[0]["product_id"], pricing_options[0]["pricing_option_id"]
 
 
-def _await_deliveries(receiver: dict) -> list[CapturedWebhook]:
-    """Poll until the asynchronous delivery lands, then reconstruct what the socket saw.
+def _await_deliveries(key: str) -> list[CapturedWebhook]:
+    """Poll the capture service until the asynchronous delivery lands.
 
     Polling rather than sleeping a fixed interval because delivery runs behind a retry
-    ladder. The reconstruction goes through ONE :class:`CapturedWebhook` per delivery:
-    ``received_raw`` flattens ``http.server``'s case-INsensitive header mapping into a
-    plain dict, and httpx makes no guarantee about the case of the ``Host`` key it puts
-    on the wire, so a raw-dict lookup can ``KeyError`` on a correct request.
-
-    The ``@target-uri`` is rebuilt from that ``Host`` plus the path — never from the URL
-    we registered. ``protocol_webhook_service._normalize_localhost_for_docker`` rewrites
-    the URL BEFORE signing and the SDK signs the post-hook effective URL, so the
-    registered URL is not the signed one, and passing it would surface as
-    ``webhook_signature_invalid`` — which reads like a crypto bug.
+    ladder. Reconstruction is :func:`captured_delivery`'s job, so the ``@target-uri`` is
+    rebuilt from the ``Host`` the receiver was handed plus the path it was dialled at —
+    on the ``https`` scheme, because that is the scheme the SERVER dialled even though
+    the capture service behind the TLS front only ever sees plaintext.
     """
     elapsed = 0.0
-    while elapsed < _DELIVERY_TIMEOUT_SECONDS and not receiver["received_raw"]:
+    deliveries = captured_deliveries(key)
+    while elapsed < _DELIVERY_TIMEOUT_SECONDS and not deliveries:
         sleep(_POLL_INTERVAL_SECONDS)
         elapsed += _POLL_INTERVAL_SECONDS
-
-    deliveries = []
-    for path, raw_headers, body in list(receiver["received_raw"]):
-        headers = httpx.Headers(raw_headers)
-        host = headers.get("host")
-        assert host, (
-            f"the captured delivery carries no Host header, so its @target-uri cannot be rebuilt: {dict(headers)!r}"
-        )
-        deliveries.append(CapturedWebhook(url=f"http://{host}{path}", headers=headers, content=body))
+        deliveries = captured_deliveries(key)
     return deliveries
 
 
@@ -267,6 +262,11 @@ async def test_an_outbound_webhook_is_signed_and_verifies_against_the_published_
     anyway — it rules out "this deployment never signs anything" as an explanation of
     phase A and "this deployment signs everything" as an explanation of phase B.
     """
+    # Before any leg: every fail-closed assertion below reads "no signed webhook
+    # arrived". That claim is worthless if the receiver could not have captured
+    # anything, and a dead receiver would otherwise surface as a phase-A pass.
+    assert_capture_service_is_live()
+
     base_url = tls_base_url(live_server)
     verify = ca_verified_ssl_context()
 
@@ -285,10 +285,10 @@ async def test_an_outbound_webhook_is_signed_and_verifies_against_the_published_
             f"Served webhook_signing: {before.get('webhook_signing')!r}"
         )
 
-        with run_webhook_capture_server(_SignedWebhookCapture, _SignedWebhookCapture.received_webhooks) as receiver:
-            miss_callback_url = receiver["url"]
-            await _fire_one_delivery(client, receiver)
-            unsigned = _await_deliveries(receiver)
+        miss_key = f"{_SLUG}-unsigned-{uuid.uuid4().hex}"
+        miss_callback_url = delivery_url(miss_key)
+        await _fire_one_delivery(client, miss_callback_url)
+        unsigned = _await_deliveries(miss_key)
 
     # Two assertions, never one. "No webhook arrived" and "an unsigned webhook arrived"
     # are different defects, and collapsing them is how a delivery path that silently
@@ -325,10 +325,10 @@ async def test_an_outbound_webhook_is_signed_and_verifies_against_the_published_
 
         jwks, published_kid = await _walk_discovery_to_jwks(client, after, declared_identity)
 
-        with run_webhook_capture_server(_SignedWebhookCapture, _SignedWebhookCapture.received_webhooks) as receiver:
-            signed_callback_url = receiver["url"]
-            await _fire_one_delivery(client, receiver)
-            signed = _await_deliveries(receiver)
+        signed_key = f"{_SLUG}-signed-{uuid.uuid4().hex}"
+        signed_callback_url = delivery_url(signed_key)
+        await _fire_one_delivery(client, signed_callback_url)
+        signed = _await_deliveries(signed_key)
 
     # (a) it arrived at all.
     assert signed, (
