@@ -21,8 +21,15 @@ self-consistent with our OWN consumer:
 a published list's ``kid`` through the counterparty's request-signing JWKS,
 so our own published list must be resolvable the same way. It is knowingly
 NOT the governance profile — see the cross-reference at
-``SigningKeyRepository.publishable_at``'s :1079 paragraph, and the follow-up:
-``salesagent-z6nr.37``.
+``SigningKeyRepository.publishable_at``'s :1079 paragraph.
+
+Closing that gap is a DEPLOYMENT decision, not a refactor: it needs a
+governance key purpose in ``MINTABLE_PURPOSES``, key material minted for it,
+and a genuinely SEPARATE publishing origin (a second origin is the point —
+serving both purposes from one host satisfies the letter and none of the
+intent, since an origin compromise then takes both). Until a deployment wants
+that, signing with the request-signing key is the self-consistent choice, and
+this docstring is the disclosure. Tracked on #1291.
 
 **The list's retention is UNBOUNDED where the JWKS grace window is not.** A
 kid dropped from ``revoked_kids`` is a kid UN-REVOKED — the schema never
