@@ -18,7 +18,7 @@ Fixes: salesagent-c6i
 import pytest
 
 from src.core.creative_agent_registry import CreativeAgentRegistry
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPValidationError
 
 
 @pytest.fixture
@@ -49,8 +49,136 @@ class TestParseMcpToolResult:
         import logging
 
         result = {"content": [{"type": "image", "data": "..."}]}
-        with pytest.raises(AdCPAdapterError, match="No text content"):
+        with pytest.raises(AdCPValidationError, match="No text content") as excinfo:
             registry._parse_mcp_tool_result(result, logging.getLogger())
+        # The agent_url came from the BUYER (this helper is only reached on the
+        # counterparty branch), so an unusable answer is their correctable input —
+        # not a seller misconfiguration, and not a transient outage.
+        assert excinfo.value.error_code == "VALIDATION_ERROR"
+        assert excinfo.value.recovery == "correctable"
+
+    async def test_the_fetch_threads_field_down_to_the_refusal(self, registry, monkeypatch):
+        """``_fetch_formats_raw_mcp`` passes its ``field`` into the parse step.
+
+        The helper-level test below proves the raise CARRIES a field it is given;
+        this proves the caller actually GIVES it one. Both halves are needed: the
+        threading lives at two call sites inside the fetch, and deleting it leaves
+        every other test green because no other caller passes a field.
+        """
+        import json as _json
+        from unittest.mock import MagicMock
+
+        from src.core.creative_agent_registry import CreativeAgent
+
+        buyer_field = "creatives[0].format_id.agent_url"
+
+        response = MagicMock()
+        response.headers = {"content-type": "application/json"}
+        # A well-formed JSON-RPC envelope whose result carries no text content —
+        # the condition the parse step refuses on.
+        response.json.return_value = {"result": {"content": [{"type": "image", "data": "..."}]}}
+        response.text = _json.dumps(response.json.return_value)
+
+        async def fake_asend(*args, **kwargs):
+            assert kwargs.get("field") == buyer_field, "the seam call lost the buyer field"
+            return MagicMock(response=response)
+
+        monkeypatch.setattr("src.core.creative_agent_registry.asend", fake_asend)
+
+        agent = CreativeAgent(agent_url="https://buyer-agent.test", name="buyer-agent")
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await registry._fetch_formats_raw_mcp(agent, field=buyer_field)
+
+        assert excinfo.value.field == buyer_field, (
+            "the refusal reached the buyer without naming which input to fix — the fetch "
+            "dropped the field on its way to the parse step"
+        )
+
+    async def test_a_response_with_no_result_is_a_correctable_buyer_error(self, registry, monkeypatch):
+        """A JSON body carrying no ``result`` refuses as VALIDATION_ERROR / correctable.
+
+        This is the fetch's OWN raise, distinct from the parse step's: the agent
+        answered, but with nothing that is a tools/call result at all. It is graded
+        separately because mutating both raises together lets the parse step's
+        grader mask this one — the mistake round 1 of test-verify made.
+
+        The agent_url is the BUYER's (this method is only reached on the
+        counterparty branch), so the refusal is their correctable input, not a
+        seller misconfiguration and not a transient outage.
+        """
+        from unittest.mock import MagicMock
+
+        from src.core.creative_agent_registry import CreativeAgent
+
+        buyer_field = "creatives[0].format_id.agent_url"
+        response = MagicMock()
+        response.headers = {"content-type": "application/json"}
+        response.json.return_value = {"jsonrpc": "2.0", "id": 1}  # no "result"
+
+        async def fake_asend(*args, **kwargs):
+            return MagicMock(response=response)
+
+        monkeypatch.setattr("src.core.creative_agent_registry.asend", fake_asend)
+
+        agent = CreativeAgent(agent_url="https://buyer-agent.test", name="buyer-agent")
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await registry._fetch_formats_raw_mcp(agent, field=buyer_field)
+
+        exc = excinfo.value
+        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.recovery == "correctable"
+        assert exc.field == buyer_field
+
+    async def test_the_sse_branch_threads_field_into_the_parse_step(self, registry, monkeypatch):
+        """The SSE path threads ``field`` at its OWN call site.
+
+        The fetch has two content-type branches and each calls the parse step
+        separately, so grading only the JSON one leaves the SSE threading free to
+        rot. This body therefore carries a real ``result`` — reaching the parse
+        step through SSE — whose content has no text, which is what that step
+        refuses on. (A body with no ``result`` would stop at the fetch's own raise
+        and never exercise the threading at all.)
+        """
+        from unittest.mock import MagicMock
+
+        from src.core.creative_agent_registry import CreativeAgent
+
+        buyer_field = "creatives[3].format_id.agent_url"
+        response = MagicMock()
+        response.headers = {"content-type": "text/event-stream"}
+        response.text = 'data: {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "image"}]}}\n'
+
+        async def fake_asend(*args, **kwargs):
+            return MagicMock(response=response)
+
+        monkeypatch.setattr("src.core.creative_agent_registry.asend", fake_asend)
+
+        agent = CreativeAgent(agent_url="https://buyer-agent.test", name="buyer-agent")
+        with pytest.raises(AdCPValidationError) as excinfo:
+            await registry._fetch_formats_raw_mcp(agent, field=buyer_field)
+
+        assert excinfo.value.error_code == "VALIDATION_ERROR"
+        assert excinfo.value.field == buyer_field, "the SSE branch dropped the buyer field on its way to the parse step"
+
+    def test_field_names_the_buyer_input_when_the_caller_has_one(self, registry):
+        """A refusal carries the ``field`` that says WHICH buyer input to fix.
+
+        The only production caller reaches here on the counterparty branch, where
+        it holds the buyer's ``creatives[].format_id.agent_url`` path. A sync
+        request carries up to 100 creatives, so without ``field`` the buyer is
+        told their input is correctable but not which one — the same channel
+        lanes 2 and 3 established as the only non-disclosing way to say it.
+
+        Graded directly because every current caller happens to pass ``None``:
+        dropping the threading would otherwise be invisible.
+        """
+        import logging
+
+        result = {"content": [{"type": "image", "data": "..."}]}
+        with pytest.raises(AdCPValidationError) as excinfo:
+            registry._parse_mcp_tool_result(result, logging.getLogger(), field="creatives[0].format_id.agent_url")
+
+        assert excinfo.value.field == "creatives[0].format_id.agent_url"
 
     def test_empty_content_raises(self, registry):
         """Empty content list → raises AdCPAdapterError.
@@ -60,8 +188,10 @@ class TestParseMcpToolResult:
         import logging
 
         result = {"content": []}
-        with pytest.raises(AdCPAdapterError, match="No text content"):
+        with pytest.raises(AdCPValidationError, match="No text content") as excinfo:
             registry._parse_mcp_tool_result(result, logging.getLogger())
+        assert excinfo.value.error_code == "VALIDATION_ERROR"
+        assert excinfo.value.recovery == "correctable"
 
 
 def _mcp_text_result(payload: dict) -> dict:

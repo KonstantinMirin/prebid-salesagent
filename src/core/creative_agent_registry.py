@@ -32,9 +32,7 @@ from adcp.types import AssetContentType as AssetType
 from adcp.types import Error as AdCPResponseError
 from pydantic import ValidationError
 
-from src.core.exceptions import (
-    AdCPAdapterError,
-)
+from src.core.exceptions import AdCPValidationError
 from src.core.format_cache import load_reference_formats
 from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
 from src.core.helpers.mcp_tool_payload import extract_tool_payload
@@ -499,19 +497,23 @@ class CreativeAgentRegistry:
                 if line.startswith("data: "):
                     event_data = json.loads(line[6:])
                     if "result" in event_data:
-                        return self._parse_mcp_tool_result(event_data["result"], logger)
+                        return self._parse_mcp_tool_result(event_data["result"], logger, field=field)
         else:
             data = response.json()
             if "result" in data:
-                return self._parse_mcp_tool_result(data["result"], logger)
+                return self._parse_mcp_tool_result(data["result"], logger, field=field)
 
-        raise AdCPAdapterError(
+        raise AdCPValidationError(
             f"No parseable result in MCP response from {agent.agent_url}",
-            recovery="terminal",
+            field=field,
         )
 
-    def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
-        """Parse formats from an MCP tools/call result."""
+    def _parse_mcp_tool_result(self, result: dict, logger: Any, *, field: str | None = None) -> list[Format]:
+        """Parse formats from an MCP tools/call result.
+
+        ``field`` names the BUYER input that supplied this agent_url, when there is
+        one, so a refusal can say which of up to 100 creatives to fix.
+        """
         import json
 
         content_list = result.get("content", [])
@@ -522,10 +524,7 @@ class CreativeAgentRegistry:
                 formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        raise AdCPAdapterError(
-            "No text content in MCP tool result",
-            recovery="terminal",
-        )
+        raise AdCPValidationError("No text content in MCP tool result", field=field)
 
     async def get_formats_for_agent(
         self,

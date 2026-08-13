@@ -380,15 +380,14 @@ def _sync_creatives_impl(
                 # problem in the buyer's own document, and drops the `field` that
                 # says which input to fix. That matters most for an egress
                 # refusal, whose message deliberately says nothing.
-                # `recovery=` is the last hand-forwarded advisory recovery in this
-                # package; it goes when the raise sites it protects stop
-                # hand-typing terminal (see _processing._failed_sync_result).
+                # The recovery is no longer forwarded: it derives from the code in
+                # wire_advisory, and the raise sites that used to hand-type a
+                # contradicting terminal no longer can.
                 results.append(
                     _failed_sync_result(
                         creative_id,
                         error_msg,
                         code=e.error_code,
-                        recovery=e.recovery,
                         field=getattr(e, "field", None),
                     )
                 )

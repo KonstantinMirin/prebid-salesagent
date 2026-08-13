@@ -402,9 +402,9 @@ class AdCPError(Exception):
     _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
+    # ``recovery`` is NOT among them: it is a read-only property, derived below.
     error_code: str
     status_code: int
-    recovery: RecoveryHint
 
     def __init__(
         self,
@@ -413,7 +413,6 @@ class AdCPError(Exception):
         error_code: str | None = None,
         status_code: int | None = None,
         details: dict[str, Any] | None = None,
-        recovery: RecoveryHint | None = None,
         field: str | None = None,
         suggestion: str | None = None,
         retry_after: int | None = None,
@@ -432,7 +431,26 @@ class AdCPError(Exception):
         self.context = context
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
-        self.recovery = recovery if recovery is not None else type(self)._default_recovery
+
+    @property
+    def recovery(self) -> RecoveryHint:
+        """The buyer-facing retry classification for this error's WIRE code.
+
+        Read-only and DERIVED — there is no way to say "I want terminal" except by
+        raising a class whose wire code the pinned enumMetadata classifies terminal.
+        Possession of the class is the proof. Before this, ``recovery=`` was a free
+        constructor kwarg, so a raise site could pair any code with any
+        classification and nothing in the system disagreed: the wire carried
+        SERVICE_UNAVAILABLE + terminal (retry forever / do not retry) and a green
+        test graded it.
+
+        Derivation follows ``wire_error_code``, NOT ``error_code``: the buyer reads
+        the translated code, so the classification must be the one the pin assigns
+        to what they actually receive. ``_default_recovery`` survives only as the
+        fallback for a wire code the pin does not define (the enumerated non-spec
+        set — NOT_SUPPORTED, plus internal codes reachable only via ``synthesize``).
+        """
+        return RECOVERY_BY_WIRE_CODE.get(self.wire_error_code, type(self)._default_recovery)
 
     @property
     def wire_error_code(self) -> str:
@@ -453,7 +471,6 @@ class AdCPError(Exception):
         *,
         error_code: str,
         status_code: int | None = None,
-        recovery: RecoveryHint | None = None,
         details: dict[str, Any] | None = None,
         field: str | None = None,
         suggestion: str | None = None,
@@ -473,12 +490,15 @@ class AdCPError(Exception):
         attributes are a footgun the public API should not invite; this method
         documents the synthesis intent explicitly so reviewers can audit
         every site that bypasses the typed class hierarchy.
+
+        ``recovery`` is deliberately NOT a parameter here either. A synthesized
+        error derives its classification from the code it was given, exactly like
+        a typed raise: the code is the choice, the retry semantics follow.
         """
         return cls(
             message,
             error_code=error_code,
             status_code=status_code,
-            recovery=recovery,
             details=details,
             field=field,
             suggestion=suggestion,
@@ -578,7 +598,6 @@ class AdCPValidationError(AdCPError):
 
     _default_status_code: ClassVar[int] = 400
     _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPBlockedUrlError(AdCPValidationError):
@@ -638,7 +657,6 @@ class AdCPAuthenticationError(AdCPError):
 
     _default_status_code: ClassVar[int] = 401
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
     # Every authentication rejection shares one buyer fix hint, so the graded
     # top-level suggestion (error.json) can never be forgotten at a raise site
     # (#1417 round-8 review item 4: 11 of 12 raise sites emitted an empty suggestion).
@@ -662,7 +680,6 @@ class AdCPAuthorizationError(AdCPError):
 
     _default_status_code: ClassVar[int] = 403
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPPolicyViolationError(AdCPAuthorizationError):
@@ -676,7 +693,6 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
     """
 
     _default_error_code: ClassVar[str] = "POLICY_VIOLATION"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPNotFoundError(AdCPError):
@@ -689,7 +705,6 @@ class AdCPNotFoundError(AdCPError):
 
     _default_status_code: ClassVar[int] = 404
     _default_error_code: ClassVar[str] = "NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
@@ -701,7 +716,6 @@ class AdCPAccountNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPAccountSetupRequiredError(AdCPError):
@@ -709,7 +723,6 @@ class AdCPAccountSetupRequiredError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "ACCOUNT_SETUP_REQUIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPAccountSuspendedError(AdCPError):
@@ -721,7 +734,6 @@ class AdCPAccountSuspendedError(AdCPError):
 
     _default_status_code: ClassVar[int] = 403
     _default_error_code: ClassVar[str] = "ACCOUNT_SUSPENDED"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPAccountPaymentRequiredError(AdCPError):
@@ -736,7 +748,6 @@ class AdCPAccountPaymentRequiredError(AdCPError):
 
     _default_status_code: ClassVar[int] = 402
     _default_error_code: ClassVar[str] = "ACCOUNT_PAYMENT_REQUIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPConflictError(AdCPError):
@@ -751,7 +762,6 @@ class AdCPConflictError(AdCPError):
 
     _default_status_code: ClassVar[int] = 409
     _default_error_code: ClassVar[str] = "CONFLICT"
-    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPAccountAmbiguousError(AdCPConflictError):
@@ -760,7 +770,6 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
     # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
     # an explicit account_id) — override the transient CONFLICT parent (#1417).
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPGoneError(AdCPError):
@@ -773,7 +782,6 @@ class AdCPGoneError(AdCPError):
 
     _default_status_code: ClassVar[int] = 410
     _default_error_code: ClassVar[str] = "INVALID_STATE"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPBudgetExhaustedError(AdCPError):
@@ -786,7 +794,6 @@ class AdCPBudgetExhaustedError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "BUDGET_EXHAUSTED"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPRateLimitError(AdCPError):
@@ -794,7 +801,6 @@ class AdCPRateLimitError(AdCPError):
 
     _default_status_code: ClassVar[int] = 429
     _default_error_code: ClassVar[str] = "RATE_LIMITED"
-    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPAdapterError(AdCPError):
@@ -802,7 +808,6 @@ class AdCPAdapterError(AdCPError):
 
     _default_status_code: ClassVar[int] = 502
     _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
-    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPConfigurationError(AdCPError):
@@ -833,7 +838,6 @@ class AdCPConfigurationError(AdCPError):
 
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
-    _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
 class AdCPServiceUnavailableError(AdCPError):
@@ -846,7 +850,6 @@ class AdCPServiceUnavailableError(AdCPError):
 
     _default_status_code: ClassVar[int] = 503
     _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
-    _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 # ---------------------------------------------------------------------------
@@ -869,7 +872,6 @@ class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "MEDIA_BUY_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPPackageNotFoundError(AdCPNotFoundError):
@@ -881,7 +883,6 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "PACKAGE_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPProductNotFoundError(AdCPNotFoundError):
@@ -896,7 +897,6 @@ class AdCPProductNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "PRODUCT_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPContextNotFoundError(AdCPNotFoundError):
@@ -915,7 +915,6 @@ class AdCPContextNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "SESSION_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPCreativeNotFoundError(AdCPNotFoundError):
@@ -932,7 +931,6 @@ class AdCPCreativeNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "CREATIVE_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPFormatNotFoundError(AdCPNotFoundError):
@@ -947,7 +945,6 @@ class AdCPFormatNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "FORMAT_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPTaskNotFoundError(AdCPNotFoundError):
@@ -962,7 +959,6 @@ class AdCPTaskNotFoundError(AdCPNotFoundError):
     """
 
     _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPBudgetTooLowError(AdCPError):
@@ -970,7 +966,6 @@ class AdCPBudgetTooLowError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "BUDGET_TOO_LOW"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPCapabilityNotSupportedError(AdCPError):
@@ -994,7 +989,6 @@ class AdCPCapabilityNotSupportedError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "UNSUPPORTED_FEATURE"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPIdempotencyConflictError(AdCPConflictError):
@@ -1011,7 +1005,6 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
     """
 
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_CONFLICT"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPIdempotencyExpiredError(AdCPConflictError):
@@ -1037,7 +1030,6 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     """
 
     _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPCreativeRejectedError(AdCPError):
@@ -1045,7 +1037,6 @@ class AdCPCreativeRejectedError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "CREATIVE_REJECTED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPBudgetExceededError(AdCPError):
@@ -1053,7 +1044,6 @@ class AdCPBudgetExceededError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "BUDGET_EXCEEDED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPProductUnavailableError(AdCPError):
@@ -1061,7 +1051,6 @@ class AdCPProductUnavailableError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "PRODUCT_UNAVAILABLE"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 # ---------------------------------------------------------------------------
@@ -1142,7 +1131,6 @@ class AdCPMediaBuyRejectedError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "MEDIA_BUY_REJECTED"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 class AdCPInventoryUnavailableError(AdCPError):
@@ -1155,7 +1143,6 @@ class AdCPInventoryUnavailableError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "INVENTORY_UNAVAILABLE"
-    _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
 # ---------------------------------------------------------------------------

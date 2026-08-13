@@ -2368,7 +2368,7 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     # position. Burying it in details={"suggestion": ...} yields a non-conformant wire
     # error (empty top-level suggestion). The e2e sibling below keeps error_details;
     # mock_ad_server pops it back to first-class.
-    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(message, recovery=recovery, suggestion=suggestion)
+    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(message, suggestion=suggestion)
     # E2E path: write the failure to the adapter test-behavior config so the
     # Docker-hosted adapter raises the same error on creative upload
     # (MockAdServer.add_creative_assets reads the fail_on_upload flag).
@@ -2856,9 +2856,10 @@ def given_adapter_error(ctx: dict) -> None:
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
+    # See the sibling above on "retryable": not a pinned classification.
+    # SERVICE_UNAVAILABLE derives transient, which is the intent here.
     error = AdCPAdapterError(
         "Ad server unavailable",
-        recovery="retryable",
         details={"suggestion": "Retry the operation or contact ad server support"},
     )
     mock_adapter.create_media_buy.side_effect = error
@@ -2873,7 +2874,11 @@ def given_adapter_error(ctx: dict) -> None:
         fail_on_update=True,
         error_message="Ad server unavailable",
         error_details={"suggestion": "Retry the operation or contact ad server support"},
-        recovery="retryable",
+        # The DB-injected value reaches the DOCKER-hosted MockAdServer, which now maps
+        # it to an exception class; "retryable" is not a pinned classification and
+        # would trip the loud-raise branch, handing e2e a CONFIGURATION_ERROR/terminal
+        # for what this scenario means as a transient adapter outage.
+        recovery="transient",
     )
     # Ensure tenant is auto-approval so production code doesn't short-circuit
     _seed_auto_approval(ctx, sync_adapter=False)

@@ -10,6 +10,7 @@ Validates that:
 beads: salesagent-pyeu, salesagent-d50c
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -818,17 +819,11 @@ class TestToDictRecoveryField:
             msg = f"{type(exc).__name__}.to_dict() recovery={d['recovery']!r}, expected {expected_recovery!r}"
             assert d["recovery"] == expected_recovery, msg
 
-    def test_to_dict_custom_recovery_override(self):
-        """Custom recovery= kwarg overrides class default in to_dict() output."""
-        from src.core.exceptions import AdCPNotFoundError
-
-        # Default is "correctable" (wire INVALID_REQUEST, salesagent-nr2q)
-        default_exc = AdCPNotFoundError("gone")
-        assert default_exc.to_dict()["recovery"] == "correctable"
-
-        # Override to "terminal"
-        overridden = AdCPNotFoundError("permanently gone", recovery="terminal")
-        assert overridden.to_dict()["recovery"] == "terminal"
+    # test_to_dict_custom_recovery_override was DELETED with the contract it pinned:
+    # `recovery=` is no longer a constructor kwarg, so "the override reaches to_dict"
+    # is not a behaviour that can exist. Its surviving half — that to_dict reports the
+    # DERIVED value — is graded by test_to_dict_includes_recovery_for_all_subclasses
+    # above, which asserts the pinned pair for nine classes including this one.
 
     def test_to_dict_roundtrip_preserves_all_fields(self):
         """Serialize to dict, reconstruct, verify recovery survives the roundtrip."""
@@ -891,36 +886,103 @@ class TestCustomRecoveryOverrideMCPBoundary:
             message_substr="temporarily missing",
         )
 
-    def test_custom_recovery_in_extract_error_info(self):
-        """extract_error_info returns overridden recovery, not class default."""
+    def test_extract_error_info_reports_the_derived_recovery(self):
+        """extract_error_info reports the recovery the code derives, for its log consumers.
+
+        This used to assert that a hand-passed ``recovery="terminal"`` came back
+        out — the override contract Epic C deletes. There is no override any
+        more: recovery is a read-only property over the pinned enumMetadata, so
+        what this pins now is that the extractor reports THAT value rather than
+        inventing or defaulting one of its own.
+        """
         from src.core.exceptions import AdCPValidationError
         from src.core.tool_error_logging import extract_error_info
 
-        # Override correctable -> terminal
-        exc = AdCPValidationError("fatal validation", recovery="terminal")
+        exc = AdCPValidationError("fatal validation")
         code, message, recovery = extract_error_info(exc)
         assert code == "VALIDATION_ERROR"
-        assert recovery == "terminal"  # Custom, not default "correctable"
+        assert recovery == "correctable"  # VALIDATION_ERROR's pinned classification
 
 
-class TestCustomRecoveryOverrideA2ABoundary:
-    """Custom recovery= override must propagate through A2A boundary."""
+class TestTypedErrorA2ABoundary:
+    """A typed error crosses the A2A boundary carrying its derived classification.
+
+    This class used to assert that a hand-passed ``recovery=`` survived the trip.
+    That contract is deleted — recovery is derived — so what it grades now is that
+    the boundary does not LOSE or rewrite the classification on the way through.
+    """
 
     @pytest.mark.asyncio
-    async def test_custom_recovery_propagates_through_a2a_boundary(self):
-        """AdCPNotFoundError(recovery='transient') propagates with the override intact."""
+    async def test_typed_error_keeps_its_derived_recovery_through_a2a(self):
+        """AdCPNotFoundError reaches the caller with the pin's value for its wire code."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import AdCPNotFoundError
 
         handler = AdCPRequestHandler()
 
         async def mock_skill(params, token):
-            raise AdCPNotFoundError("temporarily missing", recovery="transient")
+            raise AdCPNotFoundError("temporarily missing")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
             with pytest.raises(AdCPNotFoundError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
-            assert exc_info.value.recovery == "transient"
+            # NOT_FOUND translates to INVALID_REQUEST on the wire, which the pin
+            # classifies correctable — the buyer can fix the reference and resend.
+            assert exc_info.value.recovery == "correctable"
+
+
+class TestSynthesizedRestEnvelopeFollowsItsCode:
+    """The REST fallback's SYNTHESIZED error derives recovery from the code it is given.
+
+    ``handle_tool_error``'s last branch rebuilds an envelope via
+    ``AdCPError.synthesize`` for errors the typed hierarchy does not model. It used
+    to pass ``recovery=`` through from ``extract_error_info``, so the rebuilt
+    envelope could carry a classification that disagreed with the code beside it.
+    That kwarg is gone; ``extract_error_info`` still returns the value for its
+    LOGGING consumers, but the wire answer now follows the code.
+
+    Graded here because nothing else covers it: the extractor's tuple is asserted
+    on its own, and the typed branches never reach the synthesize fallback.
+    """
+
+    def test_synthesized_envelope_recovery_follows_the_code_not_the_extractor(self):
+        """A plain ToolError rebuilt at the REST boundary carries the pinned pair."""
+        from fastmcp.exceptions import ToolError
+        from starlette.responses import JSONResponse
+
+        from src.core.tool_error_logging import handle_tool_error
+
+        # A ToolError carrying its own recovery is what makes this a real grader:
+        # extract_error_info reads that value, and the pre-lane code passed it
+        # straight into synthesize. With a single-arg ToolError the extractor
+        # returns None and the two answers coincide, so the test could not fail.
+        # Here they DISAGREE — the carried "terminal" contradicts
+        # SERVICE_UNAVAILABLE's pinned "transient" — and only the derivation-driven
+        # envelope gets it right.
+        response = handle_tool_error(ToolError("SERVICE_UNAVAILABLE", "upstream is down", "terminal"))
+
+        assert isinstance(response, JSONResponse)
+        body = json.loads(bytes(response.body))
+        code = body["adcp_error"]["code"]
+        from src.core.exceptions import AdCPError
+
+        # The rule, not a hardcoded value: whatever code the fallback produced,
+        # both layers must carry what the DERIVATION gives for that code. Asking
+        # the derivation directly (rather than restating its answer) is what makes
+        # this fail if the envelope ever starts carrying a recovery from somewhere
+        # else — the divergence the deleted kwarg used to allow.
+        expected = AdCPError.synthesize("probe", error_code=code).recovery
+        assert body["adcp_error"]["recovery"] == expected, (
+            f"synthesized envelope pairs {code} with {body['adcp_error']['recovery']!r}; "
+            f"the derivation for that code says {expected!r}"
+        )
+        assert body["errors"][0]["recovery"] == expected
+
+        # Out of scope, recorded not acted: this fallback emits ``TOOL_ERROR``,
+        # which the pinned enum does not define, so the derivation falls back to
+        # the base classification. That is the CODE surface (Epic B/E), not this
+        # lane's recovery surface — flagged so the next reader does not read this
+        # pass as "the fallback emits a conformant code".
 
 
 class TestAdapterErrorRESTBoundary:

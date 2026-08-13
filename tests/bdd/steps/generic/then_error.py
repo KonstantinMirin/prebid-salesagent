@@ -864,7 +864,18 @@ def then_terminal_failure(ctx: dict) -> None:
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
-        assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
+        # Read the WIRE where there is one. ``error`` is the harness's
+        # RECONSTRUCTION, and its ``.recovery`` is now derived from its own class —
+        # so asserting on it compares the derivation against itself and would pass
+        # under any value the wire actually carried. On IMPL there is no wire by
+        # design, and the reconstruction is the real raised exception, so the
+        # class check is all that level can offer and is kept as the fallback.
+        wire = _wire_error_object(ctx)
+        if wire is not None:
+            actual = wire.get("recovery")
+            assert actual == "terminal", f"Expected terminal recovery on the wire, got {actual!r}: {wire}"
+        else:
+            assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
     elif hasattr(error, "recovery"):
         recovery = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
         assert recovery == "terminal", f"Expected terminal recovery, got '{recovery}'"

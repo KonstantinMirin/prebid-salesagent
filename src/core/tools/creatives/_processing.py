@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from adcp.types import CreativeAsset, Recovery
+from adcp.types import CreativeAsset
 from pydantic import BaseModel
 
 from src.core.exceptions import AdCPConfigurationError, wire_advisory
@@ -36,7 +36,6 @@ def _failed_sync_result(
     creative_id: str,
     error_msg: str,
     *,
-    recovery: str | None = None,
     code: str = "SERVICE_UNAVAILABLE",
     field: str | None = None,
 ) -> SyncCreativeResult:
@@ -44,10 +43,9 @@ def _failed_sync_result(
 
     The CODE is the choice; the recovery follows from it. ``wire_advisory``
     derives the buyer-facing retry classification from the pinned enumMetadata,
-    so a call site says what happened and the retry signal follows. Nine of the
-    ten call sites work that way. The tenth still passes ``recovery`` explicitly
-    and overrides the derived value — see the FIXME below for why it cannot go
-    yet and what deletes it. Pass the condition-specific code: ``CONFIGURATION_ERROR`` for a
+    so a call site says what happened and the retry signal follows — for EVERY
+    call site now: the last hand-forwarded recovery went with the constructor
+    kwarg. Pass the condition-specific code: ``CONFIGURATION_ERROR`` for a
     seller-side misconfiguration (pinned terminal — the buyer must not retry),
     ``CREATIVE_NOT_FOUND`` for an assignment referencing an unknown creative_id
     (matching the strict-mode ``AdCPCreativeNotFoundError`` raise since
@@ -55,20 +53,10 @@ def _failed_sync_result(
     default ``SERVICE_UNAVAILABLE`` (pinned transient) covers a creative agent
     that is simply down.
     """
-    advisory = wire_advisory(code, error_msg, field=field)
-    if recovery is not None:
-        # FIXME(#1802): the last hand-forwarded advisory recovery, and the only
-        # caller is _sync.py's `except AdCPError` arm. It cannot go yet: two raise
-        # sites reachable from that arm (creative_agent_registry.py's two
-        # unparseable-MCP-response raises) still hand-type recovery="terminal" on a
-        # SERVICE_UNAVAILABLE the pin calls transient, so deriving here would flip
-        # that path's buyer-facing pair to transient, ungraded. Deleted together
-        # with those raises when `recovery` becomes a read-only derived property.
-        advisory.recovery = Recovery(recovery)
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
-        errors=[advisory],
+        errors=[wire_advisory(code, error_msg, field=field)],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,

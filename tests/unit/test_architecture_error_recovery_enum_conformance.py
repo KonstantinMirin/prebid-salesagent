@@ -36,6 +36,10 @@ other surface that answers a recovery question:
 - the test-side grader itself: ``tests.helpers.assert_envelope_shape`` must
   refuse a (code, recovery) pair the pin contradicts, so a test cannot grade
   what the spec forbids.
+- the raise site: ``recovery`` must not be nameable at all — no ``recovery=``
+  kwarg on ``__init__`` or ``synthesize``, no assignment on an instance — and
+  the value the envelope builder reads off an instance must be derived from
+  that instance's WIRE code at access time.
 
 Every expectation in this file is read from the pin through
 ``tests.helpers.pinned_schema.recovery_by_code()`` — the ONE test-side reader of
@@ -51,7 +55,14 @@ from __future__ import annotations
 import pytest
 from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import ERROR_CODE_MAPPING, WIRE_STANDARD_CODES, AdCPError, translate_error_code
+from src.core.exceptions import (
+    ERROR_CODE_MAPPING,
+    WIRE_STANDARD_CODES,
+    AdCPAdapterError,
+    AdCPError,
+    AdCPValidationError,
+    translate_error_code,
+)
 from tests.helpers import pinned_schema
 
 
@@ -96,13 +107,22 @@ def test_pinned_enum_metadata_loaded() -> None:
 
 @pytest.mark.parametrize("cls", _GRADED_CLASSES, ids=lambda c: c.__name__)
 def test_default_recovery_matches_pinned_enum(cls: type[AdCPError]) -> None:
-    """Each subclass's ``_default_recovery`` must equal the pinned enum's normative recovery."""
+    """Each subclass's INSTANCE recovery must equal the pinned enum's normative value.
+
+    Reads ``_instance_of(cls).recovery``, not ``cls._default_recovery``. Since
+    recovery became a read-only derived property, the class-level declaration is
+    no longer the answer — it is only the fallback for a wire code the pin does
+    not define, and the per-subclass declarations were deleted precisely because
+    they were a re-divergence channel. What must conform is what an instance
+    actually reports, which is what the envelope builder reads.
+    """
     code = cls._default_error_code
     expected = _RECOVERY_BY_CODE[code]
-    assert cls._default_recovery == expected, (
-        f"{cls.__name__} (code {code!r}) declares recovery={cls._default_recovery!r} "
+    actual = _instance_of(cls).recovery
+    assert actual == expected, (
+        f"{cls.__name__} (code {code!r}) reports recovery={actual!r} "
         f"but the pinned error-code.json enumMetadata says {expected!r}. The enumMetadata "
-        f"recovery is normative (xc2j): fix the class, or advance the pin if the spec changed."
+        f"recovery is normative (xc2j): fix the derivation, or advance the pin if the spec changed."
     )
 
 
@@ -134,15 +154,16 @@ def test_remapped_classes_enumerated() -> None:
 @pytest.mark.parametrize("cls", _REMAPPED_CLASSES, ids=lambda c: c.__name__)
 def test_wire_recovery_matches_pinned_enum(cls: type[AdCPError]) -> None:
     """For every class whose default code is remapped by ERROR_CODE_MAPPING, the
-    class's ``_default_recovery`` must equal the pinned enum's normative recovery
+    class's INSTANCE recovery must equal the pinned enum's normative recovery
     for the code actually emitted on the wire (post-translation). The envelope
     builder emits ``exc.wire_error_code`` alongside ``exc.recovery`` — recovery
     follows the wire code, never the internal class taxonomy."""
     wire_code = translate_error_code(cls._default_error_code)
     expected = _RECOVERY_BY_CODE[wire_code]
-    assert cls._default_recovery == expected, (
+    actual = _instance_of(cls).recovery
+    assert actual == expected, (
         f"{cls.__name__} (code {cls._default_error_code!r} -> wire {wire_code!r}) "
-        f"declares recovery={cls._default_recovery!r} but the pinned error-code.json "
+        f"reports recovery={actual!r} but the pinned error-code.json "
         f"enumMetadata says the wire code {wire_code!r} is {expected!r}. The envelope "
         f"emits the wire code with the class recovery, so this pair is spec-nonconformant "
         f"(nr2q): fix the class recovery or the mapping, or advance the pin if the spec changed."
@@ -344,6 +365,24 @@ def _envelope_for(exc: AdCPError) -> dict:
     return build_two_layer_error_envelope(exc)
 
 
+def _envelope_carrying(code: str, recovery: str, message: str = "x") -> dict:
+    """A two-layer envelope carrying *code* and *recovery*, built as a literal.
+
+    Deliberately NOT built from a real exception. These tests need an envelope
+    whose pair CONTRADICTS the pin — that is the whole point of the helper they
+    grade — and no exception can carry such a pair any more: ``recovery`` is a
+    read-only property derived from the wire code, so production cannot express
+    the contradiction and neither can a constructor kwarg. Building the dict
+    directly keeps the guard alive without reintroducing the channel this epic
+    closed. The shape mirrors ``build_two_layer_error_envelope``'s output, which
+    is all ``assert_envelope_shape`` reads.
+    """
+    return {
+        "adcp_error": {"code": code, "message": message, "recovery": recovery},
+        "errors": [{"code": code, "message": message, "recovery": recovery}],
+    }
+
+
 def test_assert_envelope_shape_refuses_a_pin_contradicting_pair() -> None:
     """The F3 pair (``SERVICE_UNAVAILABLE`` + ``terminal``) must be ungradeable.
 
@@ -353,13 +392,12 @@ def test_assert_envelope_shape_refuses_a_pin_contradicting_pair() -> None:
     value the pin gives, because the fix is at the raise site (pick the class
     whose pinned recovery IS the intent), not in the assertion.
     """
-    from src.core.exceptions import AdCPAdapterError
     from tests.helpers import assert_envelope_shape
 
     pinned = _pinned_recovery_by_code()["SERVICE_UNAVAILABLE"]
     assert pinned == "transient", f"pin moved: SERVICE_UNAVAILABLE is now {pinned!r}"
 
-    envelope = _envelope_for(AdCPAdapterError("permanent failure", recovery="terminal"))
+    envelope = _envelope_carrying("SERVICE_UNAVAILABLE", "terminal", "permanent failure")
     assert envelope["adcp_error"]["recovery"] == "terminal", (
         f"precondition: the envelope must actually carry the contradicting pair, got {envelope['adcp_error']!r}"
     )
@@ -402,7 +440,7 @@ def test_assert_envelope_shape_keeps_the_caller_literal_for_unclassified_codes()
         "the pin now classifies NOT_SUPPORTED — this test needs a code the pin is still silent on"
     )
 
-    envelope = _envelope_for(AdCPError.synthesize("vendor said no", error_code="NOT_SUPPORTED", recovery="terminal"))
+    envelope = _envelope_carrying("NOT_SUPPORTED", "terminal", "vendor said no")
     assert_envelope_shape(envelope, "NOT_SUPPORTED", recovery="terminal")
 
 
@@ -421,10 +459,229 @@ def test_assert_envelope_shape_derives_from_the_test_side_pin_not_src(monkeypatc
 
     monkeypatch.setattr(pinned_schema, "recovery_by_code", lambda: {"SERVICE_UNAVAILABLE": "terminal"})
 
-    envelope = _envelope_for(AdCPAdapterError("permanent failure", recovery="terminal"))
+    envelope = _envelope_carrying("SERVICE_UNAVAILABLE", "terminal", "permanent failure")
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="terminal")
 
     with pytest.raises(AssertionError, match="enumMetadata"):
         assert_envelope_shape(
             _envelope_for(AdCPAdapterError("upstream down")), "SERVICE_UNAVAILABLE", recovery="transient"
         )
+
+
+# ---------------------------------------------------------------------------
+# raise-site mirror: recovery is DERIVED from the code, never named by a caller
+# ---------------------------------------------------------------------------
+# The oracles above close every table and every grader, and leave exactly one
+# channel open: ``recovery=`` on ``AdCPError.__init__`` / ``AdCPError.synthesize``.
+# A raise site can still hand-type a recovery the pinned enumMetadata contradicts
+# for the code it emits, and nothing above sees it — the class-conformance oracles
+# grade the CLASS DEFAULT, and the instance that reaches the envelope builder may
+# carry something else entirely.
+#
+# These tests grade the closure: the kwarg is not defaulted-from-the-table, it is
+# gone, so "I want terminal" is expressible only by raising a terminal-coded class.
+# Possession of the class is the proof.
+#
+# Expectations come from ``_pinned_recovery_by_code()`` (tests/helpers, the SDK's
+# pinned tree) and never from ``src.core.exceptions.RECOVERY_BY_WIRE_CODE``, so
+# these grade the derivation rather than agreeing with the table it reads.
+
+
+# (class, a recovery the class's own pinned wire code contradicts). Each pair is a
+# contradiction a raise site can construct today: AdCPValidationError emits
+# VALIDATION_ERROR (pinned correctable), AdCPAdapterError emits SERVICE_UNAVAILABLE
+# (pinned transient), base AdCPError emits SERVICE_UNAVAILABLE too (INTERNAL_ERROR
+# is remapped).
+_CONTRADICTING_KWARG_CASES = [
+    (AdCPValidationError, "terminal"),
+    (AdCPAdapterError, "terminal"),
+    (AdCPError, "correctable"),
+]
+
+
+@pytest.mark.parametrize(("cls", "requested"), _CONTRADICTING_KWARG_CASES, ids=lambda p: getattr(p, "__name__", p))
+def test_recovery_is_not_a_constructor_kwarg(cls: type[AdCPError], requested: str) -> None:
+    """``recovery=`` is not accepted by ``__init__`` — it is a ``TypeError``.
+
+    Not "accepted and ignored", and not "accepted and defaulted from the table":
+    a kwarg that silently does nothing still reads at the call site as a promise
+    the wire keeps. The channel has to be unconstructible, which is what makes
+    every emitted envelope's recovery definitionally the pin's value for the
+    emitted code.
+
+    The pairs above are precisely the contradictions this refusal removes — each
+    one constructs successfully today and carries the caller's value onto the
+    wire, past oracles that only ever graded the class default.
+    """
+    wire_code = translate_error_code(cls._default_error_code)
+    pinned = _pinned_recovery_by_code()[wire_code]
+    assert pinned != requested, (
+        f"precondition: {requested!r} must contradict the pin for {wire_code!r} (pin says {pinned!r}) — "
+        f"otherwise this case grades nothing"
+    )
+
+    with pytest.raises(TypeError, match="recovery"):
+        cls("x", recovery=requested)  # type: ignore[call-arg]
+
+
+def test_synthesize_does_not_accept_a_recovery_kwarg() -> None:
+    """``synthesize`` loses the kwarg too — the boundary fallback is not an exemption.
+
+    ``synthesize`` exists so a boundary can name a wire ``error_code`` the typed
+    class hierarchy does not model; ``error_code=``/``status_code=`` therefore stay.
+    ``recovery`` is different in kind: once the code is named, the pin already
+    answers it. Leaving the kwarg here would keep one hand-typed pair reachable
+    from the two boundary callers that synthesize the most opaque errors.
+    """
+    with pytest.raises(TypeError, match="recovery"):
+        AdCPError.synthesize("x", error_code="SERVICE_UNAVAILABLE", recovery="terminal")  # type: ignore[call-arg]
+
+
+# (code, whether the base class default already coincides with the pin). Both codes
+# pass through ERROR_CODE_MAPPING untranslated, so the wire code IS the code named.
+_SYNTHESIZED_CODES = ["SERVICE_UNAVAILABLE", "BUDGET_EXHAUSTED"]
+
+
+@pytest.mark.parametrize("code", _SYNTHESIZED_CODES)
+def test_synthesized_envelope_carries_the_pinned_recovery_in_both_layers(code: str) -> None:
+    """A synthesized error's wire recovery follows its CODE, not the class it was synthesized on.
+
+    ``synthesize`` is always called on a class whose own code is irrelevant (the
+    caller is overriding it), so the class default is the wrong answer by
+    construction. Both envelope layers are checked because both reach a buyer —
+    the storyboard runner reads either path — and a derivation that only reaches
+    one of them is the drift this module exists to catch.
+
+    ``SERVICE_UNAVAILABLE`` coincides with the base class default (``transient``)
+    and so already holds at HEAD; ``BUDGET_EXHAUSTED`` is pinned ``terminal`` and
+    is what a class default can never answer correctly.
+    """
+    expected = _pinned_recovery_by_code()[code]
+    envelope = _envelope_for(AdCPError.synthesize("vendor said no", error_code=code))
+
+    layers = {
+        "adcp_error": (envelope["adcp_error"]["code"], envelope["adcp_error"]["recovery"]),
+        "errors[0]": (envelope["errors"][0]["code"], envelope["errors"][0]["recovery"]),
+    }
+    assert layers == {"adcp_error": (code, expected), "errors[0]": (code, expected)}, (
+        f"synthesize(error_code={code!r}) produced {layers!r}; the pinned enumMetadata classifies "
+        f"{code!r} as {expected!r}. Recovery must be derived from the code that reaches the wire, "
+        f"not inherited from whichever class synthesize was called on."
+    )
+
+
+_WIRE_PINNED_CLASSES = sorted(
+    (
+        c
+        for c in [AdCPError, *AdCPError.iter_concrete_subclasses()]
+        if translate_error_code(c._default_error_code) in _RECOVERY_BY_CODE
+    ),
+    key=lambda c: c.__name__,
+)
+
+
+def test_every_concrete_class_has_a_pinned_wire_code() -> None:
+    """Meta-guard: no concrete class escapes the instance mirror below.
+
+    Distinct from ``test_remapped_classes_enumerated``, which pins the
+    ERROR_CODE_MAPPING TARGET set: a class whose code is never remapped has no
+    entry there, so a new class carrying an unpinned, untranslated code would
+    slip past it and out of the parametrized set below without a failure.
+    """
+    ungraded = sorted(
+        f"{c.__name__} ({c._default_error_code} -> {translate_error_code(c._default_error_code)})"
+        for c in [AdCPError, *AdCPError.iter_concrete_subclasses()]
+        if translate_error_code(c._default_error_code) not in _RECOVERY_BY_CODE
+    )
+    assert not ungraded, (
+        f"Exception class(es) {ungraded} emit a wire code the pinned enumMetadata does not "
+        f"classify, so their recovery cannot be derived and the mirror below does not grade "
+        f"them. Map the code to a pinned wire code in ERROR_CODE_MAPPING, or advance the pin."
+    )
+    assert len(_WIRE_PINNED_CLASSES) >= 40, f"Expected to mirror many classes, got {len(_WIRE_PINNED_CLASSES)}"
+
+
+def _instance_of(cls: type[AdCPError]) -> AdCPError:
+    """An instance of *cls*, built through its own constructor wherever that is possible.
+
+    A few subclasses take required domain keywords instead of a message — the
+    egress seam's ``OutboundDeliveryFailed(attempts=..., last_status=...)`` is the
+    live example — and cannot be built from a bare string. Their own ``__init__``
+    delegates to ``AdCPError.__init__`` with a fixed message and never touches
+    recovery, so the base initializer reaches the same object state this mirror
+    reads: the class's own ``_default_error_code``, hence its own wire code.
+    Skipping them instead would leave a live wire-facing class ungraded.
+    """
+    try:
+        return cls("x")
+    except TypeError:
+        instance = cls.__new__(cls)
+        AdCPError.__init__(instance, "x")
+        return instance
+
+
+@pytest.mark.parametrize("cls", _WIRE_PINNED_CLASSES, ids=lambda c: c.__name__)
+def test_instance_recovery_matches_the_pinned_enum(cls: type[AdCPError]) -> None:
+    """The INSTANCE's recovery — what the envelope builder actually reads — is the pin's.
+
+    The oracles above grade ``_default_recovery``, a class attribute. The builder
+    reads ``exc.recovery`` off an instance. With recovery derived rather than
+    stored, those are the same answer for every class; this mirror is what says so,
+    against the independently-loaded pin.
+    """
+    wire_code = translate_error_code(cls._default_error_code)
+    expected = _RECOVERY_BY_CODE[wire_code]
+    actual = _instance_of(cls).recovery
+    assert actual == expected, (
+        f"{cls.__name__} instance carries recovery={actual!r} but the pinned enumMetadata "
+        f"classifies its wire code {wire_code!r} as {expected!r}. Recovery is derived from the "
+        f"wire code; an instance cannot answer differently from the pin."
+    )
+
+
+def test_instance_recovery_follows_the_wire_code_table_at_read_time(monkeypatch) -> None:
+    """The mirror above is a live derivation, not a coincidence of hand-typed literals.
+
+    Mutation, so the mirror cannot pass vacuously: point the wire-code table at a
+    map that classifies ``SERVICE_UNAVAILABLE`` as ``terminal`` and an
+    ``AdCPAdapterError`` instance must FOLLOW it. A class that stores its literal
+    at construction time keeps answering ``transient`` — which is exactly the
+    shape where the per-class mirror and the class-default oracles grade the same
+    hand-typed value twice and neither one grades a derivation.
+
+    The mutated map also classifies the INTERNAL code ``ADAPTER_ERROR`` as
+    ``correctable``. The instance must ignore that: derivation keys on the WIRE
+    code (post-ERROR_CODE_MAPPING), which is the code the envelope emits.
+    """
+    from src.core import exceptions
+
+    mutated = dict(exceptions.RECOVERY_BY_WIRE_CODE) | {
+        "SERVICE_UNAVAILABLE": "terminal",
+        "ADAPTER_ERROR": "correctable",
+    }
+    monkeypatch.setattr(exceptions, "RECOVERY_BY_WIRE_CODE", mutated)
+
+    assert AdCPAdapterError("upstream down").recovery == "terminal", (
+        "AdCPAdapterError('...').recovery did not follow RECOVERY_BY_WIRE_CODE's entry for its "
+        "wire code SERVICE_UNAVAILABLE. Recovery must be read from the table at access time; a "
+        "value frozen at construction (or copied into a class literal) is not a derivation, and "
+        "the per-class mirror above then grades nothing."
+    )
+    assert AdCPValidationError("bad field").recovery == _pinned_recovery_by_code()["VALIDATION_ERROR"], (
+        "an unmutated code changed value — the derivation must read per-code, not fall back to a "
+        "single class-wide answer"
+    )
+
+
+def test_recovery_cannot_be_reassigned_on_an_instance() -> None:
+    """Read-only: the closed constructor channel does not reopen one line later.
+
+    ``exc = AdCPAdapterError(...); exc.recovery = "terminal"`` is the same
+    contradiction as the deleted kwarg, spelled in two statements, and it reaches
+    the envelope builder identically. A property with a setter would leave the
+    channel open; a property without one makes the derivation the only answer.
+    """
+    exc = AdCPAdapterError("upstream down")
+    with pytest.raises(AttributeError, match="recovery"):
+        exc.recovery = "terminal"  # type: ignore[misc]
+    assert exc.recovery == _pinned_recovery_by_code()["SERVICE_UNAVAILABLE"]

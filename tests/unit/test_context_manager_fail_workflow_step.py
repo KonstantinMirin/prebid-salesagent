@@ -44,11 +44,21 @@ def _expected_response_data(
     ``build_two_layer_error_envelope`` — the same function the production code
     now uses — so the test asserts on EXACTLY the dict shape
     ``update_workflow_step`` will receive.
+
+    ``recovery`` is no longer passed to the constructor (it is a read-only
+    derived property). It is still a REQUIRED argument here, and is asserted
+    against the value the derivation produces: that keeps every caller stating
+    the pair it expects, so a derivation that silently moved would redden these
+    tests rather than quietly agreeing with itself.
     """
     from src.core.exceptions import AdCPError, build_two_layer_error_envelope
 
-    exc = AdCPError(message, field=field, details=details, recovery=recovery)
+    exc = AdCPError(message, field=field, details=details)
     exc.error_code = code
+    assert exc.recovery == recovery, (
+        f"expected {code} to derive recovery {recovery!r}, got {exc.recovery!r} — "
+        "the test's stated expectation and the pin disagree"
+    )
     return build_two_layer_error_envelope(exc)
 
 

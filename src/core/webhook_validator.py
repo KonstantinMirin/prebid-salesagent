@@ -150,7 +150,6 @@ def reject_unsafe_webhook_registration_url(
             f"Invalid {field}: {error_msg}",
             field=field,
             suggestion=webhook_ssrf_suggestion(),
-            recovery="correctable",
             context=context,
         )
 
@@ -195,7 +194,6 @@ def reject_invalid_webhook_registration(
                 "Supply the shared secret in authentication.credentials, or remove the "
                 "authentication block to receive unsigned webhooks."
             ),
-            recovery="correctable",
             context=context,
         )
 

@@ -125,10 +125,16 @@ def _adcp_error_from_code(
         f"INTERNAL code {error_code!r} reached harness reconstruction — production wire leaked an internal-only code"
     )
     exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
+    # ``recovery`` is deliberately NOT passed: it is a read-only property derived
+    # from the wire code, so the reconstruction reports the same classification
+    # production does. The value actually observed on the wire is not lost — the
+    # caller stashes the whole real envelope as ``_wire_error_envelope`` (surfaced
+    # as ``result.wire_error_envelope``), which is where a test that wants to grade
+    # the wire's own recovery must read it. Asserting ``.recovery`` on this object
+    # would compare the derivation against itself and pass under any wire value.
     reconstructed = exc_cls(
         message=message,
         details=details,
-        recovery=recovery or "terminal",
         suggestion=suggestion,
         field=field,
     )
