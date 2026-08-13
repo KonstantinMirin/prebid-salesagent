@@ -36,6 +36,7 @@ Read-only. ``--jsonl`` for the source of truth, ``--markdown`` for the report.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,11 +67,78 @@ def _ledger_steps(repo: Path) -> dict[tuple[str, str], list[str]]:
     return failures
 
 
+WIREABILITY = Path("docs") / "test-obligations" / "storyboard-wireability.yaml"
+BINDING_BASELINE = Path("docs") / "test-obligations" / "storyboard-binding-baseline.md"
+
+_BINDING_ROW_RE = re.compile(r"^\| `([^`]+)` \| ([^|]+) \| \*\*([A-E])\*\* \|")
+
+
+def _wireability(repo: Path) -> dict[str, dict[str, Any]]:
+    """Curated (storyboard, step) -> e2e-wireability verdict.
+
+    The one judgement in this index no program can derive: whether a step can be
+    driven and observed from outside a running agent. Same status as the issue
+    map — curated, reviewable, joined rather than inferred.
+    """
+    import yaml
+
+    path = repo / WIREABILITY
+    if not path.is_file():
+        return {}
+    return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("steps") or {}
+
+
+def _binding_buckets(repo: Path) -> dict[str, str]:
+    """Scenario id -> binding-baseline bucket (A verified … E blocked).
+
+    A scenario in bucket B cites a storyboard it does not actually claim, so
+    "covered by that scenario" is a weaker statement than it looks. Carrying the
+    bucket alongside the scenario is what stops this index from repeating the
+    roadmap's overclaim in finer print.
+    """
+    path = repo / BINDING_BASELINE
+    if not path.is_file():
+        return {}
+    return {
+        m.group(1): m.group(3)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (m := _BINDING_ROW_RE.match(line.strip()))
+    }
+
+
+def _wire_fields(entry: dict[str, Any] | None, requires_controller: bool) -> dict[str, Any]:
+    """Wireability columns for one check.
+
+    A controller-gated step needs no assessment and gets none: it is ungradable
+    by policy, so the verdict is deterministic and stating it as an assessed
+    judgement would misrepresent where it came from.
+    """
+    if requires_controller:
+        return {
+            "e2e_wireable": "not_wireable",
+            "e2e_axes": {},
+            "e2e_requires": [],
+            "e2e_blocker": "requires comply_test_controller, which will not be implemented",
+            "e2e_source": "policy",
+        }
+    if entry is None:
+        return {"e2e_wireable": "unassessed", "e2e_axes": {}, "e2e_requires": [], "e2e_blocker": "", "e2e_source": ""}
+    return {
+        "e2e_wireable": entry["verdict"],
+        "e2e_axes": entry.get("axes") or {},
+        "e2e_requires": entry.get("requires") or [],
+        "e2e_blocker": entry.get("blocker", ""),
+        "e2e_source": "assessed",
+    }
+
+
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
     coverage = storyboard_coverage_map.build(repo, adcp)
     dist = storyboard_spec.dist_root(adcp, coverage["pinned_version"])
     issue_map = storyboard_roadmap._load_issue_map(repo)
     ledger = _ledger_steps(repo)
+    wireability = _wireability(repo)
+    buckets = _binding_buckets(repo)
 
     records: list[dict[str, Any]] = []
     for row in coverage["storyboards"]:
@@ -107,6 +175,9 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                     # our coverage — declared per storyboard, carried to each check
                     "scenarios": row["covered_by"],
                     "scenario_grain": "storyboard",
+                    "scenario_binding_buckets": {s: buckets.get(s, "-") for s in row["covered_by"]},
+                    # can a scenario for this check be wired end-to-end?
+                    **_wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), CONTROLLER in tools),
                     # tracking — the one curated input
                     "issues": issues,
                     "issue_coverage": tracking.get("coverage", "untriaged"),
@@ -125,6 +196,10 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "neither": len(gaps),
             "failing": sum(1 for r in records if r["measured_failing_protocols"]),
             "ungradable": sum(1 for r in records if r["requires_controller"]),
+            "wireable": sum(1 for r in records if r["e2e_wireable"] == "wireable"),
+            "conditional": sum(1 for r in records if r["e2e_wireable"] == "conditional"),
+            "not_wireable": sum(1 for r in records if r["e2e_wireable"] == "not_wireable"),
+            "unassessed": sum(1 for r in records if r["e2e_wireable"] == "unassessed"),
         },
         "records": records,
     }
@@ -159,6 +234,11 @@ def render(result: dict[str, Any]) -> str:
         f"- **neither scenario nor ticket: {totals['neither']}**",
         f"- measured FAILING: **{totals['failing']}**",
         f"- permanently ungradable (`comply_test_controller`): **{totals['ungradable']}**",
+        "",
+        f"E2E wireability — **{totals['wireable']}** wireable as-is, **{totals['conditional']}** "
+        f"conditional on provisioning, **{totals['not_wireable']}** not wireable"
+        + (f", **{totals['unassessed']}** unassessed" if totals["unassessed"] else "")
+        + ".",
         "",
         "Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario "
         "to a storyboard, not to a check), so a scenario shown against a check means "
@@ -206,7 +286,28 @@ def render(result: dict[str, Any]) -> str:
 
     out += [
         "",
-        "## 4. Neither scenario nor ticket",
+        "## 4. End-to-end wireability",
+        "",
+        "Can a BDD scenario for this check be wired in the e2e environment — Given seeded by "
+        "sending requests or by ordinary stack fixtures, When constructed and sent by a client, "
+        "Then asserted on the wire? Curated in `storyboard-wireability.yaml`; the harness is a "
+        "client, so building a signed request, sending a malformed one or firing N requests to "
+        "trip a rate limit are all wireable. Controller-gated checks are `not_wireable` by "
+        "policy rather than by assessment.",
+        "",
+        "| Check | Wireable | Needs provisioning | Blocker |",
+        "|---|---|---|---|",
+    ]
+    for r in records:
+        if r["e2e_wireable"] in ("wireable", "unassessed"):
+            continue
+        needs = ", ".join(f"`{x}`" for x in r["e2e_requires"]) or "—"
+        blocker = (r["e2e_blocker"] or "—").replace("\n", " ").strip()
+        out.append(f"| {_check_id(r)} | {r['e2e_wireable']} | {needs} | {blocker[:180]} |")
+
+    out += [
+        "",
+        "## 5. Neither scenario nor ticket",
         "",
         "The list to take to triage: 3.1.1 grades these, we do not test them, and nothing in the tracker names them.",
         "",
