@@ -1,4 +1,4 @@
-"""MCP tools must accept the AdCP 3.1 version envelope (salesagent-g6m2.6).
+"""MCP tools must accept the AdCP 3.1 version envelope (GH #1512).
 
 AdCP 3.1.1 composes ``core/version-envelope.json`` via ``allOf`` into EVERY
 request and response schema — "so the version semantics live in exactly one

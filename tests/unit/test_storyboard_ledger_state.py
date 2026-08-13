@@ -35,7 +35,7 @@ from tests.helpers.ledger import load_ledger_nodeids
 
 # --- mcp half ---
 # RE-SEEDED from the in-network run test-results/innet_130826_0940, taken WITH the
-# version-envelope fix (salesagent-g6m2.6) live: 52 ledgered checks over 72 collected,
+# version-envelope fix (GH #1512) live: 52 ledgered checks over 72 collected,
 # down from 81 over 95.
 #
 # The docstring's note above about #1512 is now history: the capability probe is no
@@ -48,22 +48,17 @@ from tests.helpers.ledger import load_ledger_nodeids
 # pre-fix baseline (innet_130826_0906). They are checks the run only reaches now that
 # it gets past the first step. 12 fail on the SAME error string for a DIFFERENT cause
 # — tool signatures missing 3.1.1 request fields the storyboards send, e.g. get_products
-# lacks `account` and `buying_mode` (salesagent-g6m2.8). 3 are error-code mismatches.
+# lacks `account` and `buying_mode` (GH #1193). 3 are error-code mismatches.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::assert_omitted_key_grace_handled]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_with_idempotency_key]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_reject]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_products_with_idempotency_key]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_accounts_with_idempotency_key]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creatives_with_idempotency_key]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::get_capabilities]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::missing_fields]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::nonexistent_product]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::reversed_dates_error]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::supported_major_version]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_major_version]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_release_version]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::get_capabilities]",
@@ -73,7 +68,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::assert_mechanism]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::probe_unauth]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::get_capabilities]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]",
@@ -81,7 +75,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::version_negotiation::get_capabilities_with_version]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::assert_webhook_signing_key_present]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::fetch_brand_json]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::get_capabilities]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_idempotent_webhook_initial]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_operation_id_echo]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_retry_scenario]",
@@ -95,7 +88,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::get_products_brief]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_media_buy]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]",

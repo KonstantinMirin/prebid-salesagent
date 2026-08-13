@@ -31,7 +31,7 @@ async def list_tasks(
     object_id: str | None = None,
     limit: int = 20,
     offset: int = 0,
-    context: Context | None = None,
+    ctx: Context | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
     """List workflow tasks with filtering options.
@@ -42,14 +42,14 @@ async def list_tasks(
         object_id: Filter by specific object ID
         limit: Maximum number of tasks to return (default: 20)
         offset: Number of tasks to skip (default: 0)
-        context: MCP context (automatically provided)
-        identity: Pre-resolved identity (preferred over context)
+        ctx: MCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         Dict containing tasks list and pagination info
     """
-    if identity is None and context is not None:
-        identity = await context.get_state("identity")
+    if identity is None and ctx is not None:
+        identity = await ctx.get_state("identity")
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)
@@ -122,20 +122,20 @@ async def list_tasks(
 
 
 async def get_task(
-    task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None
+    task_id: str, ctx: Context | None = None, identity: ResolvedIdentity | None = None
 ) -> dict[str, Any]:
     """Get detailed information about a specific task.
 
     Args:
         task_id: The unique task/workflow step ID
-        context: MCP context (automatically provided)
-        identity: Pre-resolved identity (preferred over context)
+        ctx: MCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         Dict containing complete task details
     """
-    if identity is None and context is not None:
-        identity = await context.get_state("identity")
+    if identity is None and ctx is not None:
+        identity = await ctx.get_state("identity")
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)
@@ -183,7 +183,7 @@ async def complete_task(
     status: str = "completed",
     response_data: dict[str, Any] | None = None,
     error_message: str | None = None,
-    context: Context | None = None,
+    ctx: Context | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
     """Complete a pending task (simulates human approval or async completion).
@@ -193,14 +193,14 @@ async def complete_task(
         status: New status ("completed" or "failed")
         response_data: Optional response data for completed tasks
         error_message: Error message if status is "failed"
-        context: MCP context (automatically provided)
-        identity: Pre-resolved identity (preferred over context)
+        ctx: MCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         Dict containing task completion status
     """
-    if identity is None and context is not None:
-        identity = await context.get_state("identity")
+    if identity is None and ctx is not None:
+        identity = await ctx.get_state("identity")
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)

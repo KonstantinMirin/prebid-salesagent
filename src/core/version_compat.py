@@ -5,8 +5,9 @@ transports call at their boundary. When the response has a model with products,
 v2 compat fields are derived from model attributes (not post-hoc dict mutation).
 Transforms are registered per-tool and only applied for pre-3.0 clients.
 
-Also provides `accepts_version_envelope()`, the request-side counterpart: the
-decorator that lets an MCP tool RECEIVE the AdCP version envelope at all.
+Also provides `accepts_spec_request_fields()`, the request-side counterpart: the
+decorator that lets an MCP tool RECEIVE every field its pinned request schema
+defines — including the AdCP version envelope, which those schemas compose in.
 """
 
 import functools
@@ -14,69 +15,97 @@ import inspect
 from collections.abc import Callable
 from typing import Any
 
+from adcp import types as adcp_types
+from pydantic import BaseModel
+
 from src.core.product_conversion import dump_products_v2_compat, needs_v2_compat
 
-# The AdCP request version envelope, per `core/version-envelope.json` at the
-# pinned spec version: "Composed via allOf into every AdCP request and response
-# schema so the version semantics live in exactly one place." Neither field is
-# required. `adcp_major_version` is deprecated in favour of `adcp_version` and
-# removed in 4.0, but servers MUST continue to honor it through 3.x.
-VERSION_ENVELOPE_FIELDS: tuple[str, ...] = ("adcp_version", "adcp_major_version")
 
-_ENVELOPE_PARAMETERS = (
-    inspect.Parameter(
-        "adcp_version",
-        inspect.Parameter.KEYWORD_ONLY,
-        default=None,
-        annotation=str | None,
-    ),
-    inspect.Parameter(
-        "adcp_major_version",
-        inspect.Parameter.KEYWORD_ONLY,
-        default=None,
-        annotation=int | None,
-    ),
-)
+def spec_request_model(tool_name: str) -> type[BaseModel] | None:
+    """The pinned SDK request model for an MCP tool, or None if it is not a spec task.
+
+    `get_products` -> `adcp.types.GetProductsRequest`. Mechanical, with no
+    exception table — and its misses carry information. At the 3.1.1 pin the
+    four tools that do NOT resolve are exactly the four that are not spec
+    tasks: `list_authorized_properties` (retired at 3.1.1),
+    `update_performance_index` (our local name for the spec's
+    provide_performance_feedback), and `get_task` / `complete_task` (a local
+    task-management surface). "No model" therefore means "no spec fields to
+    accept", which is the correct answer rather than a gap.
+    """
+    model = getattr(adcp_types, "".join(part.title() for part in tool_name.split("_")) + "Request", None)
+    return model if isinstance(model, type) and issubclass(model, BaseModel) else None
 
 
-def accepts_version_envelope(tool_func: Callable) -> Callable:
-    """Let an MCP tool accept `adcp_version` / `adcp_major_version`.
+def accepts_spec_request_fields(tool_func: Callable) -> Callable:
+    """Let an MCP tool accept every field its pinned request schema defines.
 
     FastMCP derives each tool's input schema from its Python signature and
-    validates arguments with pydantic BEFORE the tool body runs. A tool that
-    does not declare these two fields therefore rejects every spec-conformant
-    3.1 request with `VALIDATION_ERROR: Unexpected keyword argument` — which is
-    what a conformance runner sends on EVERY call, since the envelope is
-    composed into every request schema.
+    validates arguments with pydantic BEFORE the tool body runs. Any field the
+    spec defines but the signature omits is therefore REJECTED outright —
+    `VALIDATION_ERROR: Unexpected keyword argument` — rather than ignored. A
+    seller that rejects a field its own schema declares is non-conformant
+    regardless of whether it can act on it, and those schemas carry
+    `additionalProperties: true`, so tolerating MORE than we implement is the
+    explicitly specified posture.
 
-    Applied once at the registration chokepoint rather than as a parameter pair
-    on sixteen tool signatures: the envelope is one protocol constant, and a
-    seventeenth tool must not be able to forget it.
+    The field set comes from the SDK request model, which is the only candidate
+    source that is both complete and available at runtime: the JSON bundle is
+    test-only and gitignored, and `ADCP_TOOL_DEFINITIONS[*]["inputSchema"]` is a
+    partial hint (4 properties for get_products against 18 in the real schema).
+    Because the model is pinned, a spec bump widens acceptance automatically
+    instead of silently re-opening this bug.
 
-    Why an explicit ``__signature__``: ``functools.wraps`` sets ``__wrapped__``,
-    so ``inspect.signature`` would follow through to the undecorated function
-    and FastMCP would build the old schema. A bare ``**kwargs`` wrapper fails
-    for the same reason AND would silently swallow typos, defeating the
-    unknown-field handling that `universal/schema-validation.yaml` grades.
+    Applied once at the registration chokepoint rather than as parameters on
+    sixteen signatures, so a seventeenth tool cannot forget. This SUBSUMES the
+    narrower version-envelope acceptance it replaced: the request models
+    already declare `adcp_version` / `adcp_major_version`.
 
-    SCOPE — this makes the fields ACCEPTED, not ACTED ON. Negotiating the pin
-    (VERSION_UNSUPPORTED on cross-major mismatch, same-major downshift) is a
-    separate behavior, graded by `universal/version-negotiation.yaml`, and is
-    not implemented here. `apply_version_compat` above remains the only place
-    that reads a client's version, and only for v2 response shaping.
+    Why an explicit ``__signature__`` AND ``__annotations__``: ``functools.wraps``
+    points ``inspect.signature`` at the undecorated function, so FastMCP would
+    build the old schema; and pydantic builds a callable's argument schema from
+    ``get_type_hints()`` rather than the signature object, so a parameter present
+    only in ``__signature__`` raises KeyError during schema generation. A bare
+    ``**kwargs`` wrapper fixes neither and would swallow typos, defeating the
+    unknown-field handling `universal/schema-validation.yaml` grades.
+
+    SCOPE — this makes fields ACCEPTED, not ACTED ON. A buyer sending
+    `pagination` still gets unpaginated results, and `account` still does not
+    select billing. That is strictly better than failing the whole call, and the
+    spec models these as optional, but "accepts the field" must never be read as
+    "honors the field"; honoring each is separate, per-field work.
     """
     is_async = inspect.iscoroutinefunction(tool_func)
     original = inspect.signature(tool_func)
     declared = set(original.parameters)
-    # A tool that already declares the envelope keeps its own handling.
-    additions = [p for p in _ENVELOPE_PARAMETERS if p.name not in declared]
+
+    model = spec_request_model(tool_func.__name__)
+    if model is None:
+        return tool_func
+
+    wanted: dict[str, Any] = {name: field.annotation for name, field in model.model_fields.items()}
+    # `idempotency_key` is an EVERY-REQUEST envelope at 3.1, not a mutating-tool
+    # field, but the SDK's read-tool request models do not declare it — so the
+    # model alone is not sufficient here. `universal/read-tool-idempotency.yaml`
+    # is titled "Read-tool idempotency_key tolerance" and grades exactly this:
+    # "read-only AdCP tasks accept the 3.1 every-request idempotency_key
+    # envelope without strict wrapper rejection". Mutating tools already declare
+    # it on their own models, so this only ever adds it to reads, where
+    # tolerating-and-ignoring IS the specified behaviour.
+    wanted.setdefault("idempotency_key", str | None)
+
+    additions = [
+        inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation)
+        for name, annotation in wanted.items()
+        if name not in declared
+    ]
     if not additions:
         return tool_func
 
+    accepted = {p.name for p in additions}
+
     def _strip(kwargs: dict[str, Any]) -> dict[str, Any]:
-        for field in VERSION_ENVELOPE_FIELDS:
-            kwargs.pop(field, None)
-        return kwargs
+        return {k: v for k, v in kwargs.items() if k not in accepted}
 
     if is_async:
 

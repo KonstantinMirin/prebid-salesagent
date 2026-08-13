@@ -41,17 +41,12 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_with_idempotency_key]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_reject]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_products_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_accounts_with_idempotency_key]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creatives_with_idempotency_key]
 
 # --- error_compliance (7) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::missing_fields]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::nonexistent_product]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::reversed_dates_error]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::supported_major_version]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_major_version]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_release_version]
 
@@ -69,7 +64,6 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::secu
 
 # --- stale_response_advisory (2) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]
 
 # --- notification_config_event_scope (1) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
@@ -97,7 +91,6 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 # not regressions — they are gaps that were never measured before.
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::assert_webhook_signing_key_present]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::fetch_brand_json]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::get_capabilities]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_idempotent_webhook_initial]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_operation_id_echo]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_retry_scenario]
@@ -130,13 +123,13 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::_runner::agent_reachability::graded_checks_produced]
 
 # --- newly reachable after the version-envelope fix (15) ---
-# Exposed, not caused, by salesagent-g6m2.6: with the AdCP 3.1 version envelope
+# Exposed, not caused, by GH #1512: with the AdCP 3.1 version envelope
 # accepted, these storyboards get past their first step for the first time and
 # reach checks that were never collected before (all 15 were NOT-COLLECTED in the
 # pre-fix baseline innet_130826_0906 — zero regressions).
 # 12 are the SAME error string but a DIFFERENT cause: our tool signatures omit
 #    3.1.1 request fields the storyboards send (get_products lacks `account` and
-#    `buying_mode`, etc). Tracked as salesagent-g6m2.8.
+#    `buying_mode`, etc). Tracked as GH #1193.
 # 3 are error-code mismatches (MEDIA_BUY_NOT_FOUND, PACKAGE_NOT_FOUND,
 #    TERMS_REJECTED) — a separate, pre-existing enum gap.
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::creative::media_buy_seller/creative_reception::get_capabilities]
@@ -146,7 +139,6 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::medi
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::get_products_brief]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_media_buy]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]
