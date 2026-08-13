@@ -19,7 +19,6 @@ import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
-from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import httpx
@@ -122,25 +121,6 @@ def _to_wire_dict(payload: Any) -> dict[str, Any]:
     )
 
 
-def _normalize_localhost_for_docker(url: str) -> str:
-    """Replace localhost host with host.docker.internal while preserving userinfo and port."""
-    try:
-        parsed = urlparse(url)
-        if parsed.hostname and parsed.hostname.lower() == "localhost":
-            userinfo = ""
-            if parsed.username:
-                userinfo = parsed.username
-                if parsed.password:
-                    userinfo += f":{parsed.password}"
-                userinfo += "@"
-            port = f":{parsed.port}" if parsed.port else ""
-            new_netloc = f"{userinfo}host.docker.internal{port}"
-            return urlunparse(parsed._replace(netloc=new_netloc))
-    except Exception:
-        logger.debug("Docker URL rewrite failed, using original URL", exc_info=True)
-    return url
-
-
 class ProtocolWebhookService:
     """
     Service for sending protocol-level push notifications to clients.
@@ -198,11 +178,17 @@ class ProtocolWebhookService:
         if rejected:
             return False
 
-        # Rewritten AFTER the gate and BEFORE signing: the gate must judge the URL the
-        # operator actually configured, while ``@target-uri`` and ``@authority`` are
-        # covered components of the RFC 9421 signature, so signing the pre-rewrite URL
-        # would self-invalidate every dev/e2e delivery.
-        url = _normalize_localhost_for_docker(push_notification_config.url)
+        # The URL the gate judged IS the URL dialled. There is no rewrite hop: one
+        # used to swap ``localhost`` for ``host.docker.internal`` so a containerised
+        # server could reach a receiver on the developer's host, but that host is
+        # itself in BLOCKED_HOSTNAMES — so the gate approved one destination and the
+        # process dialled another the gate refuses, making the gate advisory. The e2e
+        # stack now delivers to a real HTTPS origin on a non-private address
+        # (webhooks.adcp-e2e.dev), which the gate accepts unpatched, so nothing needs
+        # the hop. It matters for signing too: ``@target-uri`` and ``@authority`` are
+        # covered components of the RFC 9421 signature, so the signed URI is now the
+        # registered one rather than a post-rewrite variant.
+        url = push_notification_config.url
 
         # Content-Type is the sender's (it frames the body it serialized), and the
         # auth headers are the boundary's. Only genuinely extra headers go here.

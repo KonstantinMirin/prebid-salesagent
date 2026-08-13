@@ -38,7 +38,11 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION_DEV, reject_unsafe_webhook_registration_url
+from src.core.webhook_validator import (
+    WEBHOOK_SSRF_SUGGESTION_DEV,
+    WebhookURLValidator,
+    reject_unsafe_webhook_registration_url,
+)
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
@@ -348,3 +352,48 @@ async def test_a2a_set_push_handler_rejects_metadata_url() -> None:
 
     assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
     mock_uow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_url_the_gate_judged_is_the_url_that_is_dialled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The destination must not be rewritten into something the gate refuses.
+
+    ``send_notification`` used to gate ``push_notification_config.url`` and then
+    rewrite ``localhost`` to ``host.docker.internal`` before dialling — a host that
+    is itself in ``BLOCKED_HOSTNAMES``, so the URL the gate approved and the URL
+    that reached the socket were different, and the second was one the gate exists
+    to refuse. A gate whose verdict does not describe the dialled destination is
+    advisory. The rewrite is gone; this pins that it stays gone.
+
+    Graded on the DIALLED url captured at the wire, not on the return value:
+    ``sent is True`` is equally true whether the destination was legitimate or
+    rewritten into a blocked one, so it cannot tell the two apart.
+
+    Runs under ADCP_TESTING because that is the only configuration in which a
+    ``localhost`` registration passes the gate at all; in production it is refused
+    outright. That is also why the original defect was a dev/e2e integrity problem
+    rather than a reachable production SSRF hole — but it was load-bearing for
+    signing, since the RFC 9421 ``@target-uri`` covers whatever URL is finally
+    dialled.
+    """
+    monkeypatch.setenv("ADCP_TESTING", "true")
+    configured = "http://localhost:9999/webhook"
+
+    with capture_outbound_webhooks() as captured:
+        async with _running_service() as service:
+            await _send(service, configured)
+
+    assert len(captured) == 1, "expected exactly one delivery to grade"
+    dialled = captured[0].url
+
+    assert dialled == configured, (
+        f"the gate judged {configured!r} but the process dialled {dialled!r} — a destination the gate never saw"
+    )
+
+    # And the dialled URL must satisfy the SAME gate that admitted the configured
+    # one. Deliberately not a bare check_url_ssrf: that is a DIFFERENT gate (no
+    # ADCP_TESTING localhost allowance), and asserting against it would fail an
+    # honest delivery while passing a rewrite into another allowed-but-unjudged
+    # host. The invariant is about the gate that actually ran.
+    is_safe, error = WebhookURLValidator.validate_outbound_webhook_url(dialled)
+    assert is_safe, f"the dialled URL {dialled!r} does not pass the gate that admitted it: {error}"
