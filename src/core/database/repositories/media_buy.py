@@ -16,7 +16,7 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
@@ -39,9 +39,15 @@ class MediaBuyRepository:
         tenant_id: Tenant scope for all queries.
     """
 
-    # "revision" is repository-managed (bumped on every successful mutation);
-    # callers may never write it directly — see _bump_revision.
-    _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "media_buy_id", "created_at", "revision"})
+    # "revision" and "confirmed_at" are repository-managed — "revision" is bumped on
+    # every successful mutation (see _bump_revision) and "confirmed_at" is stamped
+    # write-once the first time the buy reaches a committed status (see
+    # _stamp_confirmation_if_needed). Callers may never write either directly:
+    # letting update_fields set confirmed_at would walk straight through the
+    # write-once guard, because the stamp helper no-ops on an already-set value.
+    _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset(
+        {"tenant_id", "media_buy_id", "created_at", "revision", "confirmed_at"}
+    )
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
 
     def __init__(self, session: Session, tenant_id: str) -> None:
@@ -411,6 +417,7 @@ class MediaBuyRepository:
             kwargs["account_id"] = account_id
 
         media_buy = MediaBuy(**kwargs)
+        self._stamp_confirmation_if_needed(media_buy)
         self._session.add(media_buy)
         self._session.flush()
         return media_buy
@@ -422,12 +429,21 @@ class MediaBuyRepository:
         Raises ValueError if there is a tenant mismatch.
 
         Does NOT commit — the UoW handles that.
+
+        Stamps ``confirmed_at`` before the flush, so a caller-built row that is
+        already in a committed status cannot be persisted with a NULL
+        seller-commitment instant. This is a forward-lock rather than a fix for a
+        live path: today every production create goes through
+        ``create_from_request`` (this method has no production callers), but both
+        entry points must hold the invariant or the next caller to pick this one
+        reopens the hole.
         """
         if media_buy.tenant_id != self._tenant_id:
             raise ValueError(
                 f"Tenant mismatch: media_buy.tenant_id={media_buy.tenant_id!r} "
                 f"!= repository tenant_id={self._tenant_id!r}"
             )
+        self._stamp_confirmation_if_needed(media_buy)
         self._session.add(media_buy)
         self._session.flush()
         return media_buy
@@ -437,8 +453,8 @@ class MediaBuyRepository:
         """Increment the persisted monotonic revision counter by 1.
 
         Assigning a SQL expression rather than doing a Python read-modify-write is
-        deliberate: it emits ``UPDATE ... SET revision = coalesce(revision, 0) + 1``,
-        so the database serializes concurrent bumps. A read-modify-write would let
+        deliberate: it emits ``UPDATE ... SET revision = revision + 1``, so the
+        database serializes concurrent bumps. A read-modify-write would let
         two mutations that read the same value write the same value, and ``revision``
         is the buyer's optimistic-concurrency token — it MUST strictly increase on
         every successful mutation, including two landing in the same clock tick.
@@ -446,7 +462,7 @@ class MediaBuyRepository:
         Note the attribute is left holding an expression until the next refresh, so
         callers must not read ``media_buy.revision`` between this call and the flush.
         """
-        media_buy.revision = func.coalesce(MediaBuy.revision, 0) + 1
+        media_buy.revision = MediaBuy.revision + 1
 
     @staticmethod
     def _stamp_confirmation_if_needed(media_buy: MediaBuy) -> bool:
@@ -462,21 +478,6 @@ class MediaBuyRepository:
             return False
         media_buy.confirmed_at = datetime.datetime.now(datetime.UTC)
         return True
-
-    def bump_revision(self, media_buy_id: str) -> MediaBuy | None:
-        """Bump the revision counter for mutations that persist outside this class.
-
-        Package-level writes (pause, targeting overlay, budget) change what the buyer
-        sees on the media buy, so they move its concurrency token too — but they
-        persist directly on the session rather than through update_status /
-        update_fields, which would otherwise leave the token stale.
-        """
-        media_buy = self.get_by_id(media_buy_id)
-        if media_buy is None:
-            return None
-        self._bump_revision(media_buy)
-        self._session.flush()
-        return media_buy
 
     def update_status(
         self,
@@ -513,7 +514,7 @@ class MediaBuyRepository:
         Returns the updated MediaBuy, or None if not found in this tenant.
         Raises ValueError if any kwarg is not a valid MediaBuy attribute or
         if the caller attempts to update an immutable field (tenant_id,
-        media_buy_id, created_at, revision).
+        media_buy_id, created_at, revision, confirmed_at).
         """
         blocked = self._MEDIA_BUY_IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
@@ -535,6 +536,26 @@ class MediaBuyRepository:
     # ------------------------------------------------------------------
     # MediaPackage writes
     # ------------------------------------------------------------------
+
+    def _bump_parent_revision(self, media_buy_id: str) -> None:
+        """Fetch the parent buy and move its concurrency token.
+
+        Package-level writes change what the buyer sees on the media buy, so they
+        move its revision too: they persist the package directly on the session
+        rather than going through update_status / update_fields, which would
+        otherwise leave the parent's token stale.
+
+        For the two package writers that hold only the package (update_package_config,
+        update_package_fields). The two that already hold the parent row
+        (create_package, create_packages_bulk) call ``_bump_revision`` directly rather
+        than paying for a second lookup.
+
+        Raises rather than skipping when the parent is missing: get_package joins
+        through MediaBuy under the tenant filter, so a package that was found
+        guarantees a parent that exists. Swallowing a miss here would leave the
+        buyer's concurrency token stale with no signal.
+        """
+        self._bump_revision(self.get_by_id_or_raise(media_buy_id))
 
     def create_package(
         self,
@@ -563,6 +584,7 @@ class MediaBuyRepository:
             pacing=pacing,
         )
         self._session.add(package)
+        self._bump_revision(media_buy)
         self._session.flush()
         return package
 
@@ -580,6 +602,7 @@ class MediaBuyRepository:
         if package is None:
             return None
         package.package_config = package_config
+        self._bump_parent_revision(media_buy_id)
         self._session.flush()
         return package
 
@@ -607,6 +630,7 @@ class MediaBuyRepository:
             if not hasattr(package, key):
                 raise ValueError(f"MediaPackage has no attribute {key!r}")
             setattr(package, key, value)
+        self._bump_parent_revision(media_buy_id)
         self._session.flush()
         return package
 
@@ -635,6 +659,7 @@ class MediaBuyRepository:
                     f"Package {pkg.package_id!r} has media_buy_id={pkg.media_buy_id!r} but expected {media_buy_id!r}"
                 )
             self._session.add(pkg)
+        self._bump_revision(media_buy)
         self._session.flush()
         return packages
 

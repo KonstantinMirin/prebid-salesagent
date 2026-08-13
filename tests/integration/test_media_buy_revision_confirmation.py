@@ -1,10 +1,28 @@
 """Integration test: the repository maintains revision and confirmed_at.
 
 These two fields are only meaningful as PERSISTED state, so they are graded here
-against a real Postgres rather than in a unit test: the revision bump is a SQL-side
-``coalesce(revision, 0) + 1`` precisely so the database serializes concurrent
-mutations, and a mocked session would assert the Python call, not the behaviour that
-matters.
+against a real Postgres rather than in a unit test: what the assertions read back
+is the row, not a Python attribute a mock happened to receive. That is enforced,
+not merely intended — every assertion goes through ``_reread``, which expires the
+identity map and re-SELECTs with autoflush suppressed, so a value set on the
+object but never written to the database reddens instead of passing.
+
+What this file grades, precisely:
+  - every repository write path that mutates a media buy moves the revision
+    counter, and the counter is strictly increasing across successive writes;
+  - both repository create paths seed it at 1;
+  - confirmed_at is stamped at the seller-commitment instant, once, and is
+    immutable to callers.
+
+What it does NOT grade: that the bump is emitted as a SQL expression
+(``revision = revision + 1``) rather than a Python read-modify-write. That form
+is what makes two CONCURRENT bumps serialize in the database, and no test here
+discriminates the two implementations — measured, not assumed: swapping
+``_bump_revision`` to a read-modify-write leaves every test in this file green.
+Discriminating it needs two overlapping uncommitted transactions, i.e. real
+concurrency machinery, which this module deliberately does not carry. The
+rationale for the SQL-expression form lives in ``_bump_revision``'s docstring;
+treat it as ungraded here rather than as covered.
 
 Semantics adopted verbatim from PR #1544 (GH #1928 requires reconciling with it
 rather than deciding independently):
@@ -14,13 +32,24 @@ rather than deciding independently):
     later transitions.
 """
 
+import datetime
+from decimal import Decimal
+
 import pytest
 from sqlalchemy.orm import Session as SASession
 
 from src.core.database.database_session import get_engine
+from src.core.database.models import MediaBuy
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.schemas import CreateMediaBuyRequest
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+# Every timestamp the buy already carries is pinned here, far outside any window a
+# test measures. That is what makes the stamp assertions discriminating: a stamp
+# that copied created_at or approved_at instead of reading the clock would land in
+# 2020 and fail the window, where a presence-only assertion would not notice.
+_PAST = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
 
 
 @pytest.fixture
@@ -32,7 +61,7 @@ def repo_env(integration_db):
     try:
         for factory in ALL_FACTORIES:
             factory._meta.sqlalchemy_session = session
-        media_buy = MediaBuyFactory(status="pending_approval")
+        media_buy = MediaBuyFactory(status="pending_approval", created_at=_PAST, approved_at=_PAST)
         repo = MediaBuyRepository(session, media_buy.tenant_id)
         yield repo, media_buy
     finally:
@@ -41,15 +70,163 @@ def repo_env(integration_db):
             factory._meta.sqlalchemy_session = None
 
 
+def _reread(repo: MediaBuyRepository, media_buy_id: str) -> MediaBuy:
+    """Re-read the ROW, not the session's identity map.
+
+    ``repo.get_by_id`` on its own hands back the instance already living in the
+    session, so an assertion on it passes for a value that was set on the Python
+    object but never written to the database — a stamp applied after the last
+    flush, a write on a detached instance, an attribute set via
+    ``set_committed_value``. That is precisely the regression class this file
+    exists to catch, so every oracle here expires first and reads with autoflush
+    suppressed: expiring forces a real SELECT, and suppressing autoflush stops
+    the read from persisting a pending value on the writer's behalf and then
+    congratulating it. Every repository write path flushes before returning, so
+    nothing legitimate is hidden by that suppression.
+    """
+    session = repo._session  # noqa: SLF001 — the oracle must read the row this repo wrote
+    session.expire_all()
+    with session.no_autoflush:
+        media_buy = repo.get_by_id(media_buy_id)
+    assert media_buy is not None, f"media buy {media_buy_id!r} is not in the database"
+    return media_buy
+
+
 def _revision(repo: MediaBuyRepository, media_buy_id: str) -> int:
-    """Re-read the persisted counter (the attribute holds a SQL expression post-bump)."""
-    return repo.get_by_id(media_buy_id).revision
+    """The persisted counter."""
+    return _reread(repo, media_buy_id).revision
+
+
+def _confirmed_at(repo: MediaBuyRepository, media_buy_id: str) -> datetime.datetime | None:
+    """The persisted seller-commitment instant."""
+    return _reread(repo, media_buy_id).confirmed_at
+
+
+def _assert_stamped_between(
+    stamped: datetime.datetime | None,
+    t0: datetime.datetime,
+    t1: datetime.datetime,
+) -> None:
+    """The stamp must be a fresh clock reading taken during the write, not a copied field."""
+    assert stamped is not None, "confirmed_at was never stamped"
+    assert t0 <= stamped <= t1, (
+        f"confirmed_at={stamped.isoformat()} is outside the write window "
+        f"[{t0.isoformat()}, {t1.isoformat()}] — it was copied from another column "
+        f"(created_at/approved_at are pinned at {_PAST.isoformat()}) rather than read from the clock"
+    )
+
+
+def _make_request(idempotency_key: str) -> CreateMediaBuyRequest:
+    return CreateMediaBuyRequest(
+        brand={"domain": "testbrand.com"},
+        packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
+        start_time=(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)).isoformat(),
+        end_time=(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=8)).isoformat(),
+        idempotency_key=idempotency_key,
+    )
+
+
+def _create_from_request(repo: MediaBuyRepository, media_buy: MediaBuy) -> MediaBuy:
+    """The async/create_media_buy path: the repository builds the row from the request model."""
+    return repo.create_from_request(
+        media_buy_id="mb_create_from_request",
+        req=_make_request("revision-confirmation-create-from-request"),
+        principal_id=media_buy.principal_id,
+        advertiser_name="Test Advertiser",
+        budget=Decimal("5000.00"),
+        currency="USD",
+        start_time=datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1),
+        end_time=datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=8),
+        status="active",
+        created_at=_PAST,
+    )
+
+
+def _create_prebuilt(repo: MediaBuyRepository, media_buy: MediaBuy) -> MediaBuy:
+    """The sync path: the caller hands over a fully-built row in its final status."""
+    from tests.factories import MediaBuyFactory
+
+    return repo.create(
+        MediaBuyFactory.build(
+            tenant=media_buy.tenant,
+            principal=media_buy.principal,
+            media_buy_id="mb_create_prebuilt",
+            status="active",
+            created_at=_PAST,
+            approved_at=_PAST,
+        )
+    )
+
+
+# Both repository entry points that persist a brand-new media buy. Each must seed
+# revision at 1 and stamp confirmed_at when the row is born already committed.
+_CREATE_PATHS = {
+    "create_from_request": _create_from_request,
+    "create": _create_prebuilt,
+}
+
+
+def _write_package_config(repo, media_buy, package):
+    return repo.update_package_config(
+        media_buy.media_buy_id,
+        package.package_id,
+        {"package_id": package.package_id, "product_id": "prod_001", "budget": 7500.0},
+    )
+
+
+def _write_package_fields(repo, media_buy, package):
+    return repo.update_package_fields(media_buy.media_buy_id, package.package_id, budget=Decimal("7500.00"))
+
+
+def _write_new_package(repo, media_buy, package):
+    return repo.create_package(
+        media_buy.media_buy_id,
+        "pkg_created",
+        {"package_id": "pkg_created", "product_id": "prod_001"},
+    )
+
+
+def _write_packages_bulk(repo, media_buy, package):
+    from tests.factories import MediaPackageFactory
+
+    return repo.create_packages_bulk(
+        media_buy.media_buy_id,
+        # Pass the real parent, not media_buy=None. Setting the relationship to None
+        # while hand-setting media_buy_id builds a contradictory row: the child is
+        # explicitly disassociated from the parent, yet carries the FK that forms half
+        # of its own composite PK. That state is inert only while the parent stays
+        # clean — once the parent is legitimately dirty (which is exactly what this
+        # test grades), SQLAlchemy's dependency processor honors the disassociation
+        # and tries to blank the PK column. No production caller builds it that way.
+        [MediaPackageFactory.build(media_buy=media_buy, package_id="pkg_bulk")],
+    )
+
+
+# Every public repository method that persists a package. A package write changes
+# what the buyer sees on the parent media buy, so each one moves the parent's
+# concurrency token — and each is graded, so folding the bump into one of them
+# cannot be mistaken for covering all four.
+_PACKAGE_WRITERS = {
+    "create_package": _write_new_package,
+    "update_package_config": _write_package_config,
+    "update_package_fields": _write_package_fields,
+    "create_packages_bulk": _write_packages_bulk,
+}
 
 
 class TestRevisionCounter:
     def test_new_media_buy_starts_at_revision_one(self, repo_env):
         repo, media_buy = repo_env
         assert _revision(repo, media_buy.media_buy_id) == 1
+
+    @pytest.mark.parametrize("path_name", sorted(_CREATE_PATHS))
+    def test_repository_create_paths_seed_revision_at_one(self, repo_env, path_name):
+        """Both create paths persist the counter's floor, not a NULL the reader has to guess."""
+        repo, media_buy = repo_env
+
+        created = _CREATE_PATHS[path_name](repo, media_buy)
+
+        assert _revision(repo, created.media_buy_id) == 1
 
     def test_back_to_back_updates_yield_strictly_increasing_revisions(self, repo_env):
         """Two updates in the same clock tick must still produce 2 then 3.
@@ -74,11 +251,21 @@ class TestRevisionCounter:
 
         assert _revision(repo, media_buy.media_buy_id) == 2
 
-    def test_package_level_write_can_bump_via_public_entry_point(self, repo_env):
-        """Package writes persist outside update_*, so they need bump_revision."""
-        repo, media_buy = repo_env
+    @pytest.mark.parametrize("writer_name", sorted(_PACKAGE_WRITERS))
+    def test_package_level_write_bumps_parent_revision(self, repo_env, writer_name):
+        """A package write persists outside update_*, but still moves the parent's token.
 
-        repo.bump_revision(media_buy.media_buy_id)
+        The bump belongs INSIDE each package writer: an external "now also bump"
+        call is a step a future writer forgets, which is exactly how the counter
+        went stale before.
+        """
+        from tests.factories import MediaPackageFactory
+
+        repo, media_buy = repo_env
+        package = MediaPackageFactory(media_buy=media_buy)
+        assert _revision(repo, media_buy.media_buy_id) == 1, "factory setup must not move the counter"
+
+        _PACKAGE_WRITERS[writer_name](repo, media_buy, package)
 
         assert _revision(repo, media_buy.media_buy_id) == 2
 
@@ -99,25 +286,48 @@ class TestConfirmedAtStamp:
 
         repo.update_fields(media_buy.media_buy_id, budget=20000)
 
-        assert repo.get_by_id(media_buy.media_buy_id).confirmed_at is None
+        assert _confirmed_at(repo, media_buy.media_buy_id) is None
 
-    def test_reaching_a_committed_status_stamps_confirmed_at(self, repo_env):
+    def test_reaching_a_committed_status_stamps_the_transition_instant(self, repo_env):
+        """The stamp is the clock reading taken during the transition, not a nearby column."""
         repo, media_buy = repo_env
 
+        t0 = datetime.datetime.now(datetime.UTC)
         repo.update_status(media_buy.media_buy_id, "active")
+        t1 = datetime.datetime.now(datetime.UTC)
 
-        assert repo.get_by_id(media_buy.media_buy_id).confirmed_at is not None
+        _assert_stamped_between(_confirmed_at(repo, media_buy.media_buy_id), t0, t1)
+
+    @pytest.mark.parametrize("path_name", sorted(_CREATE_PATHS))
+    def test_create_in_a_committed_status_stamps_the_create_instant(self, repo_env, path_name):
+        """A buy born already committed is confirmed at creation — the sync auto-approve path.
+
+        Neither create path can leave confirmed_at NULL here: the buy is `active`,
+        and the pinned get-media-buys-response schema forbids an active item with a
+        null confirmed_at.
+        """
+        repo, media_buy = repo_env
+
+        t0 = datetime.datetime.now(datetime.UTC)
+        created = _CREATE_PATHS[path_name](repo, media_buy)
+        t1 = datetime.datetime.now(datetime.UTC)
+
+        _assert_stamped_between(_confirmed_at(repo, created.media_buy_id), t0, t1)
 
     def test_confirmed_at_is_written_once_and_survives_later_transitions(self, repo_env):
         """The commitment instant must not track the most recent transition."""
         repo, media_buy = repo_env
 
         repo.update_status(media_buy.media_buy_id, "active")
-        stamped = repo.get_by_id(media_buy.media_buy_id).confirmed_at
+        stamped = _confirmed_at(repo, media_buy.media_buy_id)
+        # Pin that the first transition actually persisted a stamp. Without this the
+        # equality below is satisfied by None == None, i.e. by a stamp that never
+        # reached the row at all.
+        assert stamped is not None, "the committing transition did not persist a stamp"
 
         repo.update_status(media_buy.media_buy_id, "completed")
 
-        assert repo.get_by_id(media_buy.media_buy_id).confirmed_at == stamped
+        assert _confirmed_at(repo, media_buy.media_buy_id) == stamped
 
     def test_rejected_never_stamps(self, repo_env):
         """A rejected buy was never committed to, so it has no commitment instant."""
@@ -125,4 +335,23 @@ class TestConfirmedAtStamp:
 
         repo.update_status(media_buy.media_buy_id, "rejected")
 
-        assert repo.get_by_id(media_buy.media_buy_id).confirmed_at is None
+        assert _confirmed_at(repo, media_buy.media_buy_id) is None
+
+    def test_confirmed_at_is_immutable_to_callers(self, repo_env):
+        """Write-once is only a guarantee if the generic field writer refuses it too.
+
+        update_fields would otherwise setattr the caller's value straight over the
+        stamp, and the write-once check downstream then no-ops because the field is
+        already non-NULL — the guarantee would be bypassable by name.
+        """
+        repo, media_buy = repo_env
+        repo.update_status(media_buy.media_buy_id, "active")
+        stamped = _confirmed_at(repo, media_buy.media_buy_id)
+        # Same guard as the write-once test: a never-persisted stamp would make the
+        # post-rejection equality vacuous.
+        assert stamped is not None, "the committing transition did not persist a stamp"
+
+        with pytest.raises(ValueError, match="immutable field"):
+            repo.update_fields(media_buy.media_buy_id, confirmed_at=_PAST)
+
+        assert _confirmed_at(repo, media_buy.media_buy_id) == stamped
