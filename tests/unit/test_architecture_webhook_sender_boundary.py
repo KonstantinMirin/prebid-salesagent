@@ -82,6 +82,14 @@ AD_SERVER_AND_API_CALLS: frozenset[tuple[str, str]] = frozenset(
 #: through the AdCP boundary would be a defect rather than a fix.
 NON_ADCP_RECEIVERS: frozenset[tuple[str, str]] = frozenset(
     {
+        # The shared gated sender for stored non-AdCP URLs (salesagent-og9k.13).
+        # base_workflow and tenants below now DELEGATE their POST to it, so their
+        # own rows describe the destination they pass in rather than a POST they
+        # still hold. It is classified here rather than as an AdCP sender by
+        # construction: an AdCP webhook must be authenticated by the mode the
+        # buyer's registration selects, which a generic JSON POST cannot do — so
+        # anything buyer-registered must go to the signing boundary, never here.
+        ("src/core/webhook_validator.py", "url"),
         ("src/adapters/base_workflow.py", "slack_webhook_url"),
         ("src/admin/blueprints/tenants.py", "tenant.slack_webhook_url"),
         ("src/core/webhook_delivery.py", "delivery.webhook_url"),

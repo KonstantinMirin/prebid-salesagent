@@ -120,9 +120,6 @@ conductor_ports.lock
 /schemas/
 tests/e2e/schemas/
 
-# Test response files
-line_item_*_response.json
-
 # Test database files (PostgreSQL test databases)
 # Only ignore database files/dirs, not test_*.py files
 test_*.db

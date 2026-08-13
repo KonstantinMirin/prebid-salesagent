@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
+import requests
 from adcp.types import ContextObject, TaskType
 
 from src.core.config import is_production
 from src.core.exceptions import AdCPValidationError
 from src.core.security.url_validator import check_url_ssrf
+
+logger = logging.getLogger(__name__)
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
@@ -143,6 +147,50 @@ def reject_unsafe_outbound_webhook_url(
         error_msg,
     )
     return True, error_msg
+
+
+def deliver_json_to_allowed_destination(
+    url: str,
+    payload: Mapping[str, Any],
+    *,
+    kind: str,
+    timeout: float = 10.0,
+    log: logging.Logger | None = None,
+) -> bool:
+    """POST *payload* as JSON to *url*, but only after the gate accepts *url*.
+
+    For senders that dial a URL read back out of config or a DB row. Judging a
+    URL at WRITE time does not make it safe at SEND time: the row may predate the
+    gate, may have been edited directly in the database, or may resolve somewhere
+    new. This re-judges at the moment of the call.
+
+    One function rather than a gate bolted onto each sender, because they are one
+    act — three copies is how two of them end up on different policies (the defect
+    salesagent-og9k.8 catalogues on the four pre-existing send paths).
+
+    Returns whether the delivery happened. Deliberately a bool and not the
+    refusal reason: the detailed cause names our network topology, and AdCP 3.1.1
+    (building/by-layer/L1/security.mdx:104-119, step 6) treats echoing it back as
+    a side channel. The cause is logged, not returned.
+    """
+    logger_ = log or logger
+    rejected, _error = reject_unsafe_outbound_webhook_url(url, log=logger_, kind=kind)
+    if rejected:
+        return False
+    try:
+        response = requests.post(
+            url,
+            json=dict(payload),
+            timeout=timeout,
+            headers={"Content-Type": "application/json"},
+        )
+    except requests.RequestException:
+        logger_.warning("%s delivery to %s failed", kind, webhook_url_for_log(url), exc_info=True)
+        return False
+    if response.status_code >= 400:
+        logger_.warning("%s delivery to %s returned HTTP %s", kind, webhook_url_for_log(url), response.status_code)
+        return False
+    return True
 
 
 class WebhookURLValidator:
