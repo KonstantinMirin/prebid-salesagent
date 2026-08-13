@@ -235,7 +235,21 @@ async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, 
     minted inside the container, is ``test_jwks_publication_e2e``
     (salesagent-mp53.7).
     """
-    from src.core.agent_identity import BRAND_JSON_PATH, JWKS_PATH, canonical_agent_url, jwks_uri
+    from src.core.agent_identity import canonical_agent_url, jwks_uri
+
+    # The well-known paths are LITERALS here, deliberately, rather than the path
+    # constants src.core.agent_identity exports. They are fixed by the pinned spec
+    # — /.well-known/adagents.json, /.well-known/brand.json, and
+    # /.well-known/jwks.json as the normative default for a jwks_uri
+    # (AdCP 3.1.1 building/by-layer/L1/security.mdx:111, :630, :644) — so the path
+    # IS the contract under test. Importing the production constant would make
+    # these assertions move in lockstep with production: change the constant and
+    # the test follows it off-spec silently, which is precisely the regression they
+    # exist to catch. Constants are right for CONSTRUCTING our own URLs
+    # (canonical_agent_url, jwks_uri, imported above); literals are right for
+    # asserting the spec-mandated location (salesagent-z6nr.36).
+    brand_json_path = "/.well-known/brand.json"
+    jwks_path = "/.well-known/jwks.json"
 
     published_tls_base_url = tls_base_url(live_server)
     verify = ssl.create_default_context(cafile=ca_bundle())
@@ -262,9 +276,9 @@ async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, 
     #    the handshake here — which is exactly what makes the scheme assertion
     #    above non-vacuous.
     async with httpx.AsyncClient(base_url=published, verify=verify, timeout=15.0) as client:
-        brand_response = await client.get(BRAND_JSON_PATH)
+        brand_response = await client.get(brand_json_path)
         assert brand_response.status_code == 200, (
-            f"brand.json must be served over TLS at {published + BRAND_JSON_PATH!r}; "
+            f"brand.json must be served over TLS at {published + brand_json_path!r}; "
             f"got HTTP {brand_response.status_code}"
         )
         brand = brand_response.json()
@@ -276,7 +290,7 @@ async def test_hop_one_of_discovery_resolves_over_real_tls(docker_services_e2e, 
             f"helper says {jwks_uri(tenant)!r}"
         )
         advertised_jwks_uri = advertised.pop()
-        assert advertised_jwks_uri == published + JWKS_PATH, (
+        assert advertised_jwks_uri == published + jwks_path, (
             f"the advertised JWKS must live on the origin we published, or a verifier raises "
             f"request_signature_key_origin_mismatch; got {advertised_jwks_uri!r} vs origin {published!r}"
         )

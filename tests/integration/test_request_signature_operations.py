@@ -111,6 +111,7 @@ from tests.helpers.signing import (
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
     bucketed_declaration,
+    counter_total,
     request_headers,
     seed_principal,
 )
@@ -257,11 +258,43 @@ def _assert_rejected(response: Any, why: str) -> None:
     )
 
 
+@contextmanager
+def _assert_verifier_looked() -> Iterator[None]:
+    """The middleware ACTUALLY RAN and reached a verdict for an unsigned request.
+
+    Wraps the request. Absence-of-rejection alone is worthless as an acceptance
+    signal — it is byte-identical to a middleware that never looked, which is true
+    whenever the verifier is disabled, the operation is in the ``none`` bucket, or
+    the posture is ``warn`` (salesagent-z6nr.40). So the control cases assert a
+    POSITIVE observable instead: production increments
+    ``adcp_request_unsigned_total`` from ``record_request_unsigned`` on exactly the
+    path that decides an unsigned request may proceed. A middleware that returned
+    early emits nothing, and the delta is zero.
+
+    Reads the counter through ``counter_total`` (tests/helpers/signing.py) rather
+    than hand-rolling a before/after pair — that idiom was open-coded at eight
+    sites across three modules, and a ninth would make it worse.
+    """
+    before = counter_total("adcp_request_unsigned_total")
+    yield
+    after = counter_total("adcp_request_unsigned_total")
+    assert after > before, (
+        "the verifier never recorded a verdict for this request: "
+        f"adcp_request_unsigned_total did not move ({before} -> {after}). A 2xx with no rejection is "
+        "equally true of a middleware that returned early — disabled verifier, 'none' bucket, or 'warn' "
+        "posture — so this control proves nothing without the counter."
+    )
+
+
 def _assert_not_rejected(response: Any, why: str) -> None:
     """The verifier did not reject — whatever the transport answered afterwards.
 
     Deliberately blind to the downstream status: these are the CONTROL cases,
     and what they grade is that the signature verifier let the request past.
+
+    Pair this with :func:`_assert_verifier_looked` around the request itself. On
+    its own it only rules out a rejection; it cannot distinguish "the verifier
+    considered this and allowed it" from "the verifier never ran".
     """
     assert _rejection_code(response) is None, (
         f"{why}\nThe verifier rejected it: status {response.status_code}, "
@@ -410,7 +443,10 @@ class TestOperationNamePerTransport:
             seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
+            with (
+                _declared_posture(**bucketed_declaration("required", "create_media_buy")),
+                _assert_verifier_looked(),
+            ):
                 response = client.put(
                     _UPDATE_MEDIA_BUY_PATH,
                     content=json.dumps({"packages": []}).encode(),
