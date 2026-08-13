@@ -26,6 +26,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.audit import storyboard_spec  # noqa: E402
+
 FEATURES = Path("tests/bdd/features")
 GHERKIN_RE = re.compile(r"##\s*\d*\.?\s*Proposed Gherkin.*?```gherkin\n(.*?)```", re.S | re.I)
 VERDICT_RE = re.compile(r"^##\s*\d*\.?\s*VERDICT\s*$", re.M)
@@ -52,20 +56,19 @@ def load_reconciliation(repo: Path, proposals: Path) -> list[dict[str, Any]]:
 
 
 def current_scenario_text(repo: Path, identifier: str) -> tuple[str, str]:
-    """(feature file, the scenario as it stands in the tree today)."""
-    for feature in sorted((repo / FEATURES).glob("*.feature")):
-        lines = feature.read_text("utf-8").splitlines()
-        for idx, line in enumerate(lines):
-            if f"@{identifier}" not in line:
-                continue
-            block = [line]
-            for probe in range(idx + 1, min(idx + 80, len(lines))):
-                nxt = lines[probe]
-                if re.match(r"^\s*@[\w.\-]+(\s+@[\w.\-]+)*\s*$", nxt):
-                    break
-                block.append(nxt)
-            return feature.name, "\n".join(block).rstrip()
-    return "", ""
+    """(feature file, the scenario as it stands in the tree today).
+
+    The "tag line terminates the block, 80-line window" walk belongs to
+    :func:`storyboard_spec.tagged_scenarios`, which already takes the tag to
+    key on — this reads the same blocks, keyed by an individual scenario's
+    ``@T-UC-…`` identifier instead of the shared ``@storyboard-v3.1``. A local
+    re-implementation of that walk is exactly the drift storyboard_spec exists
+    to prevent.
+    """
+    matches = storyboard_spec.tagged_scenarios(repo / FEATURES, tag=f"@{identifier}")
+    if not matches:
+        return "", ""
+    return matches[0].feature, matches[0].block.rstrip()
 
 
 def parse_proposals(proposals: Path) -> dict[str, dict[str, Any]]:

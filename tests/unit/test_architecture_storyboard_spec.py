@@ -166,6 +166,32 @@ def test_tagged_scenarios_block_terminates_at_next_tagline():
     assert not leaked, f"scenario block leaked sibling tag(s): {leaked}"
 
 
+def test_tagged_scenarios_keys_on_an_arbitrary_tag():
+    """``tagged_scenarios(tag=...)`` must key on any tag, not only ``TAG``.
+
+    ``scripts/audit/build_review_report.py`` looks up ONE scenario by its own
+    ``@T-UC-…`` identifier rather than the shared ``@storyboard-v3.1``, so the
+    ``tag`` parameter has to really select on the caller's tag. Pinned as the
+    same block reached two ways.
+    """
+    from scripts.audit import storyboard_spec
+
+    feature_dir = REPO_ROOT / "tests" / "bdd" / "features"
+    identifier = "T-UC-003-storyboard-media-buy-not-found"
+
+    by_identifier = storyboard_spec.tagged_scenarios(feature_dir, tag=f"@{identifier}")
+    assert len(by_identifier) == 1, f"expected exactly one scenario tagged @{identifier}"
+
+    from_default = next(s for s in storyboard_spec.tagged_scenarios(feature_dir) if s.identifier == identifier)
+    assert by_identifier[0].feature == from_default.feature == "BR-UC-003-update-media-buy.feature"
+    assert by_identifier[0].block == from_default.block
+    assert by_identifier[0].line == from_default.line
+
+    # And it is genuinely selective: the identifier tag pulls one scenario, the
+    # shared tag pulls the whole tagged population.
+    assert len(storyboard_spec.tagged_scenarios(feature_dir)) > 1
+
+
 def test_storyboard_key_does_not_collapse_index_files_onto_index():
     """storyboard_key() must key an index.yaml by its parent directory, not the
     literal stem "index" -- Path.stem collapses every */index.yaml onto the
