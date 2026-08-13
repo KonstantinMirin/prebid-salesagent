@@ -154,6 +154,11 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         for step_id, check_type, phase_id in storyboard_spec.checks_by_owner(text):
             ordinal = seen[(step_id, check_type)] = seen.get((step_id, check_type), -1) + 1
             failing = ledger.get((storyboard_id, step_id), [])
+            # The controller gate is per-STEP as well as per-storyboard: several
+            # pinned files seed through it in one step and grade ordinary client
+            # traffic in the rest, so judging by the top-level block alone marks
+            # gradable checks ungradable.
+            step_controller = CONTROLLER in tools or CONTROLLER in storyboard_spec.step_tools(text, step_id)
             records.append(
                 {
                     # identity
@@ -168,22 +173,40 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                     "tier": storyboard_spec.storyboard_tier(row["storyboard"]),
                     # gating: why a check may be unreachable rather than untested
                     "required_tools": tools,
-                    "requires_controller": CONTROLLER in tools,
+                    "requires_controller": step_controller,
                     # measured, from a real in-network run
                     "measured_failing_protocols": sorted(failing),
-                    "measured": "FAILING" if failing else ("ungradable" if CONTROLLER in tools else "no ledger entry"),
+                    "measured": "FAILING" if failing else ("ungradable" if step_controller else "no ledger entry"),
                     # our coverage — declared per storyboard, carried to each check
                     "scenarios": row["covered_by"],
                     "scenario_grain": "storyboard",
                     "scenario_binding_buckets": {s: buckets.get(s, "-") for s in row["covered_by"]},
                     # can a scenario for this check be wired end-to-end?
-                    **_wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), CONTROLLER in tools),
+                    **_wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), step_controller),
                     # tracking — the one curated input
                     "issues": issues,
                     "issue_coverage": tracking.get("coverage", "untriaged"),
                     "issue_note": (tracking.get("note") or "").replace("\n", " ").strip(),
                 }
             )
+
+    # A conditional verdict that names nothing is not an answer: it says "there
+    # is a hurdle" without saying what, so nobody can act on it and nobody can
+    # check it. Fail loudly rather than publish it — the same discipline the
+    # roadmap applies to untriaged storyboards.
+    unexplained = sorted(
+        {
+            f"{r['storyboard']}::{r['step_id']}"
+            for r in records
+            if r["e2e_wireable"] == "conditional" and not r["e2e_requires"] and not r["e2e_blocker"]
+        }
+    )
+    if unexplained:
+        raise SystemExit(
+            f"{len(unexplained)} step(s) are marked `conditional` in {WIREABILITY} with neither a "
+            "`requires` entry nor a `blocker`. A conditional verdict must name what has to be "
+            "provisioned, or be a plain `wireable`:\n" + "\n".join(f"  {s}" for s in unexplained)
+        )
 
     gaps = [r for r in records if not r["scenarios"] and not r["issues"]]
     return {

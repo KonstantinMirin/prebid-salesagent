@@ -50,7 +50,7 @@ steps:
     axes: {given: yes, when: yes, then: yes}
     evidence: "`task: get_media_buy_delivery`, `stateful: true`, invoked with `sample_request: media_buy_ids: - \"$context.media_buy_id\" / include_package_daily_breakdown: true` \u2014 the id comes from the earlier create_media_buy step, a request we send. Grading never requires forcing actual delivery volume: the four checks are `response_schema`, `check: field_present / path: \"media_buy_deliveries\"`, `field_present path: \"context\"`, and `field_value path: \"context.correlation_id\" / value: \"media_buy_seller--get_delivery\"` \u2014 presence of the delivery array, not impressions observed on an ad server."
   "protocols/media-buy/index.yaml::get_products_brief":
-    verdict: conditional
+    verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "`task: get_products` with `stateful: false`; the whole trigger is a payload a client builds \u2014 `buying_mode: \"brief\" / brief: \"Premium video inventory on sports and outdoor lifestyle publishers. Q2 flight, $50K budget...\" / pagination: max_results: 5`. Its precondition is ordinary catalog seeding named in the storyboard's own `fixtures:` block \u2014 `product_id: \"sports_preroll_q2\" / delivery_type: \"non_guaranteed\" / format_ids: - id: \"video_30s\"` with `pricing_options: - pricing_option_id: \"cpm_non_guaranteed\" / floor_price: 22.0` \u2014 a product with a pricing option, i.e. a normal e2e fixture, not i"
@@ -83,7 +83,7 @@ steps:
     axes: {given: yes, when: yes, then: yes}
     evidence: "task: create_media_buy in phase reuse_creative_on_new_buy. Its inputs are the same setup-phase context keys (`product_id: \"$context.product_id\"`, `pricing_option_id: \"$context.pricing_option_id\"`) captured from get_products_brief; the narrative's 'With the old buy canceled and the assignment released' state is produced by the earlier update_media_buy step (`canceled: true` on `media_buy_id: \"$context.media_buy_id\"`) \u2014 a client request, not injected state. Validations are all on the response: `check: response_schema`, `check: field_present / path: \"media_buy_id\"` ('Second media_buy_id returned'"
   "protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml::get_products_brief":
-    verdict: conditional
+    verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "task: get_products, `stateful: false` \u2014 the first step of the scenario, so there is no prior state at all beyond catalog fixtures. `sample_request: buying_mode: \"brief\" ... filters: is_fixed_price: true` plus the validation `check: field_present / path: \"products[0].pricing_options[0].fixed_price\"` ('The captured pricing option is fixed-price') only demands an ordinary seeded product with a fixed-price pricing option, which the e2e stack fixtures provide. Remaining validations read the response: `check: response_schema`, `check: field_present / path: \"products[0].format_ids[0].id\"`."
@@ -130,7 +130,7 @@ steps:
     axes: {given: yes, when: yes, then: yes}
     evidence: "GIVEN: the phase narrative is \"Cancel the buy (success), then try to cancel the same buy again\"; the precondition is exactly the buy created by the earlier `create_buy` step, referenced as `media_buy_id: \"$context.media_buy_id\"` \u2014 no injected state. WHEN: `task: update_media_buy` with `canceled: true` and `cancellation_reason: \"Testing NOT_CANCELLABLE on re-cancel\"` \u2014 a client request. THEN: the step has a single validation, `- check: response_schema / description: \"Response matches update-media-buy-response.json schema\"`, asserted on the response. The terminal-state consequence is graded on t"
   "protocols/media-buy/scenarios/invalid_transitions.yaml::get_products_brief":
-    verdict: conditional
+    verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "GIVEN: `stateful: false` and no `$context.*` inputs; the only precondition is a catalog containing a fixed-price product, which the check itself names \u2014 `- check: field_present / path: \"products[0].pricing_options[0].fixed_price\" / description: \"The captured pricing option is fixed-price; fixed-price storyboards do not send bid_price\"` \u2014 i.e. an ordinary tenant/product/pricing-option fixture. WHEN: `task: get_products` with `buying_mode: \"brief\"`, `brief: \"Display inventory on outdoor lifestyle content. Q3 flight.\"`, `filters: is_fixed_price: true` \u2014 a plain discovery call. THEN: both validati"
@@ -153,7 +153,7 @@ steps:
     blocker: "The buyer-side inventory lists referenced in targeting_overlay must exist as resolvable lists for the seller: 'This scenario exercises the no-match path using the test kit's pre-populated no_match_properties and no_match_collections lists.' and prerequisites 'The seller must resolve PropertyListReference / CollectionListReference against its own inventory and report a truthful outcome when nothing matches.' The e2e stack has no governance agent at 'agent_url: \"https://governance.pinnacle-agency.example\"', so the list ids (acme_outdoor_no_match_v1 / acme_outdoor_no_match_collections_v1) must be provisioned from the test kit before the run."
     evidence: "GIVEN: 'packages: [{product_id: \"$context.product_id\", ... pricing_option_id: \"$context.pricing_option_id\"}]' \u2014 both come from the storyboard's own get_products_brief step, so they are request-produced; the extra is the test-kit list provisioning quoted in the blocker. WHEN: 'task: create_media_buy' carrying 'targeting_overlay: {property_list: {agent_url: \"https://governance.pinnacle-agency.example\", list_id: \"acme_outdoor_no_match_v1\"}, collection_list: {... list_id: \"acme_outdoor_no_match_collections_v1\"}}' \u2014 one client request. THEN: the two graded checks are wire-only and deliberately outc"
   "protocols/media-buy/scenarios/inventory_list_no_match.yaml::get_products_brief":
-    verdict: conditional
+    verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "GIVEN: 'stateful: false' and no '$context.*' inputs; the only precondition is a tenant carrying at least one fixed-price product, which is an ordinary e2e stack fixture \u2014 'expected: | Return products the seller carries.' WHEN: 'task: get_products' with 'buying_mode: \"brief\"', 'brief: \"Video inventory on outdoor lifestyle programming. Q3 flight.\"' and 'filters: {is_fixed_price: true}' \u2014 a plain AdCP tool call over MCP/A2A/REST. THEN: '- check: response_schema / description: \"Response matches get-products-response.json schema\"' and '- check: field_present / path: \"products[0].pricing_options[0]."
@@ -176,7 +176,7 @@ steps:
     blocker: "Same test-kit list provisioning ('List contents come from test-kits/acme-outdoor.yaml -> inventory_targets'); the swapped ids acme_outdoor_no_match_v1 / acme_outdoor_no_match_collections_v1 come from the kit's no_match sets and are never created by any request in the storyboard. As with get_after_create, the step's task get_media_buys is outside the declared 'required_tools'."
     evidence: "GIVEN: 'stateful: true', 'media_buy_ids: [\"$context.media_buy_id\"]', and the state under test is created by the immediately preceding update_buy_swap_lists step ('task: update_media_buy' whose sample_request sets 'property_list: {... list_id: \"acme_outdoor_no_match_v1\"}') \u2014 a request, not an injected state change. WHEN: 'task: get_media_buys' / 'title: \"Confirm swap persisted\"'. THEN: response-only assertions \u2014 '- check: field_value / path: \"media_buys[0].packages[0].targeting_overlay.property_list.list_id\" / value: \"acme_outdoor_no_match_v1\" / description: \"property_list.list_id updated after"
   "protocols/media-buy/scenarios/inventory_list_targeting.yaml::get_products_brief":
-    verdict: conditional
+    verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "task: get_products; stateful: false; prerequisites: \"List contents come from test-kits/acme-outdoor.yaml \u2192 inventory_targets\" (ordinary product/pricing fixture, no controller_seeding on this storyboard). Validations are all response-observable: \"check: response_schema / Response matches get-products-response.json schema\", \"check: field_present, path: products[0].product_id\", \"check: field_present, path: products[0].pricing_options[0].fixed_price \u2014 The captured pricing option is fixed-price\". Nothing here reads internal state: send get_products over the transport and assert on the returned docu"
@@ -193,7 +193,7 @@ steps:
     axes: {given: yes, when: yes, then: yes}
     evidence: "GIVEN is the prior rejected attempt plus discovery context \u2014 both earlier steps of this same storyboard are client requests; the retry is described as \"The buyer mints a fresh idempotency_key and retries create_media_buy with the adjusted payload\" and the request carries \"idempotency_key: $generate:uuid_v4#...accept_terms_create_media_buy_relaxed_terms\". WHEN is \"task: create_media_buy\" with relaxed terms (\"measurement_window: c7\", \"max_variance_percent: 10\"). THEN is response-only: \"check: response_schema\", \"check: field_present, path: media_buy_id \u2014 Seller returns a media_buy_id after accept"
   "protocols/media-buy/scenarios/measurement_terms_rejected.yaml::get_products_brief":
-    verdict: conditional
+    verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "\"stateful: false\"; the only precondition is a discoverable fixed-price product: expected: \"Return products with pricing_options. At least one product should advertise measurement support in the response.\" WHEN is \"task: get_products\" with buying_mode brief. THEN: \"check: response_schema\", \"check: field_present, path: products[0].product_id \u2014 At least one product returned\", \"check: field_present, path: products[0].pricing_options[0].fixed_price\" \u2014 all read off the get_products response."
@@ -248,7 +248,7 @@ steps:
     blocker: "Requires a reachable on-list verifier that deterministically returns ai_generated:true with confidence >= 0.9 for the fixture asset URL; the contradiction cannot be produced by the client request alone."
     evidence: "`expected: | The seller invokes the on-list verifier against the manifest's asset URLs, observes ai_generated:true with confidence >= 0.9, and refutes the buyer's digital_capture claim.` The WHEN is still a plain client call (buyer claims `digital_source_type: \"digital_capture\"` while attaching `url: \".../ai-generated-true.jpg\"`), and the THEN surface is unusually rich but entirely wire-observable \u2014 `field_value \"creatives[0].errors[0].code\" == \"PROVENANCE_CLAIM_CONTRADICTED\"`, `field_present \"creatives[0].errors[0].details.agent_url\"`, `...details.feature_id`, `field_value ...details.claimed_"
   "protocols/media-buy/scenarios/refine_products.yaml::get_products_brief":
-    verdict: conditional
+    verdict: wireable
     axes: {given: yes, when: yes, then: yes}
     verdict_before_audit: wireable
     evidence: "GIVEN: `prerequisites: | The caller needs a brand identity and operator credentials.` \u2014 ordinary e2e stack fixtures \u2014 and the only prior state is the same storyboard's earlier `setup` step `sync_accounts` (`task: sync_accounts`, `stateful: true`), which is itself a request we send. Note this step is `stateful: false`, so it does not even depend on that. WHEN: `task: get_products` with `buying_mode: \"brief\"` and a literal brief string plus `account: brand/operator` \u2014 a client request. THEN: `- check: field_present / path: \"products\"` and `- check: field_present / path: \"products[0].product_id\"`"

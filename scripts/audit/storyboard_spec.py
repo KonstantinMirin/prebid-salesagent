@@ -266,6 +266,24 @@ def checks_for_phase(text: str, phase_id: str) -> list[str]:
     return _CHECK_LINE_RE.findall(window[1]) if window else []
 
 
+_STEP_TOOL_RE = re.compile(r"^\s*(?:task|requires_tool):\s*(\S+)\s*$", re.M)
+
+
+def step_tools(text: str, step_id: str) -> set[str]:
+    """Tools a single step names via ``task:`` or ``requires_tool:``.
+
+    A storyboard's top-level ``required_tools:`` is not the whole story: several
+    pinned storyboards reach for ``comply_test_controller`` in one seeding step
+    while the rest of the file is ordinary client traffic
+    (``universal/pagination-integrity-list-accounts.yaml`` seeds three accounts
+    that way, then grades ``list_accounts`` normally). Judging such a file only
+    by its top-level block marks every check in it ungradable, when in truth
+    only the seeding steps are.
+    """
+    window = _phase_window(text, step_id)
+    return set(_STEP_TOOL_RE.findall(window[1])) if window else set()
+
+
 def checks_by_owner(text: str) -> list[tuple[str, str, str | None]]:
     """Every graded check as ``(owner_id, check_type, parent_id)``, in file order.
 
@@ -518,6 +536,7 @@ __all__ = [
     "requires_capability",
     "requiring_indexes",
     "run_cli",
+    "step_tools",
     "storyboard_id",
     "storyboard_key",
     "storyboard_tier",

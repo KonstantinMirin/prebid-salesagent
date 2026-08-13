@@ -7,9 +7,9 @@
 - tracked by an issue: **442**
 - **neither scenario nor ticket: 497**
 - measured FAILING: **130**
-- permanently ungradable (`comply_test_controller`): **465**
+- permanently ungradable (`comply_test_controller`): **481**
 
-E2E wireability — **425** wireable as-is, **236** conditional on provisioning, **474** not wireable.
+E2E wireability — **451** wireable as-is, **197** conditional on provisioning, **487** not wireable.
 
 Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario to a storyboard, not to a check), so a scenario shown against a check means "this check's storyboard is claimed" — not that this check is asserted. That distinction is the whole reason for indexing at this grain.
 
@@ -577,6 +577,11 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#2` | FAILING | `mcp` |
 | `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#3` | FAILING | `mcp` |
 | `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#4` | FAILING | `mcp` |
+| `pagination_integrity_creative_formats/seed_format_1/field_value` | ungradable | — |
+| `pagination_integrity_creative_formats/seed_format_2/field_value` | ungradable | — |
+| `pagination_integrity_list_accounts/seed_account_1/field_value` | ungradable | — |
+| `pagination_integrity_list_accounts/seed_account_2/field_value` | ungradable | — |
+| `pagination_integrity_list_accounts/seed_account_3/field_value` | ungradable | — |
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/response_schema` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_present` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_present#1` | FAILING | `mcp` |
@@ -599,6 +604,17 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `stale_response_advisory/get_capabilities/field_present` | FAILING | `mcp` |
 | `stale_response_advisory/get_capabilities/field_present#1` | FAILING | `mcp` |
 | `stale_response_advisory/get_capabilities/field_value` | FAILING | `mcp` |
+| `stale_response_advisory/force_upstream_unavailable/response_schema` | ungradable | — |
+| `stale_response_advisory/force_upstream_unavailable/field_present` | ungradable | — |
+| `stale_response_advisory/force_upstream_unavailable/field_value` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/response_schema` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/field_present` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/field_value` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/field_value#1` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/field_present#1` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/field_present#2` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/field_value#2` | ungradable | — |
+| `stale_response_advisory/stale_response_wire_placement/field_present#3` | ungradable | — |
 | `v3_envelope_integrity/no_legacy_status_fields/response_schema` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/envelope_field_present` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/envelope_field_absent` | FAILING | `mcp` |
@@ -1269,16 +1285,6 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 
 | Check | Wireable | Needs provisioning | Blocker |
 |---|---|---|---|
-| `media_buy_seller/get_products_brief/response_schema` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present#1` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present#2` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present#3` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present#4` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present#5` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present#6` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_value` | conditional | — | — |
-| `media_buy_seller/get_products_brief/field_present#7` | conditional | — | — |
 | `media_buy_seller/create_media_buy/response_schema` | conditional | `webhook_receiver` | The sample_request's push_notification_config points at a buyer webhook (https://buyer.example/webhooks/adcp with HMAC credentials) that the harness must host and address for the c |
 | `media_buy_seller/create_media_buy/field_present` | conditional | `webhook_receiver` | The sample_request's push_notification_config points at a buyer webhook (https://buyer.example/webhooks/adcp with HMAC credentials) that the harness must host and address for the c |
 | `media_buy_seller/create_media_buy/field_value` | conditional | `webhook_receiver` | The sample_request's push_notification_config points at a buyer webhook (https://buyer.example/webhooks/adcp with HMAC credentials) that the harness must host and address for the c |
@@ -1403,9 +1409,6 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_value#1` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_present#1` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_value#2` | not_wireable | — | requires comply_test_controller, which will not be implemented |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/response_schema` | conditional | — | — |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present` | conditional | — | — |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present#1` | conditional | — | — |
 | `media_buy_seller/creative_reception/preview_synced/response_schema` | conditional | `other` | The step carries an explicit capability gate, `requires_tool: preview_creative`, and the graded output is a rendered artifact URL (`path: "previews[0].renders[0].preview_url"`). In |
 | `media_buy_seller/creative_reception/preview_synced/field_present` | conditional | `other` | The step carries an explicit capability gate, `requires_tool: preview_creative`, and the graded output is a rendered artifact URL (`path: "previews[0].renders[0].preview_url"`). In |
 | `media_buy_seller/creative_reception/preview_synced/field_present#1` | conditional | `other` | The step carries an explicit capability gate, `requires_tool: preview_creative`, and the graded output is a rendered artifact URL (`path: "previews[0].renders[0].preview_url"`). In |
@@ -1570,15 +1573,8 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#4` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#5` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#6` | not_wireable | — | requires comply_test_controller, which will not be implemented |
-| `media_buy_seller/invalid_transitions/get_products_brief/response_schema` | conditional | — | — |
-| `media_buy_seller/invalid_transitions/get_products_brief/field_present` | conditional | — | — |
-| `media_buy_seller/inventory_list_no_match/get_products_brief/response_schema` | conditional | — | — |
-| `media_buy_seller/inventory_list_no_match/get_products_brief/field_present` | conditional | — | — |
 | `media_buy_seller/inventory_list_no_match/create_buy_no_match/field_present` | conditional | `other` | The buyer-side inventory lists referenced in targeting_overlay must exist as resolvable lists for the seller: 'This scenario exercises the no-match path using the test kit's pre-po |
 | `media_buy_seller/inventory_list_no_match/create_buy_no_match/field_value` | conditional | `other` | The buyer-side inventory lists referenced in targeting_overlay must exist as resolvable lists for the seller: 'This scenario exercises the no-match path using the test kit's pre-po |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/response_schema` | conditional | — | — |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present` | conditional | — | — |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present#1` | conditional | — | — |
 | `media_buy_seller/inventory_list_targeting/create_buy_with_lists/response_schema` | conditional | `other` | The two matching test-kit lists must be resolvable by the seller before the call: prerequisites say 'The seller must accept PropertyListReference and CollectionListReference in pac |
 | `media_buy_seller/inventory_list_targeting/create_buy_with_lists/field_present` | conditional | `other` | The two matching test-kit lists must be resolvable by the seller before the call: prerequisites say 'The seller must accept PropertyListReference and CollectionListReference in pac |
 | `media_buy_seller/inventory_list_targeting/create_buy_with_lists/field_present#1` | conditional | `other` | The two matching test-kit lists must be resolvable by the seller before the call: prerequisites say 'The seller must accept PropertyListReference and CollectionListReference in pac |
@@ -1599,9 +1595,6 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/measurement_accountability/simulate_delivery/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/measurement_accountability/get_delivery_clean/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/measurement_accountability/get_delivery_clean/field_value_or_absent` | not_wireable | — | requires comply_test_controller, which will not be implemented |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/response_schema` | conditional | — | — |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present` | conditional | — | — |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present#1` | conditional | — | — |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/response_schema` | conditional | — | GIVEN: the legacy package shape (a package with no product_id) cannot be produced by any AdCP client request — the storyboard requires controller seeding via seed_media_buy |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value` | conditional | — | GIVEN: the legacy package shape (a package with no product_id) cannot be produced by any AdCP client request — the storyboard requires controller seeding via seed_media_buy |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value#1` | conditional | — | GIVEN: the legacy package shape (a package with no product_id) cannot be produced by any AdCP client request — the storyboard requires controller seeding via seed_media_buy |
@@ -1754,9 +1747,6 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/reach_buy_flow/simulate_reach_no_window/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
-| `media_buy_seller/refine_products/get_products_brief/response_schema` | conditional | — | — |
-| `media_buy_seller/refine_products/get_products_brief/field_present` | conditional | — | — |
-| `media_buy_seller/refine_products/get_products_brief/field_present#1` | conditional | — | — |
 | `media_buy_seller/refine_products/get_products_refine/response_schema` | conditional | `prior_state` | The refine array pins a literal catalog id — `product_id: "sports_preroll_q2"` — that no earlier step produces and no `fixtures:` block in this storyboard declares (prerequisites o |
 | `media_buy_seller/refine_products/get_products_refine/field_present` | conditional | `prior_state` | The refine array pins a literal catalog id — `product_id: "sports_preroll_q2"` — that no earlier step produces and no `fixtures:` block in this storyboard declares (prerequisites o |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
@@ -1904,8 +1894,8 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `get_signals_pagination_integrity/next_page/field_present` | conditional | `prior_state`, `seeded_account` | Needs the cursor minted by the preceding step — `pagination: cursor: "$context.signals_next_cursor"` — which is fine because `first_page` is itself a request the harness sends, but |
 | `get_signals_pagination_integrity/next_page/field_value` | conditional | `prior_state`, `seeded_account` | Needs the cursor minted by the preceding step — `pagination: cursor: "$context.signals_next_cursor"` — which is fine because `first_page` is itself a request the harness sends, but |
 | `idempotency/expect_rate_limit_not_replayed/replay_not_cached_rate_limit` | conditional | `rate_limit` | The invariant is only graded if the agent's per-agent idempotency-cache insert limiter actually trips inside the burst budget; otherwise the step self-grades not_applicable. The en |
-| `pagination_integrity_creative_formats/seed_format_1/field_value` | conditional | — | WHEN: the step's trigger is the compliance control-plane tool, not a production AdCP request — 'task: comply_test_controller', 'comply_scenario: seed_creative_format', with storybo |
-| `pagination_integrity_creative_formats/seed_format_2/field_value` | conditional | — | WHEN: same as seed_format_1 — 'task: comply_test_controller' with 'comply_scenario: seed_creative_format' under storyboard-level 'requires: [controller]'. The seeding hook is not a |
+| `pagination_integrity_creative_formats/seed_format_1/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `pagination_integrity_creative_formats/seed_format_2/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `pagination_integrity_creative_formats/first_page/response_schema` | conditional | `prior_state` | Requires exactly two creative formats matching name_search 'Pagination Integrity Format' to exist for the calling principal. The storyboard provisions them with comply_test_control |
 | `pagination_integrity_creative_formats/first_page/field_value` | conditional | `prior_state` | Requires exactly two creative formats matching name_search 'Pagination Integrity Format' to exist for the calling principal. The storyboard provisions them with comply_test_control |
 | `pagination_integrity_creative_formats/first_page/field_present` | conditional | `prior_state` | Requires exactly two creative formats matching name_search 'Pagination Integrity Format' to exist for the calling principal. The storyboard provisions them with comply_test_control |
@@ -1918,9 +1908,9 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `pagination_integrity_creative_formats/terminal_page/field_value_or_absent#1` | conditional | `prior_state` | Two provisioned preconditions: (a) the same two seeded formats matching name_search 'Pagination Integrity Format' (no AdCP write tool for formats — needs a stack fixture creative a |
 | `pagination_integrity_creative_formats/terminal_page/field_present` | conditional | `prior_state` | Two provisioned preconditions: (a) the same two seeded formats matching name_search 'Pagination Integrity Format' (no AdCP write tool for formats — needs a stack fixture creative a |
 | `pagination_integrity_creative_formats/terminal_page/field_value#1` | conditional | `prior_state` | Two provisioned preconditions: (a) the same two seeded formats matching name_search 'Pagination Integrity Format' (no AdCP write tool for formats — needs a stack fixture creative a |
-| `pagination_integrity_list_accounts/seed_account_1/field_value` | not_wireable | — | WHEN is a comply_test_controller backdoor call, not an AdCP client request the production agent answers. There is no comply_test_controller implementation anywhere in src/ (only te |
-| `pagination_integrity_list_accounts/seed_account_2/field_value` | not_wireable | — | Same as seed_account_1: the only action is a comply_test_controller.seed_account call. No AdCP client request against a running agent can produce 'success: true' from a controller  |
-| `pagination_integrity_list_accounts/seed_account_3/field_value` | not_wireable | — | Same as the other two seeds: the trigger is the runner-only comply_test_controller surface, gated by the storyboard's top-level 'requires: [controller]'. Nothing about it is a clie |
+| `pagination_integrity_list_accounts/seed_account_1/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `pagination_integrity_list_accounts/seed_account_2/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `pagination_integrity_list_accounts/seed_account_3/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `pagination_integrity_list_accounts/first_page/response_schema` | conditional | `prior_state`, `seeded_account` | Requires at least three sandbox accounts visible to the calling principal before the call. The storyboard provisions them via 'comply_test_controller.seed_account' ('requires: [con |
 | `pagination_integrity_list_accounts/first_page/field_value` | conditional | `prior_state`, `seeded_account` | Requires at least three sandbox accounts visible to the calling principal before the call. The storyboard provisions them via 'comply_test_controller.seed_account' ('requires: [con |
 | `pagination_integrity_list_accounts/first_page/field_present` | conditional | `prior_state`, `seeded_account` | Requires at least three sandbox accounts visible to the calling principal before the call. The storyboard provisions them via 'comply_test_controller.seed_account' ('requires: [con |
@@ -1961,17 +1951,17 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `security_baseline/probe_auth_server_metadata/field_present` | conditional | `prior_state`, `other` | The issuer to probe comes from the prior step's PRM document, and a real HTTPS OAuth authorization server must exist and serve an RFC 8414 metadata document at <issuer>/.well-known |
 | `security_baseline/probe_auth_server_metadata/field_present#1` | conditional | `prior_state`, `other` | The issuer to probe comes from the prior step's PRM document, and a real HTTPS OAuth authorization server must exist and serve an RFC 8414 metadata document at <issuer>/.well-known |
 | `security_baseline/assert_mechanism/any_of` | not_wireable | — | There is no request to send and no response to read: the step's task is `assert_contribution`, a runner-internal aggregation over branch_set flags accumulated from earlier phases. |
-| `stale_response_advisory/force_upstream_unavailable/response_schema` | conditional | `upstream_fault`, `other` | The agent must implement and advertise comply_test_controller with the force_upstream_unavailable scenario. The step declares `requires_tool: comply_test_controller` and the storyb |
-| `stale_response_advisory/force_upstream_unavailable/field_present` | conditional | `upstream_fault`, `other` | The agent must implement and advertise comply_test_controller with the force_upstream_unavailable scenario. The step declares `requires_tool: comply_test_controller` and the storyb |
-| `stale_response_advisory/force_upstream_unavailable/field_value` | conditional | `upstream_fault`, `other` | The agent must implement and advertise comply_test_controller with the force_upstream_unavailable scenario. The step declares `requires_tool: comply_test_controller` and the storyb |
-| `stale_response_advisory/stale_response_wire_placement/response_schema` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
-| `stale_response_advisory/stale_response_wire_placement/field_present` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
-| `stale_response_advisory/stale_response_wire_placement/field_value` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
-| `stale_response_advisory/stale_response_wire_placement/field_value#1` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
-| `stale_response_advisory/stale_response_wire_placement/field_present#1` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
-| `stale_response_advisory/stale_response_wire_placement/field_present#2` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
-| `stale_response_advisory/stale_response_wire_placement/field_value#2` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
-| `stale_response_advisory/stale_response_wire_placement/field_present#3` | conditional | `prior_state`, `upstream_fault`, `other` | Given depends on the preceding force_upstream_unavailable step, which itself needs comply_test_controller: `requires_tool: comply_test_controller`, `stateful: true`, and 'With the  |
+| `stale_response_advisory/force_upstream_unavailable/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/force_upstream_unavailable/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/force_upstream_unavailable/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/field_value#1` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/field_present#1` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/field_present#2` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/field_value#2` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `stale_response_advisory/stale_response_wire_placement/field_present#3` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `webhook_emission/trigger_idempotent_webhook_replay/field_value` | conditional | `prior_state`, `webhook_receiver` | The replay only means anything after trigger_idempotent_webhook_initial has run and cached a response, and both requests point at "{{runner.webhook_url:trigger_idempotent_webhook_i |
 | `webhook_emission/sync_get_products_with_webhook_config_success/response_schema` | conditional | `webhook_receiver`, `seeded_account` | Same as the rejection branch: the sample_request carries "{{runner.webhook_url:sync_get_products_with_webhook_config_success}}", which the narrative forbids sending unresolved, and |
 | `webhook_emission/sync_get_products_with_webhook_config_success/field_present` | conditional | `webhook_receiver`, `seeded_account` | Same as the rejection branch: the sample_request carries "{{runner.webhook_url:sync_get_products_with_webhook_config_success}}", which the narrative forbids sending unresolved, and |
