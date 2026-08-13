@@ -42,6 +42,17 @@ OUTBOUND_SSRF_VALIDATE_TARGET = "src.core.webhook_validator.WebhookURLValidator.
 # Shared EXTERNAL_PATCHES fragment — both CircuitBreakerEnv variants merge this.
 SSRF_EXTERNAL_PATCH: dict[str, str] = {"ssrf": OUTBOUND_SSRF_VALIDATE_TARGET}
 
+# Patch target for the send-time gate as the DELIVERY paths reach it. One constant
+# for both WebhookEnv variants, mirroring the circuit-breaker pair above.
+#
+# It names the OWNER (src.core.webhook_validator), not the importer: every sender
+# now reaches the gate through reject_unsafe_outbound_webhook_url, so patching a
+# symbol on an importing module intercepts nothing. That is exactly how these two
+# envs came to patch a method the delivery path had stopped calling
+# (salesagent-og9k.5 / og9k.8).
+WEBHOOK_VALIDATE_TARGET = "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url"
+WEBHOOK_VALIDATE_EXTERNAL_PATCH: dict[str, str] = {"validate": WEBHOOK_VALIDATE_TARGET}
+
 
 def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryResponse) -> Any:
     """E2E realization of a delivery-poll adapter response (#1418).

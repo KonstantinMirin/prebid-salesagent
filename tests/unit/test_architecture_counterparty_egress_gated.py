@@ -54,7 +54,9 @@ GATED_ENTRY_POINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "src/core/webhook_delivery.py",
         "deliver_webhook_with_retry",
-        ("validate_webhook_url",),
+        # The SHARED send-time entry point, not validate_webhook_url — that was the
+        # registration-time gate this path used to reach for (salesagent-og9k.8).
+        ("reject_unsafe_outbound_webhook_url",),
     ),
 )
 
