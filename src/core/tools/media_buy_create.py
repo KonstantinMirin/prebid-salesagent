@@ -46,6 +46,7 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
     AdCPCreativeRejectedError,
     AdCPError,
     AdCPFormatNotFoundError,
@@ -1443,9 +1444,8 @@ def _validate_pricing_model_selection(
 
     # All products must have pricing_options
     if not product.pricing_options or len(product.pricing_options) == 0:
-        raise AdCPValidationError(
-            f"Product {product.product_id} has no pricing_options configured. This is a data integrity error.",
-            recovery="terminal",
+        raise AdCPConfigurationError(
+            f"Product {product.product_id} has no pricing_options configured. This is a data integrity error."
         )
 
     # Determine which pricing option to use
@@ -1533,9 +1533,8 @@ def _validate_pricing_model_selection(
 
     # Validate fixed pricing has rate
     if selected_option.is_fixed and not selected_option.rate:
-        raise AdCPValidationError(
-            f"Product {product.product_id} pricing option has is_fixed=true but no rate specified",
-            recovery="terminal",
+        raise AdCPConfigurationError(
+            f"Product {product.product_id} pricing option has is_fixed=true but no rate specified"
         )
 
     # Validate minimum spend per package
@@ -1687,7 +1686,7 @@ def _raise_degraded_replay_outcome(
     body the buyer cannot distinguish from a faithful replay is the named
     failure mode, so this path never fabricates a response. Outcomes, in order:
 
-    - no same-key buy: terminal validation error (impossible-state guard),
+    - no same-key buy: terminal ``CONFIGURATION_ERROR`` (impossible-state guard),
     - buy outlived the replay TTL: ``IDEMPOTENCY_EXPIRED`` (rule 6 fail-closed),
     - canonical payload differs from the stored hash: ``IDEMPOTENCY_CONFLICT``
       (rule 5 — exactly as at the probe),
@@ -1703,10 +1702,15 @@ def _raise_degraded_replay_outcome(
         assert uow.idempotency_attempts is not None
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
-            raise AdCPValidationError(
-                f"Idempotency key {idempotency_key} not found after race resolution",
-                recovery="terminal",
-            )
+            # Impossible-state guard: the race resolved, yet no buy carries the key.
+            # TERMINAL is load-bearing here and the docstring above depends on it —
+            # the very next outcome is a TRANSIENT SERVICE_UNAVAILABLE for "the
+            # winner's cache write is in flight, retry". Grading this one transient
+            # too would collapse the two into one wire answer and invite a retry of
+            # a state that cannot resolve itself. CONFIGURATION_ERROR is the pinned
+            # TERMINAL code and its meaning fits: a server-side inconsistency only a
+            # human at the seller can act on.
+            raise AdCPConfigurationError(f"Idempotency key {idempotency_key} not found after race resolution")
 
         # Rule 6 (security.mdx#idempotency): a key the seller has seen whose
         # replay window has expired rejects rather than silently re-deriving —
@@ -2120,7 +2124,7 @@ async def _create_media_buy_impl(
                 f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
                 f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
             )
-            raise AdCPValidationError(error_msg, recovery="terminal")
+            raise AdCPConfigurationError(error_msg)
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.

@@ -28,6 +28,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
+    AdCPConfigurationError,
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPProductNotFoundError,
@@ -1240,14 +1241,20 @@ class TestCreateMediaBuyImplAuth:
                 ),
             ),
         ):
-            with pytest.raises(AdCPValidationError, match="(?i)setup.*incomplete|required.*tasks"):
+            with pytest.raises(AdCPConfigurationError, match="(?i)setup.*incomplete|required.*tasks"):
                 await _create_media_buy_impl(req, identity=identity)
 
     @pytest.mark.asyncio
     async def test_setup_incomplete_recovery_is_terminal(self):
         """Setup incomplete errors are terminal — buyer can't fix by retrying.
 
-        Admin must complete tenant setup (currency limits, property tags).
+        Admin must complete tenant setup (currency limits, property tags), so this
+        is a SELLER-side configuration fault: the class is AdCPConfigurationError,
+        whose pinned enumMetadata recovery IS terminal. It used to be
+        AdCPValidationError carrying a hand-typed recovery="terminal" on a wire
+        code (VALIDATION_ERROR) the pin classifies correctable — the intent was
+        right and the pair contradicted the spec. Choosing the class whose pinned
+        recovery is the intent is how that intent is now expressed.
         Covers: salesagent-91pp (PR #1083 review)
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -1272,9 +1279,13 @@ class TestCreateMediaBuyImplAuth:
                 ),
             ),
         ):
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPConfigurationError) as exc_info:
                 await _create_media_buy_impl(req, identity=identity)
             assert exc_info.value.recovery == "terminal"
+            assert exc_info.value.error_code == "CONFIGURATION_ERROR", (
+                "the terminal verdict must be carried by a code the pin classifies terminal, "
+                f"not hand-typed onto a correctable one; got {exc_info.value.error_code!r}"
+            )
 
 
 class TestIdempotencyKeyRequired:

@@ -25,7 +25,7 @@ before handing it to ``jsonschema``/``referencing``. ``file://`` is a real
 scheme that ``referencing``'s ``urljoin``-based resolution handles natively,
 and it maps back to a path with no invented naming convention in between.
 
-Two surfaces, matching the two distinct things callers need:
+Three surfaces, matching the three distinct things callers need:
 
 - ``validator_for(ref)`` — a ready-to-use ``Draft7Validator`` with full
   ``$ref`` resolution wired, for validating a payload against a schema
@@ -37,6 +37,9 @@ Two surfaces, matching the two distinct things callers need:
   Callers that want to follow the refs they find should use
   ``load_canonicalized``, which rewrites them into the root-relative form
   ``load`` itself accepts.
+- ``recovery_by_code()`` — the normative ``error-code.json`` ``enumMetadata``
+  ``{code: recovery}`` map, the ONE test-side reader of that block (see its
+  own docstring for why it lives here rather than in each consumer).
 
 A missing schema (the SDK layout changed, or a ``$ref`` is outside the
 resolvable tree) is a HARD FAILURE — ``PinnedSchemaError``, never a silent
@@ -46,6 +49,7 @@ skip.
 from __future__ import annotations
 
 import json
+from functools import cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -185,6 +189,33 @@ def load(ref: str) -> dict[str, Any]:
     """
     _, schema = _resolve_and_load(ref)
     return schema
+
+
+@cache
+def recovery_by_code() -> dict[str, str]:
+    """``{error_code: recovery}`` from the pinned ``error-code.json`` enumMetadata.
+
+    The ONE test-side reader of that block. The block is normative — its own
+    ``$comment`` says "SDKs MUST consume this block ... the recovery
+    classification embedded in that prose is normative and MUST match the value
+    here" — so it is the expectation every test-side recovery oracle grades
+    against, and more than one of them needs it (the recovery-conformance
+    oracle, and ``envelope_assertions.assert_envelope_shape``, which refuses to
+    grade a (code, recovery) pair the pin contradicts). Two independent copies
+    of the same load is the copy-paste shape DRY forbids here, and a second copy
+    can silently drift to a different key filter.
+
+    Reads through this module's own ``load()``, so it stays independent of
+    ``src.core.exceptions.RECOVERY_BY_WIRE_CODE``: a test-side oracle that
+    imported src's table would agree with the thing it grades instead of
+    grading it.
+
+    Cached: the map is a pure function of the installed SDK's pinned tree, and
+    callers hit it once per assertion. Callers share the one dict — read it,
+    never mutate it.
+    """
+    meta = load("error-code.json")["enumMetadata"]
+    return {code: entry["recovery"] for code, entry in meta.items() if isinstance(entry, dict) and "recovery" in entry}
 
 
 def _canonicalize_refs(node: Any, *, file_dir: Path, root: Path) -> Any:

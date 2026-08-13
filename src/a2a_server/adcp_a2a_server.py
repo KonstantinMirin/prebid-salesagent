@@ -132,7 +132,6 @@ def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
             str(exc),
             field="push_notification_config.url",
             suggestion=webhook_ssrf_suggestion(),
-            recovery="correctable",
         )
     return InvalidParamsError(
         message=adcp_err.message,

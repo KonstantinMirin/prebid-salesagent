@@ -854,28 +854,40 @@ class TestToDictRecoveryField:
 class TestCustomRecoveryOverrideMCPBoundary:
     """Custom recovery= override must propagate through MCP boundary (with_error_logging)."""
 
-    def test_custom_recovery_propagates_through_mcp_boundary(self):
-        """AdCPNotFoundError(recovery='transient') -> ToolError carries 'transient' not 'terminal'."""
+    def test_not_found_maps_to_invalid_request_through_mcp_boundary(self):
+        """AdCPNotFoundError -> ToolError carrying the wire code INVALID_REQUEST.
+
+        This used to also assert that a hand-passed ``recovery="transient"``
+        survived to the wire, on a code the pinned enumMetadata classifies
+        ``correctable``. That claim is retired here, not weakened: Epic C makes
+        ``recovery`` a derived property, so the kwarg it depended on becomes a
+        TypeError and the pair it asserted is one the spec contradicts. The
+        override contract is still graded, at MCP, one frame short of the wire by
+        ``test_custom_recovery_in_extract_error_info`` below, and at REST by
+        ``tests/integration/test_error_paths.py`` — until the kwarg goes.
+
+        What this pins is the half that outlives the kwarg: the internal
+        ``NOT_FOUND`` code is translated to the spec-standard ``INVALID_REQUEST``
+        at the boundary, with the message intact and the pinned recovery.
+        """
         from fastmcp.exceptions import ToolError
 
         from src.core.exceptions import AdCPNotFoundError
         from src.core.tool_error_logging import with_error_logging
 
         def failing_tool():
-            raise AdCPNotFoundError("temporarily missing", recovery="transient")
+            raise AdCPNotFoundError("temporarily missing")
 
         wrapped = with_error_logging(failing_tool)
 
         with pytest.raises(ToolError) as exc_info:
             wrapped()
 
-        # AdCPNotFoundError's NOT_FOUND code maps to INVALID_REQUEST at the wire
-        # boundary so output is spec-compliant; custom recovery still propagates.
         assert_envelope_shape(
             exc_info.value,
             "INVALID_REQUEST",
             check_mcp_tool_error=True,
-            recovery="transient",
+            recovery="correctable",
             message_substr="temporarily missing",
         )
 
@@ -911,11 +923,22 @@ class TestCustomRecoveryOverrideA2ABoundary:
             assert exc_info.value.recovery == "transient"
 
 
-class TestCustomRecoveryOverrideRESTBoundary:
-    """Custom recovery= override must propagate through REST boundary (exception handler)."""
+class TestAdapterErrorRESTBoundary:
+    """An adapter failure reaches the REST wire as the pinned SERVICE_UNAVAILABLE pair."""
 
-    def test_custom_recovery_propagates_through_rest_boundary(self):
-        """AdCPAdapterError(recovery='terminal') -> REST JSON body has 'terminal'."""
+    def test_adapter_error_reaches_rest_wire_with_the_pinned_pair(self):
+        """AdCPAdapterError -> 502 and a SERVICE_UNAVAILABLE / transient body.
+
+        This used to assert ``recovery="terminal"`` on SERVICE_UNAVAILABLE — the
+        exact contradiction this epic exists to remove, since the pinned
+        enumMetadata classifies that code ``transient``. It was green only because
+        the helper checked the two envelope layers against each other and never
+        against the spec. Retired rather than weakened: the kwarg it relied on is
+        deleted by Epic C's next lane.
+
+        The 502 is untouched by any of that — the status comes from
+        ``AdCPAdapterError._default_status_code``, not from the recovery kwarg.
+        """
         from starlette.testclient import TestClient
 
         from src.app import app
@@ -923,12 +946,12 @@ class TestCustomRecoveryOverrideRESTBoundary:
 
         with patch(
             "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=AdCPAdapterError("permanent failure", recovery="terminal"),
+            side_effect=AdCPAdapterError("permanent failure"),
         ):
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 502
-            assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="terminal")
+            assert_envelope_shape(response.json(), "SERVICE_UNAVAILABLE", recovery="transient")
 
 
 # ---------------------------------------------------------------------------

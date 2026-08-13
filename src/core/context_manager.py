@@ -402,7 +402,6 @@ class ContextManager(DatabaseManager):
                 source = AdCPError.synthesize(
                     source.message or str(source),
                     error_code="SERVICE_UNAVAILABLE",
-                    recovery="terminal",
                     details=source.details,
                     field=source.field,
                     suggestion=source.suggestion,

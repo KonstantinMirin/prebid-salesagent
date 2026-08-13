@@ -26,12 +26,24 @@ Reproduce the fixture count: ``uv run python3 -c "import json;
 print(len(json.load(open('tests/fixtures/adcp_schemas_pinned/enums/error-code.json'))['enum']))"``
 -> 64 (see docs/adcp-spec-version.md "Pinned schema sources" for the full measurement).
 
-The final section extends the same oracle to ``src/``'s own wire-code tables:
-``src.core.exceptions`` must expose ``RECOVERY_BY_WIRE_CODE``, machine-read from
-the same normative ``enumMetadata`` block, and no other table in that module may
-answer a recovery question. This file keeps its OWN independent load of the pin
-(``_pinned_recovery_by_code`` below) and grades src's table against it — never
-the reverse — so the oracle also catches a bug in src's loader.
+The final sections extend the same oracle beyond the exception classes, to every
+other surface that answers a recovery question:
+
+- ``src/``'s own wire-code tables: ``src.core.exceptions`` must expose
+  ``RECOVERY_BY_WIRE_CODE``, machine-read from the same normative
+  ``enumMetadata`` block, and no other table in that module may answer a
+  recovery question.
+- the test-side grader itself: ``tests.helpers.assert_envelope_shape`` must
+  refuse a (code, recovery) pair the pin contradicts, so a test cannot grade
+  what the spec forbids.
+
+Every expectation in this file is read from the pin through
+``tests.helpers.pinned_schema.recovery_by_code()`` — the ONE test-side reader of
+that block — and never from ``src``'s table. That independence from src/ is the
+load-bearing property: the oracle grades src's loader rather than agreeing with
+it. (The map used to be loaded a second time here; delegating to the shared
+test-side accessor removes the duplicate load without touching the
+independence.)
 """
 
 from __future__ import annotations
@@ -44,9 +56,16 @@ from tests.helpers import pinned_schema
 
 
 def _pinned_recovery_by_code() -> dict[str, str]:
-    """Return ``{error_code: recovery}`` from the pinned enumMetadata block."""
-    meta = pinned_schema.load("error-code.json")["enumMetadata"]
-    return {code: entry["recovery"] for code, entry in meta.items() if isinstance(entry, dict) and "recovery" in entry}
+    """Return ``{error_code: recovery}`` from the pinned enumMetadata block.
+
+    Delegates to the shared test-side accessor rather than loading the block a
+    second time: ``assert_envelope_shape`` now grades against the same map, and
+    two loads of one normative block is the duplication this project treats as
+    a defect. Independence from ``src`` — the property this oracle actually
+    rests on — is unchanged: the accessor lives in ``tests/`` and reads the
+    installed SDK's pinned tree, never ``src.core.exceptions``.
+    """
+    return pinned_schema.recovery_by_code()
 
 
 _RECOVERY_BY_CODE = _pinned_recovery_by_code()
@@ -302,3 +321,110 @@ def test_wire_advisory_derives_the_pair_and_contains_internal_codes() -> None:
         f"wire_advisory('ADAPTER_ERROR') produced {(internal.code, internal.recovery)!r}. An internal-only "
         "code must be translated to its wire equivalent AND take that equivalent's pinned recovery."
     )
+
+
+# ---------------------------------------------------------------------------
+# test-side mirror: the grader itself cannot grade a pin-contradicting pair
+# ---------------------------------------------------------------------------
+# ``assert_envelope_shape`` took ``recovery`` as a free caller literal and checked
+# only that the two envelope layers agreed WITH EACH OTHER, so it was blind to
+# wire<->spec drift: a shipped, green test asserted SERVICE_UNAVAILABLE+terminal,
+# a pair the normative enumMetadata contradicts. The helper now derives the
+# expected recovery from the same pin these oracles read. These tests are what
+# stops that derivation from being silently removed the next time it reddens
+# something — the failure mode being re-armed is "the grader agrees with the bug".
+#
+# Envelopes are built by the production builder from a real exception rather than
+# hand-written here, so the shapes graded are the shapes the boundaries emit.
+
+
+def _envelope_for(exc: AdCPError) -> dict:
+    from src.core.exceptions import build_two_layer_error_envelope
+
+    return build_two_layer_error_envelope(exc)
+
+
+def test_assert_envelope_shape_refuses_a_pin_contradicting_pair() -> None:
+    """The F3 pair (``SERVICE_UNAVAILABLE`` + ``terminal``) must be ungradeable.
+
+    The pin classifies ``SERVICE_UNAVAILABLE`` as ``transient``. A test that
+    pins ``terminal`` for it is asserting that the wire may carry a pair the
+    normative enumMetadata forbids, so the helper must fail it — and say which
+    value the pin gives, because the fix is at the raise site (pick the class
+    whose pinned recovery IS the intent), not in the assertion.
+    """
+    from src.core.exceptions import AdCPAdapterError
+    from tests.helpers import assert_envelope_shape
+
+    pinned = _pinned_recovery_by_code()["SERVICE_UNAVAILABLE"]
+    assert pinned == "transient", f"pin moved: SERVICE_UNAVAILABLE is now {pinned!r}"
+
+    envelope = _envelope_for(AdCPAdapterError("permanent failure", recovery="terminal"))
+    assert envelope["adcp_error"]["recovery"] == "terminal", (
+        f"precondition: the envelope must actually carry the contradicting pair, got {envelope['adcp_error']!r}"
+    )
+
+    with pytest.raises(AssertionError) as exc_info:
+        assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="terminal")
+
+    detail = str(exc_info.value)
+    assert "enumMetadata" in detail and "'transient'" in detail, (
+        f"assert_envelope_shape rejected the pair but its message does not cite the pin "
+        f"or the value the pin gives: {detail!r}"
+    )
+
+
+def test_assert_envelope_shape_accepts_the_pinned_pair() -> None:
+    """Control: the pin-conformant pair still passes.
+
+    Without this, the test above is satisfied by a helper that rejects every
+    call, which would grade nothing at all.
+    """
+    from src.core.exceptions import AdCPAdapterError
+    from tests.helpers import assert_envelope_shape
+
+    envelope = _envelope_for(AdCPAdapterError("upstream down"))
+    assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient", message_substr="upstream down")
+
+
+def test_assert_envelope_shape_keeps_the_caller_literal_for_unclassified_codes() -> None:
+    """A code the pin does not classify keeps the caller's literal as its only
+    expectation — the derivation adds a check, it does not replace the caller's.
+
+    ``NOT_SUPPORTED`` is the one code on the current wire surface the pinned
+    enumMetadata carries no ``recovery`` for (``src.core.exceptions.wire_advisory``
+    documents the same single exception). Turning "the pin is silent" into a
+    failure would make an emittable code ungradeable.
+    """
+    from tests.helpers import assert_envelope_shape
+
+    assert "NOT_SUPPORTED" not in _pinned_recovery_by_code(), (
+        "the pin now classifies NOT_SUPPORTED — this test needs a code the pin is still silent on"
+    )
+
+    envelope = _envelope_for(AdCPError.synthesize("vendor said no", error_code="NOT_SUPPORTED", recovery="terminal"))
+    assert_envelope_shape(envelope, "NOT_SUPPORTED", recovery="terminal")
+
+
+def test_assert_envelope_shape_derives_from_the_test_side_pin_not_src(monkeypatch) -> None:
+    """The helper's expectation comes from ``pinned_schema.recovery_by_code()``.
+
+    Independence, made behavioral rather than left to inspection: point the
+    shared test-side accessor at a map that classifies ``SERVICE_UNAVAILABLE``
+    as ``terminal`` and the helper's verdict must FOLLOW it. A helper that read
+    ``src.core.exceptions.RECOVERY_BY_WIRE_CODE`` (or cached its own copy at
+    import time) would keep rejecting, which is the shape that makes the grader
+    agree with the table it is supposed to grade.
+    """
+    from src.core.exceptions import AdCPAdapterError
+    from tests.helpers import assert_envelope_shape
+
+    monkeypatch.setattr(pinned_schema, "recovery_by_code", lambda: {"SERVICE_UNAVAILABLE": "terminal"})
+
+    envelope = _envelope_for(AdCPAdapterError("permanent failure", recovery="terminal"))
+    assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="terminal")
+
+    with pytest.raises(AssertionError, match="enumMetadata"):
+        assert_envelope_shape(
+            _envelope_for(AdCPAdapterError("upstream down")), "SERVICE_UNAVAILABLE", recovery="transient"
+        )
