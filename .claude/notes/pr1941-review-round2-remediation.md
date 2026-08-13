@@ -506,4 +506,42 @@ runs.
 
 ## §6 ALTERATIONS
 
-_None yet. Later entries here win over anything above._
+_Later entries here win over anything above._
+
+### A1 — Owner ruling (2026-08-13): fix legacy data with a MIGRATION, not with code paths
+
+**Raised by:** L2's solution-review gate escalated a blocker — routing the scheduler and
+creative-approval writes through `update_status` makes `_stamp_confirmation_if_needed` stamp
+`confirmed_at` on rows that were ALREADY in a confirmed status before this PR, recording the sweep
+instant (for `active -> completed`, the END of the flight) as the seller-commitment moment. It is
+write-once, so permanent, and it overwrites the truer answer the read-time fallback gives.
+
+**Ruling.** The proposed remedy — gate the stamp on the previous status — was rejected on principle:
+
+> Code should not contain any paths for legacy or back compatibility. It is very fragile this way.
+> We trust what comes from the database or from the input; for the database we take care of it
+> through migrations, for the input through verification at the boundary. This whole category of
+> problem should not exist.
+
+**Consequences, which override the sections above:**
+
+1. **§4 is amended.** "Backfill migration for legacy `confirmed_at`; delete the narrowed read-time
+   fallback → #1928" is PULLED IN-SCOPE. The backfill is the fix, not a deferral.
+2. **A backfill migration is added to L2** — the lane whose routing exposes the problem is the lane
+   that makes the data trustworthy. It sets `confirmed_at` for every existing row whose status is
+   seller-confirmed and whose `confirmed_at` is NULL, using the same rule the read-time fallback
+   encoded (`approved_at`, else `created_at`).
+3. **No stamp gate is added.** After the backfill there is no confirmed row with a NULL
+   `confirmed_at`, so the case that produced the blocker is unreachable by construction rather than
+   handled by a branch. `_stamp_confirmation_if_needed` (L1, committed) stays exactly as it is.
+4. **§3.3's first bullet changes.** L3 no longer "narrows the fabrication to the single
+   schema-forbidden combination" — it DELETES `resolve_media_buy_confirmed_at` (`models.py:914`) and
+   its one call site (`media_buy_list.py:430`), which then emit the column directly. The narrowing
+   was a smaller version of the same legacy code path.
+5. **§3.5's A3 is unaffected in intent but changes in mechanism.** The rewritten
+   `confirmed_at_missing_on_buy` scenario must grade that an active buy carries a non-null
+   `confirmed_at` from the COLUMN, not from a resolver. If L5 landed before this alteration, its
+   scenario is re-verified against the post-deletion behaviour rather than rewritten again.
+
+**Invariant this establishes:** a nullable column that production cannot legitimately read as NULL
+is a data defect to be migrated, never a NULL to be interpreted at read time.

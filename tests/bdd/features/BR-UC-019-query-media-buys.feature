@@ -48,6 +48,7 @@ Feature: BR-UC-019 Query Media Buys
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no filters
     Then the response envelope carries status completed
+    And the response should be schema-valid against media-buy/get-media-buys-response.json
 
   @T-UC-019-main-filter-ids @main-flow @filtering
   Scenario: Query media buys by specific media_buy_ids
@@ -744,15 +745,53 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with <revision_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then <expected_outcome>
-    # BR-RULE-291: schema minimum 1; 0/negative/missing -> SCHEMA_VIOLATION
+    # BR-RULE-291: the pinned item schema types revision {"type":"integer","minimum":1}
+    # and lists it in the item's `required`, so a buy whose persisted revision is
+    # below that minimum is NOT publishable — the seller must not put it on the wire.
+    # That non-publication is what the two defective rows grade, deliberately WITHOUT
+    # naming an error code: see the note under this outline.
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples: Boundary values
       | boundary_point                   | revision_state                                  | expected_outcome                                                              |
       | revision = 1 (minimum inclusive) | persisted revision 1                            | the media buy "mb-001" revision should be 1                                   |
-      | revision = 0                     | persisted revision 0 (defective seller)         | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
-      | revision = -1                    | persisted revision -1 (defective seller)        | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
-      | revision absent                  | persisted store missing revision (defective seller) | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
+      | revision = 0                     | persisted revision 0 (defective seller)         | the media buy "mb-001" should not be published, and no returned media buy should carry a revision below the pinned minimum |
+      | revision = -1                    | persisted revision -1 (defective seller)        | the media buy "mb-001" should not be published, and no returned media buy should carry a revision below the pinned minimum |
+
+  # WHY THE TWO DEFECTIVE ROWS NAME NO ERROR CODE (T-UC-019-boundary-revision)
+  # The obligation graded is the one the pin states outright and that holds however
+  # the seller refuses: a media buy whose persisted revision is below the pinned
+  # minimum is NEVER published to the buyer. Whether the seller refuses by erroring
+  # or by withholding the entry from a 200 document, the buyer must not receive it.
+  #
+  # An error CODE is deliberately not asserted, because the code production emits
+  # today is itself in question. Production rejects the defective value at the
+  # response-model boundary (GetMediaBuysMediaBuy, src/core/tools/media_buy_list.py)
+  # and the boundary translates the Pydantic failure to VALIDATION_ERROR with
+  # recovery "correctable" (src/core/tool_error_logging.py). By the pin's own
+  # enumMetadata (enums/error-code.json) that tells the BUYER to "review error
+  # details and fix field values" for a defect in the SELLER's store — data the
+  # buyer does not own and cannot fix — and invites an unbounded retry;
+  # CONFIGURATION_ERROR / "terminal" is the code whose metadata matches a
+  # seller-side deployment defect. Pinning the current code here would freeze that
+  # into the graders, so these rows grade the non-publication invariant only. The
+  # earlier text demanded code "SCHEMA_VIOLATION", which is not in the pinned
+  # error-code enum at all — it is conformance-runner vocabulary, never a wire code.
+
+  # RETIRED ROW (T-UC-019-boundary-revision): "revision absent" — a persisted store
+  # missing revision (defective seller). Unreachable at BOTH layers, so wiring it
+  # would have graded a state no seller running this code can produce:
+  #   - persistence: MediaBuy.revision is Integer, nullable=False, default=1,
+  #     server_default='1' (src/core/database/models.py:975) with no CHECK constraint —
+  #     a row with no revision cannot be written or migrated in.
+  #   - wire: GetMediaBuysMediaBuy.revision is a bare `int` (src/core/tools/
+  #     media_buy_list.py:47), never None, so the key cannot be omitted from the
+  #     response either.
+  # The two REACHABLE defective values (0 and -1) stay above and DO grade the
+  # schema minimum — retiring this row deletes no coverage. Contrast the
+  # confirmed_at outline below, where "missing" IS reachable (nullable column) and
+  # is therefore rewritten rather than retired. Reconcile upstream in adcp-req so
+  # --merge does not re-add it.
 
   @T-UC-019-inv-291-1 @invariant @BR-RULE-291 @schema-v3.1
   Scenario: INV-1 holds - every returned media buy has revision integer >= 1
@@ -813,11 +852,30 @@ Feature: BR-UC-019 Query Media Buys
       | partition                       | buy_state                                                  | expected_outcome                                                                                  |
       | confirmed_buy_carries_timestamp | a successful create stamping confirmed_at "2026-05-01T12:00:00Z" | the media buy "mb-001" confirmed_at should equal "2026-05-01T12:00:00Z"                          |
       | confirmed_at_includes_timezone  | confirmed_at "2026-05-01T12:00:00+00:00"                   | the media buy "mb-001" confirmed_at should be an ISO 8601 string with a timezone designator       |
+      | confirmed_at_null_column_on_active_buy | status "active" and a NULL persisted confirmed_at   | the media buy "mb-001" should carry a non-null confirmed_at in a schema-valid response            |
 
-    Examples: Invalid partitions
-      | partition                       | buy_state                                                  | expected_outcome                                                                                  |
-      | confirmed_at_missing_on_buy     | persisted store missing confirmed_at (defective seller)    | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
-      | confirmed_at_not_iso8601        | persisted confirmed_at "2026-05-01 12:00:00" (no T, no TZ) | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
+  # REWRITTEN ROW (T-UC-019-partition-confirmed-at): "confirmed_at_missing_on_buy"
+  # became "confirmed_at_null_column_on_active_buy" above, and its expectation is
+  # INVERTED — schema-VALID with a non-null confirmed_at, not SCHEMA_VIOLATION.
+  # The NULL column IS reachable (MediaBuy.confirmed_at is nullable,
+  # src/core/database/models.py:981 — rows predating the column are exactly this),
+  # so unlike "revision absent" the state is real and must stay graded. What the
+  # old text got backwards is the OUTCOME. The pinned item schema
+  # (media-buy/get-media-buys-response.json) types confirmed_at [string, null] and
+  # requires the key, with an allOf/if guard that forbids null only when status is
+  # "active". resolve_media_buy_confirmed_at (models.py:914) exists precisely to keep
+  # that forbidden combination off the wire by falling back to approved_at/created_at
+  # for a confirmed buy. Demanding SCHEMA_VIOLATION therefore graded the resolver's
+  # ABSENCE: it passed only if the bug shipped. The rewrite asserts what the resolver
+  # owes the buyer — a schema-valid document carrying a real timestamp — so a
+  # resolver regression fails on both halves instead of on neither.
+  #
+  # RETIRED ROW: "confirmed_at_not_iso8601" (persisted confirmed_at
+  # "2026-05-01 12:00:00", no T, no TZ). Unreachable: the column is
+  # DateTime(timezone=True) (models.py:981) and the wire value is a Pydantic
+  # datetime, so a non-ISO string can neither be persisted nor round-trip to the
+  # response — no seller running this code can emit it. Reconcile both upstream in
+  # adcp-req so --merge does not re-add them.
 
   @T-UC-019-partition-package-creative-deadline @partition @creative_deadline @schema-v3.1
   Scenario Outline: package creative_deadline - <partition>
@@ -1248,7 +1306,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent calls get_media_buys with that media_buy_id under the same account
     Then the response should be schema-valid against get-media-buys-response.json
     And the media_buys array should include the freshly-created buy
-    And the included entry should expose the same media_buy_id and current status
+    And the included entry should expose the same media_buy_id and status "pending_creatives"
     # media-buy/index.yaml create_buy / check_buy_status step: after the buyer
     # captures media_buy_id from create_media_buy, the buyer calls get_media_buys
     # to confirm the buy is queryable and observe its initial status. This anchors

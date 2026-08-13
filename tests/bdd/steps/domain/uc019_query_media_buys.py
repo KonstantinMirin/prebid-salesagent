@@ -9,7 +9,7 @@ beads: salesagent-lqb
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -229,10 +229,16 @@ def given_owns_media_buy_persisted_status(ctx: dict, principal_id: str, mb_id: s
     _seed_media_buy_with_persisted_status(ctx, principal_id, mb_id, persisted)
 
 
-def _seed_simple_media_buy(ctx: dict, principal_id: str, mb_id: str, status: str = "active") -> Any:
+def _seed_simple_media_buy(ctx: dict, principal_id: str, mb_id: str, status: str = "active", **columns: Any) -> Any:
     """Register the principal, seed a media buy (default mid-flight window) under a
     unique id, and register its Gherkin label. Shared by the plain and
     with-status Given steps so the seed+register block lives in one place.
+
+    ``**columns`` forwards further persisted column values (``revision``,
+    ``confirmed_at``) straight to the factory, so the v3.1 lifecycle-handle Givens
+    seed through this ONE factory path instead of a second seeder or a new env
+    API — MediaBuyListEnv has no seeding methods and none of UC-019's other
+    Givens use one.
     """
     _register_principal(ctx, principal_id)
     env = ctx["env"]
@@ -242,6 +248,7 @@ def _seed_simple_media_buy(ctx: dict, principal_id: str, mb_id: str, status: str
         principal=ctx["principal"],
         media_buy_id=real_id,
         status=status,
+        **columns,
     )
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
@@ -855,11 +862,16 @@ def given_adapter_no_realtime(ctx: dict) -> None:
 
 
 @given(parsers.parse('an authenticated principal "{principal_id}" who owns {count:d} media buys'))
+@given(parsers.parse('the principal "{principal_id}" owns {count:d} media buys'))
 def given_principal_with_n_buys(ctx: dict, principal_id: str, count: int) -> None:
     """Create N media buys for a principal.
 
     Uses MediaBuyFactory(...) which invokes factory_boy's create() strategy.
     env._commit_factory_data() flushes all pending factory objects to the DB session.
+
+    The second spelling is BR-RULE-291 INV-1's ("owns 3 media buys") — the same
+    logical setup in the Background's own phrasing, so it aliases onto this step
+    rather than seeding a second time in a second place.
     """
     _register_principal(ctx, principal_id)
     env = ctx["env"]
@@ -920,7 +932,26 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}"'))
 def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Create a media buy (simple, no date attributes)."""
+    """Create a media buy (simple, no date attributes).
+
+    GREEDY-CAPTURE HAZARD (the failure mode documented on
+    given_owns_media_buy_with_status): this parser's ``{mb_id}`` also matches any
+    scenario line that ENDS in a quoted clause — ``... owns media buy "mb-001" with
+    confirmed_at "2026-05-01T12:00:00Z"`` binds here with the whole clause
+    swallowed into the label, registering a buy no later by-ID step can resolve.
+
+    The escape is that pytest-bdd resolves a step to the alphabetically LAST
+    matching definition text (it registers one fixture per step text and pytest
+    takes the last fixturedef), and any text extending this one sorts after it — so
+    writing the more specific Given is always sufficient, and every confirmed_at
+    Given in the lifecycle-handles section below exists for exactly that reason.
+
+    Deliberately NOT asserted here: ~38 params across other UC-019 scenarios still
+    reach this step with a garbled label and are dormant for their own missing
+    Thens, so rejecting the label would convert their dormancy into hard failures
+    rather than grading anything. That conversion is the auto-xfail mechanism's
+    job (GH #1929), not this step's.
+    """
     _seed_simple_media_buy(ctx, principal_id, mb_id)
 
 
@@ -2513,6 +2544,588 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# v3.1 lifecycle handles: revision (BR-RULE-291) + confirmed_at (POST-S6 / INT-006)
+# ═══════════════════════════════════════════════════════════════════════
+# The pinned item schema (media-buy/get-media-buys-response.json, AdCP 3.1.1)
+# makes BOTH fields REQUIRED on every media_buys[] entry:
+#   revision      integer, minimum 1 — the buyer's optimistic-concurrency token
+#   confirmed_at  type [string, null] under an allOf/if guard that forbids null
+#                 when status is "active"
+#
+# Every Then in this section reads the BUYER'S WIRE (wire_dict / wire_field), not
+# the re-serialized typed payload. These two fields are exactly what this change
+# publishes, and a model round-trip cannot observe whether they reached the wire
+# at all — which is how they went unnoticed while three separate mutations of
+# resolve_media_buy_confirmed_at left the suite green.
+#
+# Givens seed persisted COLUMN values through _seed_simple_media_buy (the module's
+# own factory path) so production reads a real row, and the writes that move
+# `revision` go through MediaBuyRepository — the single writer of both columns.
+
+
+def _parse_iso8601(value: str) -> datetime:
+    """Parse an ISO 8601 timestamp literal into an aware datetime.
+
+    Both sides of every confirmed_at comparison go through this. "…T12:00:00Z" and
+    "…T12:00:00+00:00" are the SAME instant spelled two ways, so a string compare
+    would grade the serializer's choice of timezone designator instead of the
+    timestamp the buyer was promised.
+    """
+    return datetime.fromisoformat(value)
+
+
+def _wire_media_buy_entry(ctx: dict, mb_id: str, document: dict | None = None) -> dict:
+    """Locate one seeded buy's entry in the buyer-visible wire document.
+
+    Resolving through the Gherkin label (not the raw id) is what keeps a scenario
+    that seeded several buys from silently grading whichever entry came first.
+    """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    doc = wire_dict(ctx) if document is None else document
+    buys = doc.get("media_buys", [])
+    for buy in buys:
+        if buy.get("media_buy_id") == real_id:
+            return buy
+    raise AssertionError(
+        f"Media buy '{mb_id}' (real_id={real_id}) is not in the response; "
+        f"media_buys carried {[b.get('media_buy_id') for b in buys]!r}"
+    )
+
+
+def _sole_seeded_label(ctx: dict) -> str:
+    """The Gherkin label of the single buy the scenario seeded.
+
+    Several steps in this section name no buy — the t1/t2 write ("one successful
+    update_media_buy lands between t1 and t2"), the t1/t2 comparisons, and
+    "the confirmed_at value should be …". Each of their scenarios seeds exactly
+    one buy, so resolving "the" buy is unambiguous; asserting the count keeps it
+    that way instead of silently grading whichever one came first.
+    """
+    seeded = ctx.get("seeded_media_buys", {})
+    assert len(seeded) == 1, f"Expected exactly one seeded media buy for this scenario, got {sorted(seeded)}"
+    return next(iter(seeded))
+
+
+def _only_seeded_media_buy(ctx: dict) -> str:
+    """The real database id of the single buy the scenario seeded."""
+    return _resolve_media_buy_id(ctx, _sole_seeded_label(ctx))
+
+
+def _persisted_revision(ctx: dict, real_id: str) -> int:
+    """Read the persisted revision column back through the repository."""
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    env = ctx["env"]
+    repo = MediaBuyRepository(env.get_session(), ctx["tenant"].tenant_id)
+    row = repo.get_by_id(real_id)
+    assert row is not None, f"Media buy '{real_id}' not persisted for tenant {ctx['tenant'].tenant_id!r}"
+    return row.revision
+
+
+def _land_state_changing_write(ctx: dict, real_id: str, *, marker: str) -> None:
+    """Land ONE real state-changing write on a seeded buy, through the repository.
+
+    MediaBuyRepository is the single writer of ``revision``: ``update_fields``
+    rejects it (and ``confirmed_at``) as immutable and ends every successful call
+    in ``_bump_revision`` + flush. So a mutation counter of N can only be produced
+    by N real writes — there is no supported path that seeds the value directly,
+    which is precisely why the scenarios that say "after four writes" have to
+    perform them.
+
+    ``order_name`` is the field moved because it is buyer-visible metadata with no
+    lifecycle meaning: the graded effect is the revision bump, not the field.
+    """
+    from src.core.database.repositories.media_buy import MediaBuyRepository
+
+    env = ctx["env"]
+    repo = MediaBuyRepository(env.get_session(), ctx["tenant"].tenant_id)
+    updated = repo.update_fields(real_id, order_name=marker)
+    assert updated is not None, f"Media buy '{real_id}' not found — the write that must land between reads did not"
+    env.get_session().commit()
+
+
+# ── GIVEN: persisted revision ─────────────────────────────────────────
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with persisted revision {revision:d}'))
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" with persisted revision {revision:d} '
+        "and no subsequent writes"
+    )
+)
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" with persisted revision {revision:d} '
+        "and no intervening writes between two reads"
+    )
+)
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" with persisted revision {revision:d} '
+        "(defective seller)"
+    )
+)
+def given_owns_media_buy_with_persisted_revision(ctx: dict, principal_id: str, mb_id: str, revision: int) -> None:
+    """Seed a buy whose persisted revision column carries an exact value.
+
+    The four spellings are one setup: the partition/boundary/invariant scenarios
+    differ only in what they go on to assert. The "(defective seller)" rows seed 0
+    and -1 — a state the store genuinely admits, because ``media_buys.revision``
+    carries no CHECK constraint below the schema minimum. Whether that defective
+    value can then reach the BUYER is exactly what those rows go on to grade; the
+    Then re-reads the column to prove the defect was really persisted, so a seeding
+    path that silently coerced it back to a legal value fails there instead of
+    passing vacuously.
+    """
+    _seed_simple_media_buy(ctx, principal_id, mb_id, revision=revision)
+    ctx.setdefault("seeded_revisions", {})[mb_id] = revision
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" with persisted revision {revision:d} '
+        "after four state-changing writes"
+    )
+)
+def given_owns_media_buy_revision_after_four_writes(ctx: dict, principal_id: str, mb_id: str, revision: int) -> None:
+    """Seed a fresh buy and land FOUR real state-changing writes on it.
+
+    The scenario says "revision 5 AFTER four state-changing writes", so the four
+    writes are the setup — seeding the literal 5 would grade a value no writer
+    produced (and is not even expressible: update_fields raises ValueError on
+    ``revision``). The buy starts at the column default 1, each repository write
+    bumps it once, and the resulting counter is asserted to be the value the
+    scenario names, so a bump that stops incrementing fails here rather than
+    silently agreeing with a hand-seeded expectation.
+    """
+    _seed_simple_media_buy(ctx, principal_id, mb_id)
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    for write in range(4):
+        _land_state_changing_write(ctx, real_id, marker=f"revision-write-{write + 1}")
+    persisted = _persisted_revision(ctx, real_id)
+    assert persisted == revision, (
+        f"Four repository writes should leave revision at {revision} (1 + 4 bumps), got {persisted}"
+    )
+    ctx.setdefault("seeded_revisions", {})[mb_id] = persisted
+
+
+@given("no state-changing writes occur between two reads")
+def given_no_writes_between_reads(ctx: dict) -> None:
+    """Pin the INV-4 precondition: the buy is untouched going into the two reads.
+
+    Asserting rather than declaring — if anything had already moved the counter,
+    the two reads could agree for the wrong reason and INV-4 would pass vacuously.
+    """
+    real_id = _only_seeded_media_buy(ctx)
+    seeded = ctx["seeded_revisions"]
+    expected = next(iter(seeded.values()))
+    persisted = _persisted_revision(ctx, real_id)
+    assert persisted == expected, (
+        f"Precondition broken: revision is {persisted}, not the seeded {expected} — "
+        "something already wrote to the buy before the two reads"
+    )
+
+
+# ── GIVEN: persisted confirmed_at ─────────────────────────────────────
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with confirmed_at "{timestamp}"'))
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" '
+        'with a successful create stamping confirmed_at "{timestamp}"'
+    )
+)
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" that was successfully created at "{timestamp}"'
+    )
+)
+def given_owns_media_buy_with_confirmed_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """Seed a buy whose persisted confirmed_at column carries an exact instant.
+
+    All three spellings describe the same persisted state — the seller committed
+    at that instant — so they share one setup. Each ENDS in a quoted literal, which
+    is why they exist at all: the generic ``owns media buy "{mb_id}"`` Given also
+    matches such a line and would swallow the clause into the label (guarded there).
+    Status stays the factory-seeded serving state so the buy is a confirmed one,
+    which is what makes a non-null confirmed_at the correct reading.
+    """
+    _seed_simple_media_buy(ctx, principal_id, mb_id, confirmed_at=_parse_iso8601(timestamp))
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" '
+        'with status "{status}" and a NULL persisted confirmed_at'
+    )
+)
+def given_owns_media_buy_null_confirmed_at(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
+    """Seed a buy whose confirmed_at COLUMN is NULL — the legacy-row state.
+
+    Reachable, and the reason resolve_media_buy_confirmed_at exists: the column is
+    nullable and rows written before it was added carry NULL. On an "active" buy
+    that combination is what the pinned item schema's allOf/if guard forbids on the
+    wire, so the read path must resolve it rather than publish it.
+    """
+    mb = _seed_simple_media_buy(ctx, principal_id, mb_id, status=status, confirmed_at=None)
+    assert mb.confirmed_at is None, f"Seed did not leave confirmed_at NULL; column holds {mb.confirmed_at!r}"
+
+
+# ── WHEN: two reads, with or without a write between them ─────────────
+
+
+@when("the Buyer Agent sends a get_media_buys request at time t1")
+def when_query_at_t1(ctx: dict) -> None:
+    """Read once and snapshot the wire document as t1.
+
+    Snapshotting is what makes the pair comparable: the next dispatch overwrites
+    ctx["wire_response"], so a Then reading it afterwards would compare t2 with
+    itself.
+    """
+    _dispatch_query(ctx)
+    ctx["wire_at_t1"] = wire_dict(ctx)
+
+
+@when("the Buyer Agent sends a get_media_buys request at time t2 (t1 < t2)")
+@when("the Buyer Agent sends a get_media_buys request at time t2")
+def when_query_at_t2(ctx: dict) -> None:
+    """Read a second time and snapshot the wire document as t2."""
+    assert "wire_at_t1" in ctx, "the t2 read ran without a t1 read — the pair cannot be compared"
+    _dispatch_query(ctx)
+    ctx["wire_at_t2"] = wire_dict(ctx)
+
+
+@when("one successful update_media_buy lands between t1 and t2")
+def when_update_lands_between_reads(ctx: dict) -> None:
+    """Land one real state-changing write between the two reads.
+
+    A repository write rather than an update_media_buy dispatch on purpose: the
+    obligation graded here is the READ path — BR-RULE-291 INV-5 ("get_media_buys
+    reports the bumped token") and the confirmed_at stability invariant — while
+    UC-002/UC-003 own the update tool's own transport contract. The write still
+    goes through the production seam that owns both columns, so it moves revision
+    exactly as a real update would.
+    """
+    _land_state_changing_write(ctx, _only_seeded_media_buy(ctx), marker="update-between-t1-and-t2")
+
+
+# ── THEN: revision on the wire ────────────────────────────────────────
+
+
+@then(parsers.parse('the media buy "{mb_id}" revision should be {expected:d}'))
+def then_media_buy_revision_equals(ctx: dict, mb_id: str, expected: int) -> None:
+    """Assert the buy's wire revision is exactly the expected integer."""
+    buy = _wire_media_buy_entry(ctx, mb_id)
+    assert buy.get("revision") == expected, (
+        f"Expected media buy '{mb_id}' revision {expected} on the wire, got {buy.get('revision')!r}"
+    )
+
+
+@then(parsers.parse('the media buy "{mb_id}" revision should be {expected:d} on both reads'))
+def then_media_buy_revision_equals_on_both_reads(ctx: dict, mb_id: str, expected: int) -> None:
+    """Assert the revision is the expected integer on TWO successive reads.
+
+    The outline's single shared When performs read #1; the row's own expectation
+    ("N on both reads") is about read #2 as well, and its Given established that
+    nothing writes in between — so the second read is issued here. Both documents
+    are asserted, so a counter that drifts on a pure read fails.
+    """
+    first = _wire_media_buy_entry(ctx, mb_id)
+    assert first.get("revision") == expected, (
+        f"First read: expected media buy '{mb_id}' revision {expected}, got {first.get('revision')!r}"
+    )
+    _dispatch_query(ctx)
+    second = _wire_media_buy_entry(ctx, mb_id)
+    assert second.get("revision") == expected, (
+        f"Second read with no intervening write: expected revision {expected}, got {second.get('revision')!r}"
+    )
+
+
+def _is_wire_integer(value: Any) -> bool:
+    """Whether a wire value is an integer in the sense the pinned schema means.
+
+    The obligation is JSON Schema's ``"type": "integer"``, which is a statement
+    about the NUMBER (Draft 6+: a number with zero fractional part), not about the
+    Python type the transport happened to decode it into. That distinction is
+    load-bearing here: A2A frames its DataPart as a protobuf ``Struct``, whose only
+    numeric kind is ``number_value`` (a double), so an integer field arrives as
+    ``1.0`` on A2A and ``1`` on MCP. Asserting ``isinstance(int)`` would fail the
+    a2a arm of every revision scenario over a framing detail while letting a real
+    fractional revision through on MCP; this rejects ``1.5`` and ``"1"`` on both.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and float(value).is_integer()
+
+
+@then("every returned media buy should include an integer revision field")
+def then_every_buy_has_integer_revision(ctx: dict) -> None:
+    """Sweep EVERY returned buy for an integer revision — not just the first."""
+    buys = wire_dict(ctx).get("media_buys", [])
+    assert buys, "No media buys were returned, so 'every returned media buy' asserts nothing"
+    for buy in buys:
+        assert "revision" in buy, (
+            f"media buy {buy.get('media_buy_id')!r} carries no revision key; "
+            f"the pinned item schema requires it (keys: {sorted(buy)})"
+        )
+        revision = buy["revision"]
+        assert _is_wire_integer(revision), (
+            f"media buy {buy.get('media_buy_id')!r} revision {revision!r} ({type(revision).__name__}) is not an "
+            'integer; the pinned item schema types it "integer"'
+        )
+
+
+@then("every revision should be >= 1")
+def then_every_revision_at_least_one(ctx: dict) -> None:
+    """Sweep EVERY returned buy against the schema minimum of 1."""
+    buys = wire_dict(ctx).get("media_buys", [])
+    assert buys, "No media buys were returned, so 'every revision' asserts nothing"
+    for buy in buys:
+        revision = buy.get("revision")
+        assert revision >= 1, (
+            f"media buy {buy.get('media_buy_id')!r} revision {revision!r} is below the pinned schema minimum of 1"
+        )
+
+
+def _revision_at(ctx: dict, moment: str) -> int:
+    """The wire revision of the single seeded buy in the snapshot for t1 or t2."""
+    document = ctx.get(f"wire_at_{moment}")
+    assert document is not None, f"No wire document was snapshotted at {moment}"
+    buy = _wire_media_buy_entry(ctx, _sole_seeded_label(ctx), document)
+    return buy["revision"]
+
+
+@then("the revision at t1 should equal the revision at t2")
+def then_revision_stable_across_reads(ctx: dict) -> None:
+    """INV-4: with no intervening write, two reads report the SAME token."""
+    at_t1, at_t2 = _revision_at(ctx, "t1"), _revision_at(ctx, "t2")
+    assert at_t1 == at_t2, f"Revision drifted across two reads with no write between them: t1={at_t1}, t2={at_t2}"
+
+
+@then("the revision at t2 should be strictly greater than the revision at t1")
+def then_revision_increases_after_write(ctx: dict) -> None:
+    """INV-5: an intervening successful write moves the token strictly upward."""
+    at_t1, at_t2 = _revision_at(ctx, "t1"), _revision_at(ctx, "t2")
+    assert at_t2 > at_t1, (
+        f"A successful state-changing write must strictly increase revision, but t1={at_t1} and t2={at_t2}"
+    )
+
+
+# ── THEN: confirmed_at on the wire ────────────────────────────────────
+
+
+@then(parsers.parse('the media buy "{mb_id}" should include a confirmed_at field'))
+def then_media_buy_includes_confirmed_at(ctx: dict, mb_id: str) -> None:
+    """Assert the confirmed_at KEY is present on the wire entry.
+
+    Key PRESENCE, not truthiness: confirmed_at is required-and-nullable, so the
+    regression this grades is the key being dropped from the serialized document
+    (which an ``exclude_none`` anywhere on the path would do silently) — a null
+    value would still be a present key, and a different assertion.
+    """
+    buy = _wire_media_buy_entry(ctx, mb_id)
+    assert "confirmed_at" in buy, (
+        f"media buy '{mb_id}' carries no confirmed_at key; the pinned item schema requires it (keys: {sorted(buy)})"
+    )
+
+
+@then(parsers.parse('the confirmed_at value should be the ISO 8601 timestamp "{timestamp}"'))
+@then(parsers.parse('the media buy "{mb_id}" confirmed_at should equal "{timestamp}"'))
+def then_confirmed_at_equals(ctx: dict, timestamp: str, mb_id: str | None = None) -> None:
+    """Assert the wire confirmed_at is the expected INSTANT, parsed on both sides.
+
+    The first spelling names no buy (it follows a Then that already named one), so
+    it falls back to the scenario's sole seeded buy rather than a hardcoded label.
+    """
+    mb_id = mb_id or _sole_seeded_label(ctx)
+    buy = _wire_media_buy_entry(ctx, mb_id)
+    actual = buy.get("confirmed_at")
+    assert actual is not None, f"media buy '{mb_id}' confirmed_at is null; expected {timestamp}"
+    assert _parse_iso8601(actual) == _parse_iso8601(timestamp), (
+        f"Expected media buy '{mb_id}' confirmed_at {timestamp}, got {actual!r}"
+    )
+
+
+@then(parsers.parse('the media buy "{mb_id}" confirmed_at should be an ISO 8601 string with a timezone designator'))
+def then_confirmed_at_carries_timezone(ctx: dict, mb_id: str) -> None:
+    """Assert the wire confirmed_at is an ISO 8601 STRING carrying an offset.
+
+    The schema types the field ``string`` with ``format: date-time``, and a
+    date-time without an offset is a different instant for every reader — so both
+    halves are checked: that it serialized as a string at all, and that parsing it
+    yields an aware datetime.
+    """
+    buy = _wire_media_buy_entry(ctx, mb_id)
+    actual = buy.get("confirmed_at")
+    assert isinstance(actual, str), (
+        f"media buy '{mb_id}' confirmed_at is {type(actual).__name__}, not an ISO 8601 string"
+    )
+    assert _parse_iso8601(actual).tzinfo is not None, (
+        f"media buy '{mb_id}' confirmed_at {actual!r} carries no timezone designator"
+    )
+
+
+@then(parsers.parse('the confirmed_at at {moment} should equal "{timestamp}"'))
+def then_confirmed_at_at_moment_equals(ctx: dict, moment: str, timestamp: str) -> None:
+    """Assert the snapshotted t1/t2 document reports the expected commitment instant.
+
+    Both reads are graded against the ORIGINAL timestamp, which is what makes the
+    stability claim real: a write that rewrote confirmed_at would move t2 only, and
+    comparing t2 against t1 alone would not notice a drift that moved both.
+    """
+    document = ctx.get(f"wire_at_{moment}")
+    assert document is not None, f"No wire document was snapshotted at {moment}"
+    buy = _wire_media_buy_entry(ctx, _sole_seeded_label(ctx), document)
+    actual = buy.get("confirmed_at")
+    assert actual is not None, f"confirmed_at at {moment} is null; expected {timestamp}"
+    assert _parse_iso8601(actual) == _parse_iso8601(timestamp), (
+        f"Expected confirmed_at {timestamp} at {moment}, got {actual!r}"
+    )
+
+
+@then(parsers.parse('the media buy "{mb_id}" should carry a non-null confirmed_at in a schema-valid response'))
+def then_confirmed_at_resolved_on_schema_valid_wire(ctx: dict, mb_id: str) -> None:
+    """The resolver's explicit oracle for an active buy whose COLUMN is NULL.
+
+    Two assertions because the contract has two halves and each catches what the
+    other cannot: the whole document must satisfy the pinned response schema —
+    whose allOf/if guard rejects a null confirmed_at on an ``active`` buy — and the
+    entry must actually carry a timestamp, so a regression that dropped the field
+    entirely (schema-valid only because ``if`` needs the key present to fire) still
+    fails.
+    """
+    from tests.helpers.pinned_schema import validate_against_pinned_schema
+
+    document = wire_dict(ctx)
+    validate_against_pinned_schema("media-buy/get-media-buys-response.json", document)
+    buy = _wire_media_buy_entry(ctx, mb_id, document)
+    assert buy.get("confirmed_at") is not None, (
+        f"media buy '{mb_id}' is active with a NULL confirmed_at column and the response reported "
+        "confirmed_at null — resolve_media_buy_confirmed_at did not resolve it"
+    )
+
+
+# ── THEN: the defective-revision publication oracle ───────────────────
+# The obligation is the one the pin states outright and that holds however the
+# seller chooses to refuse: a media buy whose PERSISTED revision is below the
+# pinned minimum is never PUBLISHED to the buyer. Erroring and withholding the
+# entry from a 200 document are both compliant refusals; handing the buyer the
+# entry is not. So the oracle below reads whatever the buyer actually received —
+# success body or wire error envelope — and grades the same claim on either.
+#
+# It deliberately asserts NO error code. The code production emits today
+# (VALIDATION_ERROR / "correctable", from the response-model rejection at
+# src/core/tools/media_buy_list.py translated in src/core/tool_error_logging.py)
+# is itself in question: the pin's enumMetadata makes that code mean "buyer,
+# fix your field values" for a defect in the SELLER's store. Pinning it here
+# would freeze that into the graders. See the note under the outline in
+# BR-UC-019-query-media-buys.feature.
+
+
+def _pinned_revision_minimum() -> int:
+    """The minimum the PIN sets for ``media_buys[].revision``, read from the pin.
+
+    Read rather than hard-coded so the bound moves with the pinned schema instead
+    of with a literal someone has to remember to update — the same reason the
+    schema-shape steps validate against the pinned tree rather than a copy.
+    """
+    from tests.helpers.pinned_schema import load
+
+    schema = load("media-buy/get-media-buys-response.json")
+    minimum = schema["properties"]["media_buys"]["items"]["properties"]["revision"]["minimum"]
+    assert isinstance(minimum, int), f"Pinned revision minimum is {minimum!r}, not an integer — the pin moved"
+    return minimum
+
+
+def _published_media_buy_entries(ctx: dict) -> list[dict]:
+    """Every media-buy entry the buyer received, whichever way the seller answered.
+
+    On success this is the success wire (``wire_dict``, which itself raises if a
+    real-wire transport stashed nothing — the guard against grading an empty
+    reconstruction). On refusal it is the wire ERROR envelope, walked recursively:
+    the claim being graded is that the entry is nowhere in what the buyer got, and
+    a leak nested under ``details`` would satisfy a top-level-only check.
+    """
+    result = ctx["result"]
+    if result.is_success:
+        return _collect_media_buy_entries(wire_dict(ctx))
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, (
+        f"{ctx.get('transport')}: the request failed but no wire error envelope was captured, so there is "
+        f"no buyer-visible document to inspect and this step would assert nothing. Error: {ctx.get('error')!r}"
+    )
+    return _collect_media_buy_entries(envelope)
+
+
+def _collect_media_buy_entries(node: Any) -> list[dict]:
+    """Every dict carried under a ``media_buys`` key, at any depth of a wire document."""
+    found: list[dict] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "media_buys" and isinstance(value, list):
+                found.extend(entry for entry in value if isinstance(entry, dict))
+            found.extend(_collect_media_buy_entries(value))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_collect_media_buy_entries(item))
+    return found
+
+
+@then(
+    parsers.parse(
+        'the media buy "{mb_id}" should not be published, and no returned media buy '
+        "should carry a revision below the pinned minimum"
+    )
+)
+def then_sub_minimum_revision_never_published(ctx: dict, mb_id: str) -> None:
+    """Grade the non-publication invariant for a buy persisted below the pinned minimum.
+
+    Three assertions, and each is load-bearing:
+
+    1. The defect is REAL — the column is re-read through the repository and must
+       still hold the sub-minimum value the row named. Without this the other two
+       would pass trivially against a store that never took the defective value,
+       which is the vacuous-pass this scenario is most exposed to.
+    2. This buy is not among the entries the buyer received. Identity is the
+       resolved database id, so a same-labelled sibling cannot satisfy it.
+    3. NO entry the buyer received carries a sub-minimum revision — the invariant
+       as stated, not just the one buy. ``_is_wire_integer`` because A2A frames its
+       DataPart as a protobuf Struct whose only numeric kind is a double, so a
+       legal revision arrives as ``1.0`` there and ``1`` on MCP; a non-integer or
+       missing revision is itself a violation and is reported as one.
+    """
+    minimum = _pinned_revision_minimum()
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+
+    seeded = ctx["seeded_revisions"][mb_id]
+    persisted = _persisted_revision(ctx, real_id)
+    assert persisted == seeded, (
+        f"Precondition broken: media buy '{mb_id}' persists revision {persisted}, not the seeded {seeded} — "
+        "the defective value never reached the store, so this scenario grades nothing"
+    )
+    assert persisted < minimum, (
+        f"Precondition broken: seeded revision {persisted} is not below the pinned minimum {minimum}, "
+        "so there is no defect for the seller to withhold"
+    )
+
+    entries = _published_media_buy_entries(ctx)
+    leaked = [entry for entry in entries if entry.get("media_buy_id") == real_id]
+    assert leaked == [], (
+        f"Media buy '{mb_id}' (real_id={real_id}) persists revision {persisted}, below the pinned minimum "
+        f"{minimum}, so it is not publishable — but the buyer received it: {leaked!r}"
+    )
+    sub_minimum = [
+        (entry.get("media_buy_id"), entry.get("revision"))
+        for entry in entries
+        if not (_is_wire_integer(entry.get("revision")) and entry["revision"] >= minimum)
+    ]
+    assert sub_minimum == [], (
+        f"The pinned item schema requires every published media buy to carry an integer revision >= {minimum}; "
+        f"the buyer received these (media_buy_id, revision) pairs that do not: {sub_minimum!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Storyboard: post-create status poll (@T-UC-019-storyboard-post-create-status-poll)
 # ═══════════════════════════════════════════════════════════════════════
 # Grades the AdCP 3.1.1 storyboard step the scenario itself cites:
@@ -2585,20 +3198,24 @@ def then_media_buys_include_created_buy(ctx: dict) -> None:
     )
 
 
-@then("the included entry should expose the same media_buy_id and current status")
-def then_included_entry_exposes_id_and_status(ctx: dict) -> None:
-    """Assert the polled entry IS the created buy and reports a real lifecycle status.
+@then(parsers.parse('the included entry should expose the same media_buy_id and status "{expected_status}"'))
+def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -> None:
+    """Assert the polled entry IS the created buy and reports the expected initial status.
 
     The storyboard step this scenario cites (media-buy/index.yaml
-    ``check_buy_status``) grades exactly two things on the entry:
-    ``field_equals_context media_buys[0].media_buy_id`` against the id captured
-    from create_media_buy, and ``field_present media_buys[0].status``. Presence
-    alone would pass on a null or a typo, so the status is checked for membership
-    in the PINNED enums/media-buy-status.json enum rather than a literal list
-    copied into the test — the pin moves, this assertion moves with it.
-    """
-    from tests.helpers.pinned_schema import load
+    ``check_buy_status``) grades ``field_equals_context media_buys[0].media_buy_id``
+    against the id captured from create_media_buy, and ``field_present
+    media_buys[0].status`` — the buyer polls to OBSERVE the initial status.
 
+    The expected status is pinned in the Gherkin and compared for equality.
+    Membership in the pinned ten-member enums/media-buy-status.json enum was the
+    previous assertion and could not do this job: ``completed`` and ``failed`` are
+    both members, so a freshly-created buy reported as terminal passed. The literal
+    is the state this flow actually starts in — the request assigns no creatives,
+    and media_buy_create._resolve_status returns ``pending_creatives`` for a buy
+    with no assigned/approved creatives (priority 2, ahead of the future start_time
+    that would otherwise make it pending_start).
+    """
     media_buy_id = ctx["created_media_buy_id"]
     document = wire_dict(ctx)
     matching = [buy for buy in document.get("media_buys", []) if buy.get("media_buy_id") == media_buy_id]
@@ -2607,8 +3224,7 @@ def then_included_entry_exposes_id_and_status(ctx: dict) -> None:
         f"got {len(matching)} in {[b.get('media_buy_id') for b in document.get('media_buys', [])]!r}"
     )
 
-    allowed = load("enums/media-buy-status.json")["enum"]
     status = matching[0].get("status")
-    assert status in allowed, (
-        f"media_buys[0].status {status!r} is not a pinned AdCP MediaBuyStatus; expected one of {allowed}"
+    assert status == expected_status, (
+        f"post-create poll: expected media_buys[0].status {expected_status!r} for a freshly-created buy, got {status!r}"
     )
