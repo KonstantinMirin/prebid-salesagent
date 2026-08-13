@@ -98,7 +98,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And account.sandbox should equal false
     And media_buy.features should have boolean flags inline_creative_management, property_list_filtering, catalog_management and committed_metrics_supported
     And media_buy.supported_pricing_models should be a non-empty unique array of pricing-model enum values
-    And media_buy.reporting_delivery_methods should be a non-empty unique subset of ["webhook", "offline"]
     And media_buy.execution.targeting.geo_countries should equal true
     And media_buy.execution.targeting.geo_regions should equal true
     And the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com"
@@ -127,6 +126,49 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/reporting_delivery_methods
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
+
+  @T-UC-010-degradation-no-cascade @extension @degradation @partition @boundary
+  Scenario: one adapter-derived section degrading does not take the others with it
+    Given a tenant is resolvable from the request context
+    And the adapter resolves but enumerating its channels fails
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response should include media_buy.supported_pricing_models
+    And media_buy.portfolio primary_channels should equal "display"
+    # The adapter class feeds THREE sections: primary_channels, supported_pricing_models
+    # and targeting capabilities. This scenario fails exactly ONE of them — channel
+    # ENUMERATION raises while the adapter class itself resolves fine — and pins that
+    # the other two survive.
+    # Without this, the natural refactor (resolve the adapter inside the same
+    # try/except that maps the channels) discards a perfectly good adapter class on a
+    # channel-mapping failure, and supported_pricing_models then vanishes SILENTLY:
+    # its `if adapter` guard just skips, so no advisory is recorded and the buyer
+    # cannot tell "this seller has none" from "the lookup failed" — the quiet-failure
+    # class CLAUDE.md bans. Nothing else in the corpus distinguishes "adapter gone"
+    # from "one thing about it failed", so nothing else catches the cascade.
+    # NOT-IN-SPEC: which sections degrade together is a production choice; the spec
+    # only requires that what IS emitted is honest.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/supported_pricing_models
+
+  @T-UC-010-main-reporting-delivery @main-flow @post-s1 @partition @boundary
+  Scenario: Seller declares its reporting delivery methods
+    Given a tenant is resolvable from the request context
+    When the Buyer Agent calls get_adcp_capabilities
+    Then media_buy.reporting_delivery_methods should be a non-empty unique subset of ["webhook", "offline"]
+    # SPLIT OUT of @T-UC-010-main (#1721). This assert is the ONLY one of that
+    # scenario's asserts production cannot satisfy, and leaving it inside meant the
+    # whole scenario strict-xfailed -- masking the account / pricing / features /
+    # geo / portfolio asserts beside it, which DO pass. Isolating it lets those
+    # grade for the first time while this one keeps failing honestly.
+    #
+    # Why it cannot pass, and why that is CORRECT rather than a defect: v3.1.1
+    # get-adcp-capabilities-response.json carries a must_equal_when rule -- when
+    # reporting_delivery_methods contains "webhook", webhook_signing.supported MUST
+    # be true. webhook_signing means RFC 9421, which is unimplemented (#1291).
+    # Production does push HMAC-signed reporting webhooks, but it may not ADVERTISE
+    # the method while RFC 9421 signing is off, so omitting the field is
+    # spec-mandated honesty. This scenario un-xfails when #1291 lands, not before.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/reporting_delivery_methods
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/webhook_signing
 
   @T-UC-010-main-readonly @main-flow @post-f1
   Scenario: Capabilities discovery is read-only — no state change
@@ -389,13 +431,24 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # (minItems 1) — there is no schema-legal "partially populated without supported_billing".
     # The former "partial" row now pins the schema-legal degraded shape: block present with
     # supported_billing only, all optional fields omitted.
+    # The empty_billing_policy row is the OTHER half of that all-or-nothing rule: a tenant
+    # whose billing policy resolves to the empty set (resolve_supported_billing,
+    # src/core/billing_policy.py -- an explicitly configured [] means "reject every billing
+    # model", preserved as-is) has NO schema-legal account block available, because
+    # supported_billing is both required on the block and minItems 1. account itself is
+    # OPTIONAL (it is not in the response's top-level required list), so omitting the whole
+    # block is the only conformant emission -- emitting it with an empty array would be a
+    # schema-INVALID response.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/supported_billing/minItems
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/required
 
     Examples:
-      | partition_boundary                                            | tenant_condition                                   | account_state                                             |
-      | no_tenant no tenant → account section absent                  | no tenant can be resolved from the request context | absent                                                    |
-      | full_response tenant resolved → account section present       | a tenant is resolvable from the request context    | present                                                   |
-      | account_degraded partial config → supported_billing-only block | a tenant is resolvable with partial account config | present with supported_billing only and no optional fields |
+      | partition_boundary                                                  | tenant_condition                                          | account_state                                             |
+      | no_tenant no tenant → account section absent                        | no tenant can be resolved from the request context        | absent                                                    |
+      | full_response tenant resolved → account section present             | a tenant is resolvable from the request context           | present                                                   |
+      | account_degraded partial config → supported_billing-only block      | a tenant is resolvable with partial account config        | present with supported_billing only and no optional fields |
+      | empty_billing_policy no billing model supported → whole block absent | a tenant is resolvable with an explicitly empty billing policy | absent                                                    |
 
   @T-UC-010-degradation-sections @extension @degradation @partition @boundary
   Scenario Outline: Adapter-dependent sections absent when adapter fails

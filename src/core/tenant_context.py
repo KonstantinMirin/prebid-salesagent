@@ -53,7 +53,7 @@ class TenantContext(BaseModel):
     policy_settings: dict[str, Any] | None = None
     signals_agent_config: dict[str, Any] | None = None
     supported_billing: list[str] | None = None  # BR-RULE-059: seller billing policy
-    account_sandbox: bool = True  # #1592 C2/A2: account.sandbox + sync_accounts provisioning gate
+    account_sandbox: bool = False  # #1592 C2/A2: account.sandbox + sync_accounts provisioning gate
     approval_mode: str = "require-human"  # BR-RULE-037: creative approval mode
     account_approval_mode: str | None = None  # BR-RULE-060: account approval mode (auto|credit_review|legal_review)
     gemini_api_key: str | None = None
@@ -118,7 +118,7 @@ class TenantContext(BaseModel):
             policy_settings=safe_json_loads(tenant.policy_settings, None),
             signals_agent_config=safe_json_loads(tenant.signals_agent_config, None),
             supported_billing=safe_json_loads(tenant.supported_billing, None),
-            account_sandbox=tenant.account_sandbox if tenant.account_sandbox is not None else True,
+            account_sandbox=tenant.account_sandbox,
             approval_mode=tenant.approval_mode or "require-human",
             account_approval_mode=tenant.account_approval_mode,
             gemini_api_key=tenant.gemini_api_key,

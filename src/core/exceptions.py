@@ -11,7 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel, ValidationError
@@ -92,8 +92,34 @@ _SPEC_DEMOTED_CODES: frozenset[str] = frozenset({"NOT_SUPPORTED"})
 
 # The authoritative wire-code table: SDK baseline + pinned-spec supplement,
 # minus the codes AdCP v3.1.1 demoted (which translate to a canonical target).
+#: Codes where the SDK's shipped ``recovery`` disagrees with the PINNED spec enum,
+#: corrected to the pin. The pin is normative -- error-code.json's enumMetadata
+#: says "SDKs MUST consume this block ... the recovery classification embedded in
+#: that prose is normative and MUST match the value here" -- so where the two
+#: differ, the pin wins and the SDK value is the drift.
+#:
+#: This is the FOLD: recovery used to be classified in three places (this table,
+#: each AdCPError subclass's ``_default_recovery``, and the pin), free to
+#: disagree, and they did -- on these seven codes, six of which the owning
+#: subclass also contradicted. One buyer-facing code must not mean "retry" as a
+#: raised error and "do not retry" as an advisory entry. Parity across all three
+#: is now enforced by tests/unit/test_error_recovery_pin_parity.py.
+#:
+#: @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata
+_SPEC_RECOVERY_OVERRIDES: dict[str, str] = {
+    "ACCOUNT_PAYMENT_REQUIRED": "terminal",  # pin: settle the balance out-of-band; retrying cannot
+    "AUTHORIZATION_REQUIRED": "correctable",  # pin: the buyer can obtain authorization and re-send
+    "BUDGET_EXHAUSTED": "terminal",  # pin: the budget is spent; a retry cannot un-spend it
+    "CONFLICT": "transient",  # pin: concurrent modification -- re-read and retry may succeed
+    "IDEMPOTENCY_CONFLICT": "correctable",  # pin: re-send with a distinct idempotency key
+    "IDEMPOTENCY_EXPIRED": "correctable",  # pin: re-send with a fresh key
+    "UNSUPPORTED_FEATURE": "correctable",  # pin: drop the unsupported field and re-send
+}
+
 WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {
-    k: v for k, v in {**STANDARD_ERROR_CODES, **_SPEC_SUPPLEMENT_CODES}.items() if k not in _SPEC_DEMOTED_CODES
+    k: ({**v, "recovery": _SPEC_RECOVERY_OVERRIDES[k]} if k in _SPEC_RECOVERY_OVERRIDES else v)
+    for k, v in {**STANDARD_ERROR_CODES, **_SPEC_SUPPLEMENT_CODES}.items()
+    if k not in _SPEC_DEMOTED_CODES
 }
 
 ERROR_CODE_MAPPING: dict[str, str] = {
@@ -192,8 +218,14 @@ INTERNAL_CODES: frozenset[str] = frozenset(
 )
 
 # Sanity check: every mapping target must be a standard code.
+# An explicit raise, not `assert`: `python -O` strips asserts, so this invariant
+# would silently stop holding in exactly the deployment where a non-standard
+# target would leak an internal code onto the buyer's wire. RuntimeError, not
+# AdCPError -- it fires at IMPORT time on a developer error, with no request to
+# attach a code or recovery to.
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(WIRE_STANDARD_CODES)
-assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
+if _NON_STANDARD_TARGETS:
+    raise RuntimeError(f"ERROR_CODE_MAPPING contains non-standard targets: {sorted(_NON_STANDARD_TARGETS)}")
 
 
 def translate_error_code(code: str) -> str:
@@ -227,36 +259,27 @@ def to_wire_error_code(code: str) -> str:
 def advisory_recovery_for(code: str) -> RecoveryHint:
     """Recovery classification for a hand-built ``errors[]`` advisory.
 
-    Derived from the ``AdCPError`` subclass that owns *code* — each subclass's
-    ``_default_recovery`` is already the spec-cited classification (see the
-    per-class docstrings citing v3.1.1 ``error-code.json`` enumMetadata), so this
-    reads the existing authority rather than adding a parallel table that could
-    drift from it.
+    A LOOKUP in :data:`WIRE_STANDARD_CODES`, which is itself pin-corrected --
+    the single authority for what a wire code means to a buyer. It replaced a
+    walk over ``AdCPError.__subclasses__()``, which had two faults beyond being
+    a second classification: its traversal ORDER silently decided the winner
+    when two subclasses claimed one code, and its ``transient`` fallback
+    invented a classification for codes nobody claimed.
 
-    Falls back to ``transient`` for a code no subclass claims, which is exactly
-    what the spec tells receivers to assume: ``#/properties/code`` — "read
-    ``error.recovery`` ... and fall back to ``transient`` when ``recovery`` is
-    absent". ``to_wire_error_code`` collapses unmapped codes to
-    ``SERVICE_UNAVAILABLE``, whose pinned classification is also ``transient``,
-    so the fallback and the collapse agree.
+    Raises rather than falling back, and the raise is UNREACHABLE by
+    construction: the only caller, :func:`normalize_advisory_errors`, passes a
+    ``to_wire_error_code`` result, and that function already collapses anything
+    unmapped to ``SERVICE_UNAVAILABLE``. So every input is a table key. The
+    raise asserts that closed world instead of papering over a future hole in
+    it -- a silent default here would put an unclassified code on the wire.
     """
-    for cls in _iter_adcp_error_subclasses():
-        if getattr(cls, "_default_error_code", None) == code:
-            return cls._default_recovery
-    return "transient"
-
-
-def _iter_adcp_error_subclasses() -> Iterator[type[AdCPError]]:
-    """Every concrete AdCPError subclass, depth-first."""
-    stack: list[type[AdCPError]] = [AdCPError]
-    seen: set[type] = set()
-    while stack:
-        cls = stack.pop()
-        if cls in seen:
-            continue
-        seen.add(cls)
-        yield cls
-        stack.extend(cls.__subclasses__())
+    entry = WIRE_STANDARD_CODES.get(code)
+    if entry is None:
+        raise KeyError(
+            f"No recovery classification for wire code {code!r}. Callers must pass a "
+            "to_wire_error_code() result, which is always a WIRE_STANDARD_CODES key."
+        )
+    return cast(RecoveryHint, entry["recovery"])
 
 
 def normalize_advisory_errors(errors: list[Error]) -> list[Error]:
@@ -285,20 +308,16 @@ def normalize_advisory_errors(errors: list[Error]) -> list[Error]:
     shared by every ``_impl`` that emits advisories, and a tool importing an
     advisory normalizer from a sibling tool module is a layering inversion.
     """
-    from adcp.types import Error
-
     return [
-        Error(  # structural-guard: advisory entry serialized verbatim into a response errors[]
-            code=(wire_code := to_wire_error_code(e.code)),
-            message=e.message,
-            recovery=e.recovery if e.recovery is not None else advisory_recovery_for(wire_code),
-            field=e.field,
-            suggestion=e.suggestion,
-            details=e.details,
-            retry_after=e.retry_after,
-            issues=e.issues,
-            source=e.source,
-            sdk_id=e.sdk_id,
+        # model_copy over a 10-field re-list: this changes at most TWO fields, and
+        # naming the other eight to preserve them meant every future Error field
+        # had to be added here too or it would be silently dropped from every
+        # advisory.
+        e.model_copy(
+            update={
+                "code": (wire_code := to_wire_error_code(e.code)),
+                "recovery": e.recovery if e.recovery is not None else advisory_recovery_for(wire_code),
+            }
         )
         for e in errors
     ]

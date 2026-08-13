@@ -8,7 +8,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 
 import dataclasses
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -49,9 +49,9 @@ from pydantic import Field
 
 from src.adapters.base import TargetingCapabilities
 from src.core.auth import require_identity
-from src.core.billing_policy import BillingParty, resolve_supported_billing
+from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
-from src.core.exceptions import normalize_advisory_errors
+from src.core.exceptions import AdCPConfigurationError, normalize_advisory_errors
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant, get_targeting_capabilities_override
@@ -72,10 +72,24 @@ logger = logging.getLogger(__name__)
 
 # webhook_signing / request_signing: agent-level facts (no RFC 9421 request/webhook
 # signing implemented today), not tenant config -- declared identically on every
-# response, in-process and no-tenant alike (salesagent-3s5a). The
-# must_equal_when(webhook emission -> supported=true) x-adcp-validation invariant is
-# satisfied vacuously today because production emits no webhook-triggering fields
-# either; RFC 9421 signing support is tracked as follow-up work, not this task's scope.
+# response, in-process and no-tenant alike (salesagent-3s5a).
+#
+# The must_equal_when invariant here is satisfied HONESTLY, not vacuously, and the
+# distinction matters. v3.1.1 get-adcp-capabilities-response.json requires that when
+# media_buy.reporting_delivery_methods contains "webhook", webhook_signing.supported
+# MUST be true -- "emitting state-changing webhooks unsigned is a downgrade vector
+# that lets an on-path attacker forge delivery callbacks".
+#
+# Production DOES push reporting webhooks, signed with LEGACY HMAC
+# (get_adcp_signed_headers_for_webhook, src/services/protocol_webhook_service.py).
+# But webhook_signing means RFC 9421 specifically, which is genuinely unimplemented
+# (#1291). So declaring reporting_delivery_methods: ["webhook"] would be
+# SPEC-FORBIDDEN while signing is off -- omitting it is the mandatory-honest choice,
+# and this block is already correct. #1592's final field closes when #1291 lands: a
+# real spec dependency, not a gap in this implementation.
+#
+# Whether HMAC-only delivery should be gated off pending RFC 9421 is the signing
+# PR's decision, not this one's.
 _WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
 _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
 
@@ -118,6 +132,26 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     )
 
 
+def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable[[], T], *, default: T) -> T:
+    """Run *resolve*; on failure record a degradation advisory and return *default*.
+
+    ONE body for all five discovery lookups that degrade rather than fail the
+    response. Each site used to spell its own try/except/_record_degradation/
+    fall-back-to-a-default, which is five chances to forget the advisory (and
+    silently emit a placeholder, the quiet-failure class CLAUDE.md bans) or to
+    let an exception escape and 500 a response that is meant to degrade.
+
+    Broad ``except Exception`` is deliberate and matches what it replaces: this
+    is the degradation boundary, and the advisory is how the buyer learns a
+    section is missing rather than empty.
+    """
+    try:
+        return resolve()
+    except Exception as e:
+        _record_degradation(advisories, what, e)
+        return default
+
+
 def _build_adcp_block(tenant: Mapping[str, object] | None) -> Adcp:
     """Build the top-level adcp.* envelope -- single source for both the
     no-tenant minimal response and the tenant-resolved full response
@@ -143,22 +177,35 @@ def _build_adcp_block(tenant: Mapping[str, object] | None) -> Adcp:
     )
 
 
-def _build_account_block(tenant: Mapping[str, object]) -> AccountCapabilities:
+def _build_account_block(tenant: Mapping[str, object]) -> AccountCapabilities | None:
     """Build the account block from real tenant config -- never fabricated.
+
+    Returns None when the seller supports NO billing model. The block is
+    all-or-nothing per schema: ``supported_billing`` is required on it and is
+    minItems 1 (v3.1.1 get-adcp-capabilities-response.json#/properties/account),
+    while ``account`` itself is optional. So a seller with an explicitly empty
+    billing policy has no schema-legal block to emit -- omitting it is the only
+    conformant answer, and emitting it with an empty array is a schema-INVALID
+    response (which is what this function used to build unconditionally).
 
     supported_billing derives from resolve_supported_billing (src/core/billing_policy.py),
     the single source shared with the sync_accounts billing gate (_check_billing_policy)
     -- the two can never diverge. require_operator_auth is a true architectural constant
     (no per-tenant operator-auth config or enforcement exists yet). sandbox reflects the
-    tenant's account_sandbox column (default true). authorization_endpoint/
+    tenant's account_sandbox column via resolve_account_sandbox (default FALSE --
+    support is opted into, never assumed from an unset column). authorization_endpoint/
     required_for_products/account_financials stay omitted -- declaring them would be an
     aspirational capability the platform doesn't back yet, not an honest one
     (salesagent-3s5a Core Invariant).
     """
+    supported_billing = resolve_supported_billing(tenant)
+    if not supported_billing:
+        return None
+
     return AccountCapabilities(
-        supported_billing=[BillingParty(v) for v in resolve_supported_billing(tenant)],
+        supported_billing=[BillingParty(v) for v in supported_billing],
         require_operator_auth=False,
-        sandbox=tenant.get("account_sandbox", True),
+        sandbox=resolve_account_sandbox(tenant),
         # SDK field defaults are False, not None -- pass None explicitly or these
         # would fabricate "not required"/"no financials" instead of honestly omitting.
         authorization_endpoint=None,
@@ -244,9 +291,16 @@ _POSTAL_AREA_TABLE: dict[str, tuple[str, str]] = {
 # -- without this, the getattr(..., field, False) below would silently treat a
 # typo'd key as "unset" instead of raising (#1721 M3: the class of bug object-
 # typing + getattr let through).
-assert set(_POSTAL_AREA_TABLE) <= {f.name for f in dataclasses.fields(TargetingCapabilities)}, (
-    "_POSTAL_AREA_TABLE key(s) do not match a TargetingCapabilities field"
-)
+# An explicit raise, not `assert`: `python -O` strips asserts, and a stripped
+# invariant is one that silently stops holding in exactly the environment where
+# a typo'd key would do the most damage. RuntimeError, not AdCPError -- this
+# fires at IMPORT time on a developer error; there is no request to attach a
+# buyer-facing code or recovery to.
+if not set(_POSTAL_AREA_TABLE) <= {f.name for f in dataclasses.fields(TargetingCapabilities)}:
+    raise RuntimeError(
+        "_POSTAL_AREA_TABLE key(s) do not match a TargetingCapabilities field: "
+        f"{sorted(set(_POSTAL_AREA_TABLE) - {f.name for f in dataclasses.fields(TargetingCapabilities)})}"
+    )
 
 
 def _build_geo_postal_areas(targeting_caps: TargetingCapabilities | None) -> PostalAreaSupport | None:
@@ -317,15 +371,24 @@ def _get_adcp_capabilities_impl(
     # response's top-level errors[] (advisory warnings, not a failed task).
     advisories: list[Error] = []
 
-    adapter: type | None = None
-    try:
-        adapter = get_adapter_class_for_tenant(tenant)
+    # Resolved OUTSIDE the channel-mapping closure, deliberately. `adapter` also
+    # gates supported_pricing_models and the targeting-caps fallback below, so if
+    # the closure owned this binding a failure while MAPPING channels would
+    # discard an adapter class that resolved perfectly well -- one degradation
+    # cascading into two more absent sections, and the pricing-models one would
+    # vanish with no advisory of its own (its `if adapter` guard just skips).
+    # Two lookups, two independently-reported degradations.
+    adapter: type | None = _resolve_or_degrade(
+        advisories, "adapter", lambda: get_adapter_class_for_tenant(tenant), default=None
+    )
+
+    def _map_adapter_channels() -> None:
         if adapter and hasattr(adapter, "default_channels"):
             for channel_name in adapter.default_channels:
                 if channel_name.lower() in CHANNEL_MAPPING:
                     primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
-    except Exception as e:
-        _record_degradation(advisories, "adapter channels", e)
+
+    _resolve_or_degrade(advisories, "adapter channels", _map_adapter_channels, default=None)
 
     # Default to display if we couldn't determine from adapter
     if not primary_channels:
@@ -338,28 +401,37 @@ def _get_adcp_capabilities_impl(
     # this function; do NOT invent a default set).
     supported_pricing_models: list[PricingModel] | None = None
     if adapter and hasattr(adapter, "get_supported_pricing_models"):
-        try:
+
+        def _resolve_pricing_models() -> list[PricingModel] | None:
             resolved_models = sorted(
                 (PricingModel(m) for m in adapter.get_supported_pricing_models()), key=lambda m: m.value
             )
             # minItems 1 -- an empty result means "nothing determined", the same
-            # honest-absence posture as the exception path below, never an
-            # empty array (which the SDK model itself rejects).
-            supported_pricing_models = resolved_models or None
-        except Exception as e:
-            _record_degradation(advisories, "supported pricing models", e)
+            # honest-absence posture as the degradation default, never an empty
+            # array (which the SDK model itself rejects).
+            return resolved_models or None
+
+        supported_pricing_models = _resolve_or_degrade(
+            advisories, "supported pricing models", _resolve_pricing_models, default=None
+        )
 
     # Get publisher domains from database
-    publisher_domains: list[PublisherDomain] = []
-    try:
+    def _resolve_publisher_domains() -> list[PublisherDomain]:
+        resolved: list[PublisherDomain] = []
         with TenantConfigUoW(tenant_id) as uow:
-            assert uow.tenant_config is not None
-            partners = uow.tenant_config.list_publisher_partners()
-            for partner in partners:
+            if uow.tenant_config is None:
+                raise AdCPConfigurationError(
+                    "TenantConfigUoW did not initialize its tenant_config repository.",
+                    recovery="terminal",
+                )
+            for partner in uow.tenant_config.list_publisher_partners():
                 if partner.publisher_domain:
-                    publisher_domains.append(PublisherDomain(root=partner.publisher_domain))
-    except Exception as e:
-        _record_degradation(advisories, "publisher domains", e)
+                    resolved.append(PublisherDomain(root=partner.publisher_domain))
+        return resolved
+
+    publisher_domains: list[PublisherDomain] = _resolve_or_degrade(
+        advisories, "publisher domains", _resolve_publisher_domains, default=[]
+    )
 
     # If no domains found, use a placeholder
     if not publisher_domains:
@@ -412,13 +484,18 @@ def _get_adcp_capabilities_impl(
     # test_behavior override is configured (salesagent-689e fault injection).
     # Same degrade-on-exception posture as the adapter-channels block above —
     # the override read is a DB call, not a hard requirement.
-    targeting_caps = None
-    try:
-        targeting_caps = get_targeting_capabilities_override(tenant)
-    except Exception as e:
-        _record_degradation(advisories, "targeting capabilities override", e)
-    if targeting_caps is None and adapter and hasattr(adapter, "get_targeting_capabilities"):
-        targeting_caps = adapter.get_targeting_capabilities()
+    def _resolve_targeting_caps() -> TargetingCapabilities | None:
+        resolved = get_targeting_capabilities_override(tenant)
+        # INSIDE the degradation boundary the comment above already claims to
+        # cover. The adapter call used to sit outside it, so an adapter raising
+        # here was an uncaught 500 instead of the advisory this block exists to
+        # record -- for the one call in the pair that talks to a third-party ad
+        # server and is therefore the likelier of the two to fail.
+        if resolved is None and adapter and hasattr(adapter, "get_targeting_capabilities"):
+            resolved = adapter.get_targeting_capabilities()
+        return resolved
+
+    targeting_caps = _resolve_or_degrade(advisories, "targeting capabilities", _resolve_targeting_caps, default=None)
 
     # Build GeoMetros if any metro targeting is supported
     geo_metros = None
@@ -460,7 +537,7 @@ def _get_adcp_capabilities_impl(
     # (honest omission, never an empty object).
     execution = Execution(
         targeting=targeting,
-        trusted_match=declarations.trusted_match if declarations else None,
+        trusted_match=declarations.trusted_match,
     )
 
     # creative_approval_mode: require_human when this tenant's configuration
@@ -472,11 +549,9 @@ def _get_adcp_capabilities_impl(
     # conformance claim, not a "legacy-unspecified" honest omission).
     from src.core.helpers.adapter_helpers import resolve_manual_approval_signal
 
-    manual_approval_signal = False
-    try:
-        manual_approval_signal = resolve_manual_approval_signal(tenant)
-    except Exception as e:
-        _record_degradation(advisories, "manual approval signal", e)
+    manual_approval_signal = _resolve_or_degrade(
+        advisories, "manual approval signal", lambda: resolve_manual_approval_signal(tenant), default=False
+    )
     creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
 
     # Build media_buy capabilities
@@ -504,16 +579,10 @@ def _get_adcp_capabilities_impl(
         # Declared protocols UNION the defaults -- see
         # CapabilityDeclarations.emitted_supported_protocols for why replacement
         # would emit a specialism whose parent protocol is absent.
-        supported_protocols=(
-            declarations.emitted_supported_protocols(_DEFAULT_SUPPORTED_PROTOCOLS)
-            if declarations
-            else list(_DEFAULT_SUPPORTED_PROTOCOLS)
-        ),
-        specialisms=(
-            declarations.emitted_specialisms(_DEFAULT_SPECIALISMS) if declarations else list(_DEFAULT_SPECIALISMS)
-        ),
-        measurement=declarations.measurement if declarations else None,
-        experimental_features=declarations.emitted_experimental_features() if declarations else None,
+        supported_protocols=declarations.emitted_supported_protocols(_DEFAULT_SUPPORTED_PROTOCOLS),
+        specialisms=declarations.emitted_specialisms(_DEFAULT_SPECIALISMS),
+        measurement=declarations.measurement,
+        experimental_features=declarations.emitted_experimental_features(),
         media_buy=media_buy,
         account=_build_account_block(tenant),
         webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,

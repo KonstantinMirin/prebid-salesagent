@@ -36,3 +36,21 @@ def resolve_supported_billing(tenant: "TenantContext | Mapping[str, object] | No
     if not isinstance(supported, list):
         return list(BILLING_PARTY_VALUES)
     return [str(v) for v in supported]
+
+
+def resolve_account_sandbox(tenant: "TenantContext | Mapping[str, object] | None") -> bool:
+    """Resolve whether this seller supports sandbox accounts.
+
+    Single source for BOTH the capabilities ``account.sandbox`` emission and the
+    ``sync_accounts`` sandbox provisioning gate — the same claim-and-enforcement
+    pairing :func:`resolve_supported_billing` exists for. Four sites used to
+    inline ``tenant.get("account_sandbox", True)``, so the declaration and the
+    gate could disagree about a seller's posture, and each copy defaulted a
+    missing tenant to *supported*.
+
+    No tenant means no declared support: False. A seller advertises sandbox by
+    configuring it, never by the absence of configuration.
+    """
+    if not tenant:
+        return False
+    return bool(tenant.get("account_sandbox", False))

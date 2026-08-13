@@ -75,32 +75,48 @@ def _xfail_tags_reasons() -> dict[str, str]:
 
 
 class TestUC010MainReasonAccuracy:
-    """T-UC-010-main's xfail reason must name the CURRENTLY measured failing assert.
+    """The reporting-delivery xfail reason must name the CURRENTLY measured failing assert.
 
-    #1721 M4: the Given-side account.sandbox gap is fixed (given_tenant_account_sandbox_boundary
-    now writes account_sandbox via configure_tenant_field), so the scenario progresses past
-    account.*, targeting, and portfolio asserts and reaches a new, honest stopping point:
-    media_buy.reporting_delivery_methods is not declarable under the STRICT capability
-    policy without RFC 9421 signing (#1291). The reason must name THAT live gap now, not
-    the resolved account.sandbox one.
+    #1721: T-UC-010-main was SPLIT. Its one undeliverable assert moved to
+    @T-UC-010-main-reporting-delivery, which is what carries the xfail now; the rest
+    of T-UC-010-main executes un-xfailed. This class follows the assert to its new
+    tag -- a reason-accuracy meta-test that kept grading the old tag would grade an
+    entry that no longer exists, and would pass vacuously if the dict lookup were
+    ever made forgiving.
     """
 
-    def test_reason_names_reporting_delivery_methods_as_the_live_gap(self) -> None:
+    def test_main_reason_names_the_measured_gap_not_the_split_out_one(self) -> None:
+        """T-UC-010-main's own reason must name where it ACTUALLY stops.
+
+        It stops at media_buy.portfolio.primary_channels (a harness write-through
+        gap, #1871), not at reporting_delivery_methods -- which is the claim the
+        pre-#1721 reason made, and which was never true: the scenario never
+        reached that assert. A reason naming a later assert than the real one
+        hides the real one.
+        """
         reason = _xfail_tags_reasons()["T-UC-010-main"]
-        assert "reporting_delivery_methods" in reason, (
-            "T-UC-010-main's reason must name media_buy.reporting_delivery_methods as the "
-            "live gap now that account.sandbox is fixed (given_tenant_account_sandbox_boundary, "
-            f"#1721 M4). Got: {reason!r}"
+        assert "primary_channels" in reason, (
+            f"T-UC-010-main's reason must name primary_channels as the measured gap. Got: {reason!r}"
+        )
+        assert "reporting_delivery_methods" not in reason, (
+            "T-UC-010-main's reason still claims reporting_delivery_methods, which the scenario "
+            f"never reaches -- that assert now lives in its own scenario. Got: {reason!r}"
         )
 
-    def test_reason_does_not_repeat_the_resolved_account_sandbox_claim(self) -> None:
-        """account.sandbox is fixed at the Given level (#1721 M4) -- T-UC-010-main's own
-        reason must not still claim it as the blocking gap."""
-        reason = _xfail_tags_reasons()["T-UC-010-main"]
+    def test_reason_names_reporting_delivery_methods_as_the_live_gap(self) -> None:
+        reason = _xfail_tags_reasons()["T-UC-010-main-reporting-delivery"]
+        assert "reporting_delivery_methods" in reason, (
+            "The split scenario's reason must name media_buy.reporting_delivery_methods "
+            f"as the live gap. Got: {reason!r}"
+        )
+
+    def test_reason_cites_the_signing_dependency_not_a_resolved_claim(self) -> None:
+        """The gap is spec-gated on RFC 9421 webhook signing (#1291), and account.sandbox
+        is long since resolved -- the reason must say the former and not the latter."""
+        reason = _xfail_tags_reasons()["T-UC-010-main-reporting-delivery"]
+        assert "#1291" in reason, f"The reason must cite the RFC 9421 signing dependency. Got: {reason!r}"
         assert "account.sandbox" not in reason, (
-            "T-UC-010-main's reason still claims account.sandbox as the live gap; "
-            "given_tenant_account_sandbox_boundary now configures it and the scenario "
-            f"progresses past it to reporting_delivery_methods. Got: {reason!r}"
+            f"The reason still claims the resolved account.sandbox gap. Got: {reason!r}"
         )
 
 

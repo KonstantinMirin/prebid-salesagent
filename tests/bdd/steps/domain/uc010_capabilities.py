@@ -208,6 +208,12 @@ def given_adapter_all_canonical_channels(ctx: dict) -> None:
     ctx["env"].set_adapter_channels(list(CHANNELS_ENUM))
 
 
+@given("the adapter resolves but enumerating its channels fails")
+def given_adapter_channel_enumeration_fails(ctx: dict) -> None:
+    """Adapter class resolves; reading default_channels raises."""
+    ctx["env"].make_adapter_channel_enumeration_fail()
+
+
 @given(parsers.parse("the adapter is in {adapter_state} state"))
 def given_adapter_state(ctx: dict, adapter_state: str) -> None:
     """available → default happy adapter (channels + full targeting);
@@ -431,6 +437,23 @@ def given_no_account_financials(ctx: dict) -> None:
 def given_partial_account_config(ctx: dict) -> None:
     ctx["has_tenant"] = True
     _config(ctx)["partial_account"] = True
+
+
+@given("a tenant is resolvable with an explicitly empty billing policy")
+def given_empty_billing_policy(ctx: dict) -> None:
+    """empty_billing_policy row: REAL config, written through the same column the
+    "the tenant billing policy is configured as ..." Given writes.
+
+    ``tenants.supported_billing = []`` is the explicitly-configured empty set,
+    which ``resolve_supported_billing`` (src/core/billing_policy.py) preserves
+    as-is -- only ``None`` means "unconfigured, supports the full enum". So this
+    is the one tenant shape for which NO schema-legal account block exists
+    (supported_billing is required on the block AND minItems 1), and the block
+    must be omitted whole.
+    """
+    ctx["has_tenant"] = True
+    ctx["env"].configure_tenant_field("supported_billing", [])
+    _config(ctx)["supported_billing"] = []
 
 
 @given(parsers.parse("the tenant capabilities are configured as {capability_config}"))
@@ -1050,6 +1073,28 @@ def then_portfolio_domains(ctx: dict, domains: str) -> None:
 def then_portfolio_channels(ctx: dict, channels: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
     assert sorted(actual) == sorted(_quoted_list(channels)), f"primary_channels {actual!r} != {channels}"
+
+
+@then("the response should include media_buy.supported_pricing_models")
+def then_supported_pricing_models_present(ctx: dict) -> None:
+    """supported_pricing_models survived, i.e. the degradation did NOT cascade.
+
+    Presence, not values, is the claim here on purpose: the point is that this
+    section is EMITTED AT ALL when a sibling adapter-derived section failed. Its
+    values are graded by T-UC-010-pricing.
+    """
+    models = wire_field(ctx, "media_buy.supported_pricing_models")
+    assert isinstance(models, list) and models, (
+        "media_buy.supported_pricing_models is absent or empty after an unrelated "
+        f"adapter-derived section degraded — the failure cascaded: {models!r}"
+    )
+
+
+@then(parsers.parse('media_buy.portfolio primary_channels should equal "{expected}"'))
+def then_primary_channels_equal(ctx: dict, expected: str) -> None:
+    """The degraded section itself fell back to its documented default."""
+    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
+    assert channels == [expected], f"expected primary_channels == ['{expected}'], got {channels!r}"
 
 
 @then("primary_channels should equal the channels enum's 20 canonical values")
@@ -2318,9 +2363,7 @@ def then_version_details_supported_versions(ctx: dict) -> None:
     non-empty supported_versions (version-unsupported.json#/required = [supported_versions],
     minItems 1) — here exactly the release-precision versions the seller speaks, ["3.0", "3.1"].
     An empty array or omitted field is a conformance violation."""
-    versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED", recovery="correctable").get(
-        "supported_versions"
-    )
+    versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED", recovery="correctable").get("supported_versions")
     assert isinstance(versions, list) and versions, (
         f"details.supported_versions is empty or omitted (required, minItems 1): {versions!r}"
     )

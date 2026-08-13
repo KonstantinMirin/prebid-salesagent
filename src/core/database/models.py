@@ -79,8 +79,12 @@ class Tenant(Base, JSONValidatorMixin):
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
+    # Default FALSE: a seller advertises sandbox support by configuring it, never
+    # by the absence of configuration. A true-by-default column made every
+    # unconfigured tenant declare account.sandbox support it had not opted into,
+    # and made the sync_accounts provisioning gate admit sandbox entries for it.
     account_sandbox: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=False, server_default="false"
     )  # #1592 C2/A2
     account_approval_mode: Mapped[str | None] = mapped_column(
         String(50), nullable=True

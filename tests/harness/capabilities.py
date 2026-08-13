@@ -161,6 +161,25 @@ class CapabilitiesEnv(IntegrationEnv):
         set_adapter_test_behavior(self, self._tenant_id, unavailable=True)
 
     @realize_e2e(_realize_adapter_unavailable)
+    def make_adapter_channel_enumeration_fail(self) -> None:
+        """The adapter RESOLVES, but reading its channels raises.
+
+        Distinct from make_adapter_unavailable, and the distinction is the whole
+        point: the adapter class is used for THREE things (channels, supported
+        pricing models, targeting capabilities). If a channel-enumeration failure
+        were allowed to discard the resolved adapter, one degradation would
+        cascade into two more absent sections -- and the pricing-models one would
+        vanish with no advisory at all, because its guard just skips. This seam
+        is what makes that cascade observable; nothing else in the corpus
+        distinguishes "adapter is gone" from "one thing about it failed".
+        """
+
+        class _RaisingChannels:
+            def __iter__(self):
+                raise RuntimeError("adapter channel enumeration failed (harness)")
+
+        self._adapter_mock.default_channels = _RaisingChannels()
+
     def make_adapter_unavailable(self) -> None:
         """Adapter factory raises — production degrades to default channels.
 

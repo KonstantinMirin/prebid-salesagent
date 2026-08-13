@@ -21,6 +21,7 @@ silently clamping or emitting a non-conformant response.
 """
 
 from collections.abc import Collection, Iterable
+from enum import Enum
 from typing import Any
 
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
@@ -192,6 +193,17 @@ class TrustedMatchDeclaration(LibraryTrustedMatch):
     """
 
 
+def _union_sorted[EnumMember: Enum](defaults: list[EnumMember], declared: list[EnumMember] | None) -> list[EnumMember]:
+    """Defaults unioned with a declaration, sorted by enum value.
+
+    One body for the specialisms and supported_protocols emissions, which were
+    the same set-union-then-sort expressed twice with a different lambda -- two
+    copies of a rule ("declared ADDS to defaults, never replaces") that must not
+    be able to diverge, because a divergence emits a self-inconsistent wire.
+    """
+    return sorted(set(defaults) | set(declared or []), key=lambda m: m.value)
+
+
 class CapabilityDeclarations(BaseModel):
     """Implementation-backed capability blocks for one tenant.
 
@@ -211,16 +223,26 @@ class CapabilityDeclarations(BaseModel):
     specialisms: list[AdcpSpecialism] | None = None
 
     @classmethod
-    def from_tenant(cls, declared: Any) -> "CapabilityDeclarations | None":
-        """Parse a tenant's stored declarations, or ``None`` when nothing is declared.
+    def from_tenant(cls, declared: Any) -> "CapabilityDeclarations":
+        """Parse a tenant's stored declarations; an EMPTY instance when nothing is declared.
 
-        ``None``/empty reproduces the pre-#1592 wire exactly, which is what every
-        tenant that never declared anything must keep seeing.
+        Returns an empty declaration rather than ``None`` so callers can read it
+        unconditionally. Every emission site had to write
+        ``declarations.x if declarations else <default>``, which put the
+        undeclared-tenant default in five places instead of one -- and each
+        ternary was a chance to pick a different default than the emitted-union
+        rules on this class already define. An empty instance answers every one
+        of them correctly: the unions fall back to the defaults, and the optional
+        blocks are None.
+
+        The emitted wire for an undeclared tenant is unchanged (pre-#1592
+        behavior), which is what every tenant that never declared anything must
+        keep seeing.
         """
         from src.core.exceptions import AdCPConfigurationError
 
         if not declared:
-            return None
+            return cls()
         if not isinstance(declared, dict):
             raise AdCPConfigurationError(
                 f"capability_declarations must be a JSON object, got {type(declared).__name__}",
@@ -307,7 +329,7 @@ class CapabilityDeclarations(BaseModel):
 
     def emitted_specialisms(self, defaults: list[AdcpSpecialism]) -> list[AdcpSpecialism]:
         """Defaults UNIONED with the declaration -- same rule as protocols."""
-        return sorted(set(defaults) | set(self.specialisms or []), key=lambda s: s.value)
+        return _union_sorted(defaults, self.specialisms)
 
     def emitted_supported_protocols(self, defaults: list[SupportedProtocol]) -> list[SupportedProtocol]:
         """Defaults UNIONED with the declaration -- never replaced.
@@ -319,7 +341,7 @@ class CapabilityDeclarations(BaseModel):
         (``specialisms/sales-non-guaranteed/index.yaml#protocol`` -> ``media-buy``).
         A replacing semantics would therefore emit a self-inconsistent wire.
         """
-        return sorted(set(defaults) | set(self.supported_protocols or []), key=lambda p: p.value)
+        return _union_sorted(defaults, self.supported_protocols)
 
     def emitted_experimental_features(self) -> list[ExperimentalFeature] | None:
         """Feature ids DERIVED from the declared experimental blocks.

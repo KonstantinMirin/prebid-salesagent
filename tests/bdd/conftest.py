@@ -422,16 +422,32 @@ _XFAIL_TAGS: dict[str, str] = {
     # Verified against a real run 2026-07-14: every entry below fails on all
     # three wire transports (strict holds); per-row / per-transport gaps use
     # _SELECTIVE_XFAIL / _MCP_SELECTIVE_XFAIL instead.
-    # Wired non-dormant + strengthened (#1721 M4): the missing account_sandbox=false
-    # Given (models.py:82 default True) is fixed -- the scenario now runs all the
-    # way through account.*, media_buy.execution.targeting.geo_*, and portfolio
-    # asserts (the acceptance mechanism six reviewers found masked) before
-    # reaching its new, honest stopping point: media_buy.reporting_delivery_methods
-    # is not declarable under the STRICT capability policy without RFC 9421
-    # signing (same root as T-UC-010-v31-reporting-delivery-methods). Transport-
-    # independent: all 3 transports reach this same assert.
-    "T-UC-010-main": "media_buy.reporting_delivery_methods not emitted -- not declarable under the STRICT "
-    "capability policy without RFC 9421 signing (same gap as T-UC-010-v31-reporting-delivery-methods) — #1291",
+    # T-UC-010-main's live gap, MEASURED not assumed (#1721). The previous reason
+    # here claimed reporting_delivery_methods; that was stale -- the scenario never
+    # reaches it. It stops EARLIER, at media_buy.portfolio.primary_channels, which
+    # comes back ["display"] (the "couldn't determine from adapter" default)
+    # because the harness's set_adapter_channels has no realize_e2e write-through:
+    # unlike its sibling set_targeting_capabilities, it configures only the
+    # in-process adapter mock, so the real MCP/A2A/REST auth chain resolves an
+    # adapter that never saw the channels. Verified by running the split scenario
+    # against PRISTINE source in a separate worktree: identical failure, so it is
+    # pre-existing and not caused by #1721's changes.
+    # The fix is the AdapterConfig.test_behavior write-through — owned by this
+    # plan's Lane E step 2, tracked as #1871 — NOT a production defect.
+    "T-UC-010-main": "media_buy.portfolio.primary_channels degrades to the [display] default -- "
+    "set_adapter_channels configures only the in-process adapter mock, with no realize_e2e "
+    "write-through to AdapterConfig.test_behavior the way set_targeting_capabilities has, so the "
+    "real transport auth chain never sees the configured channels — #1871",
+    # SPLIT (#1721): the scenario's one SPEC-blocked assert no longer sits here. Its single undeliverable
+    # assert -- media_buy.reporting_delivery_methods -- moved to its own scenario,
+    # @T-UC-010-main-reporting-delivery, which carries the xfail below. The rest of
+    # T-UC-010-main (account.*, supported_pricing_models, media_buy.features,
+    # execution.targeting.geo_*, portfolio, last_updated) now EXECUTES on every
+    # transport for the first time; those asserts were being masked by this entry.
+    "T-UC-010-main-reporting-delivery": "media_buy.reporting_delivery_methods not emitted -- declaring it "
+    "is SPEC-FORBIDDEN while webhook_signing (RFC 9421) is unsupported: get-adcp-capabilities-response.json "
+    "must_equal_when requires webhook_signing.supported=true whenever the method list contains 'webhook'. "
+    "Production pushes HMAC-signed reporting webhooks but may not advertise them until RFC 9421 lands — #1291",
     # Graduated (salesagent-rldj): _build_adcp_block() now always emits
     # adcp.supported_versions (derived from SUPPORTED_ADCP_VERSIONS) on both
     # the no-tenant and tenant-resolved paths. T-UC-010-ext-a removed.
@@ -3900,7 +3916,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf"}:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf", "creative-approval"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
@@ -3909,6 +3925,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # creative lookup) — dormant until the cross-principal existence-gate
             # fix (PR #1430 review) made the surface safe to grade.
             # @webhook-ssrf scenarios grade registration SSRF on push_notification_config.url.
+            # @creative-approval scenarios drive the approval_mode arms of
+            # _processing.py, whose ai-powered branch reaches the background AI-review
+            # executor — an effect that leaves the sync transaction. CreativeSyncEnv
+            # mocks that executor, which is what makes the effect observable rather
+            # than a race with a real background thread. This set is the ONLY thing
+            # standing between a UC-006 scenario and dormancy, so a scenario that
+            # CreativeSyncEnv genuinely serves belongs in it — the entry grows the
+            # executing surface, it does not exempt anything from grading.
             from tests.harness.creative_sync import CreativeSyncEnv
 
             with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
@@ -3970,6 +3994,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         _UC010_WIRED_TAGS = {
             # Batch 1 — envelope + account families
             "T-UC-010-main",
+            # Split out of T-UC-010-main (#1721); wired by the same steps, so it
+            # must join the wired set or it would xfail as "not yet wired" rather
+            # than for its real, cited reason (#1291).
+            "T-UC-010-main-reporting-delivery",
+            "T-UC-010-degradation-no-cascade",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",
