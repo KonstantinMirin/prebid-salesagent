@@ -31,15 +31,74 @@ the hit count on the redirect target distinguishes "refused" from "followed".
 
 from __future__ import annotations
 
+import contextlib
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+from src.core.exceptions import RECOVERY_BY_WIRE_CODE, AdCPConfigurationError, build_two_layer_error_envelope
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
+from src.core.utils.mcp_client import MCPConnectionError
+from tests.helpers import assert_envelope_shape
 from tests.helpers.local_http_origin import run_local_origin
 from tests.integration.property_list_helpers import allow_local_origin
 from tests.integration.test_outbound_http import fast_backoff
 
 pytestmark = [pytest.mark.integration]
+
+
+def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
+    """Assert the buyer-visible envelope is CONFIGURATION_ERROR paired with terminal.
+
+    Asserts on the two-layer WIRE envelope, not on the exception's attributes:
+    the envelope is what a buyer receives, and reading the attributes would grade
+    the object this test already constructed the expectation from.
+
+    The expected recovery is read from ``RECOVERY_BY_WIRE_CODE`` rather than
+    written as a literal, so this cannot drift from the pin — if a spec bump
+    reclassified CONFIGURATION_ERROR, this test would follow it instead of
+    asserting yesterday's answer. The literal ``"terminal"`` is pinned once,
+    below, so the derivation itself cannot silently return the wrong thing.
+    """
+    expected = RECOVERY_BY_WIRE_CODE["CONFIGURATION_ERROR"]
+    assert expected == "terminal", (
+        f"the pinned enumMetadata classifies CONFIGURATION_ERROR as {expected!r}; this suite's whole "
+        "premise is that it is the TERMINAL code an operator-fault site should choose"
+    )
+    assert_envelope_shape(build_two_layer_error_envelope(exc), "CONFIGURATION_ERROR", recovery=expected)
+
+
+@contextlib.contextmanager
+def _stub_mcp_tool_result(monkeypatch: pytest.MonkeyPatch, *, payload: dict[str, Any]):
+    """Make the guarded seam hand ``_fetch_signals_operator`` a successful tool result.
+
+    The two raises under test sit AFTER a successful handshake and tool call, so
+    reaching them over a real socket would mean speaking enough MCP to satisfy
+    fastmcp — a fixture that would grade the protocol library, not the
+    classification. The seam itself is graded over real sockets by the sibling
+    classes in this file; here it is stubbed at exactly one point
+    (``create_mcp_client``) so the assertion is about what the registry does with
+    an answer it cannot use.
+    """
+    client = MagicMock()
+    client.call_tool = AsyncMock(return_value=MagicMock(structured_content=payload, content=[]))
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr("src.core.signals_agent_registry.create_mcp_client", lambda **_: ctx)
+    yield
+
+
+@contextlib.contextmanager
+def _stub_mcp_client_raising(monkeypatch: pytest.MonkeyPatch, exc: Exception):
+    """Make the guarded seam fail the way it reports a status-bearing failure."""
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(side_effect=exc)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    monkeypatch.setattr("src.core.signals_agent_registry.create_mcp_client", lambda **_: ctx)
+    yield
 
 
 class TestOperatorCreativeAgentRedirectIsRefused:
@@ -98,3 +157,88 @@ class TestOperatorSignalsAgentRedirectIsRefused:
             assert metadata_standin.hits == 0, (
                 f"the redirect to the metadata stand-in was followed unguarded: {metadata_standin.requests}"
             )
+
+
+class TestOperatorAgentFailureIsClassifiedTerminalByCode:
+    """An operator-configured agent that fails reaches the buyer as CONFIGURATION_ERROR.
+
+    The address of a signals or creative agent is OPERATOR configuration — a
+    tenant row this deployment wrote, never something the buyer sent. So every
+    way that dial can fail means the same thing to a buyer: nothing they can
+    change will help, and a human at the seller has to look. The pinned 3.1.1
+    ``enums/error-code.json`` gives that exactly one code —
+    ``CONFIGURATION_ERROR``, whose ``enumMetadata`` recovery is ``terminal``
+    ("surface to a human at the seller ... MUST NOT auto-retry").
+
+    These grade that the intent is expressed by CHOOSING that code. The sites
+    used to say it by hand-typing ``recovery="terminal"`` onto
+    ``AdCPAdapterError``, whose wire code is ``SERVICE_UNAVAILABLE`` — which the
+    same pinned table classifies ``transient``. A buyer classifying by code was
+    told to retry forever; a buyer classifying by recovery was told to stop. The
+    pair is asserted as one tuple here because that contradiction is precisely
+    what a single-value assertion lets back in.
+    """
+
+    async def test_a_rejected_handshake_is_configuration_error(self, monkeypatch):
+        """A terminal 4xx reported by the guarded seam -> CONFIGURATION_ERROR / terminal.
+
+        Grades ``raise_mapped_mcp_error``'s terminal-4xx arm
+        (``src/core/helpers/mcp_seam_error_mapping.py``) on the signals path:
+        "the endpoint this deployment is configured to use rejected us" is a
+        deployment fault, not a buyer fault, and not a transient one — a 404 will
+        be a 404 on the next attempt too.
+
+        The failure is injected as the seam's OWN contract rather than by serving
+        a 404 over a socket: fastmcp's handshake surfaces a plain "Session
+        terminated" with no HTTP status attached, so a real 404 never reaches the
+        status-bearing arm at all (verified — it lands in the unreachable arm and
+        raises SERVICE_UNAVAILABLE). What the mapper actually keys on is a
+        ``httpx.HTTPStatusError`` chained beneath the seam's exception, which is
+        what ``find_wrapped_http_status_error`` exists to recover; that chain is
+        what is built here.
+        """
+        import httpx
+
+        response = httpx.Response(404, request=httpx.Request("POST", "https://signals.operator.test/mcp"))
+        wrapped = httpx.HTTPStatusError("404 Not Found", request=response.request, response=response)
+        seam_error = MCPConnectionError("Failed to connect to MCP agent after 3 attempts")
+        seam_error.__cause__ = wrapped
+
+        agent = SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent")
+
+        with _stub_mcp_client_raising(monkeypatch, seam_error):
+            with pytest.raises(AdCPConfigurationError) as excinfo:
+                await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="test brief")
+
+        _assert_terminal_by_code(excinfo.value)
+
+    async def test_an_unparseable_payload_is_configuration_error(self, monkeypatch):
+        """A handshake that succeeds but carries nothing parseable -> CONFIGURATION_ERROR / terminal.
+
+        Grades ``signals_agent_registry``'s empty-payload raise. The agent is up
+        and answering, so this is not a transient outage: it is answering with
+        something that is not a ``get_signals`` response, which only the operator
+        who registered it can resolve.
+        """
+        agent = SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent")
+
+        with _stub_mcp_tool_result(monkeypatch, payload={}):
+            with pytest.raises(AdCPConfigurationError) as excinfo:
+                await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="test brief")
+
+        _assert_terminal_by_code(excinfo.value)
+
+    async def test_a_schema_invalid_payload_is_configuration_error(self, monkeypatch):
+        """A payload that parses as JSON but not as a GetSignalsResponse -> CONFIGURATION_ERROR / terminal.
+
+        The sibling of the empty-payload case: the agent answered with structure
+        the pinned response schema rejects. Same operator fault, same code — the
+        two must not diverge, which is why both are graded.
+        """
+        agent = SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent")
+
+        with _stub_mcp_tool_result(monkeypatch, payload={"signals": "not-a-list"}):
+            with pytest.raises(AdCPConfigurationError) as excinfo:
+                await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="test brief")
+
+        _assert_terminal_by_code(excinfo.value)

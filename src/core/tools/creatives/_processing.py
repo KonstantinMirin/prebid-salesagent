@@ -14,11 +14,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from adcp.types import CreativeAsset
-from adcp.types import Error as AdCPErrorDetail
+from adcp.types import CreativeAsset, Recovery
 from pydantic import BaseModel
 
-from src.core.exceptions import AdCPConfigurationError
+from src.core.exceptions import AdCPConfigurationError, wire_advisory
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
@@ -43,24 +42,33 @@ def _failed_sync_result(
 ) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
-    ``recovery`` distinguishes a transient failure (creative agent down — a retry
-    may help) from a terminal one (server misconfiguration — retrying cannot fix
-    it). The wire code defaults to the standard ``SERVICE_UNAVAILABLE``
-    (``CONFIGURATION_ERROR`` is internal-only and would leak verbatim in an
-    advisory); ``recovery`` is the structured retry signal. Buyer-correctable
-    per-item failures pass the condition-specific code: ``CREATIVE_NOT_FOUND``
-    for an assignment referencing an unknown creative_id (matching the
-    strict-mode ``AdCPCreativeNotFoundError`` raise since 287c93099),
-    ``VALIDATION_ERROR`` for other correctable causes.
+    The CODE is the choice; the recovery follows from it. ``wire_advisory``
+    derives the buyer-facing retry classification from the pinned enumMetadata,
+    so a call site says what happened and the retry signal follows. Nine of the
+    ten call sites work that way. The tenth still passes ``recovery`` explicitly
+    and overrides the derived value — see the FIXME below for why it cannot go
+    yet and what deletes it. Pass the condition-specific code: ``CONFIGURATION_ERROR`` for a
+    seller-side misconfiguration (pinned terminal — the buyer must not retry),
+    ``CREATIVE_NOT_FOUND`` for an assignment referencing an unknown creative_id
+    (matching the strict-mode ``AdCPCreativeNotFoundError`` raise since
+    287c93099), ``VALIDATION_ERROR`` for other buyer-correctable causes. The
+    default ``SERVICE_UNAVAILABLE`` (pinned transient) covers a creative agent
+    that is simply down.
     """
+    advisory = wire_advisory(code, error_msg, field=field)
+    if recovery is not None:
+        # FIXME(#1802): the last hand-forwarded advisory recovery, and the only
+        # caller is _sync.py's `except AdCPError` arm. It cannot go yet: two raise
+        # sites reachable from that arm (creative_agent_registry.py's two
+        # unparseable-MCP-response raises) still hand-type recovery="terminal" on a
+        # SERVICE_UNAVAILABLE the pin calls transient, so deriving here would flip
+        # that path's buyer-facing pair to transient, ungraded. Deleted together
+        # with those raises when `recovery` becomes a read-only derived property.
+        advisory.recovery = Recovery(recovery)
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
-        errors=[
-            AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-                code=code, message=error_msg, recovery=recovery, field=field
-            )
-        ],
+        errors=[advisory],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,
@@ -439,7 +447,7 @@ def _update_existing_creative(
             logger.error(
                 "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="terminal"), False)
+            return (_failed_sync_result(existing_creative.creative_id, error_msg, code="CONFIGURATION_ERROR"), False)
         except OutboundError as outbound_error:
             # A refused/undeliverable egress request is already correctly classified
             # by the seam — delegate rather than laundering it into the generic
@@ -463,7 +471,7 @@ def _update_existing_creative(
                 f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}",
                 exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="transient"), False)
+            return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
 
     # In full upsert, consider all fields as changed
     changes.extend(["url", "click_url", "width", "height", "duration"])
@@ -732,7 +740,7 @@ def _create_new_creative(
             # honestly so the buyer does not retry a misconfiguration.
             error_msg = str(config_error)
             logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
-            return (_failed_sync_result(creative_id, error_msg, recovery="terminal"), False)
+            return (_failed_sync_result(creative_id, error_msg, code="CONFIGURATION_ERROR"), False)
         except OutboundError as outbound_error:
             # A refused/undeliverable egress request is already correctly classified
             # by the seam — delegate rather than laundering it into the generic
@@ -756,7 +764,7 @@ def _create_new_creative(
                 f"[sync_creatives] {error_msg} - rejecting creative {creative_id}",
                 exc_info=True,
             )
-            return (_failed_sync_result(creative_id, error_msg, recovery="transient"), False)
+            return (_failed_sync_result(creative_id, error_msg), False)
 
     # Determine creative status based on approval mode
 

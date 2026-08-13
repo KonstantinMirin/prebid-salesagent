@@ -374,11 +374,15 @@ def _sync_creatives_impl(
                 )
                 failed_count += 1
                 # Carry the typed error's OWN classification onto the per-item
-                # result. The default is SERVICE_UNAVAILABLE/no-recovery, which
-                # for a correctable error reports the SELLER as unavailable for a
-                # problem in the buyer's own document — and drops the `field`
-                # that says which input to fix. That matters most for an egress
+                # result. The default is SERVICE_UNAVAILABLE — now paired with the
+                # pin's `transient` rather than left empty — which for a
+                # correctable error reports the SELLER as unavailable for a
+                # problem in the buyer's own document, and drops the `field` that
+                # says which input to fix. That matters most for an egress
                 # refusal, whose message deliberately says nothing.
+                # `recovery=` is the last hand-forwarded advisory recovery in this
+                # package; it goes when the raise sites it protects stop
+                # hand-typing terminal (see _processing._failed_sync_result).
                 results.append(
                     _failed_sync_result(
                         creative_id,

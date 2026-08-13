@@ -15,6 +15,7 @@ import math
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, get_args
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
+from adcp.types import Error as LibraryError
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
@@ -257,6 +258,49 @@ def to_wire_error_code(code: str) -> str:
     """
     translated = translate_error_code(code)
     return translated if translated in WIRE_STANDARD_CODES else "SERVICE_UNAVAILABLE"
+
+
+def wire_advisory(
+    code: str,
+    message: str,
+    *,
+    field: str | None = None,
+    suggestion: str | None = None,
+) -> LibraryError:
+    """Build an ``errors[]`` advisory entry with the recovery the PIN assigns its code.
+
+    The ONE constructor for a per-item advisory. ``recovery`` is DERIVED, never
+    chosen: pass the code that describes what happened and the buyer-facing retry
+    semantics follow from ``RECOVERY_BY_WIRE_CODE``. That is the whole point —
+    ``adcp.types.Error`` types ``code`` as a bare ``str`` and leaves ``recovery``
+    free, so a hand-built advisory could pair a code with a recovery the pinned
+    enumMetadata contradicts, and nothing downstream would catch it: advisories
+    ride inside a SUCCESS response and never pass the boundary translator, so the
+    pair here IS the wire contract.
+
+    The code is normalized through ``to_wire_error_code`` first, so an
+    internal-only code (``ADAPTER_ERROR``, ``API_ERROR``) can neither leak to the
+    buyer nor carry a foreign classification.
+
+    Populating ``recovery`` on every advisory is what the pin asks for:
+    ``Error.recovery``'s own description says senders SHOULD populate it on every
+    error from 3.1 onward, because a receiver that does not recognize the code
+    MUST still be able to classify from ``recovery``.
+
+    ``suggestion`` has no caller yet: the advisory sites migrated so far carry a
+    message and a field, not a suggestion. It is here so the sites that DO carry
+    one arrive through this constructor rather than around it.
+    """
+    wire_code = to_wire_error_code(code)
+    return LibraryError(
+        code=wire_code,
+        message=message,
+        # ``.get`` with the base fallback covers the single WIRE_STANDARD code the
+        # pin does not classify (NOT_SUPPORTED); every other code is in the table.
+        recovery=RECOVERY_BY_WIRE_CODE.get(wire_code, AdCPError._default_recovery),
+        field=field,
+        suggestion=suggestion,
+    )
 
 
 def _serialize_context(
@@ -764,13 +808,27 @@ class AdCPAdapterError(AdCPError):
 class AdCPConfigurationError(AdCPError):
     """Server-side configuration is broken (500).
 
-    Raised when encrypted secrets cannot be decrypted (key rotation,
-    corruption, missing ENCRYPTION_KEY). Callers should NOT silently
-    fall back — the configuration needs admin intervention, so recovery is
-    ``terminal``: the buyer has no lever to fix server config and per the
-    pinned enum "MUST NOT auto-retry". CONFIGURATION_ERROR is a
+    Two families of raise site, one meaning — this deployment is pointed at
+    something wrong, and only an operator can repoint it:
+
+    * local config: encrypted secrets that cannot be decrypted (key rotation,
+      corruption, missing ENCRYPTION_KEY), a missing API key.
+    * a REMOTE endpoint that is operator configuration — a registered creative
+      or signals agent — refusing us, rejecting us with a terminal 4xx, or
+      answering with something unparseable. The address came from this
+      deployment, not from the buyer, so the buyer has no lever either way.
+
+    Callers should NOT silently fall back. Recovery is ``terminal``: per the
+    pinned enum the buyer "cannot resolve a seller-side deployment
+    misconfiguration and MUST NOT auto-retry". Choosing this class IS how a
+    raise site says terminal — do not hand-type ``recovery="terminal"`` onto a
+    code the pin classifies otherwise. CONFIGURATION_ERROR is a
     _SPEC_SUPPLEMENT_CODES pass-through — it reaches the wire untranslated
     (#1430 review).
+
+    NOT for a buyer-supplied URL: that is ``AdCPBlockedUrlError``. Telling a
+    buyer the SELLER is misconfigured about an address they chose inverts the
+    provenance.
     """
 
     _default_status_code: ClassVar[int] = 500

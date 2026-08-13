@@ -70,7 +70,6 @@ import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPConfigurationError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
@@ -227,22 +226,31 @@ class TestTaxonomy:
     async def test_a_404_is_terminal_not_transient(self, registry, local_origin_tls, monkeypatch):
         """A 4xx that is not 429 tells the buyer to stop, not to retry forever.
 
-        The seam raises ``OutboundDeliveryFailed``, which IS a
-        SERVICE_UNAVAILABLE / **transient** error — correct for a 5xx, wrong for
-        a 404 the origin will keep returning. The classification is what this
-        grades; the hit count is unchanged (a 4xx was never retried) and is
+        The seam raises ``OutboundDeliveryFailed``, which is a SERVICE_UNAVAILABLE
+        / **transient** error — correct for a 5xx, wrong for a 404 the origin will
+        keep returning. The mapper therefore re-raises it as
+        ``AdCPConfigurationError``: this endpoint is OPERATOR configuration, so a
+        404 from it means the deployment points at something that is not the tool
+        it claims to be, and the pinned enumMetadata classifies CONFIGURATION_ERROR
+        terminal — "surface to a human at the seller ... MUST NOT auto-retry".
+
+        Expressing terminal by CHOOSING that code, rather than by hand-typing
+        ``recovery="terminal"`` onto SERVICE_UNAVAILABLE, is the point: the pair
+        this asserts now agrees with the pin instead of contradicting it, so a
+        buyer classifying by code and a buyer classifying by recovery read the
+        same thing. The hit count is unchanged (a 4xx was never retried) and is
         asserted only so a regression there cannot hide behind a green
         classification.
         """
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(404, body=b'{"error": "no such tool"}')
 
-        with pytest.raises(AdCPAdapterError) as excinfo:
+        with pytest.raises(AdCPConfigurationError) as excinfo:
             await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
 
         assert_envelope_shape(
             build_two_layer_error_envelope(excinfo.value),
-            "SERVICE_UNAVAILABLE",
+            "CONFIGURATION_ERROR",
             recovery="terminal",
         )
         assert local_origin_tls.hits == 1

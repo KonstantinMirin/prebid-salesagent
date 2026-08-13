@@ -266,3 +266,39 @@ def test_wire_standard_codes_carry_no_classification() -> None:
         f"+ 2 supplement). src/core/security/webhook_strict_json.py:102 documents the "
         f"40-entry count; update it together with this assertion if the SDK pin moves."
     )
+
+
+def test_wire_advisory_derives_the_pair_and_contains_internal_codes() -> None:
+    """``wire_advisory`` is the one advisory constructor, and it DERIVES recovery.
+
+    The ``errors[]`` advisory channel is the one place a (code, recovery) pair
+    reaches a buyer without passing the boundary translator — it rides inside a
+    SUCCESS response and serializes verbatim. ``adcp.types.Error`` types ``code``
+    as a bare ``str`` and leaves ``recovery`` free, so before this constructor a
+    call site could pair any code with any recovery and no oracle would see it.
+
+    Two obligations, graded together because the constructor exists to hold both:
+
+    1. The recovery is the PIN's, for every code the pin defines — not a caller's
+       literal, and not the SDK helper's (which contradicts the pin on 7 codes).
+    2. An internal-only code cannot leak. ``ADAPTER_ERROR`` is not a wire code;
+       it must arrive as its mapped ``SERVICE_UNAVAILABLE`` carrying
+       SERVICE_UNAVAILABLE's classification, never as itself and never carrying
+       the classification of the code it was translated FROM.
+    """
+    from src.core.exceptions import wire_advisory
+
+    for code, expected in sorted(_pinned_recovery_by_code().items()):
+        if code not in WIRE_STANDARD_CODES:
+            continue  # not a code an advisory may carry; the mapping cases are below
+        advisory = wire_advisory(code, "x")
+        assert (advisory.code, advisory.recovery) == (code, expected), (
+            f"wire_advisory({code!r}) produced {(advisory.code, advisory.recovery)!r}; the pinned "
+            f"enumMetadata says {expected!r}. Recovery must be derived from the code, never chosen."
+        )
+
+    internal = wire_advisory("ADAPTER_ERROR", "x")
+    assert (internal.code, internal.recovery) == ("SERVICE_UNAVAILABLE", "transient"), (
+        f"wire_advisory('ADAPTER_ERROR') produced {(internal.code, internal.recovery)!r}. An internal-only "
+        "code must be translated to its wire equivalent AND take that equivalent's pinned recovery."
+    )

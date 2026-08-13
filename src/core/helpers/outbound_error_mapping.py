@@ -71,7 +71,7 @@ def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger:
     Always raises; the ``NoReturn`` annotation lets a caller delegate from a
     single ``except OutboundError`` arm without a trailing ``raise``.
     """
-    from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPRateLimitError
+    from src.core.exceptions import AdCPConfigurationError, AdCPRateLimitError
 
     if isinstance(exc, OutboundRequestBlocked):
         logger.error("Egress policy refused the configured endpoint for %s", agent_label)
@@ -86,6 +86,6 @@ def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger:
     terminal_status = terminal_client_error_status(exc)
     if terminal_status is not None:
         logger.error("%s rejected the request (HTTP %s)", agent_label, terminal_status)
-        raise AdCPAdapterError(f"{agent_label} rejected the request.", recovery="terminal") from exc
+        raise AdCPConfigurationError(f"{agent_label} rejected the request.") from exc
 
     raise exc

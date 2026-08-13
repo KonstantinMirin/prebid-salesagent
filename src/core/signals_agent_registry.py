@@ -34,7 +34,7 @@ from typing import Any
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
 from src.core.helpers.mcp_tool_payload import extract_tool_payload
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
@@ -174,15 +174,11 @@ class SignalsAgentRegistry:
             # would otherwise validate CLEANLY with signals=None — every field is
             # optional — silently producing signals=[] and masking a genuine
             # agent failure as "agent up, 0 signals" (salesagent-9eu class bug).
-            raise AdCPAdapterError(
-                f"No parseable content in get_signals response from {agent.name}", recovery="terminal"
-            )
+            raise AdCPConfigurationError(f"No parseable content in get_signals response from {agent.name}")
         try:
             parsed = LibraryGetSignalsResponse.model_validate(payload)
         except ValidationError as e:
-            raise AdCPAdapterError(
-                f"Signals agent {agent.name} returned an invalid response", recovery="terminal"
-            ) from e
+            raise AdCPConfigurationError(f"Signals agent {agent.name} returned an invalid response") from e
 
         signals = parsed.signals or []
         total_duration = time.time() - start_time
@@ -263,15 +259,25 @@ class SignalsAgentRegistry:
                 "signal_count": len(signals),
             }
 
-        except AdCPAdapterError as e:
-            # A terminal rejection from the guarded MCP seam (e.g. HTTP 401/403/404
-            # during the handshake) — the seam's failure surface no longer
-            # distinguishes "bad auth" from "bad request" the way the deleted SDK
-            # client's ADCPAuthenticationError/ADCPConnectionError did.
-            logger.error(f"Connection test failed (rejected): {e.message}")
+        except AdCPConfigurationError as e:
+            # Everything the operator can fix by repointing or re-crediting this
+            # deployment. CONFIGURATION_ERROR now covers THREE causes that used to
+            # arrive as different classes: the guarded MCP seam rejecting us
+            # (HTTP 401/403/404 during the handshake), egress policy REFUSING the
+            # configured endpoint before we dial it, and an endpoint that answers
+            # with nothing parseable. The seam's failure surface does not
+            # distinguish "bad auth" from "bad request" the way the deleted SDK
+            # client's ADCPAuthenticationError/ADCPConnectionError did, so the
+            # advice below names every lever rather than presuming credentials —
+            # an egress refusal has nothing to do with them. ``e.message`` already
+            # says which cause it was.
+            logger.error(f"Connection test failed (configuration): {e.message}")
             return {
                 "success": False,
-                "error": f"Connection failed: {e.message}. Check credentials, auth header, and agent URL.",
+                "error": (
+                    f"Connection failed: {e.message.rstrip('.')}. Check the agent URL, its credentials "
+                    f"and auth header, and whether this deployment's egress policy allows the address."
+                ),
             }
 
         except Exception as e:

@@ -37,7 +37,12 @@ from __future__ import annotations
 import logging
 from typing import NoReturn
 
-from src.core.exceptions import AdCPAdapterError, AdCPRateLimitError, AdCPServiceUnavailableError, clamp_retry_after
+from src.core.exceptions import (
+    AdCPConfigurationError,
+    AdCPRateLimitError,
+    AdCPServiceUnavailableError,
+    clamp_retry_after,
+)
 from src.core.security.outbound_http import find_wrapped_http_status_error, retry_after_seconds
 
 
@@ -64,7 +69,7 @@ def raise_mapped_mcp_error(exc: Exception, *, agent_label: str, logger: logging.
             ) from exc
         if 400 <= status < 500:
             logger.error(f"{agent_label} rejected the request (HTTP {status})")
-            raise AdCPAdapterError(f"{agent_label} rejected the request.", recovery="terminal") from exc
+            raise AdCPConfigurationError(f"{agent_label} rejected the request.") from exc
         logger.error(f"{agent_label} returned HTTP {status}")
         raise AdCPServiceUnavailableError(f"{agent_label} is unavailable.") from exc
 
