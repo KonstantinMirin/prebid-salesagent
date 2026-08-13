@@ -6,40 +6,37 @@ the UC-019 scenario asserting the same thing went dormant. It overrides no gener
 text, so unlike the eight deliberately module-scoped UC-019 steps there is nothing
 to keep it local.
 
-Prefers the REAL WIRE. When a dispatcher stashed ``ctx["wire_response"]`` (REST's
+Grades the REAL WIRE. When a dispatcher stashed ``ctx["wire_response"]`` (REST's
 HTTP body, MCP's structured_content, A2A's artifact DataPart) that is the document
 a buyer actually receives, and validating it catches transport-framing regressions
-that a re-serialized typed payload cannot. IMPL has no wire by definition, so it
-falls back to the production serializer.
+that a re-serialized typed payload cannot.
+
+Both steps read through ``wire_dict``, which RAISES when a real-wire transport
+stashed nothing, rather than quietly re-serializing the typed payload. The
+difference is the whole point: ``status`` is a model field with a default, so a
+re-serialized payload carries it whether or not the envelope ever reached the
+wire — an instrument that reports success precisely where it could not observe
+what it was asked to grade. This module is registered globally, and that fallback
+fired on ``then_envelope_status_completed``, the step grading the obligation
+GH #1900 owns.
+
+No ``exclude_none``: stripping literal nulls would mask exactly the regression
+class a wire reader exists to catch, and ``confirmed_at`` reaches the wire as an
+explicit null under the required-nullable contract.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from pytest_bdd import parsers, then
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import wire_dict
 from tests.helpers.pinned_schema import validate_against_pinned_schema
-
-
-def serialized_response(ctx: dict) -> dict[str, Any]:
-    """The response document to grade: the real wire when there is one.
-
-    ``exclude_none`` on the fallback matches the buyer-visible wire and the AdCP
-    contract, which types optional fields only when present — a literal ``null`` is
-    not a valid array/object/boolean there.
-    """
-    wire = ctx.get("wire_response")
-    if wire is not None:
-        return wire
-    return _require_response(ctx).model_dump(mode="json", exclude_none=True)
 
 
 @then(parsers.parse("the response should be schema-valid against {schema_file}"))
 def then_response_schema_valid(ctx: dict, schema_file: str) -> None:
     """Assert the response validates against the pinned AdCP schema."""
-    validate_against_pinned_schema(schema_file, serialized_response(ctx))
+    validate_against_pinned_schema(schema_file, wire_dict(ctx))
 
 
 @then("the response envelope carries status completed")
@@ -51,7 +48,7 @@ def then_envelope_status_completed(ctx: dict) -> None:
     composes core/protocol-envelope.json, independently of whether that response's
     domain body is complete.
     """
-    document = serialized_response(ctx)
+    document = wire_dict(ctx)
     assert "status" in document, (
         f"AdCP 3.1.1 core/protocol-envelope.json marks 'status' REQUIRED on every task "
         f"response envelope, but the response carries only {sorted(document)}"

@@ -120,6 +120,35 @@ def load_json_schema(schema_ref: str) -> dict[str, Any]:
     return pinned_schema.load_canonicalized(pinned_schema.normalize_ref(schema_ref))
 
 
+class _CannotSynthesize(AssertionError):
+    """The generator has no rule for a pinned shape and refuses to invent one.
+
+    Raised only under ``strict`` (the response side). The lenient default keeps the
+    pre-existing request-side behaviour byte-for-byte, so adding this cannot quietly
+    become a rewrite of the generator.
+
+    Subclasses ``AssertionError`` so an escaping instance reads as a test-instrument
+    failure rather than a production defect — which is the entire point. An invented
+    value is not neutral: fed to a required enum or formatted field it raises
+    ``ValidationError``, and the alignment suite then reports the instrument's own gap
+    as a conformance failure against production code. That is the story
+    ``_unsynthesized_guess`` tells about ``test_status_value``, and it is what bought
+    the envelope's ``status`` its blanket exclusion from requiredness grading — the
+    exclusion GH #1900 exists to undo.
+    """
+
+
+def _cannot_synthesize(field_type: str, field_name: str, field_spec: dict | None, reason: str) -> _CannotSynthesize:
+    """Build the located refusal, naming the shape and the two sanctioned escapes."""
+    return _CannotSynthesize(
+        f"cannot synthesize a value for {field_name or '<unnamed>'} (type {field_type!r}): {reason}. "
+        f"Pinned shape: {field_spec if field_spec else '{}'}. Extend generate_example_value for this "
+        f"shape, or set sample_override on the schema's _RegistryRow. Do NOT exclude the field from "
+        f"grading — suppressing a field to silence an instrument gap is the defect this raise exists "
+        f"to prevent."
+    )
+
+
 def _unsynthesized_guess(field_name: str) -> str:
     """The generator's last-resort string for a shape it has no rule for.
 
@@ -133,8 +162,15 @@ def _unsynthesized_guess(field_name: str) -> str:
     return f"test_{field_name}_value"
 
 
-def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
-    """Generate a reasonable example value for a JSON schema type."""
+def generate_example_value(
+    field_type: str, field_name: str = "", field_spec: dict = None, *, strict: bool = False
+) -> Any:
+    """Generate a reasonable example value for a JSON schema type.
+
+    ``strict`` is the response side's contract: a shape with no rule raises
+    :class:`_CannotSynthesize` instead of inventing a value. The default stays lenient
+    so pre-existing request-side callers are unchanged byte-for-byte.
+    """
     # Inline enum (e.g. cache_scope: {"type": "string", "enum": ["public", "account"]}):
     # a generic "test_<field>_value" string is not a member of the enum and fails
     # Pydantic validation on construction — checked before the $ref/oneOf/allOf
@@ -187,29 +223,44 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             if ref_type == "string" and "enum" in ref_schema:
                 return ref_schema["enum"][0]
             if ref_type != "object":
-                return generate_example_value(ref_type, field_name, ref_schema)
+                return generate_example_value(ref_type, field_name, ref_schema, strict=strict)
             # Generate object with required fields from the resolved schema
             obj = {}
             required_fields = ref_schema.get("required", [])
             for prop_name, prop_spec in ref_schema.get("properties", {}).items():
                 if prop_name in required_fields:
                     prop_type = prop_spec.get("type", "string")
-                    obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec)
-            return obj if obj else {}
-        except Exception:
+                    obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec, strict=strict)
+            if obj:
+                return obj
+            # Empty half only: the schema loaded but this resolver reads just
+            # type/enum/properties, so a $ref whose structure is a discriminated
+            # oneOf yields nothing and {} would be invented, not derived.
+            if strict:
+                raise _cannot_synthesize(
+                    field_type, field_name, field_spec, f"resolved $ref {ref!r} exposes no readable required properties"
+                )
+            return {}
+        except _CannotSynthesize:
+            raise
+        except Exception as exc:
+            if strict:
+                raise _cannot_synthesize(
+                    field_type, field_name, field_spec, f"$ref {ref!r} could not be resolved"
+                ) from exc
             return {}
 
     # Handle allOf with $ref (e.g., time_budget: allOf[{$ref: duration.json}])
     if field_spec and "allOf" in field_spec:
         for variant in field_spec["allOf"]:
             if "$ref" in variant:
-                return generate_example_value("object", field_name, variant)
+                return generate_example_value("object", field_name, variant, strict=strict)
         # If no $ref in allOf, merge properties from all variants
         merged_spec = dict(field_spec)
         del merged_spec["allOf"]
         for variant in field_spec["allOf"]:
             merged_spec.update(variant)
-        return generate_example_value(merged_spec.get("type", "object"), field_name, merged_spec)
+        return generate_example_value(merged_spec.get("type", "object"), field_name, merged_spec, strict=strict)
 
     # Handle field-level oneOf (e.g., status_filter: oneOf[enum, array-of-enum])
     # Pick the first variant and recursively generate a value for it.
@@ -223,9 +274,9 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             if "enum" in ref_schema:
                 return ref_schema["enum"][0]
             variant_type = ref_schema.get("type", "string")
-            return generate_example_value(variant_type, field_name, ref_schema)
+            return generate_example_value(variant_type, field_name, ref_schema, strict=strict)
         variant_type = first_variant.get("type", "string")
-        return generate_example_value(variant_type, field_name, first_variant)
+        return generate_example_value(variant_type, field_name, first_variant, strict=strict)
 
     if field_type == "string":
         # Check for pattern constraints in schema
@@ -260,6 +311,11 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             return "Nike Air Jordan 2025 basketball shoes"
         if "po_number" in field_name.lower():
             return "PO-TEST-12345"
+        if strict:
+            # Reached recursively for a container's property too, where the guess is
+            # embedded in the returned object and _synthesize_sample's top-level
+            # sentinel check never sees it.
+            raise _cannot_synthesize(field_type, field_name, field_spec, "no naming or pattern rule matched")
         return _unsynthesized_guess(field_name)
     elif field_type == "number":
         return 100.0
@@ -291,10 +347,19 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
                             return [ref_schema["enum"][0]]
                         ref_type = ref_schema.get("type", "object")
                         if ref_type != "object":
-                            return [generate_example_value(ref_type, field_name, ref_schema)]
-                    except Exception:
-                        pass
+                            return [generate_example_value(ref_type, field_name, ref_schema, strict=strict)]
+                    except _CannotSynthesize:
+                        raise
+                    except Exception as exc:
+                        if strict:
+                            raise _cannot_synthesize(
+                                field_type, field_name, field_spec, f"array items $ref {ref!r} could not be resolved"
+                            ) from exc
                     # For other refs, return minimal object
+                    if strict:
+                        raise _cannot_synthesize(
+                            field_type, field_name, field_spec, f"array items $ref {ref!r} resolves to an unread object"
+                        )
                     return [{}]
 
                 item_type = items_spec.get("type", "string")
@@ -306,11 +371,27 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
                         for prop_name, prop_spec in items_spec["properties"].items():
                             if prop_name in required_fields or "id" in prop_name:
                                 prop_type = prop_spec.get("type", "string")
-                                obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec)
-                    return [obj] if obj else []
+                                obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec, strict=strict)
+                    if obj:
+                        return [obj]
+                    # Empty half only: no required/id property was readable, so [] here is an
+                    # invented element shape — unlike a top-level required array, whose empty
+                    # list is a spec-valid derived minimal instance (minItems is absent).
+                    if strict:
+                        raise _cannot_synthesize(
+                            field_type,
+                            field_name,
+                            field_spec,
+                            "array items object exposes no readable required properties",
+                        )
+                    return []
                 else:
                     # Generate one example item
-                    return [generate_example_value(item_type, field_name, items_spec)]
+                    return [generate_example_value(item_type, field_name, items_spec, strict=strict)]
+        # 'items' is absent, or is a LIST (tuple validation) the branch above cannot read,
+        # so the element shape is unknown and [] would be invented.
+        if strict:
+            raise _cannot_synthesize(field_type, field_name, field_spec, "array has no readable 'items' schema")
         return []
     elif field_type == "object":
         # Generate sensible defaults for known object types
@@ -331,10 +412,16 @@ def generate_example_value(field_type: str, field_name: str = "", field_spec: di
             for prop_name, prop_spec in field_spec["properties"].items():
                 if prop_name in required_fields:
                     prop_type = prop_spec.get("type", "string")
-                    obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec)
+                    obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec, strict=strict)
             return obj
+        if strict:
+            raise _cannot_synthesize(
+                field_type, field_name, field_spec, "object declares no 'properties' to derive from"
+            )
         return {}
     else:
+        if strict:
+            raise _cannot_synthesize(field_type, field_name, field_spec, f"no branch handles type {field_type!r}")
         return None
 
 
@@ -767,7 +854,7 @@ class _RegistryRow:
 # ApproveCreativeResponse, AssignCreativeResponse, UpdatePerformanceIndexResponse,
 # CheckMediaBuyStatusResponse, *HumanTask*, *Task*, GetTargetingCapabilities,
 # CheckAXERequirements, SimulationControl, ListAuthorizedProperties,
-# GetMediaBuysResponse, GetAllMediaBuyDelivery, Adapter*) are not spec-grounded
+# GetAllMediaBuyDelivery, Adapter*) are not spec-grounded
 # success arms and are excluded.
 _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
     _RegistryRow(
@@ -977,16 +1064,17 @@ def _synthesize_sample(arm: dict[str, Any], schema_ref: str) -> dict[str, Any]:
         if spec.get("type") == "array":
             sample[fname] = []
             continue
-        value = generate_example_value(spec.get("type", "string"), fname, spec)
-        if value == _unsynthesized_guess(fname):
-            raise AssertionError(
-                f"cannot synthesize a sample for required field {fname!r} of "
-                f"{schema_ref} — the pinned shape {spec or '{}'} has no rule in "
-                f"generate_example_value, so it fell back to a guessed string. "
-                f"Extend generate_example_value for this shape, or set "
-                f"sample_override on that schema's _RegistryRow. Do NOT exclude "
-                f"the field from grading."
-            )
+        try:
+            value = generate_example_value(spec.get("type", "string"), fname, spec, strict=True)
+        except _CannotSynthesize as exc:
+            # The generator refuses at the field; only this frame knows WHICH schema was
+            # being synthesized, so the located error is completed here. Previously this
+            # was a post-hoc comparison against the guess sentinel, which could only
+            # catch a guess returned at the TOP level — a guess embedded inside a
+            # container came back as a well-formed dict and passed.
+            raise _CannotSynthesize(
+                f"cannot synthesize a sample for required field {fname!r} of {schema_ref} — {exc}"
+            ) from exc
         sample[fname] = value
     return sample
 
@@ -1110,6 +1198,118 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
     return _merge_composed(variant, schema)
 
 
+# The no-rule exits of generate_example_value that strict synthesis must refuse
+# (plan §3.4 F9, GH #1900). Every row was measured at HEAD with sys.settrace on the
+# function's own returns, so each drives the exit named in its id and no other.
+#
+# Columns:
+#   lenient_value — what the lenient default (strict=False) must keep returning
+#                   byte-for-byte, because the pre-existing request-side callers
+#                   depend on it. Pinning it here is what keeps "add strict" from
+#                   quietly becoming "change the generator".
+#   from_cause    — True for the two ``except Exception`` swallows, whose raise must
+#                   carry the exception it swallowed (``raise ... from exc``). That is
+#                   what makes them honour load_json_schema's own HARD-FAILURE
+#                   contract instead of trading one silence for another.
+_NO_RULE_EXITS = [
+    # The $ref resolved and was read, but the resolver inspects only
+    # type/enum/properties — never oneOf — so a discriminated union yields {}.
+    # core/signal-id.json is entirely a oneOf; it reaches signals[].signal_id.
+    pytest.param(
+        "object", "signal_id", {"$ref": "core/signal-id.json"}, {}, False, id="ref-read-but-unreadable-198-else"
+    ),
+    # The $ref did not resolve at all: swallowed by ``except Exception: return {}``.
+    pytest.param("object", "thing", {"$ref": "core/unresolvable-thing.json"}, {}, True, id="ref-unresolvable-199"),
+    # A guessed string embedded in a container. _synthesize_sample's sentinel check
+    # compares the TOP-LEVEL value only, so a guess produced one level down is
+    # returned silently — and a guess fed to a required enum/formatted field is
+    # reported as a conformance failure against production, which is the exact
+    # false-failure that bought envelope 'status' its blanket exclusion.
+    pytest.param(
+        "object",
+        "wrapper",
+        {"type": "object", "required": ["weird"], "properties": {"weird": {"description": "no type"}}},
+        {"weird": _unsynthesized_guess("weird")},
+        False,
+        id="nested-string-guess-263",
+    ),
+    # Array items whose $ref did not resolve: swallowed by ``except Exception: pass``,
+    # falling through to the invented [{}].
+    pytest.param(
+        "array",
+        "things",
+        {"type": "array", "items": {"$ref": "core/unresolvable-thing.json"}},
+        [{}],
+        True,
+        id="array-items-ref-unresolvable-296",
+    ),
+    # Array items whose $ref resolved to an object: [{}] is invented for an element
+    # shape the generator declined to read.
+    pytest.param(
+        "array",
+        "errors",
+        {"type": "array", "items": {"$ref": "core/error.json"}},
+        [{}],
+        False,
+        id="array-items-ref-object-298",
+    ),
+    # Array of inline objects that declare no required and no *id* property: the
+    # EMPTY half only — [obj] for a non-empty obj is derived, not guessed.
+    pytest.param(
+        "array",
+        "rows",
+        {"type": "array", "items": {"type": "object", "properties": {"foo": {"type": "string"}}}},
+        [],
+        False,
+        id="array-of-objects-no-required-310-empty-half",
+    ),
+    # Array with no items spec at all — the element shape was never declared.
+    pytest.param("array", "coordinates", {"type": "array"}, [], False, id="array-items-absent-314"),
+    # Array whose items is a LIST (tuple validation), so items_spec.get(...) never
+    # ran and the generator fell out of the branch entirely.
+    pytest.param(
+        "array",
+        "coordinates",
+        {"type": "array", "items": [{"type": "number"}]},
+        [],
+        False,
+        id="array-items-list-valued-314",
+    ),
+    # Bare object with no properties to read: {} invented for an unread shape.
+    pytest.param("object", "payload", {"type": "object"}, {}, False, id="bare-object-336"),
+    # The terminal else. A union type array is not a branch this function has, and
+    # confirmed_at's pinned shape is exactly {"type": ["string", "null"]} — the
+    # #1900 field, reached today only because its row carries a sample_override.
+    pytest.param(
+        ["string", "null"],
+        "confirmed_at",
+        {"type": ["string", "null"]},
+        None,
+        False,
+        id="terminal-none-338",
+    ),
+]
+
+# The non-empty halves of the two split exits. A DERIVED minimal value for a shape
+# the generator READ is correct and must survive strict; only the invented half is
+# refused. Measured at HEAD: both reach the same return statements as their empty
+# twins above, with obj non-empty.
+_DERIVED_HALVES = [
+    # core/pagination-response.json resolves and declares required has_more:boolean,
+    # so the object is built from what was read, not guessed.
+    pytest.param(
+        "object", "pagination", {"$ref": "core/pagination-response.json"}, {"has_more": True}, id="198-if-half"
+    ),
+    pytest.param(
+        "array",
+        "rows",
+        {"type": "array", "items": {"type": "object", "required": ["foo"], "properties": {"foo": {"type": "integer"}}}},
+        [{"foo": 100}],
+        id="310-non-empty-half",
+    ),
+]
+
+
 class TestSampleSynthesisFailsLoud:
     """The instrument refuses to guess.
 
@@ -1149,6 +1349,78 @@ class TestSampleSynthesisFailsLoud:
             "status": "completed",
             "accounts": [],
         }
+
+    @pytest.mark.parametrize(("field_type", "field_name", "field_spec", "lenient_value", "from_cause"), _NO_RULE_EXITS)
+    def test_strict_synthesis_refuses_every_no_rule_exit(
+        self, field_type, field_name, field_spec, lenient_value, from_cause
+    ):
+        """Under ``strict``, a shape the generator has no rule for raises instead of inventing a value.
+
+        This is a PROSPECTIVE guard, and deliberately so. Measured across the whole
+        response registry, ``_synthesize_sample`` calls ``generate_example_value``
+        exactly nine times — status x5, cache_scope x2, media_buy_id, revision — all
+        at depth 1, zero recursion, and not one of them lands on an exit below. So
+        these cases drive the shapes directly rather than through a registry row: the
+        obligation is that the generator cannot invent, not that some row happens to
+        exercise it today. Every shape here is reachable in the pinned 3.1 tree.
+
+        The lenient default must be unchanged, byte-for-byte — ``strict`` is a new
+        capability for the response side, not a rewrite of the request-side generator.
+        """
+        with pytest.raises(_CannotSynthesize) as excinfo:
+            generate_example_value(field_type, field_name, field_spec, strict=True)
+
+        if from_cause:
+            assert excinfo.value.__cause__ is not None, (
+                "an exit that swallowed an exception must raise FROM it — dropping the cause "
+                "replaces one silence with another and loses why the schema could not be read"
+            )
+
+        assert generate_example_value(field_type, field_name, field_spec) == lenient_value
+
+    @pytest.mark.parametrize(("field_type", "field_name", "field_spec", "derived_value"), _DERIVED_HALVES)
+    def test_strict_synthesis_keeps_the_derived_half_of_a_split_exit(
+        self, field_type, field_name, field_spec, derived_value
+    ):
+        """Two of the refused exits are one half of a two-way return; only that half is refused.
+
+        ``return obj if obj else {}`` and ``return [obj] if obj else []`` invent on their
+        EMPTY half and derive on their non-empty one. A minimal instance built out of the
+        required names the generator actually read is a derived value, not a guess, so it
+        must still come back under ``strict`` — refusing it would make the instrument
+        unable to measure shapes it can, in fact, read.
+        """
+        assert generate_example_value(field_type, field_name, field_spec, strict=True) == derived_value
+
+    def test_top_level_required_array_keeps_the_minimal_list_rule(self):
+        """RATIFIED BOUNDARY: a top-level required array synthesizes to ``[]`` and does NOT raise.
+
+        ``_synthesize_sample`` short-circuits every required array to ``[]`` before
+        ``generate_example_value`` is reached. That is a RULE the docstring already
+        declares ("Array required fields -> empty list (valid + minimal)"), not the
+        absence of one: every required array across the registry has no ``minItems``,
+        so ``[]`` is a spec-VALID derived instance of the field, and element shapes are
+        graded by separate ``item_key`` rows rather than by this envelope sample.
+
+        The distinction this pins is the whole line strict draws: a DERIVED minimal
+        value for a shape that was read is fine; an INVENTED value for an element shape
+        the generator could not read (the array exits in ``_NO_RULE_EXITS``) is not.
+        Recorded as a decision so the short-circuit is never mistaken for an oversight —
+        and if a future pin adds ``minItems`` to any required array, ``[]`` stops being
+        spec-valid and this test is the thing that says so.
+        """
+        for row in _RESPONSE_MODEL_REGISTRY:
+            arm = _success_arm(load_json_schema(row.schema_ref))
+            props = arm.get("properties", {})
+            for fname in sorted(set(arm.get("required", [])) - _VERSION_FIELDS):
+                if props.get(fname, {}).get("type") != "array":
+                    continue
+                assert "minItems" not in props[fname], (
+                    f"{row.schema_ref} now requires a non-empty {fname!r}; the empty-list rule is no "
+                    f"longer a spec-valid derived instance and _synthesize_sample must stop using it"
+                )
+                if row.sample_override is None:
+                    assert _synthesize_sample(arm, row.schema_ref)[fname] == []
 
 
 class TestResponseModelAlignment:
@@ -1246,14 +1518,31 @@ class TestResponseModelAlignment:
                     alignment.model(**partial)
 
 
+def _extends_adcp_library_type(model: type) -> bool:
+    """Whether ``model`` directly extends a type DEFINED under ``adcp.types``.
+
+    Extracted so the rule is gradeable in isolation. The obvious inline spelling —
+    ``base in vars(adcp.types).values()`` — is not merely stale, it is
+    NON-DETERMINISTIC: ``adcp.types`` re-exports lazily via PEP 562 ``__getattr__``,
+    so that namespace is populated as a side effect of first attribute access and the
+    answer depends on what any earlier import in the process happened to touch.
+    ``__module__`` is a fixed property of the class, so this rule returns the same
+    answer whenever it is asked.
+    """
+    return any((base.__module__ or "").startswith("adcp.types") for base in model.__bases__)
+
+
 def _enumerate_grounded_response_models() -> set[type]:
     """Enumerate every local response model the registry MUST cover.
 
     This makes the registry's own inclusion rule executable instead of
     hand-listed: a model belongs iff it is (1) defined in ``src.core.schemas``
     (so imported ``Library*`` aliases, whose ``__module__`` is ``adcp.types.*``,
-    are excluded), (2) extends an ``adcp`` library type directly (``__bases__``
-    contains an ``adcp.types`` class), and (3) carries a response role — its name
+    are excluded), (2) extends an ``adcp`` library type directly — a base DEFINED
+    under ``adcp.types``, which is NOT the same as one re-exported into
+    ``vars(adcp.types)``: the SDK leaves some bases in submodules it never
+    re-exports, and testing membership of that flat namespace silently drops the
+    models extending them — and (3) carries a response role — its name
     ends in ``Response`` or ``Success`` (the oneOf success arm). Error arms end in
     ``Error`` and requests in ``Request``, so both are excluded; reusable
     sub-components (``Account``, ``Package``, ``Pagination``) lack the response
@@ -1263,10 +1552,6 @@ def _enumerate_grounded_response_models() -> set[type]:
     discovered here and fails the coverage gate, rather than slipping through a
     stale literal.
     """
-    import adcp.types as adcp_types
-
-    adcp_bases = {obj for obj in vars(adcp_types).values() if inspect.isclass(obj)}
-
     import src.core.schemas as schemas_pkg
 
     modules = [schemas_pkg]
@@ -1282,7 +1567,7 @@ def _enumerate_grounded_response_models() -> set[type]:
                 continue  # skip imported Library* aliases re-exported into the namespace
             if not (name.endswith("Response") or name.endswith("Success")):
                 continue  # response role only; error arms end in 'Error', requests in 'Request'
-            if any(base in adcp_bases for base in obj.__bases__):
+            if _extends_adcp_library_type(obj):
                 grounded.add(obj)
     return grounded
 
@@ -1310,6 +1595,76 @@ class TestResponseAlignmentCoverage:
         missing = expected - covered
         assert not missing, (
             f"AdCP-grounded response models not covered by RESPONSE_ALIGNMENTS: {sorted(m.__name__ for m in missing)}"
+        )
+
+    def test_enumeration_admits_models_whose_library_base_is_not_reexported(self):
+        """Groundedness is decided by where the base is DEFINED, not by whether it is re-exported.
+
+        ``_enumerate_grounded_response_models``'s own docstring states the rule as
+        "``__bases__`` contains an ``adcp.types`` class", but it implements that as
+        membership in ``vars(adcp.types)`` — the flat re-export namespace. A library
+        base defined in a submodule that the SDK does not re-export therefore fails the
+        identity check even though the model plainly extends a library type.
+
+        Measured at HEAD: the identity rule enumerates 10 models, the ``__module__``
+        rule 12 — the two below are the difference, and nothing is dropped. Both are
+        already registered, so the gate stays green; what the fix buys is that their
+        registry rows become deletion-protected. Until then ``SyncAccountsResponse``,
+        the model GH #1900 is named for, could have its row deleted and this coverage
+        gate would stay green — an instrument reporting success on a model it never
+        enumerated.
+
+        Worse than stale: ``adcp.types`` re-exports LAZILY via PEP 562 ``__getattr__``,
+        so ``vars(adcp.types)`` is populated as a side effect of first attribute access.
+        The identity rule's answer therefore depended on whether any earlier import in
+        the process happened to touch that name — the same model was admitted or
+        dropped depending on test order. Measured: ``SyncAccountsResponse`` is absent
+        from ``vars`` in a file-scoped run and present in a full-suite run. Definition
+        location is a stable property of the class, so the ``__module__`` rule is also
+        what makes this gate deterministic.
+
+        The rule is graded on a SYNTHETIC base rather than on the two real models,
+        and that is the whole point. Asserting only that the enumeration admits
+        ``SyncAccountsResponse``/``CreateMediaBuySuccess`` is VACUOUS in a whole-suite
+        run: measured, the identity rule starts admitting both once
+        ``test_delivery_metrics`` has executed and populated ``vars(adcp.types)``, and
+        that file sorts earlier — so by the time this test runs under ``make quality``
+        or ``tox -e unit`` (both whole-suite executions) the two rules already agree
+        and a full revert of the fix reddens nothing. A base built here is guaranteed
+        absent from that namespace no matter what ran before, so the two rules are
+        forced apart deterministically.
+        """
+        unexported_base = type("ProbeLibraryBase", (BaseModel,), {})
+        # Defined under adcp.types (new rule: grounded) but never re-exported into the
+        # flat namespace (old rule: not grounded) — true in every import order.
+        unexported_base.__module__ = "adcp.types.generated_poc.probe.probe_response"
+
+        import adcp.types as adcp_types
+
+        assert unexported_base not in vars(adcp_types).values(), (
+            "the synthetic base must not be in the flat namespace, or it cannot separate the two rules"
+        )
+
+        probe = type("ProbeResponse", (unexported_base,), {})
+        assert _extends_adcp_library_type(probe), (
+            "groundedness must follow where the base is DEFINED (__module__ under adcp.types), not "
+            "whether the SDK happens to re-export it into vars(adcp.types) — the latter is populated "
+            "lazily by PEP 562 __getattr__, so it makes admission depend on import order"
+        )
+
+        unrelated = type("UnrelatedResponse", (BaseModel,), {})
+        unrelated.__module__ = "src.core.schemas.something"
+        assert not _extends_adcp_library_type(unrelated), "a non-library base must not be admitted"
+
+        # And the rule, applied to the real tree, admits the two models whose bases the
+        # identity check missed. Order-dependent on its own (see above), so it rides
+        # behind the synthetic assertions rather than carrying the grade.
+        grounded = _enumerate_grounded_response_models()
+        unadmitted = {SyncAccountsResponse, CreateMediaBuySuccess} - grounded
+        assert not unadmitted, (
+            f"library-grounded response models the enumeration failed to admit: "
+            f"{sorted(m.__name__ for m in unadmitted)} — their registry rows are unprotected, so "
+            f"deleting one leaves the coverage gate green"
         )
 
 
