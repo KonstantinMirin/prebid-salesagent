@@ -685,21 +685,24 @@ class TestProtocolWebhookWireFormat:
     def _send_and_capture(self, payload) -> dict[str, Any]:
         """Send `payload` via the real service and return the classified capture."""
         import asyncio
-        from unittest.mock import patch
 
         from src.core.database.models import PushNotificationConfig
         from src.services.protocol_webhook_service import ProtocolWebhookService
 
         # host='127.0.0.1': this class is unit-style (no Docker) — the service
         # runs in-process, so loopback is always the right callback host.
-        # Real outbound validator allows localhost when ADCP_TESTING=true
-        # (do not patch the SSRF gate — that would hide regressions).
-        with (
-            run_webhook_capture_server(
-                WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
-            ) as info,
-            patch.dict("os.environ", {"ADCP_TESTING": "true"}),
-        ):
+        #
+        # ADCP_TESTING is NOT set here. The autouse fixture (tests/conftest.py)
+        # already sets it for every test, so a second setenv only obscured which
+        # posture this test actually grades — it read as "this test deliberately
+        # opts into leniency" when in fact it inherits it like everything else
+        # (salesagent-og9k.4). Removing it changes no behaviour and stops the
+        # redundant spelling from being copied.
+        #
+        # The SSRF gate itself is never patched: that would hide regressions.
+        with run_webhook_capture_server(
+            WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
+        ) as info:
             config = PushNotificationConfig(
                 id="pnc-test",
                 tenant_id="t-test",
