@@ -37,13 +37,10 @@ rather than deciding independently):
 """
 
 import datetime
-from contextlib import contextmanager
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.orm import Session as SASession
 
-from src.core.database.database_session import get_engine
 from src.core.database.models import MediaBuy, is_media_buy_seller_confirmed
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import CreateMediaBuyRequest
@@ -62,30 +59,19 @@ _PAST = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
 _UNRECOGNISED_STATUS = "some_new_status"
 
 
-@contextmanager
-def _factory_session():
-    """A real session with the ORM factories bound to it, unbound again on exit."""
-    from tests.factories import ALL_FACTORIES
-
-    session = SASession(bind=get_engine())
-    try:
-        for factory in ALL_FACTORIES:
-            factory._meta.sqlalchemy_session = session
-        yield session
-    finally:
-        session.close()
-        for factory in ALL_FACTORIES:
-            factory._meta.sqlalchemy_session = None
-
-
 @pytest.fixture
-def repo_env(integration_db):
-    """A pending_approval media buy plus a repository scoped to its tenant."""
+def repo_env(integration_db, bound_factory_session):
+    """A pending_approval media buy plus a repository scoped to its tenant.
+
+    Session and factory binding come from the shared ``bound_factory_session``
+    fixture rather than a local bind-then-None: it restores whatever binding was
+    there before instead of nulling, which is the only version that is correct when
+    something outside has already bound.
+    """
     from tests.factories import MediaBuyFactory
 
-    with _factory_session() as session:
-        media_buy = MediaBuyFactory(status="pending_approval", created_at=_PAST, approved_at=_PAST)
-        yield MediaBuyRepository(session, media_buy.tenant_id), media_buy
+    media_buy = MediaBuyFactory(status="pending_approval", created_at=_PAST, approved_at=_PAST)
+    yield MediaBuyRepository(bound_factory_session, media_buy.tenant_id), media_buy
 
 
 def _reread(repo: MediaBuyRepository, media_buy_id: str) -> MediaBuy:
@@ -237,6 +223,30 @@ _PACKAGE_WRITERS = {
     "update_package_fields": _write_package_fields,
     "create_packages_bulk": _write_packages_bulk,
 }
+
+
+class TestTheOracleFailsClosed:
+    """The oracles every assertion in this file goes through refuse a missing row.
+
+    ``_reread`` re-SELECTs, so a media buy that is not in the database comes back as
+    ``None``. Without the guard, ``_revision`` would then raise
+    ``AttributeError: 'NoneType' object has no attribute 'revision'`` — a crash that
+    reads like a harness bug rather than the finding it is, and ``_confirmed_at``
+    would be worse: it is typed ``| None``, so a caller comparing it to ``None``
+    would read "this buy was never confirmed" for a buy that does not exist. Every
+    oracle in this file is only as trustworthy as this guard, so it is graded rather
+    than assumed.
+    """
+
+    def test_revision_of_a_row_that_is_not_there_names_the_missing_id(self, repo_env):
+        repo, _media_buy = repo_env
+        with pytest.raises(AssertionError, match="mb_never_written"):
+            _revision(repo, "mb_never_written")
+
+    def test_confirmed_at_of_a_row_that_is_not_there_refuses_rather_than_reading_none(self, repo_env):
+        repo, _media_buy = repo_env
+        with pytest.raises(AssertionError, match="mb_never_written"):
+            _confirmed_at(repo, "mb_never_written")
 
 
 class TestRevisionCounter:
@@ -507,7 +517,9 @@ class TestFactorySeedsWhatTheRepositoryWouldWrite:
     """
 
     @pytest.mark.parametrize("status", sorted(PERSISTED_STATUS_TO_CANONICAL))
-    def test_factory_row_agrees_with_the_writer_for_every_persisted_status(self, integration_db, status):
+    def test_factory_row_agrees_with_the_writer_for_every_persisted_status(
+        self, integration_db, bound_factory_session, status
+    ):
         """For each status the column can hold, the factory stamps iff the writer would.
 
         Asserted against the writer's OWN predicate rather than a transcribed list
@@ -516,11 +528,9 @@ class TestFactorySeedsWhatTheRepositoryWouldWrite:
         """
         from tests.factories import MediaBuyFactory
 
-        with _factory_session() as session:
-            media_buy = MediaBuyFactory(status=status)
-            repo = MediaBuyRepository(session, media_buy.tenant_id)
-
-            stamped = _confirmed_at(repo, media_buy.media_buy_id) is not None
+        media_buy = MediaBuyFactory(status=status)
+        repo = MediaBuyRepository(bound_factory_session, media_buy.tenant_id)
+        stamped = _confirmed_at(repo, media_buy.media_buy_id) is not None
 
         assert stamped is is_media_buy_seller_confirmed(status), (
             f"factory-seeded {status!r} carries confirmed_at={'set' if stamped else 'NULL'}, but the "
@@ -529,7 +539,7 @@ class TestFactorySeedsWhatTheRepositoryWouldWrite:
             f"production cannot produce"
         )
 
-    def test_factory_stamp_is_a_fresh_clock_reading_not_a_copied_column(self, integration_db):
+    def test_factory_stamp_is_a_fresh_clock_reading_not_a_copied_column(self, integration_db, bound_factory_session):
         """The factory reads the clock the way the repository does.
 
         Deriving the value from ``approved_at``/``created_at`` instead is the
@@ -538,13 +548,11 @@ class TestFactorySeedsWhatTheRepositoryWouldWrite:
         """
         from tests.factories import MediaBuyFactory
 
-        with _factory_session() as session:
-            t0 = datetime.datetime.now(datetime.UTC)
-            media_buy = MediaBuyFactory(status="active", created_at=_PAST, approved_at=_PAST)
-            t1 = datetime.datetime.now(datetime.UTC)
-            repo = MediaBuyRepository(session, media_buy.tenant_id)
-
-            stamped = _confirmed_at(repo, media_buy.media_buy_id)
+        t0 = datetime.datetime.now(datetime.UTC)
+        media_buy = MediaBuyFactory(status="active", created_at=_PAST, approved_at=_PAST)
+        t1 = datetime.datetime.now(datetime.UTC)
+        repo = MediaBuyRepository(bound_factory_session, media_buy.tenant_id)
+        stamped = _confirmed_at(repo, media_buy.media_buy_id)
 
         _assert_stamped_between(stamped, t0, t1)
 

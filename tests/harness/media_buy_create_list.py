@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_list import MediaBuyListDispatchMixin
@@ -61,3 +63,48 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
         if _is_list_request(kwargs):
             return self._call_list_mcp(**kwargs)
         return super().call_mcp(**kwargs)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Refuse to build a REST body for a list request; delegate everything else.
+
+        ``get_media_buys`` has no REST route — ``src/routes/api_v1.py`` routes
+        create, update and delivery for media buys, nothing for the list. Without this
+        the inherited create builder handles the call: it is create-shaped, so it dies
+        inside ``_restore_creative_ids`` reading a ``packages`` attribute the list
+        request does not have, and the test grades a different call than it names.
+
+        Scope, precisely: this refuses the ``req=GetMediaBuysRequest(...)`` arm, keyed
+        on the same ``_is_list_request`` discriminator ``call_impl``/``call_a2a``/
+        ``call_mcp`` use. A flat-kwargs call still routes to create here exactly as it
+        does on every other transport of this env — consistent, not a REST-specific
+        mis-dispatch, and deliberately left alone.
+
+        The refusal is declared HERE, per env, and deliberately not derived from the
+        route table. The two staleness failures are not symmetric: a route DELETED
+        while deriving means the REST arm silently stops being graded and the suite
+        stays green, whereas a route ADDED while declaring means the first REST call
+        fails at this line — which is the line that must change anyway, since the list
+        mixin's body builder is flat-kwargs-only and could not dispatch correctly on
+        its own.
+
+        ``pytest.fail`` and not ``NotImplementedError`` or ``AssertionError``, because
+        this refusal has to survive two launderers to be loud at all:
+        ``tests/bdd/conftest.py`` converts a ``NotImplementedError`` raised in a call
+        phase into a skip + xfail — the silent matrix-shrink this exists to prevent —
+        and ``RestDispatcher.dispatch`` wraps the whole dispatch, this builder
+        included, in ``except Exception`` and returns the refusal as an error-shaped
+        result indistinguishable from a production error response. ``Failed`` derives
+        from ``BaseException`` and is not a ``NotImplementedError``, so neither can
+        eat it. Do not "simplify" the dialect.
+        """
+        if _is_list_request(kwargs):
+            pytest.fail(
+                f"{type(self).__name__} cannot build a REST body for a get_media_buys request: "
+                "the tool has no REST route. Dispatch it on A2A or MCP, or add the route "
+                "and a list body builder here together.",
+                pytrace=False,
+            )
+        # super(), not an explicit parent call: MediaBuyCreateUpdateListEnv resolves
+        # this through MediaBuyDualEnv's stateful create/update routing, which naming
+        # a parent directly would bypass.
+        return super().build_rest_body(**kwargs)
