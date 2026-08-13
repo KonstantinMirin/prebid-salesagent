@@ -3407,28 +3407,13 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
     agent-served but non-generative -- ``output_format_ids`` empty is precisely
     what sends production down the preview branch instead of the build branch.
     """
-    from unittest.mock import AsyncMock, MagicMock
-
-    from adcp.types import FormatId as LibraryFormatId
-
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
 
-    if format_kind == "generative":
-        fmt = env.setup_generative_build(format_id="gen_banner")
-    else:
-        format_id = "static_300x250"
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=env.DEFAULT_AGENT_URL, id=format_id)
-        mock_format.agent_url = env.DEFAULT_AGENT_URL
-        mock_format.output_format_ids = []  # non-generative -> preview_creative branch
-        env.set_run_async_result([mock_format])
-        registry = env.mock["registry"].return_value
-        registry.preview_creative = AsyncMock(
-            return_value={"previews": [{"url": "https://preview.example.com/p.html"}]}
-        )
-        registry.get_format = AsyncMock(return_value=mock_format)
-        fmt = {"agent_url": env.DEFAULT_AGENT_URL, "id": format_id}
+    generative = format_kind == "generative"
+    fmt = env.configure_agent_served_creative(
+        generative=generative, format_id="gen_banner" if generative else "static_300x250"
+    )
 
     creative_id = f"creative-{creative_state}-{format_kind}-001"
     ctx.setdefault("creatives", []).append(

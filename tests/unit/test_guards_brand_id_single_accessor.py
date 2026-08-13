@@ -42,16 +42,46 @@ from tests.unit._architecture_helpers import (
 ACCESSOR_MODULE = "src/core/helpers/brand_key.py"
 
 
+#: Names bound to a resolved :class:`NaturalKey`. Reading ``.brand_id`` off one
+#: is NOT a second extraction site -- it is reading a value the accessor already
+#: produced, because every NaturalKey constructor routes through
+#: ``brand_key_parts``. The danger this guard exists for is extracting brand_id
+#: from a BRAND object (a BrandReference or dict), where ``str()`` on the
+#: RootModel yields "root='x'"; a NaturalKey field is already a plain ``str |
+#: None``, so no mangling is possible.
+_KEY_CARRIER_SOURCES = ("NaturalKey", "_extract_natural_key")
+
+
+def _natural_key_names(tree: ast.Module) -> set[str]:
+    """Local names that hold a NaturalKey: annotated params, and assignments from its constructors."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg) and node.annotation is not None:
+            ann = ast.unparse(node.annotation)
+            if "NaturalKey" in ann:
+                names.add(node.arg)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            call = ast.unparse(node.value.func)
+            if any(call.startswith(src) or call.endswith(src) for src in _KEY_CARRIER_SOURCES):
+                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
 def find_brand_id_attribute_reads(tree: ast.Module) -> list[int]:
     """Return line numbers of ``.brand_id`` attribute READS.
 
     Loads only: an assignment target (``brand.brand_id = x``) is construction, not
-    natural-key extraction, and cannot mangle a value.
+    natural-key extraction, and cannot mangle a value. Reads off a NaturalKey are
+    likewise exempt -- see :data:`_KEY_CARRIER_SOURCES`.
     """
+    carriers = _natural_key_names(tree)
     return sorted(
         node.lineno
         for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr == "brand_id" and isinstance(node.ctx, ast.Load)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "brand_id"
+        and isinstance(node.ctx, ast.Load)
+        and not (isinstance(node.value, ast.Name) and node.value.id in carriers)
     )
 
 
@@ -70,6 +100,29 @@ def test_brand_id_is_read_only_through_the_shared_accessor():
         "and corrupt the key (#1721). Use "
         "src.core.helpers.brand_key.brand_key_parts:\n  " + "\n  ".join(violations)
     )
+
+
+def test_the_naturalkey_exemption_is_narrow():
+    """The carrier exemption must not become a blanket pass for ``.brand_id``.
+
+    Pins both directions: a read off a name the module actually BOUND to a
+    NaturalKey is exempt, and the same syntactic read off anything else is still
+    a violation. Without this, "reads off a value object are fine" would quietly
+    excuse extracting brand_id straight from a BrandReference.
+    """
+    exempt = "def f(entry):\n    natural_key = _extract_natural_key(entry)\n    return natural_key.brand_id\n"
+    assert find_brand_id_attribute_reads(ast.parse(exempt)) == []
+
+    annotated = "def f(key: NaturalKey):\n    return key.brand_id\n"
+    assert find_brand_id_attribute_reads(ast.parse(annotated)) == []
+
+    # Same attribute, receiver never bound to a NaturalKey -> still flagged.
+    unbound = "def f(brand):\n    return brand.brand_id\n"
+    assert find_brand_id_attribute_reads(ast.parse(unbound)) == [2]
+
+    # A name bound from something else entirely does not inherit the exemption.
+    wrong_source = "def f(entry):\n    natural_key = entry.brand\n    return natural_key.brand_id\n"
+    assert find_brand_id_attribute_reads(ast.parse(wrong_source)) == [3]
 
 
 def test_guard_catches_known_bad_shapes():

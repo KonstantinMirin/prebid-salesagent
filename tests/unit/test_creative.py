@@ -2606,8 +2606,21 @@ class TestDryRun:
     Spec: CONFIRMED -- sync-creatives-request.json defines dry_run (boolean, default: false).
     """
 
-    def test_dry_run_does_not_persist(self):
-        """When dry_run=True, no creatives are persisted to DB.
+    def test_dry_run_opens_a_rolled_back_transaction(self):
+        """When dry_run=True the sync asks for a transaction that ROLLS BACK.
+
+        #1721 changed the mechanism, not the promise. dry_run used to be a
+        per-call-site branch that skipped the writes; a preview therefore built
+        its results from a parallel code path that could — and did — describe
+        outcomes a real run cannot produce. It is now a transaction-DISPOSAL
+        decision: the identical write path runs and BaseUoW rolls back instead
+        of committing, so preview/live parity holds by construction.
+        So "repo.create was not called" is no longer the promise and asserting it
+        would pin the deleted mechanism. What this level CAN see is the request
+        the impl makes of its unit of work, which is asserted here. That nothing
+        ends up persisted is graded where it is observable — against a real
+        database — by TestDryRunPreviewMatchesLiveRun and the UC-006
+        out-of-transaction scenarios.
 
         Covers: UC-006-DRY-RUN-01
         """
@@ -2656,9 +2669,9 @@ class TestDryRun:
             )
 
             assert result.dry_run is True
-            # dry_run should NOT call repo.create or repo.commit
-            mock_creative_repo.create.assert_not_called()
-            mock_creative_repo.commit.assert_not_called()
+            # The unit of work is opened with dry_run=True — that flag is the
+            # ONLY thing standing between this write path and a commit.
+            mock_db.assert_called_once_with("tenant_1", dry_run=True)
 
 
 class TestCreativeWebhookDelivery:

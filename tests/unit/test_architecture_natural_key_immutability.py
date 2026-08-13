@@ -29,9 +29,10 @@ tracked separately rather than generalised here on one example.
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 
-from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.account import AccountRepository, NaturalKey
 
 #: Lookup parameters that are not themselves mutable Account columns.
 #: ``tenant_id`` is constructor-scoped and never a kwarg; ``limit`` /
@@ -59,9 +60,21 @@ def _natural_key_lookups() -> dict[str, object]:
 
 
 def _natural_key_columns() -> set[str]:
-    """Account columns the natural-key lookups filter on, from their signatures."""
-    columns: set[str] = set()
-    for member in _natural_key_lookups().values():
+    """Account columns the natural-key lookups filter on.
+
+    Two sources, because the key has two spellings today: ``get_by_natural_key``
+    takes the key as ONE :class:`NaturalKey` value, so its components come from
+    that dataclass's FIELDS -- a stronger derivation than parsing a signature,
+    since the type is now the definition of what the key is. The list/count
+    variants still take the components as loose parameters, so those are read
+    from their signatures. Both feed one set, so a component added to EITHER
+    spelling is still checked; when the remaining two adopt NaturalKey this
+    collapses to the dataclass alone.
+    """
+    columns: set[str] = {_COLUMN_FOR_PARAM.get(f.name, f.name) for f in dataclasses.fields(NaturalKey)}
+    for name, member in _natural_key_lookups().items():
+        if name == "get_by_natural_key":
+            continue
         for param in inspect.signature(member).parameters:
             if param in _QUERY_PARAMS:
                 continue
@@ -103,9 +116,9 @@ def test_brand_params_map_onto_the_protected_column():
     "brand must not be immutable" — a guard that goes red when protection
     increases would be inverted.
     """
-    params = set(inspect.signature(AccountRepository.get_by_natural_key).parameters)
-    assert {"brand_domain", "brand_id"} <= params, (
-        "get_by_natural_key no longer takes brand_domain/brand_id — the mapping in this guard "
+    key_fields = {f.name for f in dataclasses.fields(NaturalKey)}
+    assert {"brand_domain", "brand_id"} <= key_fields, (
+        "NaturalKey no longer carries brand_domain/brand_id — the mapping in this guard "
         "encodes how brand participates in the key and must be re-derived."
     )
     assert "brand" in _natural_key_columns()

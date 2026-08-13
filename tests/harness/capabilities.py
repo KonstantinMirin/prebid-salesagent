@@ -161,6 +161,26 @@ class CapabilitiesEnv(IntegrationEnv):
         set_adapter_test_behavior(self, self._tenant_id, unavailable=True)
 
     @realize_e2e(_realize_adapter_unavailable)
+    def make_adapter_unavailable(self) -> None:
+        """Adapter factory raises — production degrades to default channels.
+
+        In-process: the adapter-class mock raises directly. E2E: persists
+        test_behavior['unavailable']=True, read by get_adapter_class_for_tenant
+        (src/core/helpers/adapter_helpers.py), which raises for mock-adapter
+        tenants only.
+        """
+        self.mock["adapter"].side_effect = Exception("adapter unavailable (harness)")
+
+    @realize_e2e(
+        e2e_unsupported(
+            "the fault is 'iterating the adapter's default_channels raises', which is a property of "
+            "the in-process adapter object. Unlike 'unavailable' -- which get_adapter_class_for_tenant "
+            "honours from AdapterConfig.test_behavior -- production has no read that could make channel "
+            "ENUMERATION fail on a real adapter, and adding one would put a fault-injection branch in "
+            "production for a test's benefit. The non-cascade it grades is transport-independent "
+            "(one function's control flow in capabilities.py), so the in-process transports grade it fully"
+        )
+    )
     def make_adapter_channel_enumeration_fail(self) -> None:
         """The adapter RESOLVES, but reading its channels raises.
 
@@ -179,16 +199,6 @@ class CapabilitiesEnv(IntegrationEnv):
                 raise RuntimeError("adapter channel enumeration failed (harness)")
 
         self._adapter_mock.default_channels = _RaisingChannels()
-
-    def make_adapter_unavailable(self) -> None:
-        """Adapter factory raises — production degrades to default channels.
-
-        In-process: the adapter-class mock raises directly. E2E: persists
-        test_behavior['unavailable']=True, read by get_adapter_class_for_tenant
-        (src/core/helpers/adapter_helpers.py), which raises for mock-adapter
-        tenants only.
-        """
-        self.mock["adapter"].side_effect = Exception("adapter unavailable (harness)")
 
     @realize_e2e(
         e2e_unsupported(

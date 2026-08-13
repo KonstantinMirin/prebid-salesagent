@@ -170,6 +170,22 @@ def _harness_declaration_sites() -> list[tuple[str, str, str]]:
 # is sometimes right (format-injection has no surface), but never silent.
 EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
     {
+        # Added by #1721, both for scenarios that did not exist before it. Noted
+        # against this pin's own direction of travel (the remediation plan wants this
+        # SET to shrink): neither scenario could exist at all without the declaration,
+        # and the alternative for the creative one was a nodeid entry in
+        # e2e_rest_known_failures.txt, which is the registry this mechanism exists to
+        # replace. Both grade fully on the three in-process transports.
+        (
+            "tests/harness/capabilities.py",
+            "make_adapter_channel_enumeration_fail",
+            "the fault is 'iterating the adapter's default_channels raises', which is a property of the in-process adapter object. Unlike 'unavailable' -- which get_adapter_class_for_tenant honours from AdapterConfig.test_behavior -- production has no read that could make channel ENUMERATION fail on a real adapter, and adding one would put a fault-injection branch in production for a test's benefit. The non-cascade it grades is transport-independent (one function's control flow in capabilities.py), so the in-process transports grade it fully",
+        ),
+        (
+            "tests/harness/creative_sync.py",
+            "configure_agent_served_creative",
+            "the out-of-transaction effects this configures are observed as CALLS on in-process mocks (registry.build_creative / preview_creative, and the _ai_review_executor submit). Over real HTTP those objects live in the server process, so the assertions have nothing to read and the real creative agent answers for itself -- the scenario would grade the agent, not the gates. Observing them e2e needs effect capture at the server (a request sink + a review-verdict read-back), which is its own build",
+        ),
         (
             "tests/harness/_mixins.py",
             "set_adapter_error",

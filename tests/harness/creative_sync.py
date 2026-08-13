@@ -54,6 +54,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._realize import e2e_unsupported, realize_e2e
 
 
 class CreativeSyncEnv(IntegrationEnv):
@@ -119,6 +120,40 @@ class CreativeSyncEnv(IntegrationEnv):
         mock_config = MagicMock()
         mock_config.gemini_api_key = None
         self.mock["config"].return_value = mock_config
+
+    @realize_e2e(
+        e2e_unsupported(
+            "the out-of-transaction effects this configures are observed as CALLS on in-process mocks "
+            "(registry.build_creative / preview_creative, and the _ai_review_executor submit). Over real "
+            "HTTP those objects live in the server process, so the assertions have nothing to read and the "
+            "real creative agent answers for itself -- the scenario would grade the agent, not the gates. "
+            "Observing them e2e needs effect capture at the server (a request sink + a review-verdict "
+            "read-back), which is its own build"
+        )
+    )
+    def configure_agent_served_creative(self, *, generative: bool, format_id: str) -> dict[str, str]:
+        """Configure a format the creative agent actually serves, generative or not.
+
+        ONE seam for both cells of the dry_run out-of-transaction outline, so the
+        e2e-unrealizability is declared once, at the env method, rather than
+        re-derived in a step body.
+        """
+        if generative:
+            return self.setup_generative_build(format_id=format_id)
+
+        from adcp.types import FormatId as LibraryFormatId
+
+        mock_format = MagicMock()
+        mock_format.format_id = LibraryFormatId(agent_url=self.DEFAULT_AGENT_URL, id=format_id)
+        mock_format.agent_url = self.DEFAULT_AGENT_URL
+        mock_format.output_format_ids = []  # non-generative -> preview_creative branch
+        self.set_run_async_result([mock_format])
+        registry = self.mock["registry"].return_value
+        registry.preview_creative = AsyncMock(
+            return_value={"previews": [{"url": "https://preview.example.com/p.html"}]}
+        )
+        registry.get_format = AsyncMock(return_value=mock_format)
+        return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
 
     def setup_generative_build(
         self,

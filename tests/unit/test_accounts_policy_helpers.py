@@ -15,7 +15,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from src.core.tenant_context import TenantContext
-from src.core.tools.accounts import _build_setup_for_approval, _build_sync_result, _check_billing_policy
+from src.core.tools.accounts import (
+    _FAILURE_CLASS_TO_CODE,
+    _build_setup_for_approval,
+    _build_sync_result,
+    _check_billing_policy,
+)
 from tests.factories import PrincipalFactory
 
 
@@ -43,11 +48,19 @@ class TestCheckBillingPolicy:
         assert _check_billing_policy("agent", identity) is None
 
     def test_unsupported_value_rejected(self):
+        """The gate states a failure CLASS; the wire code is derived from it.
+
+        #1721 moved the gates onto GateFailure + _FAILURE_CLASS_TO_CODE, so the
+        code is no longer chosen at the refusal site — asserting the class here
+        and the mapping below keeps the same claim without re-pinning a literal
+        the gate no longer owns.
+        """
         identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
-        assert errors is not None
-        assert len(errors) == 1
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        failures = _check_billing_policy("operator", identity)
+        assert failures is not None
+        assert len(failures) == 1
+        assert failures[0].failure_class == "billing_not_supported"
+        assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
     def test_error_message_includes_supported_list(self):
         identity = _identity_with(supported_billing=["agent", "operator"])
@@ -65,9 +78,9 @@ class TestCheckBillingPolicy:
 
     def test_empty_supported_list_rejects_all(self):
         identity = _identity_with(supported_billing=[])
-        errors = _check_billing_policy("agent", identity)
-        assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        failures = _check_billing_policy("agent", identity)
+        assert failures is not None
+        assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
     def test_tenant_none_accepts(self):
         identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
@@ -77,9 +90,9 @@ class TestCheckBillingPolicy:
         """When identity.tenant is a TenantContext object, the same .get() contract applies."""
         identity = _identity_with_tenantcontext(supported_billing=["agent"])
         assert _check_billing_policy("agent", identity) is None
-        errors = _check_billing_policy("operator", identity)
-        assert errors is not None
-        assert errors[0].code == "BILLING_NOT_SUPPORTED"
+        failures = _check_billing_policy("operator", identity)
+        assert failures is not None
+        assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
     def test_dict_access_works(self):
         """When identity.tenant is a raw dict (IMPL transport), same behavior."""
