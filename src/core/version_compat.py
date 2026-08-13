@@ -44,10 +44,15 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     validates arguments with pydantic BEFORE the tool body runs. Any field the
     spec defines but the signature omits is therefore REJECTED outright —
     `VALIDATION_ERROR: Unexpected keyword argument` — rather than ignored. A
-    seller that rejects a field its own schema declares is non-conformant
-    regardless of whether it can act on it, and those schemas carry
-    `additionalProperties: true`, so tolerating MORE than we implement is the
-    explicitly specified posture.
+    seller that rejects a field its own schema DEFINES is non-conformant
+    regardless of whether it can act on it.
+
+    Scope is exactly the defined fields. `additionalProperties: true` on those
+    schemas is a statement about the SENDER — a buyer may send more and must not
+    get an exception — not a licence for undefined fields to reach us. Undefined
+    fields stay outside: rejected in development, ignored in production (Critical
+    Pattern #7), so nothing absent from our models can ever reach the application
+    layer and envelope validation stays out of application code.
 
     The field set comes from the SDK request model, which is the only candidate
     source that is both complete and available at runtime: the JSON bundle is
@@ -66,8 +71,9 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     build the old schema; and pydantic builds a callable's argument schema from
     ``get_type_hints()`` rather than the signature object, so a parameter present
     only in ``__signature__`` raises KeyError during schema generation. A bare
-    ``**kwargs`` wrapper fixes neither and would swallow typos, defeating the
-    unknown-field handling `universal/schema-validation.yaml` grades.
+    ``**kwargs`` wrapper fixes neither, and would additionally let undefined
+    fields through to the tool body — the one thing the layering above exists
+    to prevent.
 
     SCOPE — this makes fields ACCEPTED, not ACTED ON. A buyer sending
     `pagination` still gets unpaginated results, and `account` still does not
@@ -83,20 +89,16 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     if model is None:
         return tool_func
 
-    wanted: dict[str, Any] = {name: field.annotation for name, field in model.model_fields.items()}
-    # `idempotency_key` is an EVERY-REQUEST envelope at 3.1, not a mutating-tool
-    # field, but the SDK's read-tool request models do not declare it — so the
-    # model alone is not sufficient here. `universal/read-tool-idempotency.yaml`
-    # is titled "Read-tool idempotency_key tolerance" and grades exactly this:
-    # "read-only AdCP tasks accept the 3.1 every-request idempotency_key
-    # envelope without strict wrapper rejection". Mutating tools already declare
-    # it on their own models, so this only ever adds it to reads, where
-    # tolerating-and-ignoring IS the specified behaviour.
-    wanted.setdefault("idempotency_key", str | None)
-
+    # DEFINED fields only. `idempotency_key` is deliberately NOT added to read
+    # tools: the read-tool request schemas do not define it (only the mutating
+    # ones do), and a field the schema does not define is not ours to accept as
+    # a parameter. `universal/read-tool-idempotency.yaml` grades read tools for
+    # accepting it, but a grading tool does not outrank the schema — if the two
+    # disagree, the storyboard is what is wrong. See the note on that storyboard
+    # in docs/test-obligations/storyboard-issue-map.yaml.
     additions = [
-        inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=annotation)
-        for name, annotation in wanted.items()
+        inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=field.annotation)
+        for name, field in model.model_fields.items()
         if name not in declared
     ]
     if not additions:
