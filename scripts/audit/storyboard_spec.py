@@ -266,6 +266,46 @@ def checks_for_phase(text: str, phase_id: str) -> list[str]:
     return _CHECK_LINE_RE.findall(window[1]) if window else []
 
 
+def checks_by_owner(text: str) -> list[tuple[str, str, str | None]]:
+    """Every graded check as ``(owner_id, check_type, parent_id)``, in file order.
+
+    A check line sits inside several nested windows at once — its step's, and
+    that step's phase's. The OWNER is the innermost id whose window contains
+    it, and the parent is the next one out. Attributing to the innermost is
+    what makes a check addressable: the conformance ledger keys on
+    ``(protocol, track, storyboard_id, step_id)``, so the step is the unit a
+    scenario or a ticket can actually be mapped onto.
+
+    Same offset-keyed traversal as :func:`check_inventory`, which counts these
+    same lines — kept as one traversal so the two cannot disagree about what a
+    check is.
+    """
+    windows: list[tuple[int, int, str]] = []
+    for phase_id in phases(text):
+        window = _phase_window(text, phase_id)
+        if window is None:
+            continue
+        offset, body = window
+        windows.append((offset, offset + len(body), phase_id))
+
+    owners: dict[int, tuple[str, str, str | None]] = {}
+    for offset, end, _owner_id in windows:
+        # Scanned per window, but ownership is decided by the ENCLOSING spans
+        # below, not by the window a match was found in — a check line appears
+        # in every window that contains it.
+        body = text[offset:end]
+        for match in _CHECK_LINE_RE.finditer(body):
+            position = offset + match.start()
+            enclosing = [w for w in windows if w[0] <= position < w[1]]
+            # Innermost = smallest span; its parent = the next smallest.
+            enclosing.sort(key=lambda w: w[1] - w[0])
+            innermost = enclosing[0][2]
+            parent = enclosing[1][2] if len(enclosing) > 1 else None
+            owners[position] = (innermost, match.group(1), parent)
+
+    return [owners[position] for position in sorted(owners)]
+
+
 def check_inventory(text: str) -> dict[str, int]:
     """Every check type this storyboard grades, counted once — ``{type: count}``.
 
@@ -433,14 +473,27 @@ def run_cli(
     description: str,
     build_fn: Callable[[Path, Path], dict[str, Any]],
     render_fn: Callable[[dict[str, Any]], str],
+    jsonl_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
 ) -> int:
-    """Standard CLI: --repo/--adcp/--markdown, build(repo, adcp), print JSON or markdown."""
+    """Standard CLI: --repo/--adcp/--markdown[/--jsonl], build(repo, adcp), print.
+
+    ``--jsonl`` emits one JSON object per line. A consumer that offers it is
+    declaring that the JSONL is its SOURCE OF TRUTH and the markdown a
+    rendering of it — so the two can never drift, and a new view is a new
+    renderer rather than a new artifact.
+    """
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--adcp", type=Path, default=Path.home() / "projects" / "adcp")
     parser.add_argument("--markdown", action="store_true")
+    if jsonl_fn is not None:
+        parser.add_argument("--jsonl", action="store_true")
     args = parser.parse_args()
     result = build_fn(args.repo.resolve(), args.adcp.resolve())
+    if jsonl_fn is not None and getattr(args, "jsonl", False):
+        for record in jsonl_fn(result):
+            print(json.dumps(record, sort_keys=True))
+        return 0
     print(render_fn(result) if args.markdown else json.dumps(result, indent=2))
     return 0
 
@@ -450,6 +503,7 @@ __all__ = [
     "Storyboard",
     "TaggedScenario",
     "check_inventory",
+    "checks_by_owner",
     "checks_for_phase",
     "declared_capabilities",
     "dist_root",
