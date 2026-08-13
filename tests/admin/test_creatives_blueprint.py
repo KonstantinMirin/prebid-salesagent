@@ -256,6 +256,8 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
 # Patch at the use site: creatives.py binds this name via `from ... import`, so the
 # definition module (src.core.tools.media_buy_create) is not where the call resolves.
 _PUSH_PATCH = "src.admin.blueprints.creatives.push_creative_to_existing_buy"
+# Same binding, same reason — the adapter execution that gates the unblocked-buy status write.
+_EXECUTE_APPROVED_PATCH = "src.admin.blueprints.creatives.execute_approved_media_buy"
 
 
 class TestCreativeApprovalRetroactivePush:
@@ -413,6 +415,60 @@ class TestCreativeApprovalRetroactivePush:
 
         assert response.status_code == 200
         mock_push.assert_not_called()
+
+
+class TestCreativeApprovalUnblocksMediaBuy:
+    """The last creative approval unblocks the buy — and that is a mutation of the buy.
+
+    approve_creative reloads the buy through the repository and then writes status /
+    approved_at / approved_by onto the returned object, so the buy changes state without
+    ``revision`` (the buyer's optimistic-concurrency token) moving and without
+    ``confirmed_at`` (the instant the seller committed) being stamped. Routing the write
+    through MediaBuyRepository.update_status is what carries both.
+    """
+
+    def test_unblocked_buy_bumps_revision_and_stamps_confirmation(self, client, test_tenant, factory_session):
+        """Approving the last pending creative moves a pending_creatives buy to active."""
+        from src.core.database.repositories import MediaBuyRepository
+
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_creatives")
+        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+
+        repo = MediaBuyRepository(factory_session, test_tenant)
+        before = repo.get_by_id(media_buy_id)
+        before_revision = before.revision
+        assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
+
+        # The adapter execution is a different concern; this test grades the status write
+        # that follows a successful one.
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)) as mock_execute,
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={"approved_by": "test@example.com"},
+            )
+
+        assert response.status_code == 200
+        mock_execute.assert_called_once_with(media_buy_id, test_tenant)
+
+        factory_session.expire_all()
+        after = repo.get_by_id(media_buy_id)
+        # The factory buy's flight window (2025-01-01 .. 2027-12-31) is open now, so
+        # _compute_media_buy_status_from_flight_dates picks "active".
+        assert after.status == "active", f"unblocked buy must go live, got {after.status!r}"
+        assert after.approved_by == "system"
+        assert after.revision == before_revision + 1, (
+            f"the buy moved pending_creatives -> active but revision went "
+            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
+        )
+        assert after.confirmed_at is not None, (
+            "creative approval moved the buy to the seller-confirmed status 'active' without stamping confirmed_at"
+        )
 
 
 class TestCreativeRejection:

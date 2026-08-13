@@ -438,21 +438,28 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                             now = datetime.now(UTC)
                             if now < start_time:
-                                media_buy.status = "scheduled"
+                                approved_status = "scheduled"
                             elif now > end_time:
-                                media_buy.status = "completed"
+                                approved_status = "completed"
                             else:
-                                media_buy.status = "active"
+                                approved_status = "active"
                         else:
                             # No start or end time - set to active
-                            media_buy.status = "active"
+                            approved_status = "active"
                     else:
                         # Keep it in a state that shows it needs creative approval
                         # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
-                        media_buy.status = "draft"
+                        approved_status = "draft"
 
-                    media_buy.approved_at = datetime.now(UTC)
-                    media_buy.approved_by = user_email
+                    # One repository write for the whole branch: the status and the
+                    # approval stamps move together, and the repository owns the
+                    # revision bump and the write-once confirmed_at stamp.
+                    approve_repo.update_status(
+                        media_buy_id,
+                        approved_status,
+                        approved_at=datetime.now(UTC),
+                        approved_by=user_email,
+                    )
                     db_session.commit()
 
                     # Execute adapter creation for approved media buy
@@ -571,7 +578,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 attributes.flag_modified(step, "comments")
 
                 if media_buy and media_buy.status == "pending_approval":
-                    media_buy.status = "rejected"
+                    # approve_repo is constructed before the action split, so it is the
+                    # repository in scope here too — rejection moves the buy's revision
+                    # like any other status change.
+                    approve_repo.update_status(media_buy_id, "rejected")
 
                 db_session.commit()
 

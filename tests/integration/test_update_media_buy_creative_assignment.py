@@ -1,5 +1,7 @@
 """Integration tests for update_media_buy creative assignment functionality."""
 
+from datetime import UTC, datetime
+from typing import NamedTuple
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -765,3 +767,131 @@ def test_creative_assignments_replaces_all(integration_db):
         weight_map = {a.creative_id: a.weight for a in assignments}
         assert weight_map["c2"] == 70
         assert weight_map["c3"] == 30
+
+
+# =============================================================================
+# Approved-draft -> pending_creatives transition
+#
+# A media buy approved BEFORE it had creatives sits at status "draft" with
+# approved_at stamped. Attaching creatives is what moves it on, so both package
+# creative paths carry the same transition:
+#   - creative_ids         -> src/core/tools/media_buy_update.py:949
+#   - creative_assignments -> src/core/tools/media_buy_update.py:1185
+# Each writes through MediaBuyRepository.update_status rather than assigning
+# media_buy_obj.status directly, and that routing is the behaviour graded here:
+# update_status stamps confirmed_at (pending_creatives is a seller-confirmed
+# status — it is not in MEDIA_BUY_UNCONFIRMED_STATUSES) and bumps revision (the
+# buyer's optimistic-concurrency token). A direct attribute assignment moves the
+# buy with neither, which is invisible if the test only checks the status string.
+# =============================================================================
+
+
+class _BuyState(NamedTuple):
+    """The persisted columns a status move is responsible for carrying."""
+
+    status: str
+    revision: int
+    confirmed_at: datetime | None
+
+
+def _read_buy_state(env, media_buy_id: str) -> _BuyState:
+    """Read a media buy's persisted state through the env-bound session.
+
+    ``expire_all`` first: ``_update_media_buy_impl`` commits in its own session,
+    so the env session's identity map still holds the pre-call row.
+    """
+    from src.core.database.models import MediaBuy
+
+    env.get_session().expire_all()
+    buy = env.get_one(MediaBuy, media_buy_id=media_buy_id, tenant_id=env.identity.tenant_id)
+    assert buy is not None, f"media buy {media_buy_id} is missing from tenant {env.identity.tenant_id}"
+    return _BuyState(status=buy.status, revision=buy.revision, confirmed_at=buy.confirmed_at)
+
+
+def _seed_approved_draft_buy(env, *, media_buy_id: str, package_id: str, creative_id: str) -> None:
+    """Seed the narrow precondition both transitions guard on.
+
+    A buy that is BOTH status "draft" AND has ``approved_at`` set — i.e. the
+    seller approved it before any creative was attached — plus one package whose
+    product accepts the seeded creative's format (otherwise the shared
+    ``_validate_creatives_for_assignment`` gate rejects the update before either
+    transition site is reached).
+    """
+    from tests.factories import CreativeFactory, MediaBuyFactory, MediaPackageFactory
+
+    tenant, principal = env.setup_default_data(human_review_required=False)
+    product, _ = env.setup_product_chain(tenant)
+    buy = MediaBuyFactory(
+        tenant=tenant,
+        principal=principal,
+        media_buy_id=media_buy_id,
+        status="draft",
+        approved_at=datetime.now(UTC),
+    )
+    MediaPackageFactory(
+        media_buy=buy,
+        package_id=package_id,
+        package_config={"package_id": package_id, "product_id": product.product_id},
+    )
+    CreativeFactory(tenant=tenant, principal=principal, creative_id=creative_id, approved=True)
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize(
+    ("creative_field", "package_update"),
+    [
+        pytest.param(
+            "creative_ids",
+            {"creative_ids": ["cr_draft"]},
+            id="creative_ids",
+        ),
+        pytest.param(
+            "creative_assignments",
+            {"creative_assignments": [{"creative_id": "cr_draft", "weight": 100}]},
+            id="creative_assignments",
+        ),
+    ],
+)
+def test_approved_draft_transitions_to_pending_creatives(integration_db, creative_field, package_update):
+    """Attaching creatives to an approved draft moves it to pending_creatives via the repository.
+
+    One case per transition site (creative_ids -> :949, creative_assignments ->
+    :1185): each drives only its own branch, because each site is guarded on the
+    field its case sends and the other field is absent from the request.
+    """
+    from src.core.schemas import UpdateMediaBuyRequest
+    from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+    media_buy_id = f"mb_draft_{creative_field}"
+    package_id = "pkg_draft"
+
+    with MediaBuyDualEnv() as env:
+        _seed_approved_draft_buy(env, media_buy_id=media_buy_id, package_id=package_id, creative_id="cr_draft")
+
+        before = _read_buy_state(env, media_buy_id)
+        assert before.status == "draft", "fixture must start in the approved-but-creative-less draft state"
+        assert before.confirmed_at is None, "draft is not a seller-confirmed status, so it starts unstamped"
+
+        result = env.call_impl(
+            req=UpdateMediaBuyRequest(
+                media_buy_id=media_buy_id,
+                packages=[{"package_id": package_id, **package_update}],
+            )
+        )
+
+        assert isinstance(result, UpdateMediaBuyResult), f"update failed: {result!r}"
+
+        after = _read_buy_state(env, media_buy_id)
+        assert after.status == "pending_creatives", (
+            f"attaching {creative_field} to an approved draft must move it to pending_creatives, got {after.status!r}"
+        )
+        # The transition is a mutation of the buy, so it must carry the buy's
+        # mutation bookkeeping — which only MediaBuyRepository.update_status does.
+        assert after.revision == before.revision + 1, (
+            f"{creative_field} transition moved {media_buy_id} draft -> pending_creatives but revision went "
+            f"{before.revision} -> {after.revision}; a status move must bump revision by exactly 1"
+        )
+        assert after.confirmed_at is not None, (
+            f"{creative_field} transition moved {media_buy_id} to the seller-confirmed status "
+            "'pending_creatives' without stamping confirmed_at"
+        )

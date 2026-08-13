@@ -279,9 +279,10 @@ def _process_assignments(
                         assignments_by_creative[creative_id].append(actual_package_id)
 
             # Update media buy status if needed (draft -> pending_creatives)
+            assert uow.media_buys is not None
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
-                    mb_obj.status = "pending_creatives"
+                    uow.media_buys.update_status(mb_id, "pending_creatives")
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
 
             # UoW auto-commits on clean exit

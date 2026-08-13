@@ -6,6 +6,7 @@ Requires PostgreSQL (integration_db fixture).
 
 import uuid
 from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import delete, select
@@ -214,3 +215,150 @@ class TestWorkflowRejection:
             json={"reason": "test"},
         )
         assert response.status_code == 404
+
+
+# Patch target: workflows.py imports this inside approve_workflow_step(), so the name
+# resolves in the DEFINING module at call time (unlike a module-level `from ... import`).
+_EXECUTE_APPROVED_PATCH = "src.core.tools.media_buy_create.execute_approved_media_buy"
+
+
+def _create_step_mapped_to_media_buy(session, tenant_id: str, media_buy_id: str) -> tuple[str, str]:
+    """Create a pending_approval media buy + an approval step mapped to it.
+
+    Returns (context_id, step_id). Uses the ContextManager production API for the
+    context/step/mapping so the route's ``get_mappings_for_step`` lookup sees exactly
+    what production writes — without the mapping, approve_workflow_step never reaches
+    the media-buy branch at all.
+    """
+    from src.core.context_manager import ContextManager
+    from src.core.database.models import Principal as PrincipalModel
+    from src.core.database.models import Tenant as TenantModel
+    from tests.factories import MediaBuyFactory
+
+    tenant = session.scalars(select(TenantModel).filter_by(tenant_id=tenant_id)).first()
+    principal = session.scalars(
+        select(PrincipalModel).filter_by(tenant_id=tenant_id, principal_id="wf_test_principal")
+    ).first()
+    MediaBuyFactory(
+        tenant=tenant,
+        principal=principal,
+        media_buy_id=media_buy_id,
+        status="pending_approval",
+    )
+
+    cm = ContextManager()
+    context = cm.create_context(tenant_id=tenant_id, principal_id=principal.principal_id)
+    step = cm.create_workflow_step(
+        context_id=context.context_id,
+        step_type="approval",
+        owner="publisher",
+        status="requires_approval",
+        tool_name="create_media_buy",
+        request_data={},
+        object_mappings=[
+            {
+                "object_type": "media_buy",
+                "object_id": media_buy_id,
+                "action": "approve",
+            }
+        ],
+    )
+    return context.context_id, step.step_id
+
+
+def _reload_media_buy(session, tenant_id: str, media_buy_id: str):
+    """Re-read the media buy the route just committed, through the repository."""
+    from src.core.database.repositories import MediaBuyRepository
+
+    session.expire_all()
+    media_buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+    assert media_buy is not None, f"media buy {media_buy_id} vanished"
+    return media_buy
+
+
+class TestWorkflowApprovalMovesMediaBuy:
+    """Approving a media-buy workflow step moves the buy — with its mutation bookkeeping.
+
+    Both status writes in approve_workflow_step must go through MediaBuyRepository, which
+    is the only writer of ``revision`` (the buyer's optimistic-concurrency token, which must
+    strictly increase on every mutation) and of ``confirmed_at`` (the instant the seller
+    committed, stamped once on the first committed status). A handler that assigns
+    media_buy.status directly moves the buy while leaving both behind, so the buyer polling
+    get_media_buys sees a changed buy at an unchanged revision.
+    """
+
+    def test_approve_waiting_on_creatives_bumps_revision(self, client, test_tenant, factory_session):
+        """The pending_creatives arm: buy still waiting on creatives, but the buy DID move."""
+        _auth_session(client, test_tenant)
+        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
+        context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
+
+        from tests.factories import CreativeAssignmentFactory, CreativeFactory
+
+        media_buy = _reload_media_buy(factory_session, test_tenant, media_buy_id)
+        before_revision = media_buy.revision
+        assert media_buy.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
+
+        creative = CreativeFactory(
+            tenant=media_buy.tenant,
+            principal=media_buy.principal,
+            status="pending",
+        )
+        CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id="pkg_wf_1")
+
+        response = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+            content_type="application/json",
+            json={},
+        )
+        assert response.status_code == 200
+
+        after = _reload_media_buy(factory_session, test_tenant, media_buy_id)
+        assert after.status == "pending_creatives", (
+            f"approve with an unapproved creative must park the buy in pending_creatives, got {after.status!r}"
+        )
+        assert after.revision == before_revision + 1, (
+            f"the buy moved pending_approval -> pending_creatives but revision went "
+            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
+        )
+        # pending_creatives is NOT in MEDIA_BUY_UNCONFIRMED_STATUSES, so the seller has
+        # committed by the time the buy is merely waiting on creatives.
+        assert after.confirmed_at is not None, (
+            "admin approval moved the buy to the seller-confirmed status 'pending_creatives' "
+            "without stamping confirmed_at"
+        )
+
+    def test_approve_schedules_buy_and_bumps_revision(self, client, test_tenant, factory_session):
+        """The scheduled arm: manual approval is the buy's first real commitment."""
+        _auth_session(client, test_tenant)
+        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
+        context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
+
+        before = _reload_media_buy(factory_session, test_tenant, media_buy_id)
+        before_revision = before.revision
+        assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
+
+        # The adapter call is a different concern; this test grades the status write that
+        # follows a successful one.
+        with patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)):
+            response = client.post(
+                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+        assert response.status_code == 200
+
+        after = _reload_media_buy(factory_session, test_tenant, media_buy_id)
+        assert after.status == "scheduled"
+        assert after.approved_by == "test@example.com"
+        assert after.approved_at is not None
+        assert after.revision == before_revision + 1, (
+            f"the buy moved pending_approval -> scheduled but revision went "
+            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
+        )
+        # This is the manual-approval path: before this write the buy had no confirmation
+        # instant at all, and 'scheduled' is a seller-confirmed status.
+        assert after.confirmed_at is not None, (
+            "an admin-approved buy must carry the instant the seller committed; "
+            "confirmed_at is still NULL after approval"
+        )

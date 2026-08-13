@@ -545,3 +545,41 @@ write-once, so permanent, and it overwrites the truer answer the read-time fallb
 
 **Invariant this establishes:** a nullable column that production cannot legitimately read as NULL
 is a data defect to be migrated, never a NULL to be interpreted at read time.
+
+### A2 — Owner ruling (2026-08-13): the persisted status vocabulary becomes a type
+
+**Raised by:** L2's routing writes statuses as raw strings (`"pending_creatives"`, `"scheduled"`,
+`"draft"`, `"rejected"`), which prompted the question of why the SDK's enum is not used.
+
+**Measured.** `adcp.types.MediaBuyStatus` is a real `StrEnum` with exactly the pinned seven wire
+members, and it IS used — 89 sites. But the *persisted* vocabulary is a different, larger set and has
+no type at all: `approved`, `draft`, `failed`, `pending`, `pending_activation`, `pending_approval`,
+`ready`, `scheduled` have no SDK member. Across `src/` there are **584 raw status literals in 75
+files** against those 89 typed usages.
+
+**Ruling.** The vocabulary gets a type:
+
+> How I would design it is `MediaBuyStatus.<literal>`. If I want more statuses that are persisted, I
+> just expand the list of enums that I have, and only then I add a getter and setter on my model that
+> convert.
+
+**Consequences, which override §3.3:**
+
+1. **§3.3's F2 is REPLACED.** L3 no longer declares a `MEDIA_BUY_CONFIRMED_STATUSES` frozenset, and
+   no longer writes the disjoint/union/fail-closed drift test. It introduces
+   `PersistedMediaBuyStatus(StrEnum)` in `models.py` as the superset of the wire enum, defines the
+   commitment partition over its members, and puts the persisted→wire conversion on the model.
+2. **The fail-closed bug disappears rather than being fixed.**
+   `is_media_buy_seller_confirmed("some_new_status") is True` is not a logic error — it is the
+   absence of a type. With the enum there is no unknown member to ask about.
+3. **What this deletes:** the two frozensets, `PERSISTED_STATUS_TO_CANONICAL`,
+   `is_media_buy_seller_confirmed(str)`, and the drift test that existed only to keep a
+   hand-maintained set honest.
+4. **Drop-in, not a coexistence shim.** `StrEnum` members compare equal to their string values, so
+   every existing `== "draft"` comparison keeps working unchanged. No branch, no flag, no compat
+   path — the values are identical.
+5. **The 584 literals are NOT migrated in this lane.** Introducing the type and moving the partition
+   onto it is L3's scope; replacing the literals is mechanical follow-up that touches files no lane
+   owns.
+
+**Invariant this establishes:** a closed vocabulary is a type, not a set of strings guarded by a test.

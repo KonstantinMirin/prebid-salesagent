@@ -195,6 +195,29 @@ def _post_approval_action(admin_session, ids: dict, data: dict):
     assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
 
 
+def _media_buy_state(tenant_id: str, media_buy_id: str):
+    """Read the persisted media buy through the repository, in a fresh session.
+
+    The admin route commits in its own session, so the fixture's session would serve a
+    stale identity-mapped copy. Returns the detached row (its columns are loaded before
+    the session closes).
+    """
+    from sqlalchemy.orm import Session as SASession
+
+    from src.core.database.database_session import get_engine
+    from src.core.database.repositories import MediaBuyRepository
+
+    session = SASession(bind=get_engine())
+    try:
+        media_buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+        assert media_buy is not None, f"media buy {media_buy_id} vanished"
+        # Touch the columns while the session is open so the detached row can serve them.
+        _ = (media_buy.status, media_buy.revision, media_buy.confirmed_at, media_buy.approved_by)
+        return media_buy
+    finally:
+        session.close()
+
+
 def _webhook_body(captured: dict) -> dict:
     """The outbound webhook body as a plain dict (model_dump when a model)."""
     assert "payload" in captured, "route did not send a webhook payload"
@@ -333,6 +356,73 @@ class TestAdminMediaBuyRejectWebhook:
             "principal_id": "reject_wh_principal",
             "media_buy_id": media_buy_id,
         }
+
+    def test_reject_bumps_revision_without_confirming(
+        self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
+    ):
+        """Rejecting the buy is a mutation of the buy: revision moves, confirmation does not.
+
+        approve_media_buy's reject arm assigns media_buy.status = "rejected" directly, so the
+        buy changes state while ``revision`` — the buyer's optimistic-concurrency token, which
+        must strictly increase on every mutation — stays where it was. Routing the write through
+        MediaBuyRepository.update_status is what moves it. "rejected" is in
+        MEDIA_BUY_UNCONFIRMED_STATUSES, so this transition must NOT stamp confirmed_at: a
+        rejection is the seller declining to commit.
+        """
+        tenant_id = pending_reject_media_buy["tenant_id"]
+        media_buy_id = pending_reject_media_buy["media_buy_id"]
+
+        before = _media_buy_state(tenant_id, media_buy_id)
+        before_revision = before.revision
+        assert before.status == "pending_approval"
+        assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
+
+        _post_approval_action(
+            authenticated_admin_session, pending_reject_media_buy, {"action": "reject", "reason": "test"}
+        )
+
+        after = _media_buy_state(tenant_id, media_buy_id)
+        assert after.status == "rejected"
+        assert after.revision == before_revision + 1, (
+            f"the buy moved pending_approval -> rejected but revision went "
+            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
+        )
+        assert after.confirmed_at is None, (
+            f"a rejected buy must never carry a seller-commitment instant, got {after.confirmed_at!r}"
+        )
+
+    def test_approve_bumps_revision_for_every_status_move(
+        self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
+    ):
+        """An admin approval makes TWO status moves, so revision must move twice.
+
+        The full approve path (no adapter mock — the mock adapter really runs) moves the buy
+        pending_approval -> scheduled in approve_media_buy's four-branch if/elif, and then
+        execute_approved_media_buy moves it scheduled -> active through
+        MediaBuyUoW.media_buys.update_status. Only the SECOND write goes through the
+        repository today, so the buy ends at revision+1 having made two transitions: the
+        first move is invisible to a buyer polling on ``revision``. Both moves are real, so
+        both must bump.
+        """
+        tenant_id = pending_reject_media_buy["tenant_id"]
+        media_buy_id = pending_reject_media_buy["media_buy_id"]
+
+        before = _media_buy_state(tenant_id, media_buy_id)
+        before_revision = before.revision
+        assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
+
+        _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
+
+        after = _media_buy_state(tenant_id, media_buy_id)
+        assert after.status == "active", (
+            f"the approve path ends in the adapter-execution write to 'active', got {after.status!r}"
+        )
+        assert after.approved_by == "test@example.com"
+        assert after.revision == before_revision + 2, (
+            f"admin approval moved the buy pending_approval -> scheduled -> active but revision "
+            f"went {before_revision} -> {after.revision}; each status move bumps it by exactly 1"
+        )
+        assert after.confirmed_at is not None, "an admin-approved buy must carry the instant the seller committed"
 
     def test_a2a_reject_webhook_carries_policy_violation_task(
         self, authenticated_admin_session, make_pending_media_buy, webhook_capture

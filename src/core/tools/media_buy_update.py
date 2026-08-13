@@ -946,7 +946,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            media_buy_obj.status = "pending_creatives"
+                            uow.media_buys.update_status(actual_media_buy_id, "pending_creatives")
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_ids: {pkg_update.creative_ids})"
@@ -1182,7 +1182,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            media_buy_obj.status = "pending_creatives"
+                            uow.media_buys.update_status(actual_media_buy_id, "pending_creatives")
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_assignments processed: {updated_assignments})"

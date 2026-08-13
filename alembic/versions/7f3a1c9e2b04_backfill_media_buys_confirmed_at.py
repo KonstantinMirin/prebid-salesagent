@@ -1,0 +1,79 @@
+"""Backfill media_buys.confirmed_at for rows that predate the column.
+
+`2c4e6a7b8d9e` added the column nullable and left historical rows NULL. That left
+production reading a NULL it could not legitimately report: the pinned
+get-media-buys-response schema forbids an item whose status is `active` from
+carrying a null `confirmed_at`, so those rows could only be served by inventing a
+value at read time.
+
+Inventing it at read time is the wrong fix. A nullable column that production
+cannot legitimately read as NULL is a DATA defect, and data defects are corrected
+by migration — not by a compatibility branch that every later reader has to know
+about and that never gets deleted.
+
+So this backfills once, using the same rule the read-time fallback encoded and
+that PR #1544 defines for the field: the approval instant on the manual-approval
+path, creation on the synchronous auto-approve path. After it runs, no
+seller-confirmed row has a NULL `confirmed_at`, and the read path can simply emit
+the column.
+
+The status partition is written out literally rather than imported from
+`models.MEDIA_BUY_UNCONFIRMED_STATUSES`: a migration records what was true when
+it ran, and must not change meaning later because application code moved a status
+from one side of the partition to the other.
+
+Not backfilled, deliberately: rows in an unconfirmed status (`draft`, `pending`,
+`pending_approval`, `rejected`, `failed`) have no commitment instant to record, so
+NULL is their correct value rather than missing data.
+
+Revision ID: 7f3a1c9e2b04
+Revises: 2c4e6a7b8d9e
+"""
+
+import sqlalchemy as sa
+from alembic import op
+
+revision = "7f3a1c9e2b04"
+down_revision = "2c4e6a7b8d9e"
+branch_labels = None
+depends_on = None
+
+# Frozen at authoring time — see the module docstring.
+_UNCONFIRMED_STATUSES = ("draft", "pending", "pending_approval", "rejected", "failed")
+
+
+def upgrade() -> None:
+    """Set confirmed_at on every seller-confirmed row that is missing it."""
+    op.execute(
+        sa.text(
+            """
+            UPDATE media_buys
+               SET confirmed_at = COALESCE(approved_at, created_at)
+             WHERE confirmed_at IS NULL
+               AND lower(status) NOT IN :unconfirmed
+               AND COALESCE(approved_at, created_at) IS NOT NULL
+            """
+        ).bindparams(sa.bindparam("unconfirmed", value=_UNCONFIRMED_STATUSES, expanding=True))
+    )
+
+
+def downgrade() -> None:
+    """Re-NULL the backfilled rows.
+
+    Cannot be exact: a row stamped by this backfill is indistinguishable from one
+    the repository stamped at the same instant. The condition below is the closest
+    honest inverse — clear `confirmed_at` only where it still equals the value this
+    migration would have written, so rows carrying a genuinely observed commitment
+    instant are left alone.
+    """
+    op.execute(
+        sa.text(
+            """
+            UPDATE media_buys
+               SET confirmed_at = NULL
+             WHERE confirmed_at IS NOT NULL
+               AND confirmed_at = COALESCE(approved_at, created_at)
+               AND lower(status) NOT IN :unconfirmed
+            """
+        ).bindparams(sa.bindparam("unconfirmed", value=_UNCONFIRMED_STATUSES, expanding=True))
+    )

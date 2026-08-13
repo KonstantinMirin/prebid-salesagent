@@ -267,15 +267,23 @@ class CreativeUoW(BaseUoW):
 
     creatives: CreativeRepository | None
     assignments: CreativeAssignmentRepository | None
+    # Assigning a creative can move its media buy out of draft, and a media-buy
+    # status change carries the revision bump and the confirmed_at stamp — both
+    # owned by MediaBuyRepository. The UoW already reaches the entity
+    # (find_package_with_media_buy returns it), so it needs the repository that
+    # may legally write it rather than a bare attribute assignment.
+    media_buys: MediaBuyRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
+        self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.creatives = None
         self.assignments = None
+        self.media_buys = None
 
 
 class AdminCreativeUoW(BaseUoW):

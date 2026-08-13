@@ -3588,7 +3588,12 @@ class TestMediaBuyStatusTransition:
     """
 
     def _run_assignment_with_media_buy(self, mock_db, *, media_buy_status, approved_at, existing_assignment=None):
-        """Run _process_assignments and return the mock media buy for status inspection."""
+        """Run _process_assignments and return ``(mock_media_buy, mock_uow)``.
+
+        The uow is returned so a transition can be graded at the SEAM it must go
+        through — the repository call that carries the revision bump and the
+        write-once confirmed_at stamp — rather than as an ORM attribute poke.
+        """
         mock_uow = MagicMock()
         mock_assignment_repo = MagicMock()
         mock_uow.assignments = mock_assignment_repo
@@ -3632,7 +3637,7 @@ class TestMediaBuyStatusTransition:
             validation_mode="strict",
             principal_id="principal_1",
         )
-        return mock_media_buy
+        return mock_media_buy, mock_uow
 
     def test_draft_with_approved_at_transitions(self):
         """Draft media buy with approved_at transitions to pending_creatives.
@@ -3643,12 +3648,12 @@ class TestMediaBuyStatusTransition:
         Covers: UC-006-MEDIA-BUY-STATUS-01
         """
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            mock_mb = self._run_assignment_with_media_buy(
+            mock_mb, mock_uow = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="draft",
                 approved_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
-            assert mock_mb.status == "pending_creatives"
+            mock_uow.media_buys.update_status.assert_called_once_with("mb_1", "pending_creatives")
 
     def test_draft_without_approved_at_stays_draft(self):
         """Draft media buy without approved_at does NOT transition.
@@ -3659,12 +3664,12 @@ class TestMediaBuyStatusTransition:
         Covers: UC-006-MEDIA-BUY-STATUS-02
         """
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            mock_mb = self._run_assignment_with_media_buy(
+            mock_mb, mock_uow = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="draft",
                 approved_at=None,
             )
-            assert mock_mb.status == "draft"
+            mock_uow.media_buys.update_status.assert_not_called()
 
     def test_non_draft_status_unchanged(self):
         """Active media buy status is not affected by creative assignment.
@@ -3674,12 +3679,12 @@ class TestMediaBuyStatusTransition:
         Covers: UC-006-MEDIA-BUY-STATUS-03
         """
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            mock_mb = self._run_assignment_with_media_buy(
+            mock_mb, mock_uow = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="active",
                 approved_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
-            assert mock_mb.status == "active"
+            mock_uow.media_buys.update_status.assert_not_called()
 
     def test_transition_fires_on_upsert(self):
         """Updated (upserted) assignment still triggers status check.
@@ -3698,14 +3703,14 @@ class TestMediaBuyStatusTransition:
         existing_assignment.weight = 50  # Different from 100 to trigger update
 
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            mock_mb = self._run_assignment_with_media_buy(
+            mock_mb, mock_uow = self._run_assignment_with_media_buy(
                 mock_db,
                 media_buy_status="draft",
                 approved_at=datetime(2026, 1, 1, tzinfo=UTC),
                 existing_assignment=existing_assignment,
             )
             # Transition should still fire even on upsert
-            assert mock_mb.status == "pending_creatives"
+            mock_uow.media_buys.update_status.assert_called_once_with("mb_1", "pending_creatives")
             # Weight should be reset to 100
             assert existing_assignment.weight == 100
 

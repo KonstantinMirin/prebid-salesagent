@@ -94,7 +94,23 @@ class MediaBuyStatusScheduler:
 
                     if new_status and new_status != media_buy.status:
                         old_status = media_buy.status
-                        media_buy.status = new_status
+                        # The sweep is deliberately cross-tenant, but the repository is
+                        # tenant-scoped, so build it from this row's own tenant. That
+                        # keeps every write inside the isolation the class enforces
+                        # rather than widening it with a cross-tenant write method.
+                        updated = MediaBuyRepository(session, media_buy.tenant_id).update_status(
+                            media_buy.media_buy_id, new_status
+                        )
+                        if updated is None:
+                            # Unreachable: media_buy_id is the sole primary key and the
+                            # row is already loaded in this transaction, so the
+                            # tenant-filtered re-fetch cannot miss. Never fall through
+                            # silently — a sweep must not report an update it did not make.
+                            logger.error(
+                                f"Media buy {media_buy.media_buy_id} vanished from its own tenant "
+                                f"{media_buy.tenant_id!r} mid-sweep; status left at {old_status}"
+                            )
+                            continue
                         updated_count += 1
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
 
