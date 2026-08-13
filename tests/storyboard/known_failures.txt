@@ -35,47 +35,6 @@
 # 0 passed is not a typo: the runner's capability probe (get_adcp_capabilities)
 # is itself rejected, so most storyboards never reach their assertions.
 
-# --- signed_requests (40) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::get_capabilities]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-001-no-signature-header]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-002-wrong-tag]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-003-expired-signature]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-004-window-too-long]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-005-alg-not-allowed]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-006-missing-covered-component]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-007-missing-content-digest]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-008-unknown-keyid]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-009-key-ops-missing-verify]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-010-content-digest-mismatch]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-011-malformed-header]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-012-missing-expires-param]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-013-expires-le-created]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-014-missing-nonce-param]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-015-signature-invalid]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-016-replayed-nonce]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-017-key-revoked]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-018-digest-covered-when-forbidden]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-019-signature-without-signature-input]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-020-rate-abuse]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-021-duplicate-signature-input-label]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-022-multi-valued-content-type]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-023-multi-valued-content-digest]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-024-unquoted-string-param]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-025-jwk-alg-crv-mismatch]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-027-webhook-registration-authentication-unsigned]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-028-unsigned-protocol-method-required]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-001-basic-post]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-002-post-with-content-digest]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-003-es256-post]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-004-multiple-signature-labels]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-005-default-port-stripped]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-006-dot-segment-path]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-007-query-byte-preserved]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-008-percent-encoded-path]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-009-percent-encoded-unreserved-decoded]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-010-percent-encoded-slash-preserved]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-011-ipv6-authority]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-012-ipv6-authority-default-port-stripped]
 
 # --- read_tool_idempotency (8) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::assert_omitted_key_grace_handled]
@@ -127,17 +86,9 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 # --- version_negotiation (1) ---
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::version_negotiation::get_capabilities_with_version]
 
-# --- wholesale_feed_bulk_webhooks (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::wholesale_feed_bulk_webhooks::register_bulk_change_webhook]
 
-# --- wholesale_feed_product_webhooks (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_product_webhooks::register_product_pricing_webhook]
 
-# --- wholesale_feed_products (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_products::bootstrap_products]
 
-# --- wholesale_feed_signal_webhooks (1) ---
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::signals::wholesale_feed_signal_webhooks::register_signal_pricing_webhook]
 
 # --- webhook_emission (8) ---
 # Newly gradable once the run hosted a reachable webhook receiver
@@ -177,3 +128,29 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 # xpasses and the real a2a checks arrive un-ledgered, failing CI until triaged —
 # which is the intended signal, and the point of grading the axis at all.
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::_runner::agent_reachability::graded_checks_produced]
+
+# --- newly reachable after the version-envelope fix (15) ---
+# Exposed, not caused, by salesagent-g6m2.6: with the AdCP 3.1 version envelope
+# accepted, these storyboards get past their first step for the first time and
+# reach checks that were never collected before (all 15 were NOT-COLLECTED in the
+# pre-fix baseline innet_130826_0906 — zero regressions).
+# 12 are the SAME error string but a DIFFERENT cause: our tool signatures omit
+#    3.1.1 request fields the storyboards send (get_products lacks `account` and
+#    `buying_mode`, etc). Tracked as salesagent-g6m2.8.
+# 3 are error-code mismatches (MEDIA_BUY_NOT_FOUND, PACKAGE_NOT_FOUND,
+#    TERMS_REJECTED) — a separate, pre-existing enum gap.
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::creative::media_buy_seller/creative_reception::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::creative::media_buy_seller/creative_reception::sync_creatives]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_media_buy]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/refine_products::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/refine_products::sync_accounts]

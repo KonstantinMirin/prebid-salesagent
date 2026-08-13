@@ -332,6 +332,7 @@ from src.core.tools.performance import update_performance_index
 from src.core.tools.products import get_products
 from src.core.tools.properties import list_authorized_properties
 from src.core.tools.task_management import complete_task, get_task, list_tasks
+from src.core.version_compat import accepts_version_envelope
 
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
@@ -345,7 +346,9 @@ def _register_tool(fn: Any) -> None:
         kwargs["description"] = sdk_def["description"]
         if sdk_def.get("annotations"):
             kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
-    mcp.tool(**kwargs)(with_error_logging(fn))
+    # accepts_version_envelope must be INSIDE with_error_logging: it rewrites
+    # the signature FastMCP reads, so it has to be the layer nearest the tool.
+    mcp.tool(**kwargs)(with_error_logging(accepts_version_envelope(fn)))
 
 
 _register_tool(list_accounts)

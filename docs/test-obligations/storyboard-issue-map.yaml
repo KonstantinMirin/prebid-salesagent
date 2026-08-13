@@ -91,13 +91,15 @@ storyboards:
     # runStoryboardBody discovers its own and hands it to checkRequires).
     # Full evidence chain: salesagent-g6m2.3.
     note: >-
-      #1291 is the implementation epic. The 40 ledgered failures are NOT a
-      conformance obligation: 3.1.1 exempts agents that do not advertise
-      request_signing.supported, and the runner honours that. They are an
-      artifact of our own capability probe being rejected — MCP tools reject
-      the 3.1 version envelope (GH #1512, salesagent-g6m2.6) — which no-ops the
-      skip gate. The entries stay until that lands and an in-network run
-      MEASURES the skip; evidence in the comment above.
+      #1291 is the implementation epic. RESOLVED: the 40 ledgered failures here
+      were never a conformance obligation — 3.1.1 exempts agents that do not
+      advertise request_signing.supported — and they are now gone. They existed
+      because our capability probe was rejected (MCP tools rejected the 3.1
+      version envelope, GH #1512), which no-oped the skip gate. With that fixed
+      (salesagent-g6m2.6), the in-network run test-results/innet_130826_0940
+      MEASURES the storyboard skipping: 40 entries removed from the ledger, and
+      the roadmap's measured-failing total drops from 80 checks to 48. The
+      remaining gap here is the unwritten scenario, not a measured failure.
 
   universal/idempotency.yaml:
     issues: [1683, 1685, 1470, 1075]
