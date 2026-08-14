@@ -66,7 +66,7 @@ time" — it is one function per transport, total:
 |---|---|---|---|
 | MCP | tool name string, must equal a name in `mcp.list_tools()` | `dict` of kwargs — this **is** the FastMCP `call_tool` arguments dict, no transformation | `ToolResult.structured_content` (already a flat dict) |
 | A2A | skill id string, must equal an `AgentSkill.id` in `create_agent_card()` | `{"skill": name, "parameters": payload}` packed into a protobuf `Struct` inside a `Message` `Part.data` (`create_a2a_message_with_skill`, `tests/utils/a2a_helpers.py:67`) | artifact `Part.data` parsed via `json_format.MessageToJson` (`extract_data_from_artifact`, same file, line 39), then strip the two protocol keys `message`/`success` that `_serialize_for_a2a` adds (`adcp_a2a_server.py:1445-1457`) |
-| REST | `(method, path_template)` pair, must equal a route registered on `router` in `src/routes/api_v1.py`, keyed by `route.endpoint.__name__ == tool_name` | JSON body = `payload` minus whichever payload keys the path template consumes as path params (e.g. `media_buy_id` for `PUT /media-buys/{id}`) | `response.json()` — already the flat response dict; every `api_v1.py` handler does `return response.model_dump(mode="json")` |
+| REST | `(method, path_template)` pair, must equal a route registered on `router` in `src/routes/api_v1.py`, keyed by `route.endpoint.__name__ == tool_name` for all but one handler (see correction below) | JSON body = `payload` minus whichever payload keys the path template consumes as path params (e.g. `media_buy_id` for `PUT /media-buys/{id}`) | `response.json()` — already the flat response dict; every `api_v1.py` handler does `return response.model_dump(mode="json")` |
 
 Confirmed by direct inspection, not assumed:
 
@@ -81,11 +81,17 @@ Confirmed by direct inspection, not assumed:
 ```
 
 `route.endpoint.__name__` is literally the tool name, for every route in
-`api_v1.py` — because every handler function is named after the tool it
+`api_v1.py` EXCEPT ONE — every handler function is named after the tool it
 wraps (`create_media_buy`, `update_media_buy`, `get_media_buy_delivery`,
 `sync_creatives`, `list_creatives`, `update_performance_index`,
 `list_accounts`, `sync_accounts`, `get_products`, `list_creative_formats`,
-`list_authorized_properties`, `get_capabilities`). Same story for MCP:
+`list_authorized_properties`) — but `get_capabilities` is the REST handler
+name for the `get_adcp_capabilities` AdCP tool, not a tool name in its own
+right (a naming drift the original design missed, fixed by
+salesagent-vuz9t.9: `tests/harness/address_table.py`'s `REST_TOOL_ALIASES`
+resolves this one known mismatch explicitly, and any NEW unresolved
+divergence now raises `UnresolvedRestHandlerName` at table-build time
+instead of silently registering under the wrong name). Same story for MCP:
 `_register_tool(fn)` in `src/core/main.py:339-348` calls
 `mcp.tool(**kwargs)(with_error_logging(fn))` where `fn.__name__` becomes
 the registered tool name, so `mcp.list_tools()` (async, returns
@@ -193,6 +199,15 @@ WRAP/ADDRESS/UNWRAP functions are the only per-transport code.
 
 ## 4. Address-mapping derivation (not hand-maintained)
 
+The sketch below is the ORIGINAL SB-2b proposal; `_index_rest` in the real
+file has since grown `REST_TOOL_ALIASES`/`REST_ABSENT_TOOLS`/
+`UnresolvedRestHandlerName` (salesagent-vuz9t.9) because `tool_name =
+route.endpoint.__name__` — unmodified — silently mis-registered
+`get_capabilities` and degraded four genuinely-REST-absent tools into an
+indistinguishable "not found." Read `tests/harness/address_table.py`
+directly for the current behavior; this block is kept as the historical
+proposal, not the implementation.
+
 ```python
 # tests/harness/address_table.py (new file, SB-2b builds it)
 
@@ -253,11 +268,17 @@ Every source read here is something production *already calls to route
 real traffic or advertise itself to real buyers* — `mcp.list_tools()` is
 what a real MCP client sees, `create_agent_card()` is what a real A2A
 buyer's discovery request receives, `app.routes` is FastAPI's own
-dispatch table. There is no fourth, hand-maintained list to keep in sync;
-a tool added to any of the three registration sites becomes callable
-through the client automatically, and a tool the implementer *forgot* to
-register on a transport shows up as `NoAddressForTransport` instead of
-silently existing in a stale test-only map.
+dispatch table. There is no fourth, hand-maintained list of TOOLS to keep
+in sync; a tool added to any of the three registration sites becomes
+callable through the client automatically, and a tool the implementer
+*forgot* to register on a transport shows up as `NoAddressForTransport`
+instead of silently existing in a stale test-only map. (Correction,
+salesagent-vuz9t.9: a REST handler's Python function name is not always
+the tool name — see `REST_TOOL_ALIASES` above — so a SMALL, reviewed,
+shrink-only alias map is unavoidable for that one axis; it is not a
+hand-maintained TOOL list, but it is hand-maintained naming metadata, and
+an unresolved divergence fails table construction loudly rather than
+degrading into a silent miss.)
 
 `path_template` handling for REST WRAP: extract `{name}` groups from the
 template with a regex (`re.findall(r"\{(\w+)\}", path_template)`); any

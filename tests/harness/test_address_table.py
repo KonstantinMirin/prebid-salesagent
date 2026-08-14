@@ -20,10 +20,19 @@ objects (``mcp.list_tools()``, ``create_agent_card()``, ``app.routes``).
 from __future__ import annotations
 
 import asyncio
+from unittest import mock
 
 import pytest
 
-from tests.harness.address_table import PATH_PARAM_RE, AddressTable, NoAddressForTransport, ToolAddress
+from tests.harness.address_table import (
+    PATH_PARAM_RE,
+    REST_ABSENT_TOOLS,
+    REST_TOOL_ALIASES,
+    AddressTable,
+    NoAddressForTransport,
+    ToolAddress,
+    UnresolvedRestHandlerName,
+)
 from tests.harness.transport import Transport
 
 
@@ -67,10 +76,10 @@ class TestAddressTableAgainstLiveProduction:
         assert e2e_mcp_addr.transport == Transport.E2E_MCP
 
     def test_no_address_for_transport_on_a2a_only_skill(self):
-        """approve_creative exists only on A2A (create_creative/assign_creative/
-        approve_creative/get_media_buy_status/optimize_media_buy — design doc §2
-        'Important asymmetry to flag for the implementer'). Confirmed against the
-        live registries directly (not assumed) before writing this test."""
+        """approve_creative is A2A-only. The live A2A-only set drifts over time —
+        confirmed directly against ADDRESS_TABLE.all_tools() at write time rather
+        than trusted from a hand-copied example list (see NoAddressForTransport's
+        docstring for why this file deliberately avoids repeating one)."""
         table = AddressTable()
         with pytest.raises(NoAddressForTransport):
             table.resolve("approve_creative", Transport.MCP)
@@ -141,7 +150,21 @@ class TestAddressTableDerivationInvariant:
         assert address.name == "brand_new_skill_never_seen_before"
 
     def test_new_rest_route_becomes_addressable_without_a_map_edit(self):
+        """A brand-new, SELF-CONSISTENT tool (same name registered on MCP and
+        exposed via REST) needs zero address_table.py map edits. Since the
+        loud-miss check (AC2) validates REST handler names against known
+        MCP/A2A tool names, the injected MCP registry must register the same
+        tool name — otherwise this would (correctly) raise
+        UnresolvedRestHandlerName, which is a different invariant
+        (TestRestAliasesAndAbsence), not the one this test proves."""
         from fastapi import FastAPI
+        from fastmcp import FastMCP
+
+        temp_mcp_app = FastMCP("throwaway-test-server")
+
+        @temp_mcp_app.tool(name="brand_new_rest_tool_never_seen_before")
+        def _brand_new_rest_tool_mcp_side(x: int) -> int:
+            return x
 
         temp_app = FastAPI()
 
@@ -149,7 +172,7 @@ class TestAddressTableDerivationInvariant:
         def brand_new_rest_tool_never_seen_before(widget_id: str) -> dict:
             return {"widget_id": widget_id}
 
-        table = AddressTable(rest_app=temp_app)
+        table = AddressTable(mcp_app=temp_mcp_app, rest_app=temp_app)
         address = table.resolve("brand_new_rest_tool_never_seen_before", Transport.REST)
         assert address.name == "brand_new_rest_tool_never_seen_before"
         assert address.method == "post"
@@ -170,6 +193,212 @@ class TestAddressTableDerivationInvariant:
         table = AddressTable(rest_app=temp_app)
         with pytest.raises(NoAddressForTransport):
             table.resolve("healthcheck", Transport.REST)
+
+
+class TestRestAliasesAndAbsence:
+    """AC(2): a REST handler name that matches neither a known MCP/A2A tool
+    name nor an entry in REST_TOOL_ALIASES must fail table construction
+    loudly (:class:`UnresolvedRestHandlerName`), not silently register under
+    the wrong (unresolved) name — the actual bug this ticket fixes."""
+
+    def test_renamed_rest_handler_without_alias_raises_unresolved_rest_handler_name(self):
+        """Simulates a REST handler that was renamed (fetch_products) without
+        a matching REST_TOOL_ALIASES entry, while the real tool it should map
+        to (get_products) genuinely exists on MCP. Today this silently
+        succeeds and registers `fetch_products` as its own address, so
+        `get_products` looks unavailable on REST even though a route for it
+        exists under the wrong name. The fix must raise at table-build time
+        instead of degrading into that silent miss."""
+        from fastapi import FastAPI
+        from fastmcp import FastMCP
+
+        temp_mcp_app = FastMCP("throwaway-test-server")
+
+        @temp_mcp_app.tool()
+        def get_products(brief: str) -> dict:
+            return {}
+
+        temp_rest_app = FastAPI()
+
+        @temp_rest_app.post("/api/v1/products")
+        def fetch_products() -> dict:
+            return {}
+
+        table = AddressTable(mcp_app=temp_mcp_app, rest_app=temp_rest_app)
+        with pytest.raises(UnresolvedRestHandlerName):
+            table.resolve("get_products", Transport.REST)
+
+    def test_duplicate_resolved_tool_name_from_two_routes_raises(self):
+        """Two REST routes resolving to the SAME tool name (a real route plus a
+        stale alias pointing at it, or two routes that both alias to one tool)
+        must raise, not silently last-write-wins — aliasing makes this MORE
+        likely, not less, so it needs its own guard (not just the loud-miss
+        check above)."""
+        from fastapi import FastAPI
+        from fastmcp import FastMCP
+
+        temp_mcp_app = FastMCP("throwaway-test-server")
+
+        @temp_mcp_app.tool()
+        def get_products(brief: str) -> dict:
+            return {}
+
+        temp_rest_app = FastAPI()
+
+        @temp_rest_app.post("/api/v1/products")
+        def get_products_v1() -> dict:  # noqa: F811 - route only, not a real handler collision
+            return {}
+
+        @temp_rest_app.post("/api/v1/products-again")
+        def get_products_v2() -> dict:
+            return {}
+
+        aliases_with_collision = {"get_products_v1": "get_products", "get_products_v2": "get_products"}
+        with mock.patch("tests.harness.address_table.REST_TOOL_ALIASES", aliases_with_collision):
+            table = AddressTable(mcp_app=temp_mcp_app, rest_app=temp_rest_app)
+            with pytest.raises(UnresolvedRestHandlerName):
+                table.resolve("get_products", Transport.REST)
+
+    def test_get_adcp_capabilities_resolves_on_rest_via_alias(self):
+        """AC(1): get_adcp_capabilities genuinely resolves on REST — the ONE
+        true rename mismatch (get_capabilities REST handler -> get_adcp_capabilities
+        AdCP tool name) — against the REAL production registries, not a
+        synthetic app."""
+        table = AddressTable()
+        address = table.resolve("get_adcp_capabilities", Transport.REST)
+        assert address.name == "get_adcp_capabilities"
+        assert address.path_template == "/api/v1/capabilities"
+        assert address.method == "get"
+
+    def test_raw_rest_handler_name_does_not_resolve_as_a_tool_name(self):
+        """get_capabilities is the REST handler name, not an AdCP tool identity —
+        it must not ALSO resolve as its own address once aliased away."""
+        table = AddressTable()
+        with pytest.raises(NoAddressForTransport):
+            table.resolve("get_capabilities", Transport.REST)
+
+    def test_rest_absent_tools_stay_off_rest_and_are_real_tools(self):
+        """AC(1): the four task tools are correctly, EXPLICITLY documented as
+        REST-absent (not silently missing due to naming happenstance) — and the
+        registry itself cannot rot: every entry must genuinely have no REST
+        route AND genuinely be a real tool on MCP or A2A."""
+        table = AddressTable()
+        for tool_name in REST_ABSENT_TOOLS:
+            with pytest.raises(NoAddressForTransport):
+                table.resolve(tool_name, Transport.REST)
+            resolves_elsewhere = False
+            for transport in (Transport.MCP, Transport.A2A):
+                try:
+                    table.resolve(tool_name, transport)
+                    resolves_elsewhere = True
+                except NoAddressForTransport:
+                    pass
+            assert resolves_elsewhere, f"{tool_name!r} is in REST_ABSENT_TOOLS but resolves on neither MCP nor A2A"
+
+    def test_rest_tool_aliases_pinned_exactly(self):
+        """Reviewed-growth-only (CLAUDE.md allowlist convention): adding an
+        alias requires a deliberate edit to this test, not a silent map growth."""
+        assert REST_TOOL_ALIASES == {"get_capabilities": "get_adcp_capabilities"}
+
+    def test_rest_tool_aliases_source_and_target_stay_live(self):
+        """Mirror-direction staleness guard: an alias's source must still be a
+        live REST handler name in production, and its target must still be a
+        real tool — otherwise the alias entry is dead weight (or a typo) that
+        would rot unnoticed."""
+        from src.app import app
+
+        live_handler_names = {
+            endpoint.__name__
+            for route in app.routes
+            if getattr(route, "path", "").startswith("/api/v1") and getattr(route, "endpoint", None) is not None
+            for endpoint in [route.endpoint]
+        }
+        table = AddressTable()
+        table.resolve("get_products", Transport.MCP)  # force _build()
+        known_tool_names = table.all_tools(Transport.MCP) | table.all_tools(Transport.A2A)
+        for source, target in REST_TOOL_ALIASES.items():
+            assert source in live_handler_names, f"alias source {source!r} is no longer a live REST handler name"
+            assert target in known_tool_names, f"alias target {target!r} is not a known MCP/A2A tool name"
+
+
+class TestRestVerbDeterminism:
+    """AC(3): the chosen HTTP verb for a multi-verb route is deterministic —
+    prefer POST, else sorted order — never ``next(iter(set))``."""
+
+    def test_prefers_post_when_present(self):
+        from fastapi import FastAPI
+        from fastmcp import FastMCP
+
+        temp_mcp_app = FastMCP("throwaway-test-server")
+
+        @temp_mcp_app.tool()
+        def get_products(brief: str) -> dict:
+            return {}
+
+        temp_rest_app = FastAPI()
+
+        @temp_rest_app.api_route("/api/v1/products", methods=["GET", "POST"])
+        def get_products_route() -> dict:
+            return {}
+
+        with mock.patch("tests.harness.address_table.REST_TOOL_ALIASES", {"get_products_route": "get_products"}):
+            for _ in range(5):
+                table = AddressTable(mcp_app=temp_mcp_app, rest_app=temp_rest_app)
+                assert table.resolve("get_products", Transport.REST).method == "post"
+
+    def test_sorted_fallback_when_no_post(self):
+        from fastapi import FastAPI
+        from fastmcp import FastMCP
+
+        temp_mcp_app = FastMCP("throwaway-test-server")
+
+        @temp_mcp_app.tool()
+        def get_products(brief: str) -> dict:
+            return {}
+
+        temp_rest_app = FastAPI()
+
+        @temp_rest_app.api_route("/api/v1/products", methods=["GET", "PUT"])
+        def get_products_route() -> dict:
+            return {}
+
+        with mock.patch("tests.harness.address_table.REST_TOOL_ALIASES", {"get_products_route": "get_products"}):
+            for _ in range(5):
+                table = AddressTable(mcp_app=temp_mcp_app, rest_app=temp_rest_app)
+                assert table.resolve("get_products", Transport.REST).method == "get"
+
+
+class TestCrossRegistryConsistencyGuard:
+    """AC(4): for every tool present on more than one registry, it resolves
+    under the same AdCP name everywhere — the guard this ticket adds."""
+
+    def test_rest_tool_names_are_a_subset_of_known_mcp_or_a2a_names(self):
+        """Not just 'build succeeded' (which is guaranteed once the loud-miss
+        check is in place) — an explicit, independently-checkable statement of
+        the invariant for the next reader."""
+        table = AddressTable()
+        rest_names = table.all_tools(Transport.REST)
+        known_names = table.all_tools(Transport.MCP) | table.all_tools(Transport.A2A)
+        assert rest_names <= known_names
+
+    def test_day_one_registry_contents_pinned(self):
+        """Pins the day-1 REST tool-name surface so this guard fails on a REAL
+        registry change (a route added/removed, a tool renamed), not only on
+        deletion of the loud-miss raise — strengthens the otherwise-
+        tautological subset check above. Checks cardinality + representative
+        membership rather than the full literal name list, to avoid a second
+        near-copy of the route-name list tests/unit/test_rest_depends_auth.py
+        already carries for a different purpose (this project's DRY
+        invariant, CLAUDE.md)."""
+        table = AddressTable()
+        rest_names = table.all_tools(Transport.REST)
+        assert len(rest_names) == 12, rest_names
+        assert "get_adcp_capabilities" in rest_names  # the one alias, resolved
+        assert "get_capabilities" not in rest_names  # raw handler name, not a tool identity
+        for absent_tool in REST_ABSENT_TOOLS:
+            assert absent_tool not in rest_names
+        assert REST_TOOL_ALIASES == {"get_capabilities": "get_adcp_capabilities"}
+        assert REST_ABSENT_TOOLS == frozenset({"complete_task", "get_media_buys", "get_task", "list_tasks"})
 
 
 class TestPathParamRegex:

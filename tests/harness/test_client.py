@@ -15,6 +15,7 @@ design (§1 "MediaBuyDualEnv is the reductio").
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -116,6 +117,79 @@ class TestClientRestWrapPathParamPeeling:
 
         assert wrapped["url"] == "/api/v1/a/1/b/2"
         assert wrapped["body"] == {"extra": "kept"}
+
+
+class TestRestRequestKwargsBodilessVerbs:
+    """salesagent-vuz9t.9: get_adcp_capabilities becoming REST-resolvable
+    (GET /api/v1/capabilities, via address_table.py's REST_TOOL_ALIASES)
+    exposed that ``_deliver_rest``/``_deliver_e2e_rest`` sent ``json=`` for
+    EVERY verb — a TypeError for GET, since neither starlette
+    TestClient.get nor httpx.Client.get accept a ``json`` kwarg. Pins the
+    fix at the shared kwargs-building helper, not just end to end."""
+
+    def test_get_omits_json_body(self):
+        from tests.harness.client import _rest_request_kwargs
+
+        assert _rest_request_kwargs("get", {"some": "body"}) == {}
+
+    def test_delete_omits_json_body(self):
+        from tests.harness.client import _rest_request_kwargs
+
+        assert _rest_request_kwargs("delete", {"some": "body"}) == {}
+
+    def test_post_keeps_json_body(self):
+        from tests.harness.client import _rest_request_kwargs
+
+        assert _rest_request_kwargs("post", {"some": "body"}) == {"json": {"some": "body"}}
+
+    def test_put_keeps_json_body(self):
+        from tests.harness.client import _rest_request_kwargs
+
+        assert _rest_request_kwargs("put", {"some": "body"}) == {"json": {"some": "body"}}
+
+    def test_extra_kwargs_pass_through_regardless_of_verb(self):
+        from tests.harness.client import _rest_request_kwargs
+
+        assert _rest_request_kwargs("get", {}, headers={"X": "1"}) == {"headers": {"X": "1"}}
+        assert _rest_request_kwargs("post", {"a": 1}, headers={"X": "1"}) == {
+            "json": {"a": 1},
+            "headers": {"X": "1"},
+        }
+
+
+class TestClientRestDispatchNoDb:
+    """In-process Transport.REST dispatch through the generic client for a
+    GET-verb tool. get_rest_client() requires IntegrationEnv (real DB) for a
+    genuine end-to-end call, so this proves the narrower, decisive thing at
+    unit level without one: DELIVER builds the right call shape (no ``json=``
+    for GET) and does not raise TypeError before ever reaching the network."""
+
+    def test_get_dispatch_does_not_pass_json_kwarg(self):
+        from tests.harness.client import _deliver_rest
+
+        calls: list[dict[str, Any]] = []
+
+        class _FakeGetClient:
+            def get(self, url: str, **kwargs: Any) -> Any:
+                calls.append({"url": url, **kwargs})
+                return "fake-response"
+
+        class _UnitEnv(BaseTestEnv):
+            def get_rest_client(self) -> Any:
+                return _FakeGetClient()
+
+            def identity_for(self, transport: Transport) -> Any:
+                return None
+
+        address = ToolAddress(
+            Transport.REST, name="get_adcp_capabilities", path_template="/api/v1/capabilities", method="get"
+        )
+
+        with _UnitEnv() as env:
+            result = _deliver_rest(env, address, {"url": "/api/v1/capabilities", "body": {}}, identity=None)
+
+        assert result == "fake-response"
+        assert calls == [{"url": "/api/v1/capabilities"}]  # no `json` key — the TypeError this test guards against
 
 
 class TestClientE2eRestDelivery:
