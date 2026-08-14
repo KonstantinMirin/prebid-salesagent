@@ -116,10 +116,12 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 #
 # So this is exactly ONE entry, not an a2a mirror of the 80 mcp ones: no a2a
 # storyboard has ever been graded, and inventing entries for checks that never
-# ran would be the fabrication this ledger's Core Invariant forbids. When the
-# card gains a top-level `url` (or the SDK moves to an A2A 1.0 client) this entry
-# xpasses and the real a2a checks arrive un-ledgered, failing CI until triaged —
-# which is the intended signal, and the point of grading the axis at all.
+# ran would be the fabrication this ledger's Core Invariant forbids. Tracked as
+# GH #1440 (owner: ChrisHuie) — the agent-card dual-emit that adds a top-level
+# `url` alongside `supportedInterfaces[0].url`. When #1440 lands (or the SDK
+# moves to an A2A 1.0 client) this entry xpasses and the real a2a checks arrive
+# un-ledgered, failing CI until triaged — which is the intended signal, and the
+# point of grading the axis at all.
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::_runner::agent_reachability::graded_checks_produced]
 
 # --- newly reachable after the version-envelope fix (15) ---
