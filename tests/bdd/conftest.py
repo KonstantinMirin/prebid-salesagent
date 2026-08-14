@@ -3448,11 +3448,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # routes an UpdateMediaBuyRequest through IMPL/A2A/MCP/REST. Seed the full create
             # dependency chain plus a standalone MediaBuy with the literal id the
             # Background references ("mb_existing") so the update path has a target.
-            request.getfixturevalue("integration_db")
             from tests.factories import MediaBuyFactory
             from tests.harness.media_buy_dual import MediaBuyDualEnv
 
-            with MediaBuyDualEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyDualEnv(e2e_config=e2e_config) as env:
                 tenant, principal, product, pricing_option = env.setup_media_buy_data()
                 existing_media_buy = MediaBuyFactory(
                     tenant=tenant,
@@ -3578,12 +3577,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail(f"UC-011 harness not yet wired for markers: {marker_names}")
 
     elif uc == "ADMIN":
-        request.getfixturevalue("integration_db")
         from tests.harness.admin_accounts import AdminAccountEnv
 
         # BDD suite always uses integration mode (Flask test_client).
-        # E2E mode (requests.Session + Docker) is tested separately.
-        with AdminAccountEnv(mode="integration") as env:
+        # E2E mode (requests.Session + Docker) is tested separately. ADMIN
+        # scenarios are never parametrized under e2e_rest (pytest_generate_tests
+        # returns early for them), so e2e_config is always None here and
+        # _db_scope_for takes the direct-fixture branch — same behavior as the
+        # inline getfixturevalue call it replaces.
+        with _db_scope_for(request, e2e_config), AdminAccountEnv(mode="integration") as env:
             ctx["env"] = env
             yield
 
