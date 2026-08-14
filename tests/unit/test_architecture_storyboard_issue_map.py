@@ -36,7 +36,7 @@ ISSUE_MAP = REPO_ROOT / "docs" / "test-obligations" / "storyboard-issue-map.yaml
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.audit import storyboard_coverage_map, storyboard_spec  # noqa: E402
+from scripts.audit import storyboard_coverage_map  # noqa: E402
 
 VALID_COVERAGE = {"full", "partial", "none"}
 
@@ -44,30 +44,14 @@ VALID_COVERAGE = {"full", "partial", "none"}
 def _on_path() -> set[str]:
     """On-path storyboards, classified from the vendored index.
 
-    Reuses `storyboard_coverage_map.classify` so this guard and the generated table
-    cannot disagree about what "on-path" means — the gate logic has been wrong four
-    separate times during this sweep, and two implementations of it would be a fifth.
+    Delegates to `storyboard_coverage_map.on_path_from_vendored_index` so this guard
+    and every other fixture-driven on-path check (the JSONL artifact-truth guard in
+    `test_architecture_storyboard_check_index_artifact_truth.py`) share the one
+    implementation — the gate logic has been wrong four separate times during this
+    sweep, and a second copy of the offline derivation would be a fifth.
     """
     index = json.loads(INDEX.read_text(encoding="utf-8"))
-    declared = storyboard_spec.declared_capabilities(REPO_ROOT)
-    required_by = {
-        Path(rel).stem: entry["required_by"] for rel, entry in index["storyboards"].items() if entry.get("required_by")
-    }
-
-    on_path: set[str] = set()
-    for rel, entry in index["storyboards"].items():
-        capability = entry.get("requires_capability")
-        status, _ = storyboard_coverage_map.classify_gates(
-            rel,
-            required_tools=set(entry.get("required_tools", [])),
-            requires_capability=(capability["path"], capability["equals"]) if capability else None,
-            decl=declared,
-            tools=storyboard_coverage_map.ADVERTISED_TOOLS,
-            required_by=required_by,
-        )
-        if status == "ON-PATH":
-            on_path.add(rel)
-    return on_path
+    return storyboard_coverage_map.on_path_from_vendored_index(REPO_ROOT, index)
 
 
 def _map() -> dict[str, dict]:

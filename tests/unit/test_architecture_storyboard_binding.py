@@ -68,7 +68,12 @@ def _index() -> dict:
 def _violations() -> dict[str, str]:
     """Map identifier -> first binding defect found. Empty when every binding resolves."""
     index = _index()
-    version = index["adcp_spec_version"]
+    # Resolve against the REPO'S pin (docs/adcp-spec-version.md), not the fixture's own
+    # recorded `adcp_spec_version` — a pin bump with no fixture refresh must fail loudly
+    # here rather than keep validating footers against a version the fixture no longer
+    # represents. `test_fixture_index_version_matches_the_pin` below is what catches that
+    # drift directly; this guard just must not silently agree with a stale fixture.
+    version = storyboard_spec.pinned_version(REPO_ROOT)
     storyboards: dict[str, dict] = index["storyboards"]
     declared = storyboard_spec.declared_capabilities(REPO_ROOT)
     bad: dict[str, str] = {}
@@ -147,6 +152,30 @@ def test_storyboard_bindings_resolve_at_the_pin() -> None:
         "New broken @storyboard-v3.1 bindings. A scenario carrying this tag claims an AdCP "
         "storyboard grades it — the claim must resolve at the pinned version:\n"
         + "\n".join(f"  {k}: {v}" for k, v in sorted(new.items()))
+    )
+
+
+def test_fixture_index_version_matches_the_pin() -> None:
+    """The vendored index and docs/adcp-spec-version.md must move together.
+
+    Two artifacts are pin-coupled and neither updates itself when the pin does:
+    this vendored index (``tests/fixtures/adcp_storyboards_pinned/index.json``)
+    and the TS conformance runner's ``@adcp/sdk`` dependency
+    (``tests/storyboard/runner/package.json``, guarded separately by
+    ``tests/storyboard/test_runner_sdk_pin.py`` once installed). Bumping the pin
+    without refreshing the fixture leaves every binding above silently graded
+    against a version the fixture has no data for — the exact way this whole
+    guard drifted for months (see module docstring). Catch it at the fixture,
+    not by trusting `_violations()` to notice.
+    """
+    pinned = storyboard_spec.pinned_version(REPO_ROOT)
+    fixture_version = _index()["adcp_spec_version"]
+    assert fixture_version == pinned, (
+        f"tests/fixtures/adcp_storyboards_pinned/index.json is pinned to {fixture_version!r} but "
+        f"docs/adcp-spec-version.md now pins {pinned!r}. Refresh BOTH pin-coupled storyboard "
+        "artifacts named in that document's bump checklist: "
+        "tests/fixtures/adcp_storyboards_pinned/index.json (run its _refresh.py against a fresh "
+        "~/projects/adcp clone) and tests/storyboard/runner/package.json's @adcp/sdk dependency."
     )
 
 

@@ -183,6 +183,42 @@ def classify_gates(
     return "UNKNOWN", "unclassified tier"
 
 
+def on_path_from_vendored_index(repo: Path, index: dict[str, Any]) -> set[str]:
+    """On-path storyboard paths, classified purely from a vendored index snapshot.
+
+    No live ``~/projects/adcp`` clone: every gate value (``required_tools``,
+    ``requires_capability``, ``required_by``) is already structured in
+    ``tests/fixtures/adcp_storyboards_pinned/index.json``, so this calls
+    :func:`classify_gates` directly rather than re-deriving gates from raw YAML
+    text the way :func:`classify` does (see its docstring). The single
+    implementation behind both the issue-map guard
+    (``test_architecture_storyboard_issue_map.py``) and the artifact-truth check
+    on ``docs/test-obligations/storyboard-checks.jsonl`` — a fixture-driven
+    on-path judgement drifted into two disagreeing implementations before this
+    module existed (salesagent-pw71); it does not get a third here.
+    """
+    declared = storyboard_spec.declared_capabilities(repo)
+    storyboards: dict[str, dict[str, Any]] = index["storyboards"]
+    required_by = {
+        Path(rel).stem: entry["required_by"] for rel, entry in storyboards.items() if entry.get("required_by")
+    }
+
+    on_path: set[str] = set()
+    for rel, entry in storyboards.items():
+        capability = entry.get("requires_capability")
+        status, _ = classify_gates(
+            rel,
+            required_tools=set(entry.get("required_tools", [])),
+            requires_capability=(capability["path"], capability["equals"]) if capability else None,
+            decl=declared,
+            tools=ADVERTISED_TOOLS,
+            required_by=required_by,
+        )
+        if status == "ON-PATH":
+            on_path.add(rel)
+    return on_path
+
+
 def covered_storyboards(repo: Path) -> dict[str, list[str]]:
     """Storyboard stems our @storyboard-v3.1 scenarios claim, by scenario identifier."""
     claims: dict[str, list[str]] = {}
