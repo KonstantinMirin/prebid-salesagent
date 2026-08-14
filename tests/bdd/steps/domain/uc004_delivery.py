@@ -28,6 +28,12 @@ from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label, s
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
+#: Long enough for the sender's retry ladder on the wire, short enough that a
+#: missing delivery is a failure rather than a hang.
+_WIRE_DELIVERY_TIMEOUT_SECONDS = 45.0
+_WIRE_POLL_INTERVAL_SECONDS = 0.5
+
+
 def _pending(ctx: dict, step: str) -> None:
     """Mark a step as pending implementation (harness not yet wired for BDD).
 
@@ -62,10 +68,52 @@ def _last_delivery_call(ctx: dict) -> Any:
     One accessor for the three readings the delivery Thens make of it — payload,
     headers, and the whole captured request — so "the last delivery" cannot come to
     mean a different call in one of them.
+
+    Two sources, one shape. In process the socket is the patched ``requests.post``
+    mock. On the wire the server runs in its own container and no in-process mock
+    can see it, so the delivery is read back from the TLS capture service under
+    this scenario's own key. Both return the ``(args, kwargs)`` pair the readers
+    already expect, with ``content`` and ``headers`` — which is why none of the 21
+    call sites had to change (salesagent-og9k.9).
     """
+    if _on_real_wire(ctx):
+        return _last_captured_delivery(ctx)
     mock_post = ctx["env"].mock["post"]
     assert mock_post.called, "No webhook POST was made"
     return mock_post.call_args_list[-1]
+
+
+def _last_captured_delivery(ctx: dict) -> Any:
+    """The last delivery the capture service recorded for this scenario's key.
+
+    Polls, because delivery is asynchronous behind the sender's retry ladder —
+    unlike the in-process branch, where the POST has already happened by the time
+    a Then runs.
+    """
+    from time import sleep
+
+    from tests.e2e._webhook_capture import captured_deliveries
+
+    key = ctx.get("webhook_capture_key")
+    assert key is not None, (
+        "no capture key was allocated for this scenario — a Given must configure the webhook "
+        "destination through _webhook_destination() before a Then reads a delivery"
+    )
+
+    deliveries: list[Any] = []
+    elapsed = 0.0
+    while elapsed < _WIRE_DELIVERY_TIMEOUT_SECONDS and not deliveries:
+        deliveries = captured_deliveries(key)
+        if deliveries:
+            break
+        sleep(_WIRE_POLL_INTERVAL_SECONDS)
+        elapsed += _WIRE_POLL_INTERVAL_SECONDS
+
+    assert deliveries, (
+        f"No webhook POST reached the capture receiver for key {key!r} within {_WIRE_DELIVERY_TIMEOUT_SECONDS}s"
+    )
+    last = deliveries[-1]
+    return ((), {"content": last.content, "headers": dict(last.headers), "url": last.url})
 
 
 def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
@@ -372,14 +420,53 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 _WEBHOOK_URL = "https://buyer.example.com/webhook"
 
 
+def _on_real_wire(ctx: dict) -> bool:
+    """Whether this scenario's deliveries cross a real socket to a real receiver.
+
+    True only on the e2e transports, where the server runs in its own container:
+    an in-process mock cannot observe what it posts, and the destination has to be
+    somewhere the server can actually reach.
+    """
+    transport = ctx.get("transport")
+    return str(getattr(transport, "value", transport) or "").startswith("e2e")
+
+
+def _webhook_destination(ctx: dict) -> str:
+    """Where this scenario's deliveries should land.
+
+    In process: a fixed public URL — the POST is intercepted before it leaves, so
+    the address only has to survive the SSRF gate.
+
+    On the wire: a per-scenario key on the TLS capture origin
+    (``https://webhooks.adcp-e2e.dev:8443``), whose address production's UNPATCHED
+    gate accepts. The key is stored on ctx so :func:`_last_delivery_call` reads
+    back the same one — two scenarios running against the shared receiver must not
+    see each other's captures (salesagent-og9k.9).
+    """
+    if not _on_real_wire(ctx):
+        return _WEBHOOK_URL
+    key = ctx.get("webhook_capture_key")
+    if key is None:
+        from uuid import uuid4
+
+        key = f"uc004-{uuid4().hex}"
+        ctx["webhook_capture_key"] = key
+    from tests.e2e._webhook_capture import delivery_url
+
+    return delivery_url(key)
+
+
 def _set_active_webhook(ctx: dict, mb_id: str) -> None:
     """Shared: configure an active webhook for a media buy.
 
-    Also persists PushNotificationConfig to DB when running inside an
-    integration env (CircuitBreakerEnv) so send_delivery_webhook can find it.
+    Persists PushNotificationConfig to the DB whenever the env has a bound
+    session. That includes E2E: BaseTestEnv binds ``_session`` to the LIVE
+    server's database when ``e2e_config`` is present (``_base.py`` :1198-1212), so
+    the row this writes is one the running server reads — the same mechanism
+    ``_persist_simulation_config`` uses for delivery-poll responses.
     """
     ctx.setdefault("webhook_config", {})[mb_id] = {
-        "url": _WEBHOOK_URL,
+        "url": _webhook_destination(ctx),
         "active": True,
     }
     env = ctx["env"]
@@ -446,7 +533,7 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
         select(PushNotificationConfig).where(
             PushNotificationConfig.tenant_id == tenant_id,
             PushNotificationConfig.principal_id == principal_id,
-            PushNotificationConfig.url == _WEBHOOK_URL,
+            PushNotificationConfig.url == _webhook_destination(ctx),
         )
     ).first()
     if existing is not None:
@@ -474,7 +561,7 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
     PushNotificationConfigFactory(
         tenant=tenant,
         principal=principal,
-        url=_WEBHOOK_URL,
+        url=_webhook_destination(ctx),
         is_active=True,
         **auth_fields,
     )
@@ -523,7 +610,7 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
     wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
     wh["auth_scheme"] = scheme
     wh["active"] = True
-    wh["url"] = _WEBHOOK_URL
+    wh["url"] = _webhook_destination(ctx)
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
@@ -559,10 +646,10 @@ def given_webhook_no_authentication(ctx: dict) -> None:
         select(PushNotificationConfig).where(
             PushNotificationConfig.tenant_id == env._tenant_id,
             PushNotificationConfig.principal_id == env._principal_id,
-            PushNotificationConfig.url == _WEBHOOK_URL,
+            PushNotificationConfig.url == _webhook_destination(ctx),
         )
     ).first()
-    assert row is not None, f"no PushNotificationConfig was registered for {_WEBHOOK_URL}"
+    assert row is not None, f"no PushNotificationConfig was registered for {_webhook_destination(ctx)}"
     assert (row.authentication_type, row.authentication_token) == (None, None), (
         "this registration must carry no authentication block — it is the ABSENCE that selects "
         f"RFC 9421 (:1424) — but it carries type={row.authentication_type!r} token set: "

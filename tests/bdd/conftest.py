@@ -1223,6 +1223,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # delivery through `_last_delivery_call` -> `ctx["env"].mock["post"]`, the
             # same in-process accessor every other tag in this set uses.
             "T-UC-004-webhook-9421",
+            # STAYS PARKED, and the reason is now MEASURED rather than assumed.
+            # Graduating it alone (per the one-at-a-time protocol) produced:
+            #   AssertionError: No webhook POST reached the capture receiver for key
+            #   'uc004-...' within 45.0s   -- x3 parametrizations, bdd_e2e
+            # The receiver, the destination and the accessor all work; nothing is
+            # DELIVERED. Cause: the When step (`the webhook scheduler fires for X`,
+            # uc004_delivery.py:1044) calls env.call_deliver(...) IN-PROCESS on every
+            # transport, so on e2e_rest the delivery happens inside the test process
+            # against its own patched requests.post -- the live server never sends
+            # anything. That is transport bypass (salesagent-gnal.4), not a missing
+            # receiver, and no capture plumbing can fix it.
             "T-UC-004-webhook-notification-type",
             "T-UC-004-webhook-no-aggregated",
             "T-UC-004-webhook-circuit-open",
