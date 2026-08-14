@@ -179,17 +179,28 @@ chmod 2775 logs 2>/dev/null || true
 for _log in audit.log error.log structured.jsonl security.jsonl; do
     rm -f "logs/$_log" 2>/dev/null || true
     : >"logs/$_log" 2>/dev/null || true
-    chmod 664 "logs/$_log" 2>/dev/null || true
-    # Verify rather than hope. `-w` would test OUR access; what actually
-    # matters is the GROUP write bit, because the tests container is a
-    # different uid that reaches these files through the shared group. find
+    # 0666, not 0664. Group-write is NOT enough, and assuming it was is what
+    # kept the e2e stack down: `adcp-server` runs as the image's own non-root
+    # user, and that user shares no group with whoever created these files.
+    # Measured on the box: the container is `app` uid=1001 gid=1001 groups=1001,
+    # while the files land `sacirunner:sacirunner` (or `ci`) — so 0664 leaves the
+    # server with OTHER permissions, r--, and it dies opening audit.log:
+    #   PermissionError: [Errno 13] Permission denied: '/app/logs/audit.log'
+    # The whole stack follows it down — nothing binds :8000, so every e2e test
+    # errors "Server not ready after 60s (port 8000)" and every e2e_rest BDD
+    # scenario errors "the live E2E stack is unreachable", with no hint that a
+    # file mode is the cause. chown to 1001 would need root we do not have here;
+    # these are per-run scratch logs, so world-writable is the honest fix.
+    chmod 666 "logs/$_log" 2>/dev/null || true
+    # Verify rather than hope. `-w` would test OUR access; what actually matters
+    # is the OTHER write bit, since the server's uid is outside our groups. find
     # -perm is used over `stat` because stat's flags differ between the GNU
-    # coreutils on the CI box and the BSD one on a macOS host, and this
-    # script runs on both.
-    if [ -z "$(find "logs/$_log" -perm -g+w 2>/dev/null)" ]; then
-        echo "ERROR: logs/$_log is not group-writable; the tests container runs as a" >&2
-        echo "       different uid in the same group and will die at collection with" >&2
-        echo "       PermissionError. Current state:" >&2
+    # coreutils on the CI box and the BSD one on a macOS host, and this script
+    # runs on both.
+    if [ -z "$(find "logs/$_log" -perm -o+w 2>/dev/null)" ]; then
+        echo "ERROR: logs/$_log is not writable by other; adcp-server runs as a" >&2
+        echo "       non-root uid outside our groups and will die at startup with" >&2
+        echo "       PermissionError, taking the whole e2e stack with it. State:" >&2
         ls -la "logs/$_log" logs/ >&2 || true
         exit 1
     fi
