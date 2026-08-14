@@ -3092,11 +3092,19 @@ def then_sub_minimum_revision_never_published(ctx: dict, mb_id: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Grades the AdCP 3.1.1 storyboard step the scenario itself cites:
 # dist/compliance/3.1.1/domains/media-buy/index.yaml -> "check_buy_status".
-# The buyer polls get_media_buys with the media_buy_id create_media_buy returned;
-# its graded validations are response_schema (full document against
-# media-buy/get-media-buys-response.json), field_equals_context
-# media_buys[0].media_buy_id == the captured id, and field_present
-# media_buys[0].status — one per Then below, in order.
+# The buyer polls get_media_buys with the media_buy_id create_media_buy returned.
+# The THREE validations the Thens below grade — one each, in order — are:
+#   response_schema        full document against media-buy/get-media-buys-response.json
+#   field_equals_context   media_buys[0].media_buy_id == the captured id
+#   field_present          media_buys[0].status
+# That is a subset, not the step's whole validation list. The pinned step carries
+# six; the three NOT graded here are all context echo:
+#   field_present  context
+#   field_value    context.correlation_id == "media_buy_seller--check_buy_status"
+#   field_value    media_buys[0].context.correlation_id == "media_buy_seller--create_media_buy"
+# They are ungraded because this scenario does not send a correlation_id, so there
+# is nothing to echo. Wiring them needs the request side first — do not read this
+# block as "the storyboard step is fully covered".
 #
 # The scenario ran dormant (auto-xfailed on missing step definitions,
 # tests/bdd/conftest.py) until its two real blockers closed: the envelope

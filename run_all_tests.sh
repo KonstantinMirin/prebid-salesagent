@@ -148,7 +148,13 @@ dc build postgres adcp-server proxy tests
 mkdir -p logs && chmod 2775 logs
 for f in audit.log error.log structured.jsonl security.jsonl; do
     rm -f "logs/$f" 2>/dev/null || true
-    : > "logs/$f" && chmod 664 "logs/$f"
+    # Two statements, not `: > "logs/$f" && chmod ...`. errexit exempts every command
+    # in an AND-OR list except the last, so as an &&-list a failed truncate merely
+    # short-circuits: chmod is skipped, the loop continues, and the script still exits
+    # 0. Verified A/B (with a directory planted at logs/audit.log to force the
+    # failure): &&-list -> "REACHED-END", exit 0; split -> exit 1 at the truncate.
+    : > "logs/$f"
+    chmod 664 "logs/$f"
 done
 
 dc up -d postgres adcp-server proxy creative-pg creative-agent

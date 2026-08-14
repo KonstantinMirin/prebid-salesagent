@@ -17,6 +17,8 @@ import inspect
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 
 def _get_schemas_source_files() -> list["Path"]:
     """Get all Python source files in the schemas package.
@@ -71,6 +73,54 @@ def _get_library_type_mapping() -> dict[str, type]:
     return mapping
 
 
+# Library aliases whose local name is a plain re-export/alias, not a subclass.
+ALIAS_ONLY_TYPES = {
+    "AdCPBaseModel",
+    "BrandManifest",
+    "GetSignalsRequest",
+    "PackageUpdate",
+    "Property",
+    "PromotedProducts",
+    "ResponsePagination",
+}
+
+# Bases every schema in the package inherits. They are not a library type a class
+# "narrows", so redefinition-grading must not treat them as one.
+_UNIVERSAL_BASES = {"AdCPBaseModel"}
+
+
+def _get_redefinition_targets() -> list[tuple[str, type, type]]:
+    """Yield ``(local_name, local_cls, lib_base)`` for every local class that actually
+    extends an imported ``Library*`` type.
+
+    Membership is decided by the MRO, not by the class's NAME. The name-derived
+    mapping above answers "which local class SHOULD extend LibraryX", which is the
+    right question for the inheritance test but the wrong one for redefinition: a
+    subclass whose name is not ``alias-minus-Library`` was never visited at all, so
+    its redefinitions went ungraded and — worse — its allowlist entries read as
+    *stale* rather than as unreachable. Three classes were invisible this way
+    (AdCPPackageUpdate, SyncAccountsResponse, SyncCreativesResponse), carrying six
+    live redefinitions between them.
+
+    Bases that everything inherits (``AdCPBaseModel`` and the local base built on it)
+    are excluded: they are not a "library type this class narrows", and treating them
+    as one would flag every schema in the package.
+    """
+    mapping = _get_library_type_mapping()
+    local_classes = _get_local_schema_classes()
+    lib_bases = {lib for name, lib in mapping.items() if name not in _UNIVERSAL_BASES}
+
+    targets: list[tuple[str, type, type]] = []
+    for local_name, local_cls in sorted(local_classes.items()):
+        if local_name in ALIAS_ONLY_TYPES:
+            continue
+        for base in inspect.getmro(local_cls)[1:]:
+            if base in lib_bases and hasattr(base, "model_fields"):
+                targets.append((local_name, local_cls, base))
+                break
+    return targets
+
+
 def _get_local_schema_classes() -> dict[str, type]:
     """Get all classes defined in src.core.schemas (including submodules)."""
     schemas = importlib.import_module("src.core.schemas")
@@ -120,18 +170,8 @@ class TestSchemaInheritance:
         mapping = _get_library_type_mapping()
         local_classes = _get_local_schema_classes()
 
-        # Some Library* imports are used as TypeAliases or type hints, not subclassed.
-        # These are legitimate and don't need a local subclass.
-        ALIAS_ONLY_TYPES = {
-            "AdCPBaseModel",  # Used as base for SalesAgentBaseModel (different naming)
-            "BrandManifest",  # TypeAlias
-            "GetSignalsRequest",  # Direct alias
-            "PackageUpdate",  # Local PackageUpdate is a simplified model; AdCPPackageUpdate extends library
-            "Property",  # TypeAlias
-            "PromotedProducts",  # Imported but unused (cleanup candidate)
-            "ResponsePagination",  # Named differently in local code (Pagination)
-        }
-
+        # ALIAS_ONLY_TYPES (module scope) lists the Library* imports used as TypeAliases
+        # or type hints rather than subclassed — legitimate, so no local subclass is due.
         violations = []
         for local_name, lib_type in sorted(mapping.items()):
             if local_name in ALIAS_ONLY_TYPES:
@@ -160,19 +200,11 @@ class TestSchemaInheritance:
 
         Redefinition means the field was copied instead of inherited, which causes
         drift when the library updates the field's type or validator.
-        """
-        mapping = _get_library_type_mapping()
-        local_classes = _get_local_schema_classes()
 
-        ALIAS_ONLY_TYPES = {
-            "AdCPBaseModel",
-            "BrandManifest",
-            "GetSignalsRequest",
-            "PackageUpdate",
-            "Property",
-            "PromotedProducts",
-            "ResponsePagination",
-        }
+        Graded with ``assert_violations_match_allowlist`` so the allowlist can only
+        SHRINK: an entry that stops being a real redefinition fails as stale instead
+        of accumulating silently.
+        """
 
         # Known exceptions: fields intentionally overridden with tighter types,
         # custom validators, nested serialization (Critical Pattern #4), or
@@ -257,37 +289,33 @@ class TestSchemaInheritance:
             # success-arm fields required; the SDK base declares them optional, so
             # we redeclare required to match the spec.
             ("GetProductsResponse", "products"),
+            # Pattern #4 on the two sync success arms. Both narrow the parent's item
+            # type to a local subclass that adds fields the library type lacks
+            # (SyncResponseAccount; SyncCreativeResult's assigned_to /
+            # assignment_errors), so serializing through the parent annotation would
+            # drop them. Newly VISIBLE rather than newly introduced: the collector
+            # keyed on alias-minus-"Library" until now, and neither class's name
+            # matches its parent's, so neither was ever visited.
+            ("SyncAccountsResponse", "accounts"),
+            ("SyncCreativesResponse", "creatives"),
         }
 
-        violations = []
-        for local_name, lib_type in sorted(mapping.items()):
-            if local_name in ALIAS_ONLY_TYPES:
-                continue
+        found: set[tuple[str, str]] = set()
+        for local_name, _local_cls, lib_base in _get_redefinition_targets():
+            # Fields declared DIRECTLY on the local class. Can't use __annotations__ —
+            # Pydantic model_rebuild populates it with inherited fields — so read
+            # source-level declarations out of the AST.
+            own = _get_class_own_field_names(local_name)
+            found |= {(local_name, field) for field in own & set(lib_base.model_fields.keys())}
 
-            local_cls = local_classes.get(local_name)
-            if local_cls is None:
-                continue
-
-            mro = inspect.getmro(local_cls)
-            if lib_type not in mro:
-                continue  # Already flagged by previous test
-
-            # Get fields defined DIRECTLY on the local class (not inherited).
-            # Can't use __annotations__ — Pydantic model_rebuild populates it
-            # with inherited fields. Use AST to find source-level declarations.
-            if not hasattr(lib_type, "model_fields"):
-                continue
-
-            lib_fields = set(lib_type.model_fields.keys())
-            local_own_annotations = _get_class_own_field_names(local_name)
-
-            for field_name in local_own_annotations & lib_fields:
-                if (local_name, field_name) not in KNOWN_OVERRIDES:
-                    violations.append(
-                        f"{local_name}.{field_name} redefines field from "
-                        f"{lib_type.__name__} — inherit instead of redeclare"
-                    )
-
-        assert not violations, "Schema classes redefining library fields (should inherit):\n" + "\n".join(
-            f"  - {v}" for v in violations
+        assert_violations_match_allowlist(
+            found,
+            KNOWN_OVERRIDES,
+            fix_hint=(
+                "A new violation means a field was copied instead of inherited — delete the "
+                "redeclaration, or add it to KNOWN_OVERRIDES with the reason it must differ. "
+                "A stale entry means the redeclaration is gone (delete the entry) OR that the "
+                "class stopped being collected — check it is still reachable from "
+                "_get_redefinition_targets before assuming it was fixed."
+            ),
         )

@@ -16,6 +16,7 @@ all spec-compliant requests.
 import importlib
 import inspect
 import pkgutil
+from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any
@@ -940,6 +941,20 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
 ]
 
 
+def _resolved_allof_arms(schema: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Yield each arm of a schema's top-level ``allOf``, ``$ref``s resolved.
+
+    Requiredness and definedness are harvested from these same arms by
+    ``_allof_required_fields`` and ``_allof_properties``. They walked the list
+    independently before, which is the shape that lets the two halves drift apart —
+    and they must not, because a field pulled out of an arm's ``required`` without
+    that arm's ``properties`` is reported as schema-required and undefined in the
+    same breath.
+    """
+    for arm in schema.get("allOf", []) or []:
+        yield pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
+
+
 def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
     """Domain-level required fields from every arm of a schema's top-level
     ``allOf`` — e.g. a shared error/pricing sub-schema composed in alongside
@@ -954,11 +969,7 @@ def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
     envelope-required field lands directly as alignment failures on every model
     lacking it — forcing the same per-field decision, at the location that needs it.
     """
-    required: set[str] = set()
-    for arm in schema.get("allOf", []) or []:
-        resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
-        required |= set(resolved.get("required", []))
-    return required
+    return {field for arm in _resolved_allof_arms(schema) for field in arm.get("required", [])}
 
 
 def _standard_branch_required_fields(schema: dict[str, Any]) -> set[str]:
@@ -997,11 +1008,8 @@ def _allof_properties(schema: dict[str, Any]) -> dict[str, Any]:
     "not defined by pinned schema" failures plus samples synthesized from an
     empty spec.
     """
-    props: dict[str, Any] = {}
-    for arm in schema.get("allOf", []) or []:
-        resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
-        props |= resolved.get("properties", {})
-    return props
+    # Later arms win on key collision, which is what the sequential ``|=`` did.
+    return {name: spec for arm in _resolved_allof_arms(schema) for name, spec in arm.get("properties", {}).items()}
 
 
 def _merge_composed(node: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:

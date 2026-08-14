@@ -114,8 +114,11 @@ class Signal(LibrarySignal):
     tenant_id: str = Field(exclude=True)
 ```
 
-These intentional overrides are listed in `KNOWN_OVERRIDES` inside the test file.
-Currently 27 entries, mostly for nested serialization.
+These intentional overrides are listed in `KNOWN_OVERRIDES` inside the test file,
+mostly for nested serialization. The list is graded with
+`assert_violations_match_allowlist`, so it can only shrink: an entry that stops being a
+real redefinition fails as stale. (No count is quoted here — a hand-maintained one drifts,
+and this line said "27" while the set held 44.)
 
 ### Boundary Completeness Guard
 

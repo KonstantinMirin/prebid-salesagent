@@ -897,11 +897,17 @@ class AgentAccountAccess(Base):
 
 # Statuses in which the seller has NOT yet committed to running the buy. The
 # AdCP 3.1.1 `confirmed_at` field ("when the seller committed to this media buy")
-# MUST be absent for these. This is the SINGLE source of truth for "seller
-# committed", consulted by both the create path (which omits confirmed_at on its
-# not-yet-committed arms) and the repository's write-once confirmation stamp — so
-# the two cannot drift: adding a new not-yet-committed status here fixes both at
-# once.
+# carries no commitment instant for these — on get_media_buys it is serialized as
+# PRESENT-AND-NULL, because the pinned item schema types it {"type": ["string",
+# "null"]} AND lists it in `required`. "Absent" is only true of the create
+# response's not-yet-committed arms, which omit the field entirely.
+#
+# This is the SINGLE source of truth for "seller committed", consulted by both the
+# create path and the repository's write-once confirmation stamp
+# (`_stamp_confirmation_if_needed`), so adding a not-yet-committed status here
+# reaches both. That is a shared definition, not a guarantee of agreement: each
+# consumer still decides independently what to DO with it, and only the tests
+# grade that they agree.
 #
 # Adopted verbatim from PR #1544 (GH #1928 requires reconciling with it rather
 # than deciding these semantics independently), minus its `finalizing` member —

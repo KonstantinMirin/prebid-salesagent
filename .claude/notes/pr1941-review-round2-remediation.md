@@ -636,3 +636,135 @@ TRUE while the worker is blocked on an Event. The deletion removes no coverage.
 
 **Invariant this establishes:** an assertion that cannot fail is not hygiene, it is decoration —
 grade a property where it can be violated, or do not claim to grade it.
+### A5 — Owner ruling (2026-08-14): §3.6's shadow-guard rule is narrowed to the named disease
+
+**Raised by:** L6's solution-review gate, on measurement rather than argument.
+
+§3.6 directs the strengthened guard to *"fail when 2+ modules match one line"* with
+`_ALLOWED_SHADOWS` staying **EMPTY**. Measured at HEAD `af2167542` across all 14,125 feature step
+lines × 1,168 registered plugin parsers (type-filtered, outline placeholders skipped): that rule
+fires on **11 cross-module collision classes**, of which exactly one is the UC-005 target.
+
+Three of the eleven are *legitimate* deliberate narrowing of a generic sentence by a domain module
+(`then_error` vs `uc003_ext_error_scenarios`, 28 sites / 24 distinct texts; `then_error` vs
+`uc003_ext`; `then_error` vs `uc002`). In all three the narrower parser wins **only because its
+module is registered later in the conftest `pytest_plugins` list** — pytest-bdd sorts
+`_arg2fixturedefs[bdd_name]` by baseid and pytest takes the last, so equal baseids preserve
+registration order. Reorder that list and grading changes silently.
+
+So the plan's two clauses are jointly unsatisfiable: "pick winners and land the guard anyway" means
+**10 behavioural decisions in UC-002/003/004/006 grading**, none of which is this lane, and the
+alternative is seeding a 10-entry allowlist the plan itself forbids.
+
+**Ruling.** Narrow the RULE to exactly the disease §3.6 names: *a step module outside
+`tests.bdd.steps.generic.*` must not register an EXACT-TEXT (string-parser) step whose text a
+`tests.bdd.steps.generic.*` parser already matches.* Measured: fires on exactly **1** class at HEAD
+(UC-005), and is **empty** after the F16 deletion — so RED-at-head / green-after holds with a
+genuinely empty allowlist and zero out-of-lane winner-picking.
+
+The broader bars — no generic-vs-domain overlap at all (5 classes), no cross-module overlap at all
+(11), and intra-module ambiguity (34 further distinct texts across 7 modules, invisible to any
+"2+ MODULES" rule) — are declared in the guard **docstring** and filed as a follow-up ticket. They
+are not allowlist entries.
+
+**Implementation constraints carried from the same gate (Q1), both load-bearing:**
+- The guard MUST filter on step **type** (given/when/then) before comparing, because production
+  filters on type first (`pytest_bdd/scenario.py:59-66`); without it the guard reports cross-type
+  phantom overlaps.
+- The guard MUST assert a **non-zero parser count and non-zero matched-line count**. The parser is
+  reached via `vars(mod)[attr]._pytest_bdd_step_context.parser.is_matching(text)`, unwrapping
+  defensively through `._fixture_function`; a pytest minor bump that changes the fixture shape would
+  otherwise make the guard scan zero parsers and pass **vacuously**.
+
+**Invariant this establishes:** a guard's rule is scoped to the disease it was written for; breadth
+that forces unrelated behavioural decisions is a follow-up ticket, never a day-one allowlist.
+
+### A6 — Owner ruling (2026-08-14): §3.6's grader grades the GUARD; the UC-005 scenario is routed
+
+**Raised by:** L6's solution-review gate, established empirically — it deleted the uc005 step
+fixture at `pytest_configure` time from a scratchpad plugin (no repo edits) and re-ran
+`tests/bdd/test_uc005_discover_creative_formats.py -k roundtrip`: **3 passed → 3 failed**.
+
+§3.6 ratifies the grader as *"RED at head on the UC-005 collision, green after F16's deletion."*
+The second half is unreachable, and for two stacked reasons — neither of which is the serialization
+gap the design predicted:
+
+1. **Ambiguous pinned ref.** `tests/helpers/pinned_schema.py:158` raises `PinnedSchemaError`:
+   the feature line at `BR-UC-005-discover-creative-formats.feature:1071` names
+   `list-creative-formats-response.json`, which resolves to **two** pinned documents
+   (`creative/…` and `media-buy/…`). The generic step passes the feature-line token straight to the
+   resolver. This is the same *one sentence, two meanings* disease one level down, and it is in
+   frame for this lane — fixed by one feature-line edit to the category-qualified ref. (Note it
+   contradicts the design's blanket "ZERO feature edits needed", which was scoped to F14 and holds
+   there.)
+2. **Catalog-vs-pin gap.** After qualifying the ref (tried both categories, identical result):
+   3 violations, every one a `pixel_tracker` asset — *"at formats.0.assets.2/.3/.4 … is not valid
+   under any of the given schemas"*. Source is `tests/fixtures/creative_formats/reference_formats.json`,
+   captured from a post-pin reference creative agent: **45 of 57** reference formats carry
+   `pixel_tracker` assets, and the pinned AdCP 3.1.1 asset union does not model that `asset_type`.
+   The ADCP_TESTING catalog puts assets on the wire that the pin forbids.
+
+**Ruling.** The lane's oracle is the **guard**: RED at head, green after the deletion, empty
+allowlist. Fix the ambiguous ref (one feature-line edit). Then **surface** the pixel_tracker
+pin-vs-catalog gap as a spec-grounded xfail-ledger entry naming the pin gap, plus a follow-up
+ticket. Reconciling 45 of 57 reference formats against pinned 3.1.1 is real AdCP conformance work
+and a lane of its own; it is not step-vocabulary governance. Restoring the weak uc005 body remains
+forbidden — that is the disease.
+
+**Invariant this establishes:** when deleting a vacuous assertion exposes a real defect underneath,
+the defect is surfaced and routed — never re-covered by the assertion that was hiding it.
+
+### A7 — Owner ruling (2026-08-14): §3.11 fixes the inheritance guard's collector, not just its allowlist
+
+**Raised by:** the L11 early probe §3.11 mandates ("ATTEMPT THIS EARLY … if it flags
+demonstrably-live entries, the collector has a blind spot and THAT is the real finding — escalate
+rather than allowlisting"). It fired.
+
+Replaying the guard's own collector at HEAD: 44 allowlist entries, 43 found, **0 new**, **1 stale** —
+`('AdCPPackageUpdate', 'targeting_overlay')`. That entry is not stale-because-fixed. The class still
+declares `targeting_overlay` in its own body and still inherits `LibraryPackageUpdate`; it is simply
+**never visited**. `_get_library_type_mapping()` derives the local class name by stripping the
+`Library` prefix — `LibraryPackageUpdate` → expects a local class literally named `PackageUpdate`
+(which is itself in `ALIAS_ONLY_TYPES`, so even that name is skipped).
+
+Measured blind spot — **6 live field redefinitions across 3 classes, entirely ungraded**:
+
+| local class | library base | ungraded redefinitions |
+|---|---|---|
+| `AdCPPackageUpdate` | `PackageUpdate` | `targeting_overlay` |
+| `SyncAccountsResponse` | `SyncAccountsResponse1` | `accounts`, `context`, `dry_run`, `ext` |
+| `SyncCreativesResponse` | `SyncCreativesResponse1` | `creatives` |
+
+Two of those three are **exactly the classes L7 modifies**.
+
+**Ruling.** L11 maps by **MRO membership** instead of by name-minus-prefix, and dispositions all six
+individually (inherit, or allowlist with a documented reason). The swap to
+`assert_violations_match_allowlist` still lands. Closing the hole belongs in the same PR that grew
+the allowlist by 3 with no stale-entry companion, and it puts L7's two classes under the guard for
+the first time.
+
+**Invariant this establishes:** an allowlist entry that reads as stale must be diagnosed before it is
+deleted — "the guard stopped seeing it" and "the violation is gone" are opposite facts with identical
+symptoms.
+
+### A8 — Owner ruling (2026-08-14): ticket-filing discipline (binding on every ticket this plan authorises)
+
+**Applies to:** §3.11's two authorised issues, the #1906 comment, and every follow-up ticket added by
+A5 (broader shadow-overlap bars), A6 (pixel_tracker catalog-vs-pin gap) and A7 (if any disposition
+defers).
+
+Before opening ANY issue:
+
+1. **Search GitHub extensively first** — not one query. Search open *and* closed, by symptom, by
+   symbol name, by file path, and by the error text a reader would paste. `gh issue list --search`
+   plus `gh search issues` across states. A near-duplicate filed because the first query missed is
+   worse than no ticket.
+2. **If an existing issue already covers it, do not file** — comment on that issue with the new
+   evidence instead, and cite the comment URL wherever this plan expected a ticket number.
+3. **If existing issues are related but not an exact match, LINK them** — reference them in the new
+   issue body ("related to #N", "narrower than #N", "blocked by #N") and add a back-reference comment
+   on the older issue pointing at the new one. Partial overlap must be made visible in both
+   directions, never silently duplicated.
+
+**Invariant this establishes:** the issue tracker is a shared index, not an append-only log — a new
+ticket must be reachable from every issue a reader would plausibly search first.

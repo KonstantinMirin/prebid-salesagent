@@ -41,9 +41,12 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
 
     A ``req=GetMediaBuysRequest(...)`` kwarg routes to the list path; anything
     else falls through to the inherited create path. ``req=`` is a free
-    discriminator because both ``_run_a2a_handler`` and ``_run_mcp_wrapper``
-    already flatten a request model into the flat skill/tool parameters those
-    wrappers accept.
+    discriminator because the dispatchers this env actually uses —
+    ``_run_a2a_handler`` and ``_run_mcp_client`` (MediaBuyListDispatchMixin.call_mcp
+    and MediaBuyCreateEnv.call_mcp both route through the latter) — already flatten
+    a request model into the flat skill/tool parameters those wrappers accept.
+    Not ``_run_mcp_wrapper``: it is deprecated, no env here calls it, and unlike
+    ``_run_mcp_client`` it never stashes the real MCP wire.
 
     No extra patches: get_media_buys is a pure DB read with no external services,
     and the inherited create patches target the create module only.

@@ -290,9 +290,13 @@ def _get_media_buys_impl(
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
                 # Both spec-required on media_buys[] at AdCP 3.1.1, and both read
-                # straight off the persisted columns rather than defaulted here:
-                # confirmed_at is stamped once by the repository when the seller
-                # commits, revision is its monotonic mutation counter.
+                # straight off the persisted columns rather than defaulted here.
+                # Neither is produced at this site: MediaBuyRepository owns both
+                # writes — `_stamp_confirmation_if_needed` writes confirmed_at once,
+                # the first time the buy reaches a committed status, and
+                # `_bump_parent_revision` advances revision as the buy's monotonic
+                # mutation counter. This function is a pure reader of what that seam
+                # decided.
                 confirmed_at=buy.confirmed_at,
                 revision=buy.revision,
             )

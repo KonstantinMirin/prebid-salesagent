@@ -47,6 +47,7 @@ from src.core.database.models import (
 )
 from src.core.database.models import (
     PERSISTED_STATUS_TO_CANONICAL,
+    PersistedMediaBuyStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -138,9 +139,14 @@ def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool =
     # outside the vocabulary, so an unmapped value cannot be persisted and this
     # lookup cannot miss. Guessing a serving state here is what previously let an
     # undefined status reach the buyer as "active" with no commitment instant —
-    # a document the pinned schema forbids. A KeyError is a real defect surfacing,
-    # not a case to absorb.
-    canonical = PERSISTED_STATUS_TO_CANONICAL[persisted] if persisted else CANONICAL_SERVING
+    # a document the pinned schema forbids. A raised lookup is a real defect
+    # surfacing, not a case to absorb.
+    #
+    # The column's value is widened back into the type before the lookup rather than
+    # indexed as a bare str: the map is keyed by PersistedMediaBuyStatus, and while a
+    # StrEnum member compares equal to its value at runtime, relying on that leaves
+    # the read side untyped and hides exactly the drift the enum exists to prevent.
+    canonical = PERSISTED_STATUS_TO_CANONICAL[PersistedMediaBuyStatus(persisted)] if persisted else CANONICAL_SERVING
 
     should_refine = canonical == CANONICAL_SERVING or (simulate and canonical not in TERMINAL_STATUSES)
     if not should_refine:
