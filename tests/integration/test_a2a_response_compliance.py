@@ -243,6 +243,52 @@ class TestA2ASpecCompliance:
 
 
 @pytest.mark.integration
+class TestGetMediaBuysProtocolMessage:
+    """``get_media_buys`` must not stamp a Python repr onto the protocol ``message``.
+
+    ``GetMediaBuysResponse`` carries no curated ``__str__``, so ``str(response)``
+    is a 316-character pydantic repr containing the literal ``message=None`` —
+    and that string is what a buyer receives, on two surfaces:
+
+    * A2A: ``_stamp_a2a_protocol_fields`` sets ``response_data["message"] =
+      str(response)`` (``src/a2a_server/adcp_a2a_server.py``), and the artifact
+      TextPart reads that stamped value back rather than re-deriving it.
+    * MCP: ``media_buy_list.py`` returns ``mcp_result(response)`` with no
+      ``content=``, and ``src/core/tools/_mcp.py`` falls back to
+      ``str(response)`` for ``ToolResult.content``.
+
+    Asserted through the production stamper rather than on ``str(response)``
+    alone: this module's docstring disclaims grading the wire text, so a bare
+    ``str()`` assertion would prove the method exists and nothing about the
+    buyer-visible field.
+
+    Wording mirrors the nearest sibling, ``ListAuthorizedPropertiesResponse.__str__``
+    (``src/core/schemas/_base.py``), which uses the same three-branch count form.
+    """
+
+    @pytest.mark.parametrize(
+        ("count", "expected_message"),
+        [
+            (0, "No media buys found."),
+            (1, "Found 1 media buy."),
+            (3, "Found 3 media buys."),
+        ],
+    )
+    def test_stamped_protocol_message_is_curated_text(self, count, expected_message):
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.schemas import GetMediaBuysResponse
+        from tests.factories import GetMediaBuysMediaBuyFactory
+
+        response = GetMediaBuysResponse(
+            media_buys=[GetMediaBuysMediaBuyFactory() for _ in range(count)],
+        )
+
+        stamped = AdCPRequestHandler._stamp_a2a_protocol_fields(response)
+
+        assert stamped["message"] == expected_message
+
+
+@pytest.mark.integration
 class TestMCPAndA2AResponseParity:
     """Test that MCP and A2A return identical response data."""
 

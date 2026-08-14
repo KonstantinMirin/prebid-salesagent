@@ -1,4 +1,9 @@
-"""Factory_boy factories for MediaBuy and MediaPackage models."""
+"""Factory_boy factories for MediaBuy and MediaPackage models.
+
+Also holds the Pydantic factory for the ``get_media_buys`` RESPONSE item
+(``GetMediaBuysMediaBuyFactory``) — the wire-shaped sibling of the ORM
+``MediaBuyFactory`` above it.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +11,11 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import factory
+from adcp.types import MediaBuyStatus
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
+from src.core.schemas import GetMediaBuysMediaBuy
 from tests.factories.core import TenantFactory
 from tests.factories.principal import PrincipalFactory
 
@@ -77,3 +84,29 @@ class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
             "budget": float(o.budget),
         }
     )
+
+
+class GetMediaBuysMediaBuyFactory(factory.Factory):
+    """Pydantic factory for a ``get_media_buys`` response item.
+
+    Not an ORM factory — this builds the wire-shaped item that
+    ``GetMediaBuysResponse.media_buys`` carries, so tests that grade the
+    response (serialization, the protocol ``message``) don't hand-roll it.
+
+    ``confirmed_at`` and ``revision`` are spec-REQUIRED on ``media_buys[]`` at
+    AdCP 3.1.1 and the model is grounded on the library item type, so both carry
+    concrete defaults here rather than being left to the caller.
+    """
+
+    class Meta:
+        model = GetMediaBuysMediaBuy
+
+    media_buy_id = Sequence(lambda n: f"mb_{n:04d}")
+    status = MediaBuyStatus.active
+    currency = "USD"
+    total_budget = 10000.0
+    confirmed_at = datetime(2025, 1, 1, tzinfo=UTC)
+    revision = 1
+    # LazyFunction, not a bare ``[]``: a mutable class attribute would be the SAME
+    # list object on every built item.
+    packages = factory.LazyFunction(list)

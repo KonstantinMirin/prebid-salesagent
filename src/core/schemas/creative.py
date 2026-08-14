@@ -55,6 +55,7 @@ from pydantic import (
 from src.core.config import get_pydantic_extra_mode
 from src.core.enum_helpers import enum_value
 from src.core.schemas._base import (
+    CompletedTaskStatusMixin,
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
@@ -476,7 +477,7 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(LibrarySyncCreativesSuccess):
+class SyncCreativesResponse(CompletedTaskStatusMixin, LibrarySyncCreativesSuccess):
     """Extends library SyncCreativesResponse success variant.
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
@@ -492,15 +493,14 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Design decision (salesagent-g3c): error variant never constructed.
     """
 
-    # Protocol-envelope status (core/protocol-envelope.json): REQUIRED on every task
-    # response envelope, a sibling field at the MCP/REST wire root (not nested under
-    # a "payload" key). This class only ever represents a synchronously-completed
-    # sync (the error/submitted branches are never constructed here — see class
-    # docstring), so "completed" is invariant. Declared directly on the response
-    # (the pattern already used by CreateMediaBuySuccess/UpdateMediaBuySuccess/
-    # ListCreativeFormatsResponse) rather than left to a wrapper that never actually
-    # ran (GH #1710): the library parent has no status field at all.
-    status: Literal["completed"] = "completed"
+    # Protocol-envelope `status` comes from CompletedTaskStatusMixin (composed above):
+    # REQUIRED on every task response envelope, a sibling field at the MCP/REST wire
+    # root (not nested under a "payload" key). This class only ever represents a
+    # synchronously-completed sync (the error/submitted branches are never constructed
+    # here — see class docstring), so "completed" is invariant. It is carried on the
+    # response rather than by a wrapper that never actually ran (GH #1710), and this
+    # is a TEMPORARY adoption: the library parent has no status field at all, so the
+    # mixin deletes as a no-op once adcp ships it.
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.

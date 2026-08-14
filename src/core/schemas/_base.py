@@ -68,6 +68,17 @@ from adcp.types.aliases import (
     UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
+from adcp.types.generated_poc.enums.creative_approval_status import (
+    # Aliased to OUR name for this concept, not to the library's. Two reasons, both
+    # load-bearing: src.core.schemas already exports an unrelated
+    # ``CreativeApprovalStatus`` (creative.py:252, a per-creative result model), so an
+    # unaliased import would shadow it depending on star-import order; and the
+    # schema-inheritance guard reads ``Library<X>`` as "the local class X must be or
+    # extend this", which for ``LibraryCreativeApprovalStatus`` would point it at that
+    # unrelated model. ``LibraryApprovalStatus`` states the true relationship: this is
+    # the library type behind our ``ApprovalStatus``.
+    CreativeApprovalStatus as LibraryApprovalStatus,
+)
 from adcp.types.generated_poc.enums.media_buy_valid_action import (
     MediaBuyValidAction,  # noqa: F401 — re-exported via src.core.schemas
 )
@@ -308,6 +319,74 @@ class NestedModelSerializerMixin:
         return data
 
 
+class CompletedTaskStatusMixin:
+    """Declares the protocol-envelope ``status`` of a synchronous success arm.
+
+    The spec fact: ``core/protocol-envelope.json`` at the pinned AdCP 3.1.1 lists
+    ``status`` in ``required`` and calls it "REQUIRED on every task response
+    envelope". A response type that only ever represents a synchronously
+    *completed* task therefore carries ``"completed"`` invariantly — it is not a
+    value any constructor should have to thread.
+
+    The four adopters reach that same declaration for two different reasons, and
+    they do NOT share an obsolescence condition:
+
+    * ``SyncAccountsResponse``, ``SyncCreativesResponse`` — the adcp 6.6 parents
+      have no ``status`` field at all, so this mixin SUPPLIES it (additive
+      subclassing, not an override). Those adoptions are temporary: they die the
+      day adcp ships the field, and
+      ``test_sync_arm_mixin_presence_tracks_the_parents_missing_status`` is the
+      biconditional that forces the deletion rather than merely reporting it.
+    * ``CreateMediaBuySuccess``, ``UpdateMediaBuySuccess`` — the parents already
+      declare ``status: Literal["completed"]`` as REQUIRED. Here the mixin adds
+      only the DEFAULT, which is permanent and spec-correct: no SDK bump obsoletes
+      it, and every ``UpdateMediaBuySuccess`` construction site relies on it.
+
+    ``GetMediaBuysResponse`` deliberately does NOT adopt this. It inherits the
+    pinned envelope's ``TaskStatus`` correctly, and composing a ``Literal`` over
+    that would narrow an eight-member enum to a single value.
+
+    Base order is style, not contract — Pydantic collects this declaration from a
+    plain mixin whether it sits first or last in the bases, so nothing pins it.
+    """
+
+    status: Literal["completed"] = "completed"
+
+
+class AlwaysIncludeFieldsMixin:
+    """Keeps spec-required fields on the wire even when their value is null.
+
+    The library base serializes with ``exclude_none=True``, which is right for
+    OPTIONAL fields — AdCP omits them rather than sending null — and wrong for a
+    field the schema lists in ``required`` while typing it nullable. Dropping one
+    of those produces a response that fails item-level validation: the same class
+    of silent omission as the missing envelope status (GH #1900).
+
+    Adopters declare the field names in ``_ALWAYS_INCLUDE_NULL_FIELDS``.
+
+    Two footguns, named here rather than inherited silently:
+
+    1. The re-insert reads ``getattr(self, field)``, so a caller passing an
+       explicit ``exclude={...}`` to this model would get the REAL value back
+       instead of the exclusion it asked for. No production path does — the only
+       dump of these items goes through ``NestedModelSerializerMixin``, which
+       passes ``mode`` and nothing else — but a future one could.
+    2. Under ``mode="json"`` the re-insert puts the RAW Python value in. That is
+       harmless only because a field reaches this code exclusively by being
+       ``None``; a non-None absent field would land a live ``datetime`` in a JSON
+       dump.
+    """
+
+    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset()
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        result = super().model_dump(**kwargs)  # type: ignore[misc]
+        for field in self._ALWAYS_INCLUDE_NULL_FIELDS:
+            if field not in result:
+                result[field] = getattr(self, field, None)
+        return result
+
+
 class SalesAgentBaseModel(LibraryAdCPBaseModel):
     """Base model for all internal salesagent schemas.
 
@@ -358,7 +437,7 @@ def _mirror_media_buy_status(model: Any) -> Any:
     return model
 
 
-class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
+class CreateMediaBuySuccess(CompletedTaskStatusMixin, AdCPCreateMediaBuySuccess):
     """Successful create_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp CreateMediaBuySuccess type with internal workflow tracking.
@@ -378,13 +457,12 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # adcp 6.6 (spec 3.1.1) made these required on the success envelope. They are
     # invariant for a synchronous committed success, so declare spec-correct defaults
     # here rather than threading identical literals through every constructor:
-    #   status      — protocol-envelope TaskStatus; a sync create_media_buy that
-    #                 returns this type has, by definition, completed.
+    #   status      — see CompletedTaskStatusMixin (composed above); this class is a
+    #                 permanent adopter, the parent already types the field.
     #   confirmed_at — seller commitment timestamp (stable after set).
     #   revision     — initial revision number (schema minimum: 1).
     # NOTE (SDK divergence): spec allows confirmed_at=null for provisional/manual-approval
     # buys, but adcp 6.6 types it non-nullable AwareDatetime; that branch can't be modeled.
-    status: Literal["completed"] = "completed"
     confirmed_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
     revision: int = 1
 
@@ -603,7 +681,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
+class UpdateMediaBuySuccess(CompletedTaskStatusMixin, AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     """Successful update_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking.
@@ -619,16 +697,15 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     """
 
     # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
-    # status is invariant for a synchronous applied update, so it is declared here
-    # rather than threaded through every constructor (see the twin note on
-    # CreateMediaBuySuccess).
+    # status is invariant for a synchronous applied update — see
+    # CompletedTaskStatusMixin (composed above), which supplies the default so the
+    # literal is not threaded through every constructor.
     #
     # revision is NOT invariant — it is the buy's live optimistic-concurrency token,
     # and every update path passes the persisted value. The default remains only
     # because this model has construction sites outside the update tool; a caller
     # that lets it default is reporting a token it did not read, so pass the row's
     # revision rather than relying on this.
-    status: Literal["completed"] = "completed"
     revision: int = 1
 
     # Override affected_packages to use our extended AffectedPackage type
@@ -2746,12 +2823,15 @@ class ListAuthorizedPropertiesResponse(NestedModelSerializerMixin, SalesAgentBas
 SnapshotUnavailableReason = LibrarySnapshotUnavailableReason
 
 
-class ApprovalStatus(StrEnum):
-    """Approval status value for a creative assignment in a get_media_buys response."""
-
-    pending_review = "pending_review"
-    approved = "approved"
-    rejected = "rejected"
+# Approval status for a creative assignment in a get_media_buys response. Aliased to
+# the library enum rather than redeclared, on the same basis as
+# SnapshotUnavailableReason above: the local copy and the pinned enum have identical
+# members (pending_review/approved/rejected), and a hand-kept copy only ever drifts.
+# Until now producer and consumer disagreed by type — _map_creative_status
+# (src/core/tools/media_buy_list.py:619) returned the LOCAL enum while CreativeApproval
+# inherits the LIBRARY one — and that worked only because both are StrEnums that
+# validate by value. The alias closes the split by construction.
+ApprovalStatus = LibraryApprovalStatus
 
 
 class Snapshot(LibraryGetMediaBuysSnapshot):
@@ -2799,7 +2879,7 @@ class GetMediaBuysPackage(LibraryGetMediaBuysPackage):
         return result
 
 
-class GetMediaBuysMediaBuy(LibraryGetMediaBuysMediaBuy):
+class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy):
     """Media buy details in a GetMediaBuys response.
 
     Grounded on the library type, which makes the pinned item contract enforceable
@@ -2817,26 +2897,22 @@ class GetMediaBuysMediaBuy(LibraryGetMediaBuysMediaBuy):
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
 
-    def model_dump(self, **kwargs):
-        """Keep spec-required fields on the wire even when their value is null.
+    # ``confirmed_at`` is spec-required AND nullable on the pinned item schema:
+    # ``{"type": ["string", "null"]}`` and in ``required``, because it "may be null
+    # until seller commitment occurs in deferred/manual approval flows". Dropping it
+    # produced a response that failed item-level validation for every
+    # not-yet-confirmed buy — the same class of silent omission as the missing
+    # envelope status (GH #1900), caught by the wire-graded UC-019 scenario rather
+    # than by review. AlwaysIncludeFieldsMixin keeps it present.
+    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset({"confirmed_at"})
 
-        The library base defaults to ``exclude_none=True``, which is right for
-        OPTIONAL fields (AdCP omits them rather than sending null) and wrong for a
-        field the schema lists in ``required`` while typing it nullable.
-        ``confirmed_at`` is exactly that: ``{"type": ["string", "null"]}`` and in
-        ``required``, because it "may be null until seller commitment occurs in
-        deferred/manual approval flows". Dropping it produced a response that failed
-        item-level validation for every not-yet-confirmed buy — the same class of
-        silent omission as the missing envelope status (GH #1900), caught by the
-        wire-graded UC-019 scenario rather than by review.
-        """
+    def model_dump(self, **kwargs):
+        """Serialize local package subclasses, then keep required-nullable fields."""
         result = super().model_dump(**kwargs)
         if "packages" in result and self.packages:
             # Pattern #4: this class carries no NestedModelSerializerMixin, so the
             # local package subclass's own serializer has to be invoked explicitly.
             result["packages"] = [pkg.model_dump(**kwargs) for pkg in self.packages]
-        if "confirmed_at" not in result:
-            result["confirmed_at"] = None
         return result
 
 
@@ -2881,6 +2957,28 @@ class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysRespon
     # Redeclared for Pattern #4 (nested serialization with the local item subclass);
     # the library types it as a Sequence.
     media_buys: list[GetMediaBuysMediaBuy]
+
+    def __str__(self) -> str:
+        """Return the human-readable message for the protocol layer.
+
+        This is a buyer-visible protocol field, not a debugging aid. Both transports
+        read it: A2A stamps ``str(self)`` onto ``response_data["message"]``
+        (adcp_a2a_server.py ``_stamp_a2a_protocol_fields``), and MCP falls back to
+        ``str(self)`` for ``ToolResult.content`` because ``get_media_buys`` returns
+        ``mcp_result(response)`` with no explicit ``content``.
+
+        Without this the class inherited pydantic's ``__repr__``, so the wire message
+        was a 316-character field dump that itself contained ``message=None``. The
+        class never had a curated ``__str__``; re-basing onto the library envelope
+        only made the dump longer. Shape mirrors the sibling
+        ``ListAuthorizedPropertiesResponse.__str__`` above.
+        """
+        count = len(self.media_buys)
+        if count == 0:
+            return "No media buys found."
+        if count == 1:
+            return "Found 1 media buy."
+        return f"Found {count} media buys."
 
 
 # Re-export product schemas for backward compatibility.
