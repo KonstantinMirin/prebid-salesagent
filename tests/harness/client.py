@@ -57,7 +57,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from tests.harness.address_table import ADDRESS_TABLE, ToolAddress
-from tests.harness.transport import Transport, TransportResult
+from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport, TransportResult
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
@@ -68,19 +68,6 @@ if TYPE_CHECKING:
 # need to know the map lives in a separate module).
 from tests.harness.address_table import NoAddressForTransport  # noqa: F401  (re-export)
 
-# Sentinel distinguishing "identity not passed" (fall back to
-# env.identity_for(transport), the DELIVER functions' own default) from an
-# EXPLICIT identity=None (deliberately unauthenticated dispatch — the same
-# meaning env._run_mcp_client / _run_a2a_handler / _prepare_rest_request
-# already give identity=None, and RestE2EDispatcher.dispatch documents this
-# convention explicitly). The design doc's pseudocode used a plain
-# ``identity: Any = None`` default; that would collide with the "explicit
-# unauthenticated" meaning identity=None already carries throughout
-# tests/harness, so this client uses a private sentinel instead — same
-# pattern _base.py's own dispatch primitives already use internally
-# (``_NO_OVERRIDE``).
-_NO_IDENTITY_OVERRIDE = object()
-
 
 def _with_identity(payload: dict[str, Any], identity: Any) -> dict[str, Any]:
     """Copy *payload* and, unless *identity* is the no-override sentinel, add it.
@@ -90,9 +77,24 @@ def _with_identity(payload: dict[str, Any], identity: Any) -> dict[str, Any]:
     DELIVER function that consumes the resulting kwargs differs.
     """
     kwargs = dict(payload)
-    if identity is not _NO_IDENTITY_OVERRIDE:
+    if identity is not NO_IDENTITY_OVERRIDE:
         kwargs["identity"] = identity
     return kwargs
+
+
+def flatten_payload(req: Any, **kwargs: Any) -> dict[str, Any]:
+    """Flatten a request model + explicit sibling kwargs into one wire payload.
+
+    The one kwargs-merge policy for the legacy ``env.call_via(transport,
+    req=..., **kwargs)`` calling convention (used by the E2E dispatchers in
+    ``tests/harness/dispatchers.py``): explicit kwargs always win over the
+    model dump, identical regardless of transport. ``req=None`` (or a *req*
+    with no ``model_dump``) returns *kwargs* unchanged. Callers that already
+    have a flat payload dict (no ``req`` object) should not call this at all.
+    """
+    if req is not None and hasattr(req, "model_dump"):
+        return {**req.model_dump(mode="json", exclude_none=True), **kwargs}
+    return dict(kwargs)
 
 
 # -- WRAP: payload (flat AdCP request dict) -> transport envelope -----------
@@ -246,7 +248,7 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
 
-    resolved_identity = env.identity_for(Transport.E2E_REST) if identity is _NO_IDENTITY_OVERRIDE else identity
+    resolved_identity = env.identity_for(Transport.E2E_REST) if identity is NO_IDENTITY_OVERRIDE else identity
     headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
     method = address.method or "post"
 
@@ -288,7 +290,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     # uncommitted factory rows in this test session would be invisible to it.
     env._commit_factory_data()
 
-    resolved_identity = env.identity_for(Transport.E2E_MCP) if identity is _NO_IDENTITY_OVERRIDE else identity
+    resolved_identity = env.identity_for(Transport.E2E_MCP) if identity is NO_IDENTITY_OVERRIDE else identity
     headers = e2e_identity_headers(resolved_identity)
     url = f"{env.e2e_config.base_url}/mcp/"
 
@@ -379,14 +381,10 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
 
-    kwargs = _with_identity(wrapped, identity)
-    _NO_OVERRIDE = object()
-    resolved_identity = kwargs.pop("identity", _NO_OVERRIDE)
-    if resolved_identity is _NO_OVERRIDE:
-        resolved_identity = env.identity_for(Transport.E2E_A2A)
+    resolved_identity = env.identity_for(Transport.E2E_A2A) if identity is NO_IDENTITY_OVERRIDE else identity
 
     headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
-    rpc_body = _build_a2a_jsonrpc_body(address.name, kwargs)
+    rpc_body = _build_a2a_jsonrpc_body(address.name, wrapped)
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as http_client:
         response = http_client.post("/a2a", json=rpc_body, headers=headers)
@@ -479,6 +477,57 @@ def _unwrap_rest(env: BaseTestEnv, raw: Any) -> TransportResult:
     return TransportResult(payload=body, envelope=envelope, raw_response=raw, wire_response=body)
 
 
+def _dispatch_core(
+    env: BaseTestEnv,
+    transport: Transport,
+    tool_name: str,
+    payload: dict[str, Any],
+    identity: Any = NO_IDENTITY_OVERRIDE,
+) -> TransportResult:
+    """Address -> wrap -> deliver -> unwrap -> ``TransportResult``.
+
+    The one dispatch core (salesagent-vuz9t.8.1) — ``AdCPTestClient.call``
+    below and every E2E dispatcher (``tests/harness/dispatchers.py``:
+    ``McpE2EDispatcher``, ``A2AE2EDispatcher``) delegate here instead of each
+    re-implementing ADDRESS/WRAP/DELIVER/UNWRAP or hand-rolling their own
+    identity/exception handling.
+
+    *payload* is always the flat AdCP request payload as a dict (the same
+    shape ``req.model_dump(mode="json", exclude_none=True)`` already produces
+    across every env's ``build_rest_body``/``_flatten_request`` — see
+    ``flatten_payload`` above for callers that still carry a ``req`` object).
+
+    Raises :class:`~tests.harness.address_table.NoAddressForTransport` when
+    *tool_name* has no registered address on *transport* — expected for tools
+    that are not exposed on every transport (e.g. A2A-only skills).
+
+    Note on ``TransportResult.payload``: this core has no per-tool response
+    schema to parse into (the whole point is not hand-maintaining one), so on
+    success ``payload`` holds the same flat dict as ``wire_response`` rather
+    than a parsed Pydantic model — every existing Then-step helper that only
+    checks ``is_success``/``is_error``/``wire_response``/``wire_error_envelope``
+    (i.e. ``assert_wire_error``) is unaffected; a step that reaches into
+    ``result.payload.<field>`` attribute-style needs
+    ``result.payload["<field>"]`` instead, or a follow-up can add an optional
+    ``response_cls`` parameter for typed parsing (not needed by any caller
+    yet — this is exactly the gap salesagent-vuz9t.8.3 closes).
+    """
+    address = ADDRESS_TABLE.resolve(tool_name, transport)
+    wrapped = WRAP[transport](address, payload)
+    try:
+        raw = DELIVER[transport](env, address, wrapped, identity)
+    except NotImplementedError:
+        # Missing delivery support — an E2E delivery gap (§7), an env that
+        # doesn't implement REST (get_rest_client), or a MissingToolNameError
+        # raised by a dispatcher before DELIVER even runs — must surface as a
+        # hard failure, not get silently downgraded into a TransportResult
+        # error a test could mistake for a real AdCP rejection.
+        raise
+    except Exception as exc:
+        return UNWRAP_ERROR[transport](exc)
+    return UNWRAP_SUCCESS[transport](env, raw)
+
+
 class AdCPTestClient:
     """One client, all transports, in-process and e2e (design doc §5).
 
@@ -500,43 +549,12 @@ class AdCPTestClient:
         payload: dict[str, Any],
         transport: Transport,
         *,
-        identity: Any = _NO_IDENTITY_OVERRIDE,
+        identity: Any = NO_IDENTITY_OVERRIDE,
     ) -> TransportResult:
-        """Address -> wrap -> deliver -> unwrap -> ``TransportResult``.
-
-        *payload* is always the flat AdCP request payload as a dict (the same
-        shape ``req.model_dump(mode="json", exclude_none=True)`` already
-        produces across every env's ``build_rest_body``/``_flatten_request``).
-
-        Raises :class:`~tests.harness.address_table.NoAddressForTransport`
-        when *tool* has no registered address on *transport* — expected for
-        tools that are not exposed on every transport (e.g. A2A-only skills).
-
-        Note on ``TransportResult.payload``: this client has no per-tool
-        response schema to parse into (the whole point is not hand-maintaining
-        one), so on success ``payload`` holds the same flat dict as
-        ``wire_response`` rather than a parsed Pydantic model — every existing
-        Then-step helper that only checks ``is_success``/``is_error``/
-        ``wire_response``/``wire_error_envelope`` (i.e. ``assert_wire_error``)
-        is unaffected; a step that reaches into ``result.payload.<field>``
-        attribute-style needs ``result.payload["<field>"]`` instead, or a
-        follow-up can add an optional ``response_cls`` parameter to ``call()``
-        for typed parsing (not needed by any caller yet).
-        """
-        address = ADDRESS_TABLE.resolve(tool, transport)
-        wrapped = WRAP[transport](address, payload)
-        try:
-            raw = DELIVER[transport](self._env, address, wrapped, identity)
-        except NotImplementedError:
-            # Missing delivery support — an E2E delivery gap (§7) or an env
-            # that doesn't implement REST (get_rest_client) — must surface as
-            # a hard failure, not get silently downgraded into a
-            # TransportResult error a test could mistake for a real AdCP
-            # rejection.
-            raise
-        except Exception as exc:
-            return UNWRAP_ERROR[transport](exc)
-        return UNWRAP_SUCCESS[transport](self._env, raw)
+        """Dispatch *tool* through *transport* — see ``_dispatch_core`` above
+        for the full ADDRESS/WRAP/DELIVER/UNWRAP contract and the
+        ``TransportResult.payload`` typed-payload caveat."""
+        return _dispatch_core(self._env, transport, tool, payload, identity)
 
 
 def _mcp_error_to_result(exc: Exception) -> TransportResult:

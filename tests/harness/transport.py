@@ -86,6 +86,38 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
 }
 
 
+# The ONE identity-argument omission sentinel for the whole dispatch core
+# (tests/harness/client.py, dispatchers.py, _base.py, _mixins.py — plus
+# tests/helpers/mcp_envelope_capture.py, which carries the same distinction
+# outside tests/harness/). Distinguishes "the caller did not pass identity="
+# (fall back to whatever default THAT call site uses — env.identity_for(),
+# self.identity, delegate-by-omission, PrincipalFactory.make_identity(), ...)
+# from an EXPLICIT identity=None (deliberately unauthenticated dispatch).
+# Previously reimplemented as a private object() in seven different function
+# bodies plus two other module-level sentinels (client.py, mcp_envelope_
+# capture.py) — this is the one shared object identity every comparison uses;
+# each call site keeps its OWN fallback logic when it detects the sentinel,
+# never folded into this constant. Scoped to the identity-argument omission
+# disease specifically — other object()-as-sentinel uses in tests/harness/
+# for unrelated fields (e.g. media_buy_create.py's OMIT_IDEMPOTENCY_KEY) are
+# a different sentinel family and are not consolidated here.
+NO_IDENTITY_OVERRIDE = object()
+
+
+class MissingToolNameError(NotImplementedError):
+    """A legacy ``env.call_via(transport, **kwargs)`` E2E dispatch had no way to
+    derive the tool/skill name (no ``tool_name=`` kwarg, no per-env attribute
+    to introspect it from).
+
+    The ONE exception type for this failure mode, replacing what used to be a
+    per-dispatcher fork (``TypeError`` in one, ``NotImplementedError`` in the
+    other). Subclasses ``NotImplementedError`` deliberately: that is the one
+    exception ``AdCPTestClient.call()`` re-raises as a hard wiring failure
+    instead of downgrading into an error ``TransportResult`` — a missing tool
+    name is a harness bug, not a simulated AdCP rejection.
+    """
+
+
 @dataclass(frozen=True)
 class E2EConfig:
     """Configuration for E2E transport dispatch.

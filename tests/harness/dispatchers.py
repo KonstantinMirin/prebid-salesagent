@@ -262,11 +262,17 @@ class RestE2EDispatcher:
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         from tests.harness.address_table import ToolAddress
         from tests.harness.client import _deliver_e2e_rest
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
         if not env.e2e_config:
             return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
-        identity = kwargs.pop("identity", None)
+        # NO_IDENTITY_OVERRIDE default (not None): omitted identity must fall
+        # back to env.identity_for(transport) inside _deliver_e2e_rest, the
+        # same resolution every other transport's omitted-identity dispatch
+        # gets — a bare ``None`` default here would force every omitted-
+        # identity call unauthenticated instead (salesagent-vuz9t.8.1).
+        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
         method = getattr(env, "REST_METHOD", "post")
@@ -356,27 +362,23 @@ class McpE2EDispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import AdCPTestClient
-        from tests.harness.transport import Transport
+        from tests.harness.client import _dispatch_core, flatten_payload
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, MissingToolNameError, Transport
 
         tool_name = kwargs.pop("tool_name", None)
         if tool_name is None:
-            raise TypeError(
+            raise MissingToolNameError(
                 "McpE2EDispatcher.dispatch requires tool_name= in kwargs (e.g. "
                 'env.call_via(Transport.E2E_MCP, tool_name="get_products", req=...)) — '
                 "there is no per-env attribute to derive it from generically. "
                 "Prefer AdCPTestClient(env).call(tool_name, payload, Transport.E2E_MCP) directly."
             )
 
-        identity = kwargs.pop("identity", None)
+        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
         req = kwargs.pop("req", None)
-        payload = (
-            req.model_dump(mode="json", exclude_none=True)
-            if req is not None and hasattr(req, "model_dump")
-            else dict(kwargs)
-        )
+        payload = flatten_payload(req, **kwargs)
 
-        return AdCPTestClient(env).call(tool_name, payload, Transport.E2E_MCP, identity=identity)
+        return _dispatch_core(env, Transport.E2E_MCP, tool_name, payload, identity)
 
 
 class A2AE2EDispatcher:
@@ -406,14 +408,13 @@ class A2AE2EDispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import AdCPTestClient
-        from tests.harness.transport import Transport
+        from tests.harness.client import _dispatch_core, flatten_payload
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, MissingToolNameError, Transport
 
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
         tool_name = kwargs.pop("tool_name", None) or getattr(env, "A2A_SKILL", None)
         if not tool_name:
-            raise NotImplementedError(
+            raise MissingToolNameError(
                 "A2AE2EDispatcher.dispatch() needs a tool/skill name to resolve an address via "
                 "AdCPTestClient — pass tool_name=... to env.call_via(Transport.E2E_A2A, ...) (or "
                 "declare env.A2A_SKILL), or call AdCPTestClient(env).call(tool, payload, "
@@ -422,15 +423,9 @@ class A2AE2EDispatcher:
             )
 
         req = kwargs.pop("req", None)
-        if req is not None and hasattr(req, "model_dump"):
-            payload = {**req.model_dump(mode="json", exclude_none=True), **kwargs}
-        else:
-            payload = dict(kwargs)
+        payload = flatten_payload(req, **kwargs)
 
-        client = AdCPTestClient(env)
-        if identity is _NO_OVERRIDE:
-            return client.call(tool_name, payload, Transport.E2E_A2A)
-        return client.call(tool_name, payload, Transport.E2E_A2A, identity=identity)
+        return _dispatch_core(env, Transport.E2E_A2A, tool_name, payload, identity)
 
 
 DISPATCHERS: dict[

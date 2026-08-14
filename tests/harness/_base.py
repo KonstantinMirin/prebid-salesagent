@@ -626,15 +626,14 @@ class BaseTestEnv:
         from a2a.types import SendMessageRequest, Task
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from tests.harness.transport import Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
         from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
         self._commit_factory_data()
 
         # Pop identity — used for the handler mock, not sent as a skill parameter.
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        a2a_identity = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        a2a_identity = self.identity_for(Transport.A2A) if identity is NO_IDENTITY_OVERRIDE else identity
 
         # The real A2A handler writes audit logs which require the tenant to exist
         # in the DB. Ensure the tenant record exists (idempotent) so audit logging
@@ -785,14 +784,13 @@ class BaseTestEnv:
         from fastmcp import Client
 
         from src.core.main import mcp
-        from tests.harness.transport import Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
         self._commit_factory_data()
 
         # Pop identity — used for the auth mock, not sent as a tool argument.
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
+        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        mcp_identity = self.identity_for(Transport.MCP) if identity is NO_IDENTITY_OVERRIDE else identity
 
         # Unpack req object into flat arguments if present.
         # MCP tools accept individual params, not a request model.
@@ -868,13 +866,12 @@ class BaseTestEnv:
 
         from fastmcp.server.context import Context
 
-        from tests.harness.transport import Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
         self._commit_factory_data()
 
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
+        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        mcp_identity = self.identity_for(Transport.MCP) if identity is NO_IDENTITY_OVERRIDE else identity
 
         # Unpack req object into flat kwargs — MCP wrappers accept individual
         # parameters, not a request model.
@@ -919,11 +916,10 @@ class BaseTestEnv:
         Returns ``(client, resolved_identity)``; the caller builds the body from the
         now-identity-free *kwargs* and issues the HTTP verb.
         """
-        from tests.harness.transport import Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        if identity is _NO_OVERRIDE:
+        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        if identity is NO_IDENTITY_OVERRIDE:
             identity = self.identity_for(Transport.REST)
 
         self._commit_factory_data()
