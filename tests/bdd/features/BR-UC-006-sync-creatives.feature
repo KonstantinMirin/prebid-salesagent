@@ -1551,7 +1551,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F2: rejection rationale is structured
     # POST-F3: buyer knows what to revise
 
-  @T-UC-006-storyboard-provenance-required-rejection @storyboard-v3.1 @v3-1 @provenance @rejection
+  @T-UC-006-storyboard-provenance-required-rejection @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_REQUIRED -- provenance object absent on creative under a policy that requires it
     Given the tenant has a product with creative_policy.provenance_required = true
     And the Buyer Agent submits a creative whose manifest carries no provenance object at all
@@ -1564,7 +1564,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement: provenance entirely absent under provenance_required policy
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
 
-  @T-UC-006-storyboard-provenance-digital-source-type-missing @storyboard-v3.1 @v3-1 @provenance @rejection
+  @T-UC-006-storyboard-provenance-digital-source-type-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING -- provenance present but digital_source_type omitted
     Given the tenant has a product with creative_policy.provenance_requirements.require_digital_source_type = true
     And the Buyer Agent submits a creative whose provenance object omits digital_source_type
@@ -1577,7 +1577,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement: digital_source_type missing under require_digital_source_type policy
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
 
-  @T-UC-006-storyboard-provenance-disclosure-missing @storyboard-v3.1 @v3-1 @provenance @rejection
+  @T-UC-006-storyboard-provenance-disclosure-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DISCLOSURE_MISSING -- provenance present but disclosure block omitted under require_disclosure_metadata
     Given the tenant has a product with creative_policy.provenance_requirements.require_disclosure_metadata = true
     And the Buyer Agent submits a creative whose provenance object lacks a disclosure block
@@ -1590,7 +1590,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement: disclosure block missing under require_disclosure_metadata policy
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_disclosure step=sync_creatives_missing_disclosure
 
-  @T-UC-006-storyboard-provenance-corrected-acceptance @storyboard-v3.1 @v3-1 @provenance @acceptance
+  @T-UC-006-storyboard-provenance-corrected-acceptance @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @acceptance
   Scenario: Corrected resubmission with disclosure block and on-list verifier is accepted
     Given a creative submission that previously failed with provenance rejection codes
     And the Buyer Agent resubmits with a complete disclosure block and an on-list verify_agent from the seller's accepted_verifiers
@@ -1605,7 +1605,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement: corrected resubmission terminates the rejection cascade
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=accept_with_disclosure step=sync_creatives_with_disclosure
 
-  @T-UC-006-storyboard-provenance-claim-contradicted @schema-v3.1 @v3-1 @provenance @rejection @truth-of-claim
+  @T-UC-006-storyboard-provenance-claim-contradicted @uc006-storyboard-routing @schema-v3.1 @v3-1 @provenance @rejection @truth-of-claim
   Scenario: PROVENANCE_CLAIM_CONTRADICTED -- on-list verifier refutes buyer's digital_source_type claim
     Given the Buyer Agent submits a creative claiming digital_source_type "digital_capture"
     And the on-list verifier responds with ai_generated true at confidence at least 0.9
@@ -1624,7 +1624,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_truth_of_claim: verifier contradicts buyer claim; details bounded to audit-safe allowlist
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
 
-  @T-UC-006-storyboard-multi-format-sync @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
+  @T-UC-006-storyboard-multi-format-sync @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
   Scenario: Bulk sync of three creatives in three different formats returns per-creative action and status
     Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
     When the Buyer Agent sends sync_creatives
@@ -1640,7 +1640,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # sync_multiple: bulk multi-format validation returns per-creative action+status
     # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
 
-  @T-UC-006-storyboard-format-id-roundtrip-on-sync @storyboard-v3.1 @v3-1 @format-id-roundtrip
+  @T-UC-006-storyboard-format-id-roundtrip-on-sync @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @format-id-roundtrip
   Scenario: Sync creative with the same format_id object returned by get_products -- seller MUST accept its own format_id
     Given the Buyer Agent captured a format_id {agent_url, id} from a prior get_products response
     When the Buyer Agent sends sync_creatives carrying a creative whose format_id matches the captured object
@@ -1654,7 +1654,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # format_id roundtrip: seller MUST accept its own format_ids on sync_creatives
     # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
 
-  @T-UC-006-storyboard-creative-reception-stateful-render @schema-v3.1 @v3-1 @stateful-push @creative-reception
+  @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions
     Given the Buyer Agent pushes creative assets to a stateful sales agent
     When the Buyer Agent sends sync_creatives

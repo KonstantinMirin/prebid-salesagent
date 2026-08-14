@@ -3071,45 +3071,24 @@ def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal:
     _register_package(ctx, "pkg_001", pkg)
 
 
+_UC_TAG_RE = re.compile(r"^T-UC-(\d{3})(?:-|$)")
+
+
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags.
 
-    The recognized-UC set below must cover every ``T-UC-<n>`` tag prefix that
-    a bound feature file can carry. A tag that isn't recognized here falls
-    through to ``None``, and ``_harness_env``'s catch-all then reports it as
-    "No harness wired for None" instead of naming the actual UC -- masking
-    the real gap. Widen this set whenever a new BR-UC-*.feature gets a
-    binding test_*.py file, even if no harness env exists for it yet: an
-    informative per-UC xfail is strictly better than the opaque "None"
-    message.
+    The UC number derives from the tag itself (``T-UC-(\\d{3})``) -- a
+    scenario that carries its own ``T-UC-<n>`` tag needs no per-UC branch
+    here, wired or not. Only the genuinely non-derivable cases get an
+    explicit branch: ADMIN and COMPAT scenarios don't carry a ``T-UC-<n>``
+    tag at all, and UC-GET-PRODUCTS / the brand_shorthand-create_media_buy
+    override route on tags that aren't UC-numbered. A tag none of this
+    resolves falls through to ``None``, and ``_harness_env``'s catch-all
+    then reports it as "No harness wired for None" instead of naming the
+    actual UC -- masking the real gap. Widening the derivable set never
+    needs a code change here; only a genuinely new non-derivable case does.
     """
     marker_names = {m.name for m in request.node.iter_markers()}
-    if any(t.startswith("T-UC-002") for t in marker_names):
-        return "UC-002"
-    if any(t.startswith("T-UC-003") for t in marker_names):
-        return "UC-003"
-    if any(t.startswith("T-UC-006") for t in marker_names):
-        return "UC-006"
-    if any(t.startswith("T-UC-005") for t in marker_names):
-        return "UC-005"
-    if any(t.startswith("T-UC-004") for t in marker_names):
-        return "UC-004"
-    if any(t.startswith("T-UC-008") for t in marker_names):
-        return "UC-008"
-    if any(t.startswith("T-UC-011") for t in marker_names):
-        return "UC-011"
-    if any(t.startswith("T-UC-014") for t in marker_names):
-        return "UC-014"
-    if any(t.startswith("T-UC-018") for t in marker_names):
-        return "UC-018"
-    if any(t.startswith("T-UC-019") for t in marker_names):
-        return "UC-019"
-    if any(t.startswith("T-UC-020") for t in marker_names):
-        return "UC-020"
-    if any(t.startswith("T-UC-021") for t in marker_names):
-        return "UC-021"
-    if any(t.startswith("T-UC-030") for t in marker_names):
-        return "UC-030"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
     if "inventory_profile" in marker_names or (
@@ -3120,6 +3099,10 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-002"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
+    for tag in marker_names:
+        m = _UC_TAG_RE.match(tag)
+        if m:
+            return f"UC-{m.group(1)}"
     return None
 
 
@@ -3432,7 +3415,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf", "storyboard-v3.1"}:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf", "uc006-storyboard-routing"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
@@ -3441,12 +3424,17 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # creative lookup) — dormant until the cross-principal existence-gate
             # fix (PR #1430 review) made the surface safe to grade.
             # @webhook-ssrf scenarios grade registration SSRF on push_notification_config.url.
-            # @storyboard-v3.1 covers the 8 UC-006 storyboard-conformance proposals
+            # @uc006-storyboard-routing is a dedicated routing tag (not the grading-
+            # provenance tag) carried by all 8 UC-006 storyboard-conformance proposals
             # (provenance required/disclosure/digital-source-type/corrected/contradicted,
-            # multi-format sync, format-id roundtrip, creative-reception) — without this
-            # tag they xfailed here before any step ran, which is what let some of them
-            # falsely appear "dormant by design" (no matching steps) when they were
-            # actually masked by this gate.
+            # multi-format sync, format-id roundtrip, creative-reception). It must stay
+            # decoupled from @storyboard-v3.1 / @schema-v3.1: those are grading-provenance
+            # tags shared across every UC's storyboard scenarios (scripts/audit's
+            # storyboard_spec.TAG), and two of these eight already carry @schema-v3.1
+            # instead of @storyboard-v3.1 — keying routing on either grading tag would
+            # both misroute other UCs' storyboard scenarios into CreativeSyncEnv and
+            # leave those two never reaching the gate. Retagging a scenario for grading
+            # provenance must never change which env it resolves to.
             from tests.harness.creative_sync import CreativeSyncEnv
 
             with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
