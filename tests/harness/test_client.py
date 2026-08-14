@@ -324,6 +324,60 @@ class TestClientE2eRestDelivery:
         assert captured["headers"]["x-adcp-auth"] == "tok_abc"
         assert captured["headers"]["x-adcp-tenant"] == identity.tenant["subdomain"]
 
+    def test_e2e_rest_delivery_sends_same_header_set_the_deleted_inline_code_did(self, monkeypatch):
+        """salesagent-vuz9t.10: ``_deliver_e2e_rest`` (via ``e2e_identity_headers``)
+        must emit the SAME x-adcp-auth / x-adcp-tenant / x-dry-run header set that
+        ``RestE2EDispatcher`` used to build inline, before commit 4363757dc
+        deleted that code and routed delivery through this shared function
+        instead — e2e_rest is a live caller (real HTTP to the Docker stack), so a
+        regression here silently drops a header a real server request depends on.
+        The auth/tenant pair already has coverage above; this is the one place
+        x-dry-run (the third header the deleted code built) is checked."""
+        import httpx
+
+        from tests.factories.principal import PrincipalFactory
+
+        captured = {}
+
+        class _FakeResponse:
+            status_code = 200
+            headers = {"content-type": "application/json"}
+
+            def json(self):
+                return {"products": []}
+
+        class _FakeClient:
+            def __init__(self, *, base_url, timeout):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                return False
+
+            def post(self, url, *, json, headers):
+                captured["headers"] = headers
+                return _FakeResponse()
+
+        monkeypatch.setattr(httpx, "Client", _FakeClient)
+
+        identity = PrincipalFactory.make_identity(
+            principal_id="p1", tenant_id="t1", protocol="rest", auth_token="tok_dry", dry_run=True
+        )
+
+        with self._make_env_with_e2e_config() as env:
+            client = AdCPTestClient(env)
+            result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_REST, identity=identity)
+
+        assert result.is_success, result.error
+        assert captured["headers"] == {
+            "Content-Type": "application/json",
+            "x-adcp-auth": "tok_dry",
+            "x-adcp-tenant": identity.tenant["subdomain"],
+            "x-dry-run": "true",
+        }
+
     def test_e2e_rest_delivery_unauthenticated_omits_auth_header(self, monkeypatch):
         import httpx
 
