@@ -3131,12 +3131,80 @@ def _build_uc003_storyboard_generic_client_env(e2e_config: object | None) -> Abs
     return BareIntegrationEnv(e2e_config=e2e_config)
 
 
+def _build_admin_env(e2e_config: object | None) -> AbstractContextManager:
+    """ADMIN scenarios always run the Flask test_client, never e2e_rest.
+
+    ``pytest_generate_tests`` never parametrizes ADMIN scenarios under
+    e2e_rest, so ``e2e_config`` is always ``None`` here.
+    """
+    from tests.harness.admin_accounts import AdminAccountEnv
+
+    return AdminAccountEnv(mode="integration")
+
+
+def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
+    """Shared by COMPAT and UC-GET-PRODUCTS — both are read-only product listing."""
+    from tests.harness.product import ProductEnv
+
+    return ProductEnv(e2e_config=e2e_config)
+
+
+def _build_creative_formats_env(e2e_config: object | None) -> AbstractContextManager:
+    from tests.harness.creative_formats import CreativeFormatsEnv
+
+    return CreativeFormatsEnv(e2e_config=e2e_config)
+
+
+def _seed_uc005(ctx: dict, env: object) -> None:
+    """Seed a tenant ONLY in e2e mode.
+
+    The live server authenticates the token against the DB tenant, and UC-005
+    baseline scenarios carry no account/tenant Given step to seed it (unlike
+    UC-006/UC-011). In-process the registry is mocked and the DB is per-test,
+    so the in-process status quo must stay unseeded. Mirrors the UC-004 poll
+    branch (#1417).
+    """
+    if env.e2e_config is not None:
+        env.setup_default_data()
+
+
+def _build_media_buy_list_env(e2e_config: object | None) -> AbstractContextManager:
+    """get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
+    its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
+    read). Genuine spec-production gaps stay xfailed via _UC019_XFAIL_TAGS /
+    the selective blocks in the UC-002 branch above.
+    """
+    from tests.harness.media_buy_list import MediaBuyListEnv
+
+    return MediaBuyListEnv(principal_id="buyer-001", e2e_config=e2e_config)
+
+
+def _seed_uc019(ctx: dict, env: object) -> None:
+    """Scenarios seed buys via factories under ctx["tenant"]/["principal"]
+    (principal "buyer-001" matches the feature files)."""
+    tenant, principal = env.setup_default_data()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+
+
 ENV_ROUTES: dict[str, EnvRoute] = {
     "T-UC-003-storyboard-media-buy-not-found": EnvRoute(
         tag="T-UC-003-storyboard-media-buy-not-found",
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
+    # The five rows below are keyed by the coarse `uc` bucket (from
+    # _detect_uc), not a per-scenario tag: every scenario in these UCs uses
+    # the exact same env + seed, with no marker_names-based sub-branching, so
+    # there is nothing finer to key on. UC-002/003(remainder)/004/006/011/018
+    # still have marker-set-based sub-branching that doesn't reduce to a
+    # single row and are intentionally left as prose branches in
+    # `_harness_env` (see salesagent-vuz9t.19 follow-up).
+    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
+    "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
+    "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
+    "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
+    "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_uc019),
 }
 
 
@@ -3285,7 +3353,9 @@ def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> 
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
 
-    - UC-005 → CreativeFormatsEnv
+    - A ``uc`` bucket with no marker_names-based sub-branching (ADMIN, COMPAT,
+      UC-GET-PRODUCTS, UC-005, UC-019) is a row in ``ENV_ROUTES`` and goes
+      through the one generic ``_run_env_route`` consumer.
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)
@@ -3305,7 +3375,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     if e2e_config is not None:
         _reset_e2e_db(e2e_config)
 
-    if uc == "UC-002":
+    if uc in ENV_ROUTES:
+        # Every scenario in these UCs uses one env + one seed, with no
+        # marker_names-based sub-branching -- nothing finer to key on than
+        # the uc bucket itself. See ENV_ROUTES's comment for the UCs that
+        # still need marker-set-based prose branches below.
+        yield from _run_env_route(request, ctx, ENV_ROUTES[uc], e2e_config)
+
+    elif uc == "UC-002":
         marker_names = {m.name for m in request.node.iter_markers()}
         # Tags that need the full create_media_buy flow (MediaBuyCreateEnv)
         # rather than account resolution only (MediaBuyAccountEnv).
@@ -3515,20 +3592,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         else:
             pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
 
-    elif uc == "UC-005":
-        from tests.harness.creative_formats import CreativeFormatsEnv
-
-        with _db_scope_for(request, e2e_config), CreativeFormatsEnv(e2e_config=e2e_config) as env:
-            # Seed a tenant ONLY in e2e mode: the live server authenticates the token
-            # against the DB tenant, and UC-005 baseline scenarios carry no account/tenant
-            # Given step to seed it (unlike UC-006/UC-011). In-process the registry is mocked
-            # and the DB is per-test, so the in-process status quo must stay unseeded.
-            # Mirrors the UC-004 poll branch (#1417).
-            if env.e2e_config is not None:
-                env.setup_default_data()
-            ctx["env"] = env
-            yield
-
     elif uc == "UC-018":
         # list_creatives — the wired scenarios are @list-after-sync (#1405),
         # @concept-id (#1407), and the @BR-RULE-034 cross-principal isolation
@@ -3576,26 +3639,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-011 harness not yet wired for markers: {marker_names}")
-
-    elif uc == "ADMIN":
-        from tests.harness.admin_accounts import AdminAccountEnv
-
-        # BDD suite always uses integration mode (Flask test_client).
-        # E2E mode (requests.Session + Docker) is tested separately. ADMIN
-        # scenarios are never parametrized under e2e_rest (pytest_generate_tests
-        # returns early for them), so e2e_config is always None here and
-        # _db_scope_for takes the direct-fixture branch — same behavior as the
-        # inline getfixturevalue call it replaces.
-        with _db_scope_for(request, e2e_config), AdminAccountEnv(mode="integration") as env:
-            ctx["env"] = env
-            yield
-
-    elif uc == "COMPAT":
-        from tests.harness.product import ProductEnv
-
-        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
-            ctx["env"] = env
-            yield
 
     elif uc == "UC-004":
         harness_type = _detect_delivery_harness(request)
@@ -3646,28 +3689,5 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
-    elif uc == "UC-GET-PRODUCTS":
-        from tests.harness.product import ProductEnv
-
-        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
-            ctx["env"] = env
-            yield
-    elif uc == "UC-019":
-        # get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
-        # its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
-        # read). Scenarios seed buys via factories under ctx["tenant"]/["principal"]
-        # (principal "buyer-001" matches the feature files). Genuine spec-production
-        # gaps stay xfailed via _UC019_XFAIL_TAGS / the selective blocks above.
-        from tests.harness.media_buy_list import MediaBuyListEnv
-
-        with (
-            _db_scope_for(request, e2e_config),
-            MediaBuyListEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
-        ):
-            tenant, principal = env.setup_default_data()
-            ctx["env"] = env
-            ctx["tenant"] = tenant
-            ctx["principal"] = principal
-            yield
     else:
         pytest.xfail(f"No harness wired for {uc}")
