@@ -53,21 +53,12 @@ from scripts.audit import storyboard_spec  # noqa: E402
 # Scenarios whose binding is known-broken at the audit baseline. MAY ONLY SHRINK.
 # Every entry is a scenario the 3.1.1 audit found mis-bound; removing one means its
 # @source now resolves (or it was retagged @schema-v3.1 and left this guard's scope).
-KNOWN_BROKEN_BINDINGS: frozenset[str] = frozenset(
-    {
-        "T-UC-002-storyboard-inventory-list-no-match",
-        "T-UC-002-storyboard-measurement-terms-rejected",
-        "T-UC-003-storyboard-not-cancellable-on-recancel",
-        "T-UC-003-storyboard-creative-fate-after-cancellation",
-        "T-UC-004-storyboard-required-metrics-end-to-end-accountability",
-        "T-UC-004-storyboard-vendor-metric-end-to-end",
-        "T-UC-005-storyboard-format-id-third-party-agent-out-of-scope",
-        "T-UC-006-storyboard-provenance-required-rejection",
-        "T-UC-006-storyboard-provenance-digital-source-type-missing",
-        "T-UC-006-storyboard-format-id-roundtrip-on-sync",
-        "T-UC-018-storyboard-list-all-creatives-after-sync",
-    }
-)
+#
+# Empty: every @storyboard-v3.1 scenario's footer was re-verified against the pinned
+# v3.1.1 tree and corrected to its true source (wrong path/phase/step fixed, missing
+# footers added) rather than ledgered here (salesagent-vuz9t.5). Stays the (empty)
+# seed of this shrink-only guard.
+KNOWN_BROKEN_BINDINGS: frozenset[str] = frozenset()
 
 
 def _index() -> dict:

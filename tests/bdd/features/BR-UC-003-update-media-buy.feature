@@ -2088,7 +2088,7 @@ Feature: BR-UC-003 Update Media Buy
     # the existing terminal_canceled INVALID_STATE scenario which targets non-cancel
     # updates; NOT_CANCELLABLE is reserved for re-cancel attempts specifically.
     # invalid_transitions: re-cancel of terminal canceled buy is NOT_CANCELLABLE, not silent success
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=double_cancel step=second_cancel
 
   @T-UC-003-storyboard-creative-fate-after-cancellation @storyboard-v3.1 @v3-1 @cancellation @creative-library @lifecycle-decoupling
   Scenario: Canceling a media buy releases package-creative assignments but leaves creatives in the library with review state intact
@@ -2107,6 +2107,7 @@ Feature: BR-UC-003 Update Media Buy
     # containing buy was canceled -- a rejection MUST be a deliberate review
     # decision with its own rejection_reason.
     # creative_fate_after_cancellation: creative lifecycle decoupled from media buy lifecycle
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml phase=verify_creative_persists_post_cancel step=list_creatives_after_cancel
 
   @T-UC-003-partition-revision @partition @revision @schema-v3.1
   Scenario Outline: Revision optimistic-concurrency partition validation - <partition>

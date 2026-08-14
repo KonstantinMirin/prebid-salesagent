@@ -1562,7 +1562,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement Phase 2: cheapest buyer mistake -- no provenance attached.
     # Seller accepts envelope but per-creative action=failed with PROVENANCE_REQUIRED.
     # provenance_enforcement: provenance entirely absent under provenance_required policy
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
 
   @T-UC-006-storyboard-provenance-digital-source-type-missing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING -- provenance present but digital_source_type omitted
@@ -1575,7 +1575,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # under a policy with require_digital_source_type=true. Distinct from
     # PROVENANCE_REQUIRED because provenance IS present.
     # provenance_enforcement: digital_source_type missing under require_digital_source_type policy
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
 
   @T-UC-006-storyboard-provenance-disclosure-missing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DISCLOSURE_MISSING -- provenance present but disclosure block omitted under require_disclosure_metadata
@@ -1652,7 +1652,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # that it returned in products, its catalog does not roundtrip and a buy
     # would silently fail at sync_creatives after commit.
     # format_id roundtrip: seller MUST accept its own format_ids on sync_creatives
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/creative_reception.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
 
   @T-UC-006-storyboard-creative-reception-stateful-render @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions

@@ -756,7 +756,7 @@ Feature: BR-UC-018 List Creatives
       | a transient data gap                  | SNAPSHOT_TEMPORARILY_UNAVAILABLE  |
       | an access restriction                 | SNAPSHOT_PERMISSION_DENIED        |
 
-  @T-UC-018-storyboard-list-all-creatives-after-sync @storyboard-v3.1 @v3-1 @list-after-sync
+  @T-UC-018-storyboard-list-all-creatives-after-sync @schema-v3.1 @v3-1 @list-after-sync
   Scenario: List creatives with no filters returns the library including recently synced creatives
     Given the buyer recently synced three creatives in three different formats via sync_creatives
     When the Buyer Agent sends list_creatives with no filters for the same account
@@ -766,9 +766,13 @@ Feature: BR-UC-018 List Creatives
     # creative_lifecycle list_and_filter / list_all: after sync_creatives,
     # list_creatives without filters returns the library for the account
     # including the synced items. Each entry exposes creative_id, name,
-    # format_id, status.
+    # format_id, status. The graded step lives inside the `creative` protocol
+    # baseline storyboard; capabilities.py declares supported_protocols=[media_buy]
+    # only, so this behavior is schema-grounded for us, not storyboard-graded
+    # (matches the sibling scenarios in this file already tagged @schema-v3.1
+    # for the same undeclared-protocol reason).
     # creative_lifecycle: list_creatives reflects recent sync_creatives state
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/creative/index.yaml phase=list_and_filter step=list_all
 
   @T-UC-018-storyboard-filter-by-format-id-object @schema-v3.1 @v3-1 @list-filter @format-id-object
   Scenario: List creatives filtered by a format_id object returns only creatives matching that {agent_url, id}

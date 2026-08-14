@@ -2711,7 +2711,7 @@ Feature: BR-UC-002 Create Media Buy
     # identifying which list matched nothing. Silently-successful buys with normal
     # forecast numbers, crashes, or non-AdCP error shapes are compliance failures.
     # inventory_list_no_match: empty intersection MUST be surfaced truthfully
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_targeting.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_no_match.yaml phase=no_match_attempt step=create_buy_no_match
 
   @T-UC-002-storyboard-inventory-list-targeting-parity @storyboard-v3.1 @v3-1 @inventory-list @property-list @collection-list
   Scenario: PropertyListReference and CollectionListReference honored in package targeting on create_media_buy
@@ -2742,7 +2742,7 @@ Feature: BR-UC-002 Create Media Buy
     # committed_metrics references not in product available_metrics; this storyboard
     # tests the measurement_terms field specifically.
     # measurement_terms_rejected: seller refuses unworkable measurement_terms with structured error
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/pending_creatives_to_start.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/measurement_terms_rejected.yaml phase=reject_terms step=create_media_buy_aggressive_terms
 
   @T-UC-002-storyboard-pending-creatives-state-transition @schema-v3.1 @v3-1 @lifecycle @pending-creatives @pending-start
   Scenario: Media buy created without creatives sits in pending_creatives until sync_creatives completes, then transitions to pending_start

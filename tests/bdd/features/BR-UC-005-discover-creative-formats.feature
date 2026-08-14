@@ -1096,7 +1096,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # on_out_of_scope=warn). The seller MUST NOT fabricate a local format entry to
     # cover a third-party reference.
     # list_formats_integrity: third-party format_ids are unverifiable locally and out of scope for graded failure
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=list_formats
 
   @T-UC-005-storyboard-baseline-format-id-object-shape @storyboard-v3.1 @v3-1 @format-id-shape @baseline-conformance
   Scenario: Baseline list_creative_formats response carries format_id objects with agent_url and id

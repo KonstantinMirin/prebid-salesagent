@@ -1362,7 +1362,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # scenarios target single missing entries; this storyboard anchor asserts
     # the full lifecycle (discovery -> reporting contract -> emission).
     # measurement_accountability: required_metrics at discovery -> missing_metrics in delivery
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/vendor_metric_accountability.yaml
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/measurement_accountability.yaml phase=simulate_and_validate_accountability step=get_delivery_clean
 
   @T-UC-004-storyboard-vendor-metric-end-to-end @storyboard-v3.1 @v3-1 @vendor-metric @accountability
   Scenario: Vendor metric accountability -- declaration on product, filter at discovery, emission in delivery
@@ -1387,6 +1387,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     #      per (vendor.domain, vendor.brand_id, metric_id) per reporting period;
     #      seller MUST de-duplicate before emission.
     # vendor_metric_accountability: declaration -> filter -> emission contract
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/vendor_metric_accountability.yaml phase=simulate_and_validate_vendor_metrics step=get_delivery_with_vendor_metrics
 
   @T-UC-004-aggr-scope-standard @invariant @BR-RULE-220 @metric-aggregates
   Scenario: Standard-scope aggregate row draws metric_id from the closed enum
