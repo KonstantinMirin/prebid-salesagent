@@ -59,6 +59,35 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def _real_wire_error_envelope(ctx: dict) -> dict | None:
+    """Read ``TransportResult.wire_error_envelope`` — the ONE attribute-access site.
+
+    Every reader of this field, anywhere in ``tests/bdd/steps/``, must go
+    through this module (:func:`wire_error_envelope_or_none` or
+    :func:`wire_error_dict`) rather than hand-rolling
+    ``getattr(result, "wire_error_envelope", None)`` — enforced by
+    ``test_architecture_bdd_wire_discipline.py``'s access-pattern check.
+    """
+    result = ctx.get("result")
+    return getattr(result, "wire_error_envelope", None) if result is not None else None
+
+
+def wire_error_envelope_or_none(ctx: dict) -> dict | None:
+    """Return the REAL wire error envelope (REST/A2A/MCP) captured for this dispatch, or ``None``.
+
+    No loud guard, no IMPL-synthesized fallback — the strict counterpart to
+    :func:`wire_error_dict`. Use this when a caller must distinguish "a real
+    wire envelope was captured" from "only the IMPL-synthesized one exists"
+    before delegating to ``TransportResult.assert_wire_error``, which reads
+    ``wire_error_envelope`` specifically and raises its own (misleading)
+    error if handed a synthesized-only result (``then_error_recovery``'s
+    reason for using this instead of ``wire_error_dict``). Returns ``None``
+    on IMPL and on any scenario where no wire envelope was captured —
+    callers fall back to the reconstructed ``ctx['error']``.
+    """
+    return _real_wire_error_envelope(ctx)
+
+
 def wire_error_dict(ctx: dict) -> dict:
     """Return the full error-path wire envelope as the buyer sees it on the wire.
 
@@ -81,7 +110,7 @@ def wire_error_dict(ctx: dict) -> dict:
     ``wire_dict``'s IMPL fallback to the serialized typed payload.
     """
     result = ctx.get("result")
-    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    envelope = _real_wire_error_envelope(ctx)
     transport = ctx.get("transport")
     if envelope is None and transport not in (None, Transport.IMPL):
         raise AssertionError(f"{transport}: wire_error_envelope missing — env does not stash the wire error envelope")
