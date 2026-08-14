@@ -17,7 +17,6 @@ Usage (internal — called by BaseTestEnv.call_via)::
 
 from __future__ import annotations
 
-import copy
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -149,36 +148,18 @@ class RestDispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+        from tests.harness.client import unwrap_rest_response
+
         try:
             endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
             response = env._run_rest_request(endpoint, **kwargs)
-
-            envelope = {
-                "transport": "rest",
-                "status_code": response.status_code,
-                "content_type": response.headers.get("content-type", ""),
-            }
-
-            if response.status_code >= 400:
-                body = response.json()
-                error = env.parse_rest_error(response.status_code, body)
-                return TransportResult(
-                    error=error,
-                    envelope=envelope,
-                    raw_response=response,
-                    wire_error_envelope=body,
-                )
-
-            body = response.json()
-            # Parse a COPY: env parsers strip envelope keys in place (e.g.
-            # _parse_update_rest_response pops "status", #1417), which
-            # would silently delete fields from the stashed wire capture — the
-            # dispatcher owns the pristine-wire guarantee (#1417).
-            payload = env.parse_rest_response(copy.deepcopy(body))
-            # Real REST wire: the HTTP JSON body dict.
-            return TransportResult(payload=payload, envelope=envelope, raw_response=response, wire_response=body)
         except Exception as exc:
             return TransportResult(error=exc)
+        # unwrap_rest_response (salesagent-vuz9t.8.2) owns the status-code
+        # branching, envelope tag, and the #1417 pristine-wire deepcopy rule —
+        # the same function RestE2EDispatcher and the generic client's
+        # _unwrap_rest delegate to below.
+        return unwrap_rest_response(env, response, Transport.REST, env.parse_rest_response)
 
 
 class McpDispatcher:
@@ -248,20 +229,20 @@ class RestE2EDispatcher:
     implementation also used by ``AdCPTestClient.call(..., Transport.E2E_REST)``
     (salesagent-uz00, SB-3a; design doc §5).
 
-    UNWRAP (the status-code/envelope handling below) stays local to this
-    class: it preserves the exact ``"e2e_rest"`` envelope tag and the
-    graceful non-JSON-body fallback (#1420) that e2e_rest — the only e2e
-    transport running today — has always had as its regression baseline.
-    ``tests.harness.client._unwrap_rest`` does not (yet) replicate the
-    e2e-specific envelope tag for the E2E_REST family member, so reusing it
-    here would silently change behavior; not done.
+    UNWRAP (the status-code/envelope handling) delegates to
+    ``tests.harness.client.unwrap_rest_response`` (salesagent-vuz9t.8.2) —
+    the one REST unwrap shared with the in-process ``RestDispatcher`` and the
+    generic client's ``_unwrap_rest``. It derives the envelope tag from
+    ``Transport.E2E_REST.value`` (``"e2e_rest"``) and keeps the graceful
+    non-JSON-body fallback (#1420) that e2e_rest — the only e2e transport
+    running today — has always had as its regression baseline.
 
     Ported from feature/media-buy-refactoring (PR #1360 lineage).
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         from tests.harness.address_table import ToolAddress
-        from tests.harness.client import _deliver_e2e_rest
+        from tests.harness.client import _deliver_e2e_rest, unwrap_rest_response
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
         if not env.e2e_config:
@@ -279,63 +260,7 @@ class RestE2EDispatcher:
         address = ToolAddress(Transport.E2E_REST, name=endpoint, method=method)
 
         response = _deliver_e2e_rest(env, address, {"url": endpoint, "body": body}, identity)
-
-        envelope = {
-            "transport": "e2e_rest",
-            "status_code": response.status_code,
-            "content_type": response.headers.get("content-type", ""),
-        }
-
-        if response.status_code >= 400:
-            try:
-                body = response.json()
-            except Exception:
-                # Non-JSON error (e.g. 500 with empty body) — wrap as AdCPError so
-                # Then steps detect the error type and xfail spec-production gaps.
-                # No wire_error_envelope: there is no structured body to expose, and
-                # the INTERNAL_ERROR/5xx shape lets the "invalid" Then-step tell a
-                # server crash apart from a real validation rejection (#1420).
-                from src.core.exceptions import AdCPError
-
-                body_text = response.text or "(empty body)"
-                error = AdCPError(
-                    f"HTTP {response.status_code}: {body_text}",
-                    details={"status_code": response.status_code, "raw_body": body_text},
-                )
-                error.status_code = response.status_code
-                return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
-            # Structured JSON error: mirror the in-process RestDispatcher and expose
-            # the raw two-layer body as wire_error_envelope so error Then-steps assert
-            # on the buyer-visible envelope (e.g. uc004 _assert_wire_rejection, or
-            # assert_envelope_shape) instead of a lossy reconstructed exception. (#1420)
-            error = env.parse_rest_error(response.status_code, body)
-            return TransportResult(
-                payload=None,
-                envelope=envelope,
-                error=error,
-                wire_error_envelope=body,
-                raw_response=response,
-            )
-
-        try:
-            wire_response = response.json()
-            # Parse a COPY — same pristine-wire guarantee as the in-process
-            # RestDispatcher (parsers strip envelope keys in place, #1417).
-            payload = env.parse_rest_response(copy.deepcopy(wire_response))
-        except Exception as exc:
-            return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
-
-        # Real HTTP wire body — the e2e analogue of the in-process RestDispatcher's
-        # wire_response (parallel to wire_error_envelope on the error path), so
-        # success-path wire-shape steps grade the live server too instead of
-        # re-deriving from the typed payload (#rlgl.3).
-        return TransportResult(
-            payload=payload,
-            envelope=envelope,
-            error=None,
-            wire_response=wire_response,
-            raw_response=response,
-        )
+        return unwrap_rest_response(env, response, Transport.E2E_REST, env.parse_rest_response)
 
 
 class McpE2EDispatcher:

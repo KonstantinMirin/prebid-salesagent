@@ -53,6 +53,7 @@ Usage::
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -475,28 +476,102 @@ DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = 
 # RestDispatcher.
 
 
-def _unwrap_mcp_success(env: BaseTestEnv, raw: dict[str, Any]) -> TransportResult:
+def _unwrap_mcp_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport) -> TransportResult:
     # cast: TransportResult.payload is typed BaseModel | None — see the "typed
     # payload" docstring note on AdCPTestClient.call for why this client
     # deliberately puts a flat dict there instead (no per-tool response schema).
-    return TransportResult(payload=cast(Any, raw), envelope={"transport": "mcp"}, wire_response=env._last_wire_response)
+    # tag: transport.value, never a literal — Transport.MCP -> "mcp",
+    # Transport.E2E_MCP -> "e2e_mcp" (this function serves both, see
+    # UNWRAP_SUCCESS below), so an E2E dispatch is never mislabeled in-process.
+    return TransportResult(
+        payload=cast(Any, raw), envelope={"transport": transport.value}, wire_response=env._last_wire_response
+    )
 
 
-def _unwrap_a2a_success(env: BaseTestEnv, raw: dict[str, Any]) -> TransportResult:
-    return TransportResult(payload=cast(Any, raw), envelope={"transport": "a2a"}, wire_response=env._last_wire_response)
+def _unwrap_a2a_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport) -> TransportResult:
+    return TransportResult(
+        payload=cast(Any, raw), envelope={"transport": transport.value}, wire_response=env._last_wire_response
+    )
 
 
-def _unwrap_rest(env: BaseTestEnv, raw: Any) -> TransportResult:
-    envelope = {
-        "transport": "rest",
-        "status_code": raw.status_code,
-        "content_type": raw.headers.get("content-type", ""),
+def unwrap_rest_response(
+    env: BaseTestEnv,
+    raw_response: Any,
+    transport: Transport,
+    parse_response: Callable[[dict[str, Any]], Any],
+) -> TransportResult:
+    """The one REST UNWRAP — ``RestDispatcher``, ``RestE2EDispatcher``
+    (``tests/harness/dispatchers.py``) and the generic client's
+    ``_unwrap_rest`` (below) all delegate here instead of each re-parsing the
+    raw HTTP response (salesagent-vuz9t.8.2 — three REST unwraps collapsed
+    into one).
+
+    *transport* supplies the envelope ``"transport"`` tag via
+    ``transport.value`` — derived from the ``Transport`` enum, never a
+    hardcoded string literal, so ``Transport.REST`` and ``Transport.E2E_REST``
+    are tagged ``"rest"``/``"e2e_rest"`` respectively as read directly off the
+    transport that produced the result, not duplicated per call site.
+
+    *parse_response* controls how ``payload`` is derived from a **deep copy**
+    of the parsed wire body — the #1417 pristine-wire rule: env parsers like
+    ``_parse_update_rest_response`` mutate their input in place (e.g. popping
+    ``"status"``), so handing them the SAME dict backing ``wire_response``
+    would silently corrupt the stashed wire capture. Dispatchers pass
+    ``env.parse_rest_response`` to get a typed Pydantic model; the
+    transport-generic ``AdCPTestClient`` core passes the identity function to
+    keep the flat dict (no per-tool response schema — see the docstring note
+    on ``_dispatch_core``). Either way, ``payload`` and ``wire_response`` are
+    built from separate dict objects — they never alias.
+    """
+    envelope: dict[str, Any] = {
+        "transport": transport.value,
+        "status_code": raw_response.status_code,
+        "content_type": raw_response.headers.get("content-type", ""),
     }
-    body = raw.json()
-    if raw.status_code >= 400:
-        error = env.parse_rest_error(raw.status_code, body)
-        return TransportResult(error=error, envelope=envelope, raw_response=raw, wire_error_envelope=body)
-    return TransportResult(payload=body, envelope=envelope, raw_response=raw, wire_response=body)
+    if raw_response.status_code >= 400:
+        try:
+            body = raw_response.json()
+        except Exception:
+            # Non-JSON error body (e.g. a bare 500 with an empty body) — no
+            # structured envelope to expose; wrap as AdCPError so error
+            # Then-steps see a typed failure instead of a JSONDecodeError,
+            # matching the live-server e2e_rest baseline (#1420).
+            from src.core.exceptions import AdCPError
+
+            body_text = raw_response.text or "(empty body)"
+            non_json_error = AdCPError(
+                f"HTTP {raw_response.status_code}: {body_text}",
+                details={"status_code": raw_response.status_code, "raw_body": body_text},
+            )
+            non_json_error.status_code = raw_response.status_code
+            return TransportResult(envelope=envelope, error=non_json_error, raw_response=raw_response)
+        parsed_error = env.parse_rest_error(raw_response.status_code, body)
+        return TransportResult(
+            error=parsed_error, envelope=envelope, raw_response=raw_response, wire_error_envelope=body
+        )
+
+    try:
+        wire_response = raw_response.json()
+        # #1417 pristine-wire deepcopy rule — parse_response may mutate its
+        # input in place; hand it a COPY so wire_response keeps the untouched
+        # wire body.
+        payload = parse_response(copy.deepcopy(wire_response))
+    except Exception as exc:
+        # A success-status response whose body doesn't parse as JSON, or
+        # whose parse_response rejects it — surface as an error result with
+        # the envelope/raw_response still attached (mirrors the former
+        # RestE2EDispatcher behavior) rather than propagating a raw
+        # JSONDecodeError/ValidationError past the dispatch boundary.
+        return TransportResult(envelope=envelope, error=exc, raw_response=raw_response)
+    return TransportResult(payload=payload, envelope=envelope, raw_response=raw_response, wire_response=wire_response)
+
+
+def _unwrap_rest(env: BaseTestEnv, raw: Any, transport: Transport) -> TransportResult:
+    # No per-tool response schema in the generic client core (see the "typed
+    # payload" docstring note on _dispatch_core) — payload stays the flat
+    # wire dict, still deepcopy-isolated from wire_response by
+    # unwrap_rest_response above.
+    return unwrap_rest_response(env, raw, transport, lambda body: body)
 
 
 def _dispatch_core(
@@ -547,7 +622,7 @@ def _dispatch_core(
         raise
     except Exception as exc:
         return UNWRAP_ERROR[transport](exc)
-    return UNWRAP_SUCCESS[transport](env, raw)
+    return UNWRAP_SUCCESS[transport](env, raw, transport)
 
 
 class AdCPTestClient:
@@ -628,7 +703,7 @@ def _rest_error_to_result(exc: Exception) -> TransportResult:
     return TransportResult(error=exc)
 
 
-UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any], TransportResult]] = {
+UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport], TransportResult]] = {
     Transport.MCP: _unwrap_mcp_success,
     Transport.E2E_MCP: _unwrap_mcp_success,
     Transport.A2A: _unwrap_a2a_success,

@@ -21,7 +21,7 @@ import pytest
 
 from tests.harness._base import BaseTestEnv
 from tests.harness.address_table import NoAddressForTransport, ToolAddress
-from tests.harness.client import AdCPTestClient, _wrap_rest
+from tests.harness.client import AdCPTestClient, _wrap_rest, unwrap_rest_response
 from tests.harness.transport import Transport
 
 
@@ -190,6 +190,71 @@ class TestClientRestDispatchNoDb:
 
         assert result == "fake-response"
         assert calls == [{"url": "/api/v1/capabilities"}]  # no `json` key — the TypeError this test guards against
+
+
+class TestUnwrapRestResponse:
+    """``unwrap_rest_response`` (salesagent-vuz9t.8.2) — the one REST unwrap
+    shared by ``RestDispatcher``, ``RestE2EDispatcher``
+    (``tests/harness/dispatchers.py``) and the generic client's
+    ``_unwrap_rest``. Before this consolidation, the generic client core's
+    REST unwrap aliased ``payload`` and ``wire_response`` to the SAME dict
+    object, dropping the #1417 pristine-wire deepcopy rule."""
+
+    class _FakeRestResponse:
+        def __init__(self, status_code: int, body: dict) -> None:
+            self.status_code = status_code
+            self.headers = {"content-type": "application/json"}
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    def test_payload_and_wire_response_do_not_alias(self):
+        raw = self._FakeRestResponse(200, {"products": [{"product_id": "prod_001"}]})
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv() as env:
+            result = unwrap_rest_response(env, raw, Transport.REST, lambda body: body)
+
+        assert result.payload is not result.wire_response
+        result.payload["products"].append({"product_id": "injected"})
+        assert result.wire_response["products"] == [{"product_id": "prod_001"}]
+
+    def test_tag_derived_from_transport_enum_not_a_literal(self):
+        raw = self._FakeRestResponse(200, {})
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv() as env:
+            rest_result = unwrap_rest_response(env, raw, Transport.REST, lambda body: body)
+            e2e_result = unwrap_rest_response(env, raw, Transport.E2E_REST, lambda body: body)
+
+        assert rest_result.envelope["transport"] == "rest"
+        assert e2e_result.envelope["transport"] == "e2e_rest"
+
+    def test_typed_parse_policy_gets_its_own_deepcopy(self):
+        """Dispatchers pass env.parse_rest_response (a typed parser) as
+        parse_policy — it must receive a deep copy too, not the dict backing
+        wire_response, so an in-place-mutating parser (e.g.
+        _parse_update_rest_response popping "status", #1417) never corrupts
+        the stashed wire capture."""
+        raw = self._FakeRestResponse(200, {"status": "accepted", "media_buy_id": "mb_1"})
+
+        def _mutating_parser(data: dict) -> dict:
+            data.pop("status", None)
+            return data
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        with _UnitEnv() as env:
+            result = unwrap_rest_response(env, raw, Transport.REST, _mutating_parser)
+
+        assert result.payload == {"media_buy_id": "mb_1"}
+        assert result.wire_response == {"status": "accepted", "media_buy_id": "mb_1"}
 
 
 class TestClientE2eRestDelivery:
@@ -412,7 +477,11 @@ class TestClientE2eMcpDelivery:
         result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_MCP, identity=None)
 
         assert result.is_success, result.error
-        assert result.envelope["transport"] == "mcp"
+        # Tag derived from Transport.E2E_MCP.value ("e2e_mcp") — before
+        # salesagent-vuz9t.8.2 this incorrectly pinned the in-process "mcp"
+        # tag on an E2E dispatch (client.py's _unwrap_mcp_success is shared
+        # by both Transport.MCP and Transport.E2E_MCP).
+        assert result.envelope["transport"] == "e2e_mcp"
         assert result.wire_response == {"products": [{"product_id": "prod_e2e"}]}
 
         fake_client = self._FakeMcpClient.instances[0]
