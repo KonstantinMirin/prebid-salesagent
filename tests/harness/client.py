@@ -398,8 +398,20 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     ``_envelope_to_adcp_error``, same helper the in-process path uses),
     SUBMITTED synthesizes the manual-approval wire, otherwise the first
     artifact's ``data`` Part is the success payload.
+
+    Sends the ``A2A-Version`` header the real JSON-RPC route requires
+    (``a2a.server.routes.jsonrpc_dispatcher``'s ``@validate_version(PROTOCOL_VERSION_1_0)``
+    decorator on ``on_message_send`` / ``on_message_send_stream``) — omitting it
+    makes the SDK's own ``validate_version`` default to the legacy '0.3' and
+    reject the request with a ``VersionNotSupportedError`` before it ever
+    reaches ``AdCPRequestHandler``. The in-process ``_run_a2a_handler`` path
+    (``tests/harness/_base.py``) never needed this: it calls
+    ``AdCPRequestHandler().on_message_send()`` directly, bypassing the
+    route-level decorator entirely — a divergence invisible until this
+    function got its first live caller (salesagent-vuz9t.18).
     """
     import httpx
+    from a2a.utils import constants as a2a_constants
 
     from tests.harness._base import _envelope_to_adcp_error
 
@@ -408,7 +420,11 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 
     resolved_identity = env.identity_for(Transport.E2E_A2A) if identity is NO_IDENTITY_OVERRIDE else identity
 
-    headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
+    headers = {
+        "Content-Type": "application/json",
+        a2a_constants.VERSION_HEADER: a2a_constants.PROTOCOL_VERSION_CURRENT,
+        **e2e_identity_headers(resolved_identity),
+    }
     rpc_body = _build_a2a_jsonrpc_body(address.name, wrapped)
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as http_client:
