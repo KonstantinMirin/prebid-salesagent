@@ -111,6 +111,7 @@ from tests.helpers.signing import (
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
     bucketed_declaration,
+    counter_samples,
     counter_total,
     request_headers,
     seed_principal,
@@ -283,6 +284,33 @@ def _assert_verifier_looked() -> Iterator[None]:
         f"adcp_request_unsigned_total did not move ({before} -> {after}). A 2xx with no rejection is "
         "equally true of a middleware that returned early — disabled verifier, 'none' bucket, or 'warn' "
         "posture — so this control proves nothing without the counter."
+    )
+
+
+@contextmanager
+def _assert_no_operation_was_named() -> Iterator[None]:
+    """The resolver did not NAME this request as an AdCP operation.
+
+    The inverse discriminator, for the sites where "the verifier declined to treat
+    this as an operation" IS the behaviour under test — a session frame, or a
+    posture declaring no support. A bare absence-of-rejection cannot distinguish
+    that from "engaged and allowed" (salesagent-z6nr.40).
+
+    Asserts on the operation LABEL rather than the raw count, and the difference
+    matters: measured, a bodiless MCP GET does increment
+    ``adcp_request_unsigned_total`` — twice, once per middleware pass — but always
+    with ``operation=""``. The empty label is the resolver correctly refusing to
+    name it. So the honest claim is "no NAMED operation was recorded", which is
+    exactly what the surrounding test asserts in prose; a count-based assertion
+    would fail on metric noise that is not a naming failure.
+    """
+    before = {k for k, v in counter_samples("adcp_request_unsigned_total").items() if v}
+    yield
+    after = {k for k, v in counter_samples("adcp_request_unsigned_total").items() if v}
+    named = [dict(k).get("operation") for k in after - before if dict(k).get("operation")]
+    assert not named, (
+        f"the resolver named this request as AdCP operation(s) {named} and recorded an unsigned verdict "
+        "for it — but it is a session frame, not an operation, so nothing should have been named"
     )
 
 
@@ -610,7 +638,12 @@ class TestSessionFramesAreNotUnresolvable:
             client = _client(env)
 
             with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
-                response = client.get(_MCP_PATH, headers=request_headers(None))
+                # The counter window wraps ONLY the request under test. Entering it
+                # alongside _declared_posture measured that context manager's own
+                # traffic too, which is a second request through the same middleware
+                # and made the delta 2 rather than 0.
+                with _assert_no_operation_was_named():
+                    response = client.get(_MCP_PATH, headers=request_headers(None))
 
             _assert_not_rejected(
                 response,
