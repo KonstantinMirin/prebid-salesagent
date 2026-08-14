@@ -163,7 +163,17 @@ def test_divergence_dict_names_only_storyboards_that_require_the_controller():
 
 
 def test_every_controller_storyboard_in_the_pinned_index_is_covered():
-    """Derivation covers the whole set, including what the dict never named."""
+    """Derivation covers the whole set, including what the dict never named.
+
+    Grades the REAL per-storyboard ``required_tools`` recorded in the vendored
+    index, not a hardcoded ``[CONTROLLER]`` list fed to every stem — that
+    older shape made ``requires_controller`` true by construction for every
+    stem under test, so ``return True`` in production would have passed here
+    too. Building each stem's synthetic text from its own indexed tools means
+    the ~90 storyboards that do NOT require the controller must derive
+    ``False``, which a blanket ``return True`` fails.
+    """
+    index = json.loads(INDEX.read_text(encoding="utf-8"))
     requiring = _index_stems_requiring_controller()
 
     assert ON_PATH_UNMARKED <= requiring, "the ticket's four on-path storyboards must require the controller"
@@ -171,14 +181,15 @@ def test_every_controller_storyboard_in_the_pinned_index_is_covered():
     # cannot be the source of the status.
     assert set(storyboard_roadmap._COMPLY_TEST_CONTROLLER_DIVERGENCE) < requiring
 
-    uncovered = {
-        stem
-        for stem in requiring
-        if not storyboard_roadmap.build_row_status_fields(stem=stem, text=_storyboard_text([CONTROLLER]))[
-            "requires_controller"
-        ]
-    }
-    assert uncovered == set()
+    mismatched = []
+    for rel, entry in index["storyboards"].items():
+        stem = storyboard_spec.storyboard_key(rel)
+        real_tools = entry.get("required_tools") or []
+        row = storyboard_roadmap.build_row_status_fields(stem=stem, text=_storyboard_text(real_tools))
+        expected = CONTROLLER in real_tools
+        if row["requires_controller"] != expected:
+            mismatched.append((rel, stem, row["requires_controller"], expected))
+    assert mismatched == []
 
 
 @requires_clone
