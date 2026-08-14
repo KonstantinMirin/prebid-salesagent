@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -3074,6 +3075,92 @@ def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal:
 _UC_TAG_RE = re.compile(r"^T-UC-(\d{3})(?:-|$)")
 
 
+@dataclass(frozen=True)
+class EnvRoute:
+    """One row of the declarative BDD env-routing registry.
+
+    ``env_builder`` constructs the harness env (a ``BaseTestEnv`` context
+    manager, not yet entered); ``seed`` — given the entered ``env`` — stashes
+    ``ctx["env"]`` plus whatever tenant/principal/client/existing-data a
+    scenario's steps need. ``xfail_reason``, when set, means this row is a
+    placeholder: the generic consumer xfails immediately instead of building
+    anything, so a UC can be registered ahead of a harness existing for it.
+
+    The registry exists so authoring a new routing case is adding a row —
+    there is no field for hand-rolling seeding or skipping DB scoping.
+    """
+
+    tag: str
+    env_builder: Callable[[object | None], AbstractContextManager]
+    seed: Callable[[dict, object], None] | None = None
+    xfail_reason: str | None = None
+
+
+def _seed_uc003_storyboard_generic_client(ctx: dict, env: object) -> None:
+    """Seed ctx for the UC-003 storyboard-media-buy-not-found scenario.
+
+    SB-4a demonstrator (salesagent-35to): dispatches through the transport-
+    generic ``AdCPTestClient`` (``tests/harness/client.py``) instead of
+    ``MediaBuyDualEnv``/``dispatch_request`` — see
+    ``tests/bdd/steps/domain/uc003_storyboard_generic_client.py``. Background
+    still seeds "mb_existing" (BR-UC-003-update-media-buy.feature:24-28 runs
+    for this scenario too), so seeding reuses ``_setup_existing_media_buy``
+    (the same named helper the ext-/targeting-overlay branch uses) instead of
+    a hand-rolled ``MediaBuyFactory``/``_commit_factory_data`` block —
+    ``given_buyer_owns_media_buy_by_id`` registers whatever real id the
+    factory generates under the Gherkin "mb_existing" label, so the literal
+    id is not required. ``BareIntegrationEnv`` has no product dependency
+    chain, so a minimal ``Product`` row is created here purely to satisfy
+    ``_setup_existing_media_buy``'s package_config.product_id.
+    """
+    from tests.factories import ProductFactory
+    from tests.harness.client import AdCPTestClient
+
+    tenant, principal = env.setup_default_data()
+    product = ProductFactory(tenant=tenant)
+    ctx["client"] = AdCPTestClient(env)
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    _setup_existing_media_buy(ctx, env, tenant, principal, product)
+
+
+def _build_uc003_storyboard_generic_client_env(e2e_config: object | None) -> AbstractContextManager:
+    from tests.harness._base import BareIntegrationEnv
+
+    return BareIntegrationEnv(e2e_config=e2e_config)
+
+
+ENV_ROUTES: dict[str, EnvRoute] = {
+    "T-UC-003-storyboard-media-buy-not-found": EnvRoute(
+        tag="T-UC-003-storyboard-media-buy-not-found",
+        env_builder=_build_uc003_storyboard_generic_client_env,
+        seed=_seed_uc003_storyboard_generic_client,
+    ),
+}
+
+
+def _run_env_route(
+    request: pytest.FixtureRequest, ctx: dict, route: EnvRoute, e2e_config: object | None
+) -> Generator[None, None, None]:
+    """The one generic ``ENV_ROUTES`` consumer.
+
+    Enters ``_db_scope_for`` — the structural DB-scoping entry point — before
+    the row's ``env_builder`` runs, so on the e2e_rest parametrization
+    production's cached engine is pointed at the live server DB (not an empty
+    per-test DB) before any factory writes happen. Stashes the entered env on
+    ``ctx["env"]``, runs the row's ``seed`` callback if present, then yields
+    control to the scenario. A row with ``xfail_reason`` set never builds an
+    env at all.
+    """
+    if route.xfail_reason is not None:
+        pytest.xfail(route.xfail_reason)
+    with _db_scope_for(request, e2e_config), route.env_builder(e2e_config) as env:
+        ctx["env"] = env
+        if route.seed is not None:
+            route.seed(ctx, env)
+        yield
+
+
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags.
 
@@ -3383,31 +3470,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["existing_media_buy"] = existing_media_buy
                 yield
         elif marker_names & _UC003_STORYBOARD_GENERIC_CLIENT:
-            # SB-4a demonstrator: BareIntegrationEnv (no external patches) +
-            # AdCPTestClient, NOT MediaBuyDualEnv. Background still seeds
-            # "mb_existing" so this mirrors _UC003_MANUAL_APPROVAL's shape;
+            # SB-4a demonstrator: EnvRoute registry row (BareIntegrationEnv, no
+            # external patches, + AdCPTestClient, NOT MediaBuyDualEnv).
             # dispatch goes through ctx["client"] via dispatch_via_client
-            # instead of ctx["env"].call_via via dispatch_request.
-            request.getfixturevalue("integration_db")
-            from tests.factories import MediaBuyFactory
-            from tests.harness._base import BareIntegrationEnv
-            from tests.harness.client import AdCPTestClient
-
-            with BareIntegrationEnv(e2e_config=e2e_config) as env:
-                tenant, principal = env.setup_default_data()
-                existing_media_buy = MediaBuyFactory(
-                    tenant=tenant,
-                    principal=principal,
-                    media_buy_id="mb_existing",
-                    status="active",
-                )
-                env._commit_factory_data()
-                ctx["env"] = env
-                ctx["client"] = AdCPTestClient(env)
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["existing_media_buy"] = existing_media_buy
-                yield
+            # instead of ctx["env"].call_via via dispatch_request. Routed
+            # through the one generic ENV_ROUTES consumer, which enters
+            # _db_scope_for before building the env (fixes the wrong-DB
+            # defect: over e2e_rest, a direct integration_db fixture call
+            # here repointed production's cached engine at an empty per-test
+            # DB while this env's factory rows landed in the live server DB).
+            yield from _run_env_route(request, ctx, ENV_ROUTES["T-UC-003-storyboard-media-buy-not-found"], e2e_config)
         else:
             pytest.xfail(
                 "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
