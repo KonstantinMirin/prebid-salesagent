@@ -144,6 +144,9 @@ Feature: BR-UC-011 Manage Accounts
     # @bva authentication (account operations): valid token on sync
     # @bva accounts (sync operation): 1 account (minimum)
     # @bva accounts (sync operation): all same action
+    # @bva brand (brand-ref): single_brand_domain -- brand with domain only (single brand)
+    # POST-S5: Buyer knows the seller-assigned account_id
+    # POST-S6: Buyer knows the action taken per account
 
   @T-UC-011-sync-schema-valid @sync @schema @v3-1 @envelope
   Scenario: A sync_accounts response validates against its pinned AdCP schema
@@ -157,9 +160,6 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com   | operator |
     Then the response should be schema-valid against sync-accounts-response.json
     And the response envelope carries status completed
-    # @bva brand (brand-ref): single_brand_domain -- brand with domain only (single brand)
-    # POST-S5: Buyer knows the seller-assigned account_id
-    # POST-S6: Buyer knows the action taken per account
 
   @T-UC-011-sync-multi-brand @sync @brand-identity @partition @boundary
   Scenario: Sync multi_brand_domain with brand_id and operator (brand with domain + brand_id)

@@ -43,12 +43,23 @@ response).
 
 **Why steps live here (not in steps/domain/ + pytest_plugins):** pytest-bdd 8
 resolves step definitions only from the scenario's own module, conftest, or
-registered plugins — importing them does not register them. The generic
-``schema-valid against <file>`` and ``authenticated as principal`` phrasings are
-shared by other, already-wired feature files (UC-004/005/006); registering them
-globally would alter those suites. Defining the steps inline scopes them to this
-one scenario, keeping the blast radius to UC-018. The reusable, non-step schema
-validator lives in ``tests.helpers.pinned_schema``.
+registered plugins — importing them does not register them. So a step defined
+here is reachable only from this module's scenarios.
+
+Note what that is NOT a licence for. The generic ``schema-valid against <file>``
+and ``authenticated as principal`` phrasings are owned by
+``tests/bdd/steps/generic/``. Re-registering either sentence here would not
+"keep the blast radius small" — it would give one Gherkin sentence two meanings,
+with the local, usually weaker, definition silently winning for this file while
+every other suite kept the generic one. That is the defect
+``test_architecture_bdd_no_shadowed_steps.py`` now fails on, and it is exactly
+how UC-005 ended up grading ``isinstance(formats, list)`` under a sentence that
+promises full pinned-schema validation.
+
+A step belongs inline only when its SENTENCE is specific to this scenario. When
+the behaviour is genuinely UC-018-specific, give it its own wording rather than
+narrowing a shared one. The reusable, non-step schema validator lives in
+``tests.helpers.pinned_schema``.
 
 The "synced" creatives are seeded via ``CreativeFactory`` rather than a live
 ``sync_creatives`` call: ``CreativeListEnv`` mocks only the audit logger (it has

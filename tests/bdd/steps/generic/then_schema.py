@@ -39,20 +39,25 @@ def then_response_schema_valid(ctx: dict, schema_file: str) -> None:
     validate_against_pinned_schema(schema_file, wire_dict(ctx))
 
 
-@then("the response envelope carries status completed")
-def then_envelope_status_completed(ctx: dict) -> None:
+@then(parsers.parse("the response envelope carries status {expected_status}"))
+def then_envelope_status(ctx: dict, expected_status: str) -> None:
     """Assert the protocol envelope's spec-required ``status`` is on the response.
 
     Scoped to the envelope rather than full-document validity on purpose: this is
     the obligation GH #1900 owns, and it is gradeable on any response whose schema
     composes core/protocol-envelope.json, independently of whether that response's
     domain body is complete.
+
+    Parameterized on the status rather than hard-coding ``completed``: an exact-text
+    step means the next scenario that needs a different terminal status has to invent
+    a second sentence for the same obligation, which is how one obligation ends up
+    with several phrasings and only one of them graded.
     """
     document = wire_dict(ctx)
     assert "status" in document, (
         f"AdCP 3.1.1 core/protocol-envelope.json marks 'status' REQUIRED on every task "
         f"response envelope, but the response carries only {sorted(document)}"
     )
-    assert document["status"] == "completed", (
-        f"a synchronously-completed task must report status 'completed', got {document['status']!r}"
+    assert document["status"] == expected_status, (
+        f"expected the envelope to report status {expected_status!r}, got {document['status']!r}"
     )

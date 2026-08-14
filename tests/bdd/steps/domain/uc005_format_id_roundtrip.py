@@ -98,17 +98,12 @@ def _assert_formats_non_empty(ctx: dict, failure_message: str) -> list[dict]:
     return formats
 
 
-@then("the response should be schema-valid against list-creative-formats-response.json")
-def then_response_schema_valid(ctx: dict) -> None:
-    """Assert the serialized wire response carries a formats list.
-
-    Asserts the actual wire payload (``ctx["wire_response"]`` on a2a/mcp/rest, or
-    the production-serialized payload on IMPL) via ``_serialized_formats`` — not
-    the typed ``ListCreativeFormatsResponse``, whose fields are already coerced
-    to their declared types and so cannot observe a serialization regression.
-    """
-    formats = _serialized_formats(ctx)
-    assert isinstance(formats, list), f"Expected formats to be a list, got {type(formats).__name__!r}"
+# "the response should be schema-valid against {schema_file}" is owned by the generic
+# parser in tests/bdd/steps/generic/then_schema.py, which runs FULL pinned-schema
+# validation. This module used to register an exact-text step for that same sentence
+# whose entire body was `assert isinstance(formats, list)` — one sentence with two
+# meanings, and the weaker meaning won for every UC-005 scenario. Deleted rather than
+# renamed: the generic step is what the sentence has always claimed to do.
 
 
 @then("the formats array should contain at least one entry")
