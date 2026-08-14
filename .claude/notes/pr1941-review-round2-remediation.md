@@ -616,3 +616,23 @@ the resolver substituted `approved_at`/`created_at`, hiding it.
 
 **Invariant this establishes:** a closed vocabulary is enforced where values enter the system; a
 reader that has to guess is a boundary that was never enforced.
+
+### A4 — Owner ruling (2026-08-14): §3.10's kept assertion is deleted, not kept
+
+**Raised by:** L10's solution-review gate. §3.10 directs *"KEEP `assert not
+is_approval_running(...)` after the join — now a deterministic registry-hygiene check rather than a
+race."* That justification is false, and the plan could not have known why.
+
+`is_approval_running` → `ThreadRegistry.contains` (`thread_registry.py:65-70`) calls `_reap_locked`
+(`:102-108`) **first**, dropping every entry whose thread is not alive, and only then tests
+membership. After a successful join the thread is provably dead, so any surviving entry is reaped by
+that very call and the assertion returns False on every path — including the path where no thread was
+ever found. It cannot fail.
+
+**Ruling.** Delete the line. An assertion that cannot fail is precisely the defect class this lane
+exists to remove, so the plan bullet and the lane's Core Invariant cannot both be honoured. Registry
+membership stays graded where it *can* fail: `test_approval_thread_tracks_in_registry` asserts it
+TRUE while the worker is blocked on an Event. The deletion removes no coverage.
+
+**Invariant this establishes:** an assertion that cannot fail is not hygiene, it is decoration —
+grade a property where it can be violated, or do not claim to grade it.
