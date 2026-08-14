@@ -262,6 +262,8 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
 @when("the Buyer Agent syncs the creative via the REST/A2A endpoint")
 @when("the Buyer Agent syncs the creative via the MCP tool")
 @when("the Buyer Agent sends a sync_creatives request")
+@when("the Buyer Agent sends sync_creatives")
+@when("the Buyer Agent sends sync_creatives with the corrected manifest")
 def when_sync_creative(ctx: dict) -> None:
     """Send sync_creatives request with account reference through transport dispatch.
 
@@ -2730,6 +2732,7 @@ def given_creative_with_provenance(ctx: dict) -> None:
 @given("a creative without provenance metadata")
 @given("a creative with a known format_id but no provenance metadata")
 @given("a creative with no provenance metadata")
+@given("the Buyer Agent submits a creative whose manifest carries no provenance object at all")
 def given_creative_without_provenance(ctx: dict) -> None:
     """Set up a creative that has no provenance metadata."""
     _build_creative_payload(ctx, provenance=None)
