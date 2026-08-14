@@ -568,11 +568,12 @@ class TestProtocolMethodNamespace:
             client = _client(env)
 
             with _declared_posture(**_requires_protocol_methods("tasks/cancel")):
-                response = client.post(
-                    _MCP_PATH,
-                    content=_mcp_tool_call("tasks/cancel"),
-                    headers=_json_headers(None),
-                )
+                with _assert_verifier_looked():
+                    response = client.post(
+                        _MCP_PATH,
+                        content=_mcp_tool_call("tasks/cancel"),
+                        headers=_json_headers(None),
+                    )
 
             _assert_not_rejected(
                 response,
@@ -843,7 +844,7 @@ class TestWebhookAuthenticationForcesASignature:
             token = seed_principal(env)
             client = _client(env)
 
-            with _declared_posture(supported=False):
+            with _declared_posture(supported=False), _assert_verifier_looked():
                 response = client.put(
                     _UPDATE_MEDIA_BUY_PATH,
                     content=self._webhook_body(with_authentication=True),
