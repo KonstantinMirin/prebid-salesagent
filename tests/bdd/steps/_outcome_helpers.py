@@ -59,6 +59,42 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def wire_error_dict(ctx: dict) -> dict:
+    """Return the full error-path wire envelope as the buyer sees it on the wire.
+
+    The error-path analogue of :func:`wire_dict` — the single guarded accessor
+    for ``TransportResult.wire_error_envelope``, which its own docstring names
+    "the canonical field for error verification" (``tests/CLAUDE.md`` § Error
+    Verification Policy) and whose ``assert_wire_error`` calls "the single
+    harness-provided way to verify an error on the wire — step definitions
+    must not hand-roll envelope parsing." Callers that only need to read a
+    field off the envelope (e.g. ``context.correlation_id`` echo checks) call
+    this directly; callers verifying the error SHAPE should prefer
+    ``result.assert_wire_error(...)``, the single shape authority.
+
+    Shares the same loud guard as ``wire_dict``: a real-wire transport
+    (REST/A2A/MCP) that captured no error envelope raises instead of silently
+    asserting nothing — that combination is a test bug (the operation should
+    have failed through the wire), not a legitimate no-wire case. IMPL has no
+    wire — falls back to ``synthesized_error_envelope`` (what the boundary
+    translator WOULD emit against the caught error), consistent with
+    ``wire_dict``'s IMPL fallback to the serialized typed payload.
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    transport = ctx.get("transport")
+    if envelope is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_error_envelope missing — env does not stash the wire error envelope")
+    if envelope is not None:
+        return envelope
+    synthesized = getattr(result, "synthesized_error_envelope", None) if result is not None else None
+    assert synthesized is not None, (
+        f"No wire_error_envelope or synthesized_error_envelope available (result={result!r}) — "
+        "expected an error dispatch"
+    )
+    return synthesized
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 

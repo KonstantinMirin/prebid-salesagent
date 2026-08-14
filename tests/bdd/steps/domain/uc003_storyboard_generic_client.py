@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from pytest_bdd import given, then, when
 
+from tests.bdd.steps._outcome_helpers import wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_via_client
 from tests.bdd.steps.generic.then_error import then_error_recovery
 
@@ -57,9 +58,7 @@ def then_response_echoes_correlation_id_unchanged(ctx: dict) -> None:
     a scenario-specific one, so this step is reusable by any sibling scenario
     that generates and stashes a correlation_id the same way.
     """
-    result = ctx.get("result")
-    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
-    assert envelope is not None, f"Expected a wire error envelope to check context echo, got result={result!r}"
+    envelope = wire_error_dict(ctx)
     expected = ctx.get("correlation_id")
     assert expected is not None, "No correlation_id stashed on ctx — the When step must generate and stash one"
     actual = (envelope.get("context") or {}).get("correlation_id")
@@ -68,19 +67,28 @@ def then_response_echoes_correlation_id_unchanged(ctx: dict) -> None:
 
 @then("the response should NOT be a 500 or non-AdCP error shape")
 def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
-    """Assert the two-layer AdCP envelope shape unconditionally, and non-500 where a status exists.
+    """Assert the two-layer AdCP envelope shape via the single shape authority, and non-500 where a status exists.
 
-    The two-layer adcp_error/errors keys are asserted on every transport (a
-    real check everywhere, not a conditional no-op). The status_code != 500
-    check is additionally gated to transports whose envelope carries one
-    (REST/e2e_rest) — MCP/A2A's error-to-result builders never populate
-    result.envelope with a status_code, so there is nothing to compare there.
+    ``result.assert_wire_error`` is the harness's single shape authority for
+    verifying an error on the wire (see its docstring) — delegating to it here
+    (rather than re-implementing its checks inline) means a spec change to the
+    envelope shape only needs updating in one place. This step has no expected
+    code of its own (it is reused across scenarios with different codes), so
+    it reads the code the envelope itself reports and asserts against THAT —
+    which still exercises the real checks ``assert_wire_error`` performs: the
+    two-layer invariant (``adcp_error.code == errors[0].code``), that the code
+    is canonical (pinned ``error-code.json``), and that recovery matches the
+    pinned classification. A real check on every transport, not a conditional
+    no-op. The status_code != 500 check is additionally gated to transports
+    whose envelope carries one (REST/e2e_rest) — MCP/A2A's error-to-result
+    builders never populate result.envelope with a status_code, so there is
+    nothing to compare there.
     """
     result = ctx.get("result")
-    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
-    assert envelope is not None, f"Expected a wire error envelope, got result={result!r}"
-    assert "adcp_error" in envelope, f"missing envelope-level adcp_error: {envelope}"
-    assert envelope.get("errors"), f"missing payload-level errors[]: {envelope}"
+    envelope = wire_error_dict(ctx)
+    code = (envelope.get("adcp_error") or {}).get("code")
+    assert code, f"Expected a non-empty adcp_error.code in the wire envelope, got {envelope}"
+    result.assert_wire_error(code)
 
     transport_envelope = getattr(result, "envelope", None) or {}
     status_code = transport_envelope.get("status_code")
