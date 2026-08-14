@@ -11,6 +11,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from adcp.types import ContextObject
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
@@ -31,6 +32,7 @@ async def list_tasks(
     object_id: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    context: ContextObject | None = None,
     ctx: Context | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
@@ -42,6 +44,10 @@ async def list_tasks(
         object_id: Filter by specific object ID
         limit: Maximum number of tasks to return (default: 20)
         offset: Number of tasks to skip (default: 0)
+        context: Application-level context object (optional). Per AdCP 3.1.1's
+            normative echo contract (docs/building/by-layer/L2/context-sessions.mdx),
+            this is opaque -- never parsed or acted on -- but MUST be echoed
+            byte-for-byte in the response when the caller supplies it.
         ctx: MCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -51,9 +57,9 @@ async def list_tasks(
     if identity is None and ctx is not None:
         identity = await ctx.get_state("identity")
 
-    identity = require_identity(identity)
-    tenant = require_tenant(identity)
-    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
+    identity = require_identity(identity, context=context)
+    tenant = require_tenant(identity, context=context)
+    require_principal_id(identity, context=context)  # F-03: an authenticated (non-anonymous) principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -118,6 +124,9 @@ async def list_tasks(
             "offset": offset,
             "limit": limit,
             "has_more": offset + limit < total if total is not None else False,
+            # Echoed verbatim per the AdCP 3.1.1 normative echo contract -- never
+            # fabricated when the caller omitted it (rule 4, "No synthesis").
+            "context": context.model_dump(mode="json") if context is not None else None,
         }
 
 

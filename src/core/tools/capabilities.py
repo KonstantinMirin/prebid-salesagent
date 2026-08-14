@@ -9,7 +9,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from datetime import UTC, datetime
 
-from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
@@ -80,12 +80,21 @@ def _get_adcp_capabilities_impl(
     Returns the capabilities of this sales agent per AdCP spec.
 
     Args:
-        req: GetAdcpCapabilitiesRequest (optional, currently unused)
+        req: GetAdcpCapabilitiesRequest, carrying (among other fields) the
+            caller's opaque ``context`` object, which AdCP 3.1.1's normative
+            echo contract (docs/building/by-layer/L2/context-sessions.mdx)
+            requires be echoed byte-for-byte on every response path.
         identity: Resolved identity from transport boundary
 
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
+    # Computed once -- req is Optional only because ~20 unit tests call this
+    # _impl directly with req=None; both production wrappers always build a
+    # real req. Every response-construction / error-echo site below reuses
+    # this instead of repeating the `req.context if req else None` ternary.
+    request_context = req.context if req else None
+
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
@@ -99,10 +108,11 @@ def _get_adcp_capabilities_impl(
             ),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            context=request_context,
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
-    identity = require_identity(identity, context=req.context if req else None)
+    identity = require_identity(identity, context=request_context)
 
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")
@@ -273,6 +283,7 @@ def _get_adcp_capabilities_impl(
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
+        context=request_context,
     )
 
     return response
@@ -280,6 +291,7 @@ def _get_adcp_capabilities_impl(
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -288,6 +300,9 @@ async def get_adcp_capabilities(
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
+        context: Application-level context object (optional). Opaque per AdCP
+            3.1.1's normative echo contract -- never parsed, always echoed
+            byte-for-byte in the response when supplied.
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -295,8 +310,7 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object (currently minimal)
-    req = GetAdcpCapabilitiesRequest()
+    req = GetAdcpCapabilitiesRequest(context=context)
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -323,6 +337,7 @@ async def get_adcp_capabilities(
 
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetAdcpCapabilitiesResponse:
@@ -332,6 +347,9 @@ async def get_adcp_capabilities_raw(
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
+        context: Application-level context object (optional), echoed
+            byte-for-byte in the response per AdCP 3.1.1's normative echo
+            contract.
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -342,5 +360,5 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest()
+    req = GetAdcpCapabilitiesRequest(context=context)
     return _get_adcp_capabilities_impl(req, identity)

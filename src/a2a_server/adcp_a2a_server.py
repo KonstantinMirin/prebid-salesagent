@@ -1846,9 +1846,20 @@ class AdCPRequestHandler(RequestHandler):
         # Import and call the core implementation
         from src.core.tools.capabilities import get_adcp_capabilities_raw
 
+        # Caller's context is opaque correlation data (AdCP 3.1.1 normative
+        # echo contract) -- construct the typed model so it round-trips
+        # through the response unchanged, matching the sync_creatives
+        # conversion above. Same context= boundary discipline (#1417): a
+        # malformed context object surfaces as a suggestion-bearing envelope,
+        # not a raw pydantic ValidationError.
+        with adcp_validation_boundary(context="get_adcp_capabilities request"):
+            ctx_param = parameters.get("context")
+            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
+
         # Call core function with identity
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
+            context=context,
             identity=identity,
         )
 
