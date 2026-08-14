@@ -154,7 +154,7 @@ def classify_gates(
     """
     # Reachability first: if every index that pulls this scenario in is behind a
     # gate we fail, the scenario is unreachable regardless of its own directory.
-    owners = (required_by or {}).get(Path(rel).stem, [])
+    owners = (required_by or {}).get(storyboard_spec.storyboard_key(rel), [])
     if owners and not any(storyboard_spec.index_reachable(o, decl) for o in owners):
         return "OFF-PATH", f"only required by {sorted(owners)} — all behind gates we do not declare"
 

@@ -47,19 +47,12 @@ from pathlib import Path
 
 import pytest
 
+from scripts.audit import storyboard_spec
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SPEC_VERSION_DOC = REPO_ROOT / "docs" / "adcp-spec-version.md"
 ADCP_HOME = Path.home() / "projects" / "adcp"
 
-
-def _pinned_version() -> str:
-    text = SPEC_VERSION_DOC.read_text(encoding="utf-8")
-    match = re.search(r"targets \*\*AdCP spec version ([0-9][^*]*)\*\*", text)
-    assert match, f"cannot determine pinned version from {SPEC_VERSION_DOC}"
-    return match.group(1).strip()
-
-
-DIST = ADCP_HOME / "dist" / "compliance" / _pinned_version()
+DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
 pytestmark = pytest.mark.skipif(
     not DIST.is_dir(),

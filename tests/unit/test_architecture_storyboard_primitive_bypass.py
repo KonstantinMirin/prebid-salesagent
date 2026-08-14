@@ -12,13 +12,35 @@ site, and wrong: ``phases()`` returns ids at every depth while a phase's
 window already encloses its steps', so every nested check was counted twice.
 119 of 121 storyboards shipped inflated numbers.
 
-Two forms are banned here, both drawn from that ticket's disease scan:
+salesagent-vuz9t.2 widened the guard from these two literal names to the
+pattern CLASSES they belong to, after finding the guard itself had a sibling
+gap: it policed two of roughly 14 primitives by name, and a fresh copy of a
+third (the pinned-version regex) shipped green right next to two guards that
+call the real primitive.
+
+Five forms are banned here:
 
 1. **The aggregate.** Iterating ``phases()`` and calling ``checks_for_phase()``
    inside the loop. There is exactly one correct spelling of that aggregate --
    ``storyboard_spec.check_inventory()`` -- and it is not this one.
 2. **The declared-id regex.** Re-deriving a storyboard's top-level ``id:``
    with a local regex instead of ``storyboard_spec.storyboard_id()``.
+3. **The spec-version regex.** A local copy of the ``pinned_version()`` regex,
+   anchored on the escaped-markdown substring (``\\*\\*AdCP spec version``)
+   that only appears in the regex SOURCE -- prose and docstrings write
+   ``**AdCP spec version**`` unescaped, so they never match.
+4. **The dist/compliance path join.** Hand-building
+   ``.../"dist"/"compliance"/version`` instead of calling
+   ``storyboard_spec.dist_root()``.
+5. **The raw stem collapse.** ``Path(rel).stem`` on a storyboard's relative
+   path -- collapses every ``*/index.yaml`` onto the literal ``"index"``
+   (salesagent-pw71) instead of calling ``storyboard_spec.storyboard_key()``.
+   Anchored on the argument name ``rel``: every primitive in this module and
+   its consumers spells a storyboard-relative path ``rel`` (
+   ``storyboard_key(rel)``, ``classify(rel, ...)``, ``classify_gates(rel,
+   ...)``) -- it is the established identity for this exact concept, not an
+   arbitrary path, so a ``.stem`` read off some unrelated ``Path`` (a test
+   filename, say) does not trip the guard.
 
 Structural, not textual: the check walks the AST, so it catches the pattern
 through a bare import (``from ... import phases``), through the module
@@ -105,6 +127,70 @@ def find_declared_id_regexes(tree: ast.AST) -> list[int]:
     ]
 
 
+# A local re-implementation of storyboard_spec.pinned_version()'s regex.
+# Anchored on the escaped-markdown substring unique to the REGEX SOURCE --
+# `\*\*` only appears when the pattern is written as a regex escaping literal
+# asterisks; prose and docstrings write `**AdCP spec version**` unescaped.
+_SPEC_VERSION_REGEX_ANCHOR = r"\*\*AdCP spec version"
+
+
+def find_spec_version_regex_literals(tree: ast.AST) -> list[int]:
+    """Line numbers of string literals re-deriving the pinned-version regex."""
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and _SPEC_VERSION_REGEX_ANCHOR in node.value
+    ]
+
+
+def find_dist_compliance_path_joins(tree: ast.AST) -> list[int]:
+    """Line numbers of a hand-joined ``.../"dist"/"compliance"`` path expression.
+
+    Matches the exact join ``storyboard_spec.dist_root()`` performs
+    (``adcp / "dist" / "compliance" / version``) built inline instead of
+    through the primitive.
+    """
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
+            continue
+        if not (isinstance(node.right, ast.Constant) and node.right.value == "compliance"):
+            continue
+        left = node.left
+        if (
+            isinstance(left, ast.BinOp)
+            and isinstance(left.op, ast.Div)
+            and isinstance(left.right, ast.Constant)
+            and left.right.value == "dist"
+        ):
+            hits.append(node.lineno)
+    return hits
+
+
+def find_raw_storyboard_stem_collapses(tree: ast.AST) -> list[int]:
+    """Line numbers of ``Path(rel).stem`` -- the exact collapse ``storyboard_key()`` fixes.
+
+    Anchored on the argument name ``rel``, the established identity for a
+    storyboard-relative path throughout this module and its consumers (see
+    module docstring) -- so a ``.stem`` read off an unrelated ``Path`` does
+    not trip the guard.
+    """
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Attribute) and node.attr == "stem"):
+            continue
+        call = node.value
+        if (
+            isinstance(call, ast.Call)
+            and _called_name(call) == "Path"
+            and len(call.args) == 1
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == "rel"
+        ):
+            hits.append(node.lineno)
+    return hits
+
+
 def _scan_files() -> list[Path]:
     return sorted(
         path
@@ -139,6 +225,45 @@ def test_no_consumer_re_derives_the_declared_storyboard_id():
     assert violations == {}, (
         "A local `^id:` regex re-derives a compliance-tree primitive. Call "
         "storyboard_spec.storyboard_id() instead — see salesagent-g6m2.1."
+    )
+
+
+def test_no_consumer_re_derives_the_pinned_version_regex():
+    """The pinned-version regex belongs to storyboard_spec.pinned_version()."""
+    violations = {
+        str(path.relative_to(REPO_ROOT)): lines
+        for path in _scan_files()
+        if (lines := find_spec_version_regex_literals(ast.parse(path.read_text(encoding="utf-8"))))
+    }
+    assert violations == {}, (
+        "A local copy of the pinned-version regex re-derives a compliance-tree primitive. "
+        "Call storyboard_spec.pinned_version(repo) instead — see salesagent-vuz9t.2."
+    )
+
+
+def test_no_consumer_hand_joins_the_dist_compliance_path():
+    """The dist/compliance/<version> join belongs to storyboard_spec.dist_root()."""
+    violations = {
+        str(path.relative_to(REPO_ROOT)): lines
+        for path in _scan_files()
+        if (lines := find_dist_compliance_path_joins(ast.parse(path.read_text(encoding="utf-8"))))
+    }
+    assert violations == {}, (
+        "A hand-joined dist/compliance/<version> path re-derives a compliance-tree primitive. "
+        "Call storyboard_spec.dist_root(adcp, version) instead — see salesagent-vuz9t.2."
+    )
+
+
+def test_no_consumer_collapses_a_storyboard_rel_path_with_raw_stem():
+    """The storyboard identity read belongs to storyboard_spec.storyboard_key()."""
+    violations = {
+        str(path.relative_to(REPO_ROOT)): lines
+        for path in _scan_files()
+        if (lines := find_raw_storyboard_stem_collapses(ast.parse(path.read_text(encoding="utf-8"))))
+    }
+    assert violations == {}, (
+        'Path(rel).stem collapses every */index.yaml onto the literal "index" (salesagent-pw71). '
+        "Call storyboard_spec.storyboard_key(rel) instead — see salesagent-vuz9t.2."
     )
 
 
@@ -231,3 +356,72 @@ LABEL = "id: the storyboard's declared identifier"
 PATTERN = r"- id:\\s*(\\S+)"
 """
     assert find_declared_id_regexes(ast.parse(benign)) == []
+
+
+_VIOLATION_SPEC_VERSION_REGEX = """
+import re
+
+def pinned_version(text):
+    match = re.search(r"targets \\*\\*AdCP spec version ([0-9][^*]*)\\*\\*", text)
+    return match.group(1) if match else None
+"""
+
+
+def test_guard_catches_a_local_spec_version_regex():
+    assert find_spec_version_regex_literals(ast.parse(_VIOLATION_SPEC_VERSION_REGEX))
+
+
+def test_guard_ignores_prose_mentioning_the_spec_version():
+    """Negative meta-test: plain markdown prose (no regex escaping) is fine."""
+    benign = """
+DOC = "Prebid Sales Agent targets **AdCP spec version 3.1.1** via the adcp SDK."
+"""
+    assert find_spec_version_regex_literals(ast.parse(benign)) == []
+
+
+_VIOLATION_DIST_COMPLIANCE_JOIN = """
+from pathlib import Path
+
+def dist(adcp, version):
+    return adcp / "dist" / "compliance" / version
+"""
+
+
+def test_guard_catches_a_hand_joined_dist_compliance_path():
+    assert find_dist_compliance_path_joins(ast.parse(_VIOLATION_DIST_COMPLIANCE_JOIN))
+
+
+def test_guard_ignores_unrelated_path_joins():
+    """Negative meta-test: joining "dist" with something other than "compliance" is fine."""
+    benign = """
+from pathlib import Path
+
+def build_output(root):
+    return root / "dist" / "assets"
+"""
+    assert find_dist_compliance_path_joins(ast.parse(benign)) == []
+
+
+_VIOLATION_RAW_STEM = """
+from pathlib import Path
+
+def owners_for(rel, required_by):
+    return required_by.get(Path(rel).stem, [])
+"""
+
+
+def test_guard_catches_a_raw_stem_collapse_on_rel():
+    assert find_raw_storyboard_stem_collapses(ast.parse(_VIOLATION_RAW_STEM))
+
+
+def test_guard_ignores_stem_on_unrelated_paths():
+    """Negative meta-test: `.stem` on a `Path` built from something other than `rel`
+    is fine (e.g. a test filename, unrelated to the storyboard-tree parsing this
+    guard polices)."""
+    benign = """
+from pathlib import Path
+
+def test_name_for(fspath):
+    return Path(fspath).stem
+"""
+    assert find_raw_storyboard_stem_collapses(ast.parse(benign)) == []
