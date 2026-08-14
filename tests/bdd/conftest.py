@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 # fixture lookup. Simple ``import`` is not enough — pytest only discovers
 # fixtures from conftest files and registered plugins.
 pytest_plugins = [
+    "tests.bdd.scenario_liveness",
     "tests.bdd.steps.generic.given_auth",
     "tests.bdd.steps.generic.given_config",
     "tests.bdd.steps.generic.given_entities",
