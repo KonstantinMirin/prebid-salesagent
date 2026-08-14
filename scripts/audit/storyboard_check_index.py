@@ -311,8 +311,14 @@ def render(result: dict[str, Any]) -> str:
         "|---|---|---|---|",
     ]
     for r in records:
-        if r["e2e_wireable"] in ("wireable", "unassessed"):
+        if r["e2e_wireable"] == "wireable":
             continue
+        # `unassessed` is a gap, not a non-finding: a check with no curated verdict
+        # in storyboard-wireability.yaml (and not named in that file's `untriaged:`
+        # list) means nobody has judged whether it can be wired at all. Dropping the
+        # row here used to make an untriaged step invisible instead of visible as a
+        # gap — the exact silent-omission bug test_architecture_storyboard_
+        # wireability.py guards against.
         needs = ", ".join(f"`{x}`" for x in r["e2e_requires"]) or "—"
         blocker = (r["e2e_blocker"] or "—").replace("\n", " ").strip()
         out.append(f"| {_check_id(r)} | {r['e2e_wireable']} | {needs} | {blocker[:180]} |")

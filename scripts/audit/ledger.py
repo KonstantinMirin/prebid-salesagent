@@ -157,3 +157,20 @@ def load_wireability(repo: Path) -> dict[str, dict[str, Any]]:
     if not path.is_file():
         return {}
     return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("steps") or {}
+
+
+def load_wireability_untriaged(repo: Path) -> set[str]:
+    """``(storyboard, step)`` keys explicitly deferred rather than assessed.
+
+    A step can legitimately have no verdict yet -- someone has to look at it
+    -- but that is a stated decision, not a silent absence. This is the
+    curated escape hatch ``test_architecture_storyboard_wireability.py``
+    checks against: a graded step missing from ``load_wireability()`` fails
+    the guard UNLESS its key also appears here.
+    """
+    import yaml
+
+    path = repo / WIREABILITY
+    if not path.is_file():
+        return set()
+    return set((yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("untriaged") or [])

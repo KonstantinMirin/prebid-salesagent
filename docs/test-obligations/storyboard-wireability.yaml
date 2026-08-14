@@ -29,6 +29,14 @@
 # Produced by a 42-agent assess+verify pass over the pinned steps; the
 # adversarial pass corrected 11 verdicts, every one of them an over-conservative
 # not_wireable that the evidence did not support. `evidence` quotes the step.
+#
+# `untriaged` is the escape hatch test_architecture_storyboard_wireability.py
+# enforces: an on-path, non-controller-gated (storyboard, step) that AdCP grades
+# us on must either carry a verdict in `steps` below or be named here, plainly
+# admitting nobody has judged it yet. A step silently missing from both fails
+# that guard, naming it — this file is not allowed to just fall behind the pin.
+
+untriaged: []
 
 steps:
   "protocols/media-buy/index.yaml::check_buy_status":
