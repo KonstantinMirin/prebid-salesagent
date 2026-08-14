@@ -64,7 +64,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # OUT OF SCOPE: the v3.1 creative-variant request's `include_pricing` / `account` mechanism
     # (and its "account required when include_pricing=true" constraint) is not part of the
     # media-buy aggregator contract under analysis (see overview scope notes).
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-main-no-pricing @main-flow @post-s5
   Scenario: Formats without vendor pricing carry no pricing_options
@@ -243,7 +243,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then only "structured-ad" should be returned
     # BR-RULE-049 INV-8 (v3.1): match against disclosure_capabilities[].position when present
     # --- INV-9: output_format_ids OR-match (NEW) ---
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-9-holds @UC-005-MAIN-MCP-19 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-9 holds - Output format IDs OR-match filter
@@ -313,7 +313,7 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with disclosure_persistence filter ["continuous", "initial"]
     Then only "eu-compliant" should be returned
     # BR-RULE-049 INV-11: each requested mode satisfied by >=1 position (AND across modes, existential across positions)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-11-violated @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-11 violated - Unsatisfiable persistence mode excludes format
@@ -323,7 +323,7 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with disclosure_persistence filter ["continuous"]
     Then "flex-only" should not be returned
     # BR-RULE-049 INV-11: no position supports "continuous" -> excluded
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-11-nofield @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-11 edge - Format without disclosure_capabilities excluded
@@ -428,7 +428,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid enum value
     # POST-F3: Suggestion lists valid enum values
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-ext-b-persistence-empty @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty disclosure persistence array
@@ -442,7 +442,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-ext-b-persistence-dupes @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Duplicate disclosure persistence modes
@@ -457,7 +457,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains uniqueItems violation
     # POST-F3: Suggestion for recovery
     # --- ext-b: Output Format IDs Validation Errors (NEW) ---
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-ext-b-output-empty @UC-005-EXT-B-13 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty output format IDs array
@@ -1027,7 +1027,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # v3.1: the asset_types FILTER enum is asset-content-type.json (14 values).
     # vast_tracker / daast_tracker are manifest-payload discriminators in
     # asset-types/index.json (16 keys) — NOT valid filter inputs.
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
     Examples: 14 asset-content-type filter enum values
       | asset_type     |
@@ -1053,7 +1053,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the response should indicate a validation error
     And the error should indicate "asset_types" must use outer registry discriminators only
     # v3.1: registry forbids sibling entries like vast_url/vast_inline; use vast with inner delivery_type
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-v31-payload-vs-requirements-separation @main-flow @v3-1 @asset-registry
   Scenario: Format response carries constraints under requirements, not on the asset schema

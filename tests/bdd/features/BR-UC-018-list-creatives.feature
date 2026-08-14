@@ -49,7 +49,7 @@ Feature: BR-UC-018 List Creatives
     # POST-S2: Buyer knows total count and page position
     # POST-S3: Buyer knows core attributes
     # POST-S7: Buyer knows applied filters and sort
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-enriched @main-flow
   Scenario: List creatives with assignments included by default
@@ -59,7 +59,7 @@ Feature: BR-UC-018 List Creatives
     And each creative includes assignment data
     # BR-RULE-149 INV-3: include_assignments defaults to true
     # POST-S4: Buyer knows package assignments (default included)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-performance @main-flow
   Scenario: List creatives with explicit delivery snapshot request
@@ -68,7 +68,7 @@ Feature: BR-UC-018 List Creatives
     Then each creative includes a delivery snapshot
     # BR-RULE-149 INV-4: include_snapshot defaults to false, must explicitly request
     # POST-S5: Buyer knows the lightweight delivery snapshot (when requested)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-subassets @main-flow
   Scenario: List creatives with explicit items request
@@ -77,7 +77,7 @@ Feature: BR-UC-018 List Creatives
     Then the creative includes items data
     # BR-RULE-149 INV-5: include_items defaults to false, must explicitly request
     # POST-S6: Buyer knows the items for multi-asset creatives (when requested)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-main-variables @main-flow
   Scenario: List creatives with explicit variables request
@@ -429,7 +429,7 @@ Feature: BR-UC-018 List Creatives
     And the error should include a "suggestion" field
     And the suggestion should contain "ISO 8601"
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-148-6-violated @invariant @BR-RULE-148
   Scenario: BR-RULE-148 INV-6 counter -- valid ISO 8601 date accepted
@@ -461,21 +461,21 @@ Feature: BR-UC-018 List Creatives
     Given the authenticated principal has an approved creative with delivery snapshot data
     When the Buyer Agent sends a list_creatives request without specifying include_snapshot
     Then the creative in the response does not include a delivery snapshot
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-5-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-5 holds -- include_items defaults to false
     Given the authenticated principal has a multi-asset creative with items
     When the Buyer Agent sends a list_creatives request without specifying include_items
     Then the creative in the response does not include items data
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-7-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-7 holds -- include_variables defaults to false
     Given the authenticated principal has an approved creative with dynamic-content variables
     When the Buyer Agent sends a list_creatives request without specifying include_variables
     Then the creative in the response does not include variables data
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-6-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-6 holds -- unrecognized DB status mapped to pending_review
@@ -509,7 +509,7 @@ Feature: BR-UC-018 List Creatives
     And the response is not an error
     # POST-S1: Buyer knows no creatives match (empty result)
     # POST-S2: Buyer knows total is 0
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-edge-pagination-next @main-flow @edge-case
   Scenario: Pagination cursor traversal across pages
@@ -521,7 +521,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with the cursor from the previous response
     Then the response contains 50 creatives from the second page
     And the creatives do not overlap with the first page results
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-edge-duplicate-dedup @invariant @BR-RULE-148 @edge-case
   Scenario: Singular media_buy_id duplicate in plural array is deduplicated
@@ -630,7 +630,7 @@ Feature: BR-UC-018 List Creatives
     And the error should include a "suggestion" field
     And the suggestion should contain "account"
     # POST-F1, POST-F2, POST-F3
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-225-2-holds @invariant @BR-RULE-225
   Scenario: BR-RULE-225 INV-2 holds -- include_pricing with account returns pricing_options
@@ -639,21 +639,21 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with include_pricing true and the account reference
     Then each creative in the response carries a pricing_options array with at least one option
     # POST-S9: Buyer knows pricing options (when include_pricing and account provided)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-225-3-holds @invariant @BR-RULE-225
   Scenario: BR-RULE-225 INV-3 holds -- pricing_options absent when include_pricing omitted
     Given the authenticated principal has 2 approved creatives
     When the Buyer Agent sends a list_creatives request without specifying include_pricing
     Then no creative in the response includes a pricing_options field
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-partition-pricing-include @partition @pricing-include
   Scenario Outline: Pricing disclosure gate -- <partition>
     Given the authenticated principal has approved creatives
     When the Buyer Agent sends a list_creatives request with <request_params>
     Then <outcome>
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
     Examples: Valid partitions
       | partition                        | request_params                                              | outcome                               |
@@ -685,7 +685,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with include_snapshot true
     Then the creative in the response includes a delivery snapshot
     And the creative does not include a snapshot_unavailable_reason
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-226-2-holds @invariant @BR-RULE-226
   Scenario Outline: BR-RULE-226 INV-2 holds -- snapshot unavailable surfaces machine-readable reason -- <reason>
@@ -693,7 +693,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with include_snapshot true
     Then the creative in the response omits the snapshot
     And the creative includes a snapshot_unavailable_reason of "<reason>"
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
     Examples:
       | condition                             | reason                            |
@@ -706,14 +706,14 @@ Feature: BR-UC-018 List Creatives
     Given the authenticated principal has an approved creative whose snapshot is unavailable
     When the Buyer Agent sends a list_creatives request without specifying include_snapshot
     Then the creative in the response includes neither a snapshot nor a snapshot_unavailable_reason
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-partition-snapshot-unavailable @partition @snapshot-unavailable
   Scenario Outline: Snapshot unavailability disclosure -- <partition>
     Given the authenticated principal has an approved creative
     When the Buyer Agent sends a list_creatives request with <request_params>
     Then <outcome>
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
     Examples: Valid partitions
       | partition              | request_params                              | outcome                                                                    |
@@ -786,7 +786,7 @@ Feature: BR-UC-018 List Creatives
     # returned. A filter shaped as a bare string id (not an object) is not part
     # of the v3.1 contract; format_ids are objects, period.
     # creative_lifecycle: format_id object filter exact-matches both (agent_url, id)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
 
   @T-UC-018-storyboard-filter-by-concept-id @schema-v3.1 @v3-1 @list-filter @concept-id
   Scenario: List creatives filtered by concept_ids returns only creatives in that concept carrying concept_id and concept_name
@@ -801,7 +801,7 @@ Feature: BR-UC-018 List Creatives
     # INT-001 "concept" filter dimension. Each returned creative exposes concept_id
     # and concept_name (list-creatives-response.json creatives[].concept_id/concept_name).
     # creative_lifecycle: concept_ids filter scopes results to one concept; concept_id/concept_name exposed
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/list-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-filter-boolean-flags @list-filter @boolean-filter @v3-1
   Scenario Outline: v3.1 boolean filter <flag> partitions the library

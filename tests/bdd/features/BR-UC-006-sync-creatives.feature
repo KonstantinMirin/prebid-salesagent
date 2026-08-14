@@ -123,7 +123,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the response should not include a creatives array
     And the Buyer can poll tasks/get with the task_id to retrieve per-item results
     # POST-S1/S2: per-item results land on the task completion artifact, not this envelope
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-main-delete-missing-conflict @main-flow @error
   Scenario: Sync creatives — delete_missing rejected when creative_ids filter provided
@@ -1230,7 +1230,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # status surface here is the advisory CreativeStatus on each per-creative RESULT
     # of the SyncCreativesSuccess shape. These boundaries fix the enum membership of
     # that response value.
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Valid scope combinations
       | boundary_point                          | scope_setup                                              | expected                                                       |
@@ -1249,7 +1249,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative whose sync resolves to a non-terminal per-creative action "<action>" carrying advisory status <status_value>
     When the Buyer Agent syncs the creative
     Then <expected>
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Valid CreativeStatus members
       | boundary_point                          | action    | status_value     | expected                                                           |
@@ -1324,7 +1324,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # BR-RULE-209 INV-11: sandbox permitted only on the synchronous success shape;
     # forbidden on the async submitted envelope (no sandbox property) — a queued
     # sandbox sync has produced no simulated result yet to flag
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-sandbox-errors-no-flag @invariant @br-rule-209 @sandbox @error @v3-1
   Scenario: Sandbox account terminal-failure sync_creatives response omits the sandbox flag
@@ -1338,7 +1338,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # BR-RULE-209 INV-11: sandbox forbidden on the terminal-failure errors shape
     # (not.anyOf required:[sandbox]) — the failure carries the real error only
     # POST-F3: suggestion field present even on the sandbox error shape
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-boundary-sandbox @boundary @sandbox @v3-1
   Scenario Outline: Sandbox flag response-shape boundary — <boundary_point>
@@ -1347,7 +1347,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And <account_kind>
     When the Buyer Agent sends a <response_shape>
     Then <expected>
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Synchronous success shape (sandbox permitted)
       | boundary_point                                            | account_kind                                       | response_shape                                    | expected                                                |
@@ -1388,7 +1388,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And every CreativeItem should be persisted under the parent creative
     # POST-S1: multi-asset composite sync succeeds
     # POST-S2: action = created
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-creative-item-text-array @v3-1 @creative-item
   Scenario: CreativeItem text content accepts array for A/B variants
@@ -1399,7 +1399,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response should include the creative with action "created"
     And all text variants should be retained on the CreativeItem
     # POST-S2: array-shaped text content preserved (A/B variant support)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-creative-item-missing-content @v3-1 @creative-item @ext-c
   Scenario: CreativeItem missing discriminator-required field is rejected
@@ -1423,7 +1423,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And every declared CreativeVariable should be persisted on the creative
     # POST-S1: DCO-aware creative sync succeeds
     # POST-S2: variables retained for serve-time substitution
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-creative-variable-required-flag @v3-1 @creative-variable @dco
   Scenario: CreativeVariable required flag is preserved on persisted creative
@@ -1433,7 +1433,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response should include the creative with action "created"
     And the persisted CreativeVariable should retain its required flag and default_value
     # POST-S2: serve-time semantics (required, default_value) preserved
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-creative-variable-invalid-type @v3-1 @creative-variable @dco @ext-c
   Scenario: CreativeVariable with unsupported variable_type is rejected
@@ -1458,7 +1458,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And every VAST tracker asset should be persisted with its vast_event and url
     # POST-S1: decomposed VAST trackers accepted
     # POST-S2: trackers retained for serve-time TrackingEvents assembly
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-vast-tracker-progress-requires-offset @v3-1 @vast-tracker @ext-c
   Scenario: VAST tracker with vast_event "progress" without offset is rejected
@@ -1472,7 +1472,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error should include a "suggestion" field
     # POST-F2: conditional-required violation surfaced
     # POST-F3: field path points at offset
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-vast-tracker-forbidden-event @v3-1 @vast-tracker @ext-c
   Scenario: VAST tracker with forbidden vast_event "impression" is rejected
@@ -1486,7 +1486,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error should include a "suggestion" field
     # POST-F2: VAST modeling rule enforced (impression -> url asset, not vast_tracker)
     # POST-F3: suggestion points buyer at the correct asset type
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-daast-tracker-asset @v3-1 @daast-tracker
   Scenario: Sync audio creative with decomposed DAAST trackers succeeds
@@ -1498,7 +1498,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response should include the creative with action "created"
     And every DAAST tracker asset should be persisted with its daast_event and url
     # POST-S1: decomposed DAAST trackers accepted
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-daast-tracker-no-non-linear-target @v3-1 @daast-tracker @ext-c
   Scenario: DAAST tracker with target "non_linear" is rejected
@@ -1524,7 +1524,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error should include a suggestion to re-read the resource and retry
     # POST-F2: machine-readable version info returned
     # POST-F3: recovery path is explicit (re-read + retry)
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-error-details-policy-violation @v3-1 @error-details @policy-violation
   Scenario: POLICY_VIOLATION error returns policy reference and violated rules
@@ -1537,7 +1537,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error details should include a policy_url where the full policy can be reviewed
     # POST-F2: policy reference is structured, not free text
     # POST-F3: buyer can fetch policy text and revise
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
   @T-UC-006-error-details-creative-rejected @v3-1 @error-details @creative-rejected
   Scenario: CREATIVE_REJECTED error returns policy reference and rejection reasons
@@ -1622,7 +1622,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # claimed_value, observed_value, confidence) -- no detail_url, no verifier extension
     # fields. This is the cross-tenant trust boundary.
     # provenance_truth_of_claim: verifier contradicts buyer claim; details bounded to audit-safe allowlist
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
 
   @T-UC-006-storyboard-multi-format-sync @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
   Scenario: Bulk sync of three creatives in three different formats returns per-creative action and status
