@@ -27,12 +27,16 @@ This module pins the new single-owner shape:
   storyboard-binding-baseline.md changes no published number" is provable in
   CI without a live ``~/projects/adcp`` clone and without touching the
   checked-in artifact.
-* ``storyboard_check_index.build()`` raises ``SystemExit`` naming any scenario
-  id an on-path row's ``covered_by`` names but the binding-bucket join cannot
-  resolve -- the real zero-join invariant (the originally-proposed "raise if
-  bindings is empty" was near-vacuous: bindings and covered_by share a key
-  space by construction, so an empty result only happens when nothing was at
-  risk in the first place).
+* ``storyboard_check_index.build()`` raises ``storyboard_spec.
+  StoryboardAuditError`` naming any scenario id an on-path row's
+  ``covered_by`` names but the binding-bucket join cannot resolve -- the real
+  zero-join invariant (the originally-proposed "raise if bindings is empty"
+  was near-vacuous: bindings and covered_by share a key space by
+  construction, so an empty result only happens when nothing was at risk in
+  the first place). Typed, not ``SystemExit`` -- this is a library function
+  importable from tests and sibling scripts, and ``SystemExit`` would kill
+  the importing process rather than give the caller something catchable
+  (salesagent-vuz9t.1.2).
 
 """
 
@@ -278,7 +282,7 @@ def test_binding_buckets_source_no_longer_references_the_rendered_baseline():
     assert "storyboard-binding-baseline.md" not in source
 
 
-# --- Zero-join tripwire: build() raises SystemExit naming an unresolved scenario id ---
+# --- Zero-join tripwire: build() raises StoryboardAuditError naming an unresolved scenario id ---
 
 DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
@@ -289,7 +293,7 @@ requires_clone = pytest.mark.skipif(
 
 
 @requires_clone
-def test_build_raises_systemexit_naming_an_unresolved_covered_by_scenario(monkeypatch):
+def test_build_raises_storyboard_audit_error_naming_an_unresolved_covered_by_scenario(monkeypatch):
     """The real zero-join invariant: build() must name any scenario id a
     covered on-path row claims but the binding-bucket join cannot resolve.
 
@@ -336,7 +340,7 @@ def test_build_raises_systemexit_naming_an_unresolved_covered_by_scenario(monkey
         },
     )
 
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(storyboard_spec.StoryboardAuditError) as excinfo:
         storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
 
     assert unresolved_scenario_id in str(excinfo.value)

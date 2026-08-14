@@ -66,7 +66,7 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
     version = storyboard_spec.pinned_version(repo)
     dist = storyboard_spec.dist_root(adcp, version)
     if not dist.is_dir():
-        raise SystemExit(f"pinned compliance tree missing: {dist}")
+        raise storyboard_spec.StoryboardAuditError(f"pinned compliance tree missing: {dist}")
 
     declared = storyboard_spec.declared_capabilities(repo)
     scenarios = storyboard_spec.tagged_scenarios(repo / "tests" / "bdd" / "features")

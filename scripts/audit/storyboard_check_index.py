@@ -176,7 +176,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         }
     )
     if unexplained:
-        raise SystemExit(
+        raise storyboard_spec.StoryboardAuditError(
             f"{len(unexplained)} step(s) are marked `conditional` in {ledger.WIREABILITY} with neither a "
             "`requires` entry nor a `blocker`. A conditional verdict must name what has to be "
             "provisioned, or be a plain `wireable`:\n" + "\n".join(f"  {s}" for s in unexplained)
@@ -190,7 +190,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     # "nothing to report" case.
     unresolved_scenarios = sorted({s for r in records for s in r["scenarios"] if s not in buckets})
     if unresolved_scenarios:
-        raise SystemExit(
+        raise storyboard_spec.StoryboardAuditError(
             f"{len(unresolved_scenarios)} scenario(s) are claimed by an on-path row's `covered_by` "
             "but storyboard_binding_sweep.audit() resolved no binding bucket for them — the join is "
             "broken, not the data. Fix binding_buckets() before trusting this output:\n"

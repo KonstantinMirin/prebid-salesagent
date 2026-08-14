@@ -240,7 +240,10 @@ def _load_runner_scenarios(results_dir: Path) -> tuple[list[dict[str, Any]], dic
     for name in ("sb1d-full.json", "sb1b-full.json"):
         path = results_dir / name
         if path.is_file():
-            data = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise storyboard_spec.StoryboardAuditError(f"malformed runner results at {path}: {exc}") from exc
             scenarios = [s for track in data.get("tested_tracks", []) for s in track.get("scenarios", [])]
             return scenarios, data
     return [], {}
@@ -337,21 +340,21 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         runner_summary.get("storyboards_missing_tools", [])
     )
     if runner_ran_count and joined == 0:
-        raise SystemExit(
+        raise storyboard_spec.StoryboardAuditError(
             f"measured-status join resolved 0 of {len(on_path)} on-path rows, but the runner "
             f"reports {runner_ran_count} storyboards executed/missing-tools — the join key is "
             "broken, not the data. Fix _measured_status() before trusting this output."
         )
 
     if ledgered and not any(r["ledgered_failures"] for r in rows):
-        raise SystemExit(
+        raise storyboard_spec.StoryboardAuditError(
             f"ledger has {sum(len(v) for v in ledgered.values())} failing checks across "
             f"{len(ledgered)} storyboards, but none joined to an on-path row — the join key is "
             "broken, not the data. Every row would render as passing. Fix _ledgered_failures()."
         )
 
     if untriaged:
-        raise SystemExit(
+        raise storyboard_spec.StoryboardAuditError(
             f"{len(untriaged)} on-path storyboard(s) are absent from {ledger.ISSUE_MAP}. A storyboard the "
             "pinned spec grades us on must be triaged before this table can claim to be the "
             "conformance gap record — even if the triage outcome is `coverage: none`:\n"

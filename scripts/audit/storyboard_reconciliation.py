@@ -24,11 +24,20 @@ Read-only over the proposal directory. ``--markdown`` emits the artifact.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.audit import storyboard_spec  # noqa: E402
+
+# The single source of truth for how many @storyboard-v3.1 scenarios this
+# sweep covers -- build_review_report.py reuses this rather than repeating
+# the number, since a magic 40 drifting silently out of sync with this one
+# is exactly the disease this constant exists to prevent.
+EXPECTED_SCENARIOS = 40
 
 VERDICT_RE = re.compile(r"^##\s*\d*\.?\s*VERDICT\s*$", re.M)
 NOT_GRADED_RE = re.compile(r"^\s*NOT GRADED", re.I)
@@ -184,15 +193,19 @@ def render(result: dict[str, Any]) -> str:
     return "\n".join(out) + "\n"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def _configure_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--proposals", type=Path, required=True)
-    parser.add_argument("--expected", type=int, default=40)
-    parser.add_argument("--markdown", action="store_true")
-    args = parser.parse_args()
-    result = build(args.proposals, args.expected)
-    print(render(result) if args.markdown else json.dumps(result, indent=2))
-    return 0
+    parser.add_argument("--expected", type=int, default=EXPECTED_SCENARIOS)
+
+
+def main() -> int:
+    return storyboard_spec.run_cli(
+        __doc__ or "",
+        build,
+        render,
+        configure_args=_configure_args,
+        build_args=lambda args: (args.proposals, args.expected),
+    )
 
 
 if __name__ == "__main__":

@@ -31,11 +31,28 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+class StoryboardAuditError(Exception):
+    """A library-level failure in the storyboard audit pipeline.
+
+    Every ``scripts/audit/storyboard_*.py`` consumer imports these functions
+    as a library (from tests, from sibling scripts, from ``make quality``
+    guards) as well as running them as a CLI. ``raise SystemExit`` from inside
+    a library function kills the whole importing process — a pytest run, a
+    sibling script's in-process call — instead of giving the caller something
+    catchable. This is the one typed error every ``build()``/``audit()``/
+    parsing function in this pipeline raises for a data problem it detects;
+    only :func:`run_cli`, the CLI boundary, is allowed to turn it into a
+    process exit.
+    """
+
 
 # ── Pinned version + declared capabilities ─────────────────────────────────
 
@@ -51,7 +68,7 @@ def pinned_version(repo: Path) -> str:
     text = (repo / "docs" / "adcp-spec-version.md").read_text(encoding="utf-8")
     match = _SPEC_VERSION_RE.search(text)
     if not match:
-        raise SystemExit("cannot determine pinned version from docs/adcp-spec-version.md")
+        raise StoryboardAuditError("cannot determine pinned version from docs/adcp-spec-version.md")
     return match.group(1).strip()
 
 
@@ -544,25 +561,52 @@ def normalize_cited_path(raw_path: str) -> str:
 
 def run_cli(
     description: str,
-    build_fn: Callable[[Path, Path], dict[str, Any]],
+    build_fn: Callable[..., dict[str, Any]],
     render_fn: Callable[[dict[str, Any]], str],
     jsonl_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
+    *,
+    configure_args: Callable[[argparse.ArgumentParser], None] | None = None,
+    build_args: Callable[[argparse.Namespace], tuple[Any, ...]] | None = None,
 ) -> int:
-    """Standard CLI: --repo/--adcp/--markdown[/--jsonl], build(repo, adcp), print.
+    """Standard CLI: parse args, ``build_fn(*build_args(args))``, print, catch.
+
+    Default shape (``configure_args``/``build_args`` both ``None``) is
+    ``--repo/--adcp/--markdown[/--jsonl]``, ``build_fn(repo, adcp)`` — every
+    ``storyboard_*.py`` sibling but ``storyboard_reconciliation`` uses this
+    default. A consumer whose ``build_fn`` takes different arguments (e.g.
+    ``storyboard_reconciliation.build(proposals, expected)``) supplies both
+    hooks instead of hand-rolling its own argparse + print + error-handling
+    boilerplate — the duplicate ``main()`` this module exists to close.
 
     ``--jsonl`` emits one JSON object per line. A consumer that offers it is
     declaring that the JSONL is its SOURCE OF TRUTH and the markdown a
     rendering of it — so the two can never drift, and a new view is a new
     renderer rather than a new artifact.
+
+    A :class:`StoryboardAuditError` raised by ``build_fn`` (a data problem
+    the pipeline itself detected — a broken join, a malformed pinned file, an
+    unresolvable citation) is caught here, printed to stderr, and turned into
+    exit code 1. This is the ONLY place in the audit pipeline allowed to turn
+    a caught error into a process exit — every library function raises the
+    typed error and lets its caller decide, so importing these functions from
+    a test or a sibling script never risks killing the importing process.
     """
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--adcp", type=Path, default=Path.home() / "projects" / "adcp")
+    if configure_args is None:
+        parser.add_argument("--repo", type=Path, default=Path.cwd())
+        parser.add_argument("--adcp", type=Path, default=Path.home() / "projects" / "adcp")
+    else:
+        configure_args(parser)
     parser.add_argument("--markdown", action="store_true")
     if jsonl_fn is not None:
         parser.add_argument("--jsonl", action="store_true")
     args = parser.parse_args()
-    result = build_fn(args.repo.resolve(), args.adcp.resolve())
+    call_args = build_args(args) if build_args is not None else (args.repo.resolve(), args.adcp.resolve())
+    try:
+        result = build_fn(*call_args)
+    except StoryboardAuditError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     if jsonl_fn is not None and getattr(args, "jsonl", False):
         for record in jsonl_fn(result):
             print(json.dumps(record, sort_keys=True))
@@ -576,6 +620,7 @@ __all__ = [
     "SourceFooter",
     "SourceFooterError",
     "Storyboard",
+    "StoryboardAuditError",
     "TaggedScenario",
     "check_inventory",
     "checks_by_owner",

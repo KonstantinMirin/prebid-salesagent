@@ -19,16 +19,14 @@ from __future__ import annotations
 
 import argparse
 import html
-import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.audit import storyboard_spec  # noqa: E402
+from scripts.audit import storyboard_reconciliation, storyboard_spec  # noqa: E402
 
 FEATURES = Path("tests/bdd/features")
 GHERKIN_RE = re.compile(r"##\s*\d*\.?\s*Proposed Gherkin.*?```gherkin\n(.*?)```", re.S | re.I)
@@ -39,20 +37,18 @@ SLATE_ROW_RE = re.compile(
 )
 
 
-def sh(*args: str) -> str:
-    return subprocess.run(args, capture_output=True, text=True).stdout
+def load_reconciliation(proposals: Path) -> list[dict[str, Any]]:
+    """In-process call into the sibling script's ``build()``.
 
-
-def load_reconciliation(repo: Path, proposals: Path) -> list[dict[str, Any]]:
-    out = sh(
-        "uv",
-        "run",
-        "python",
-        str(repo / "scripts/audit/storyboard_reconciliation.py"),
-        "--proposals",
-        str(proposals),
-    )
-    return json.loads(out)["rows"]
+    Previously this shelled out via ``subprocess`` and parsed the child's
+    stdout as JSON, discarding its stderr — a failure inside the sibling
+    (e.g. a missing proposals directory) surfaced here as an opaque
+    ``json.JSONDecodeError`` on empty stdout, not the real cause. Calling
+    ``build()`` directly lets a :class:`storyboard_spec.StoryboardAuditError`
+    propagate with its real message intact, and drops the subprocess
+    re-entry between sibling audit scripts entirely.
+    """
+    return storyboard_reconciliation.build(proposals, storyboard_reconciliation.EXPECTED_SCENARIOS)["rows"]
 
 
 def current_scenario_text(repo: Path, identifier: str) -> tuple[str, str]:
@@ -199,7 +195,7 @@ document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{
 
 
 def build(repo: Path, proposals: Path, consolidated: Path) -> str:
-    rows = load_reconciliation(repo, proposals)
+    rows = load_reconciliation(proposals)
     props = parse_proposals(proposals)
     slate = parse_slate(consolidated)
 
@@ -404,7 +400,11 @@ def main() -> int:
 
     repo = args.repo.resolve()
     consolidated = args.proposals / "CONSOLIDATED-ISSUES.md"
-    body = build(repo, args.proposals.resolve(), consolidated)
+    try:
+        body = build(repo, args.proposals.resolve(), consolidated)
+    except storyboard_spec.StoryboardAuditError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     args.out.write_text(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'

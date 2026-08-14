@@ -204,7 +204,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     version = storyboard_spec.pinned_version(repo)
     dist = storyboard_spec.dist_root(adcp, version)
     if not dist.is_dir():
-        raise SystemExit(f"missing pinned compliance tree: {dist}")
+        raise storyboard_spec.StoryboardAuditError(f"missing pinned compliance tree: {dist}")
 
     decl = storyboard_spec.declared_capabilities(repo)
     claims = covered_storyboards(repo)
