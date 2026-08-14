@@ -37,6 +37,7 @@ Read-only. ``--jsonl`` for the source of truth, ``--markdown`` for the report.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,84 @@ from scripts.audit import ledger, storyboard_binding_sweep, storyboard_coverage_
 # A check whose storyboard needs this tool can never be graded here: the tool is
 # a production test-control backdoor we will not implement.
 CONTROLLER = "comply_test_controller"
+
+
+@dataclass(frozen=True)
+class CheckRecord:
+    """One graded check — the record published as ``storyboard-checks.jsonl``.
+
+    This IS the source of truth the module docstring promises: every markdown
+    table in :func:`render` is a rendering of these fields, never a second
+    source that can drift from the first. Declaring the shape (instead of the
+    ``dict[str, Any]`` this replaces) makes two things impossible that the
+    dict form allowed: renaming a field without every reader failing at
+    attribute access, and publishing a record missing one of its identity
+    fields — every field below is required, there is no partially-populated
+    ``CheckRecord``.
+
+    Grouped exactly as :func:`build` assembles them: identity, provenance,
+    gating, measured, coverage, wireability, tracking. Record identity is
+    ``(storyboard, step_id, check_type, ordinal)`` — see the module
+    docstring for why the step, not the storyboard, is the addressable unit.
+    """
+
+    # identity
+    storyboard: str
+    storyboard_id: str
+    phase_id: str | None
+    step_id: str
+    check_type: str
+    ordinal: int
+    # provenance — every claim below is checkable against this
+    citation: str
+    tier: str
+    # gating: why a check may be unreachable rather than untested
+    required_tools: list[str]
+    requires_controller: bool
+    # measured, from a real in-network run
+    measured_failing_protocols: list[str]
+    measured: str
+    # our coverage — declared per storyboard, carried to each check
+    scenarios: list[str]
+    scenario_grain: str
+    scenario_binding_buckets: dict[str, str]
+    # can a scenario for this check be wired end-to-end?
+    e2e_wireable: str
+    e2e_axes: dict[str, Any]
+    e2e_requires: list[str]
+    e2e_blocker: str
+    e2e_source: str
+    # tracking — the one curated input
+    issues: list[int]
+    issue_coverage: str
+    issue_note: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "storyboard": self.storyboard,
+            "storyboard_id": self.storyboard_id,
+            "phase_id": self.phase_id,
+            "step_id": self.step_id,
+            "check_type": self.check_type,
+            "ordinal": self.ordinal,
+            "citation": self.citation,
+            "tier": self.tier,
+            "required_tools": self.required_tools,
+            "requires_controller": self.requires_controller,
+            "measured_failing_protocols": self.measured_failing_protocols,
+            "measured": self.measured,
+            "scenarios": self.scenarios,
+            "scenario_grain": self.scenario_grain,
+            "scenario_binding_buckets": self.scenario_binding_buckets,
+            "e2e_wireable": self.e2e_wireable,
+            "e2e_axes": self.e2e_axes,
+            "e2e_requires": self.e2e_requires,
+            "e2e_blocker": self.e2e_blocker,
+            "e2e_source": self.e2e_source,
+            "issues": self.issues,
+            "issue_coverage": self.issue_coverage,
+            "issue_note": self.issue_note,
+        }
 
 
 def _ledger_steps(repo: Path) -> dict[tuple[str, str], list[str]]:
@@ -114,7 +193,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     wireability = ledger.load_wireability(repo)
     buckets = binding_buckets(repo, adcp)
 
-    records: list[dict[str, Any]] = []
+    records: list[CheckRecord] = []
     for row in coverage["storyboards"]:
         if row["status"] != "ON-PATH":
             continue
@@ -133,35 +212,40 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             # traffic in the rest, so judging by the top-level block alone marks
             # gradable checks ungradable.
             step_controller = CONTROLLER in tools or CONTROLLER in storyboard_spec.step_tools(text, step_id)
+            wire = _wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), step_controller)
             records.append(
-                {
+                CheckRecord(
                     # identity
-                    "storyboard": row["storyboard"],
-                    "storyboard_id": storyboard_id,
-                    "phase_id": phase_id,
-                    "step_id": step_id,
-                    "check_type": check_type,
-                    "ordinal": ordinal,
+                    storyboard=row["storyboard"],
+                    storyboard_id=storyboard_id,
+                    phase_id=phase_id,
+                    step_id=step_id,
+                    check_type=check_type,
+                    ordinal=ordinal,
                     # provenance — every claim below is checkable against this
-                    "citation": f"repo=adcp ref={coverage['pinned_version']} path={row['storyboard']}",
-                    "tier": storyboard_spec.storyboard_tier(row["storyboard"]),
+                    citation=f"repo=adcp ref={coverage['pinned_version']} path={row['storyboard']}",
+                    tier=storyboard_spec.storyboard_tier(row["storyboard"]),
                     # gating: why a check may be unreachable rather than untested
-                    "required_tools": tools,
-                    "requires_controller": step_controller,
+                    required_tools=tools,
+                    requires_controller=step_controller,
                     # measured, from a real in-network run
-                    "measured_failing_protocols": sorted(failing),
-                    "measured": "FAILING" if failing else ("ungradable" if step_controller else "no ledger entry"),
+                    measured_failing_protocols=sorted(failing),
+                    measured="FAILING" if failing else ("ungradable" if step_controller else "no ledger entry"),
                     # our coverage — declared per storyboard, carried to each check
-                    "scenarios": row["covered_by"],
-                    "scenario_grain": "storyboard",
-                    "scenario_binding_buckets": {s: buckets.get(s, "-") for s in row["covered_by"]},
+                    scenarios=row["covered_by"],
+                    scenario_grain="storyboard",
+                    scenario_binding_buckets={s: buckets.get(s, "-") for s in row["covered_by"]},
                     # can a scenario for this check be wired end-to-end?
-                    **_wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), step_controller),
+                    e2e_wireable=wire["e2e_wireable"],
+                    e2e_axes=wire["e2e_axes"],
+                    e2e_requires=wire["e2e_requires"],
+                    e2e_blocker=wire["e2e_blocker"],
+                    e2e_source=wire["e2e_source"],
                     # tracking — the one curated input
-                    "issues": issues,
-                    "issue_coverage": tracking.get("coverage", "untriaged"),
-                    "issue_note": (tracking.get("note") or "").replace("\n", " ").strip(),
-                }
+                    issues=issues,
+                    issue_coverage=tracking.get("coverage", "untriaged"),
+                    issue_note=(tracking.get("note") or "").replace("\n", " ").strip(),
+                )
             )
 
     # A conditional verdict that names nothing is not an answer: it says "there
@@ -170,9 +254,9 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     # roadmap applies to untriaged storyboards.
     unexplained = sorted(
         {
-            f"{r['storyboard']}::{r['step_id']}"
+            f"{r.storyboard}::{r.step_id}"
             for r in records
-            if r["e2e_wireable"] == "conditional" and not r["e2e_requires"] and not r["e2e_blocker"]
+            if r.e2e_wireable == "conditional" and not r.e2e_requires and not r.e2e_blocker
         }
     )
     if unexplained:
@@ -188,7 +272,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     # @storyboard-v3.1-tagged scenarios), so a scenario named in covered_by
     # that resolves no bucket is a genuine join break, never a legitimate
     # "nothing to report" case.
-    unresolved_scenarios = sorted({s for r in records for s in r["scenarios"] if s not in buckets})
+    unresolved_scenarios = sorted({s for r in records for s in r.scenarios if s not in buckets})
     if unresolved_scenarios:
         raise storyboard_spec.StoryboardAuditError(
             f"{len(unresolved_scenarios)} scenario(s) are claimed by an on-path row's `covered_by` "
@@ -197,23 +281,28 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             + "\n".join(f"  {s}" for s in unresolved_scenarios)
         )
 
-    gaps = [r for r in records if not r["scenarios"] and not r["issues"]]
+    gaps = [r for r in records if not r.scenarios and not r.issues]
     return {
         "pinned_version": coverage["pinned_version"],
         "totals": {
             "checks": len(records),
-            "storyboards": len({r["storyboard"] for r in records}),
-            "with_scenario": sum(1 for r in records if r["scenarios"]),
-            "with_issue": sum(1 for r in records if r["issues"]),
+            "storyboards": len({r.storyboard for r in records}),
+            "with_scenario": sum(1 for r in records if r.scenarios),
+            "with_issue": sum(1 for r in records if r.issues),
             "neither": len(gaps),
-            "failing": sum(1 for r in records if r["measured_failing_protocols"]),
-            "ungradable": sum(1 for r in records if r["requires_controller"]),
-            "wireable": sum(1 for r in records if r["e2e_wireable"] == "wireable"),
-            "conditional": sum(1 for r in records if r["e2e_wireable"] == "conditional"),
-            "not_wireable": sum(1 for r in records if r["e2e_wireable"] == "not_wireable"),
-            "unassessed": sum(1 for r in records if r["e2e_wireable"] == "unassessed"),
+            "failing": sum(1 for r in records if r.measured_failing_protocols),
+            "ungradable": sum(1 for r in records if r.requires_controller),
+            "wireable": sum(1 for r in records if r.e2e_wireable == "wireable"),
+            "conditional": sum(1 for r in records if r.e2e_wireable == "conditional"),
+            "not_wireable": sum(1 for r in records if r.e2e_wireable == "not_wireable"),
+            "unassessed": sum(1 for r in records if r.e2e_wireable == "unassessed"),
         },
-        "records": records,
+        # to_dict() at the JSONL boundary, mirroring Binding.to_dict() — every
+        # consumer of build()'s return value (render(), jsonl(), the plain
+        # `json.dumps(result)` CLI path) works with dicts; only this function
+        # and its internal post-processing above ever touch a CheckRecord
+        # attribute directly.
+        "records": [r.to_dict() for r in records],
     }
 
 
