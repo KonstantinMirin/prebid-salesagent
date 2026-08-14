@@ -31,27 +31,60 @@ import pytest
 
 from src.core.version_compat import spec_request_model
 
-# The tools registered with the MCP server, in registration order.
-# Kept explicit rather than scraped: a tool silently dropping out of
-# registration should break this guard loudly, not shrink its own coverage.
-REGISTERED_TOOLS = (
-    "list_accounts",
-    "sync_accounts",
-    "get_adcp_capabilities",
-    "get_products",
-    "list_creative_formats",
-    "sync_creatives",
-    "list_creatives",
-    "list_authorized_properties",
-    "create_media_buy",
-    "update_media_buy",
-    "get_media_buy_delivery",
-    "get_media_buys",
-    "update_performance_index",
-    "list_tasks",
-    "get_task",
-    "complete_task",
-)
+
+def _live_registered_tools() -> tuple[str, ...]:
+    """The MCP registry's live tool roster, in registration order.
+
+    Async enumeration of ``mcp.list_tools()`` — the same registry object
+    ``_published_input_fields`` below already queries per-tool. Deriving the
+    parametrization from it means a newly-registered tool is guarded with no
+    test edit; the drop-out risk that motivated hand-typing the old tuple is
+    covered instead by cross-checking against a genuinely independent second
+    derivation, see ``_structurally_registered_tools``.
+    """
+    import asyncio
+
+    from src.core.main import mcp
+
+    return tuple(tool.name for tool in asyncio.run(mcp.list_tools()))
+
+
+def _structurally_registered_tools() -> frozenset[str]:
+    """Second, independent derivation of the tool roster: static AST parse.
+
+    Reads ``src/core/main.py``'s source text and collects the positional
+    argument of every module-level ``_register_tool(<name>)`` call — the
+    helper that wires each tool module's function into ``mcp.tool(...)``.
+    This never touches the live FastMCP registry, so it is a different code
+    path from ``_live_registered_tools`` (which is also the path
+    ``tests/harness/address_table.py`` uses — reusing it here would just be
+    the same live query twice, not an independent check). A tool that is
+    removed from one side but not the other — dropped from registration, or
+    a live-registry bug that silently omits a tool — makes the two
+    derivations disagree.
+    """
+    import ast
+    from pathlib import Path
+
+    import src.core.main as main_module
+
+    main_path = Path(main_module.__file__)
+    tree = ast.parse(main_path.read_text(), filename=str(main_path))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_register_tool"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+        ):
+            names.add(node.args[0].id)
+    return frozenset(names)
+
+
+# Live-derived tool roster, in registration order — see _live_registered_tools.
+REGISTERED_TOOLS = _live_registered_tools()
 
 # Tools with no SDK request model at the pin. This is NOT an allowlist of
 # violations — it is the set of surfaces that are not 3.1.1 spec tasks at all,
@@ -122,6 +155,30 @@ def test_non_spec_tools_are_still_non_spec(tool_name: str):
     assert spec_request_model(tool_name) is None, (
         f"{tool_name} now has an SDK request model — remove it from NON_SPEC_TOOLS "
         "so the field-acceptance guard applies to it"
+    )
+
+
+def test_live_registration_matches_structural_registration():
+    """Drop-out detector: the two independent roster derivations must agree.
+
+    ``REGISTERED_TOOLS`` (used above to parametrize the field-acceptance
+    guard) is derived live from ``mcp.list_tools()``. This test re-derives
+    the roster by statically parsing ``src/core/main.py``'s
+    ``_register_tool(...)`` call list instead — a different code path that
+    never touches the runtime registry. A tool silently dropping out of
+    registration (removed from one side, or a live-registry bug that omits
+    it) fails this test naming the tool, rather than just shrinking
+    ``REGISTERED_TOOLS`` — and the parametrization count — with nothing to
+    notice.
+    """
+    live = set(REGISTERED_TOOLS)
+    structural = _structurally_registered_tools()
+    only_live = sorted(live - structural)
+    only_structural = sorted(structural - live)
+    assert not only_live and not only_structural, (
+        "Live MCP registration and the static _register_tool(...) call list in "
+        f"src/core/main.py disagree. Only in live registry: {only_live}. "
+        f"Only in source: {only_structural}."
     )
 
 
