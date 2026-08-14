@@ -71,9 +71,7 @@ class TestGetAdcpCapabilitiesContextEcho:
 
             response = env.call_a2a(context={"trace_id": "trace_caps_a2a_1"})
 
-        assert response.context is not None, (
-            "A2A get_adcp_capabilities dropped the caller's context object."
-        )
+        assert response.context is not None, "A2A get_adcp_capabilities dropped the caller's context object."
         assert response.context.model_dump(exclude_none=True) == {"trace_id": "trace_caps_a2a_1"}
 
     def test_no_context_supplied_means_none_in_response(self, integration_db):
