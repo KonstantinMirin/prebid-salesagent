@@ -200,7 +200,9 @@ def on_path_from_vendored_index(repo: Path, index: dict[str, Any]) -> set[str]:
     declared = storyboard_spec.declared_capabilities(repo)
     storyboards: dict[str, dict[str, Any]] = index["storyboards"]
     required_by = {
-        Path(rel).stem: entry["required_by"] for rel, entry in storyboards.items() if entry.get("required_by")
+        storyboard_spec.storyboard_key(rel): entry["required_by"]
+        for rel, entry in storyboards.items()
+        if entry.get("required_by")
     }
 
     on_path: set[str] = set()
