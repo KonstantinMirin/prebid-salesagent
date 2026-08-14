@@ -71,12 +71,34 @@ _PAIRS = [
 ]
 
 
+def _decorator_injected_params(fn) -> set[str]:
+    """Params `accepts_spec_request_fields` added to `fn`, absent from any REST-forwarding check.
+
+    That decorator (salesagent-g6m2.10) makes a raw wrapper CALLABLE with
+    every field its pinned SDK request model defines, but explicitly does
+    NOT forward or honor them (see its SCOPE docstring) — nothing in the
+    system, REST included, acts on them yet. They are therefore not a
+    "capability REST silently drops": no capability exists anywhere for
+    REST to lose. `functools.wraps` (used by that decorator) preserves
+    `__wrapped__`, so the params it added are exactly the set difference
+    between the decorated and undecorated signatures.
+    """
+    wrapped = getattr(fn, "__wrapped__", None)
+    if wrapped is None:
+        return set()
+    return set(inspect.signature(fn).parameters) - set(inspect.signature(wrapped).parameters)
+
+
 def _raw_param_names(fn) -> set[str]:
-    """Named keyword/positional parameters of a raw wrapper, minus transport plumbing."""
+    """Named keyword/positional parameters of a raw wrapper, minus transport plumbing
+    and minus fields accepts_spec_request_fields added (accepted, not honored anywhere)."""
+    injected = _decorator_injected_params(fn)
     return {
         name
         for name, p in inspect.signature(fn).parameters.items()
-        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) and name not in _TRANSPORT_PARAMS
+        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+        and name not in _TRANSPORT_PARAMS
+        and name not in injected
     }
 
 

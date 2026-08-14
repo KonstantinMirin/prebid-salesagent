@@ -6,8 +6,9 @@ v2 compat fields are derived from model attributes (not post-hoc dict mutation).
 Transforms are registered per-tool and only applied for pre-3.0 clients.
 
 Also provides `accepts_spec_request_fields()`, the request-side counterpart: the
-decorator that lets an MCP tool RECEIVE every field its pinned request schema
-defines — including the AdCP version envelope, which those schemas compose in.
+decorator that lets an MCP tool (or an A2A/REST `_raw()` wrapper) RECEIVE every
+field its pinned request schema defines — including the AdCP version envelope,
+which those schemas compose in.
 """
 
 import functools
@@ -38,7 +39,8 @@ def spec_request_model(tool_name: str) -> type[BaseModel] | None:
 
 
 def accepts_spec_request_fields(tool_func: Callable) -> Callable:
-    """Let an MCP tool accept every field its pinned request schema defines.
+    """Let an MCP tool (or A2A/REST ``_raw()`` wrapper) accept every field its
+    pinned request schema defines.
 
     FastMCP derives each tool's input schema from its Python signature and
     validates arguments with pydantic BEFORE the tool body runs. Any field the
@@ -46,6 +48,16 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     `VALIDATION_ERROR: Unexpected keyword argument` — rather than ignored. A
     seller that rejects a field its own schema DEFINES is non-conformant
     regardless of whether it can act on it.
+
+    The sibling ``_raw()`` functions in ``src/core/tools/`` that A2A and REST
+    call directly have no FastMCP schema validation in front of them, but they
+    have the same underlying defect: calling one with a keyword its own
+    signature omits raises a plain Python ``TypeError`` at argument-binding
+    time (salesagent-g6m2.10). Applying this SAME decorator directly to a
+    ``_raw()`` function closes that gap identically — the tool name is
+    recovered by stripping the trailing ``_raw`` (``get_products_raw`` ->
+    ``get_products``), so one mechanism, one field-set source, covers both
+    the MCP registration chokepoint and the raw-wrapper call sites.
 
     Scope is exactly the defined fields. `additionalProperties: true` on those
     schemas is a statement about the SENDER — a buyer may send more and must not
@@ -61,10 +73,11 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     Because the model is pinned, a spec bump widens acceptance automatically
     instead of silently re-opening this bug.
 
-    Applied once at the registration chokepoint rather than as parameters on
-    sixteen signatures, so a seventeenth tool cannot forget. This SUBSUMES the
-    narrower version-envelope acceptance it replaced: the request models
-    already declare `adcp_version` / `adcp_major_version`.
+    Applied once at the registration chokepoint (or once per ``_raw()``
+    function definition) rather than as parameters on sixteen signatures, so a
+    seventeenth tool cannot forget. This SUBSUMES the narrower version-envelope
+    acceptance it replaced: the request models already declare `adcp_version`
+    / `adcp_major_version`.
 
     Why an explicit ``__signature__`` AND ``__annotations__``: ``functools.wraps``
     points ``inspect.signature`` at the undecorated function, so FastMCP would
@@ -79,13 +92,17 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     `pagination` still gets unpaginated results, and `account` still does not
     select billing. That is strictly better than failing the whole call, and the
     spec models these as optional, but "accepts the field" must never be read as
-    "honors the field"; honoring each is separate, per-field work.
+    "honors the field"; honoring each is separate, per-field work. On the
+    ``_raw()`` path specifically, today's A2A skill handlers also do not yet
+    forward these fields down from the wire `parameters` dict — this decorator
+    only makes the raw function itself callable with them; wiring each A2A
+    handler to forward them is separate, per-field work tracked elsewhere.
     """
     is_async = inspect.iscoroutinefunction(tool_func)
     original = inspect.signature(tool_func)
     declared = set(original.parameters)
 
-    model = spec_request_model(tool_func.__name__)
+    model = spec_request_model(tool_func.__name__.removesuffix("_raw"))
     if model is None:
         return tool_func
 

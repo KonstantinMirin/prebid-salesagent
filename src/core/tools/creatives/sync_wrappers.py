@@ -12,6 +12,7 @@ from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
+from src.core.version_compat import accepts_spec_request_fields
 
 from ._sync import _sync_creatives_impl
 
@@ -73,6 +74,7 @@ async def sync_creatives(
     return mcp_result(response)
 
 
+@accepts_spec_request_fields
 def sync_creatives_raw(
     # A2A/REST send wire dicts; _sync_creatives_impl validates each entry
     # individually (partial-success semantics with per-creative results).
@@ -91,6 +93,11 @@ def sync_creatives_raw(
     """Sync creative assets to the centralized creative library (raw function for A2A server use).
 
     Delegates to the shared implementation.
+
+    @accepts_spec_request_fields additionally lets this function be CALLED
+    with every field SyncCreativesRequest defines (e.g. ext) without raising
+    TypeError — accepted, not yet forwarded or honored by _impl
+    (salesagent-g6m2.10).
 
     Args:
         creatives: List of CreativeAsset models

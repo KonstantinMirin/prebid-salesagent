@@ -41,6 +41,7 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
+from src.core.version_compat import accepts_spec_request_fields
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -335,6 +336,7 @@ async def get_adcp_capabilities(
     return mcp_result(response, content=summary)
 
 
+@accepts_spec_request_fields
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
     context: ContextObject | None = None,
@@ -344,6 +346,11 @@ async def get_adcp_capabilities_raw(
     """Get the capabilities of this AdCP sales agent.
 
     Raw function without @mcp.tool decorator for A2A server use.
+
+    @accepts_spec_request_fields additionally lets this function be CALLED
+    with every field GetAdcpCapabilitiesRequest defines (e.g. ext) without
+    raising TypeError — accepted, not yet forwarded or honored by _impl
+    (salesagent-g6m2.10).
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)

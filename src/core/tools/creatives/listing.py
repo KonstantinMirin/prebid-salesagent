@@ -31,6 +31,7 @@ from src.core.schemas import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
+from src.core.version_compat import accepts_spec_request_fields
 
 logger = logging.getLogger(__name__)
 
@@ -547,6 +548,7 @@ async def list_creatives(
     return mcp_result(response)
 
 
+@accepts_spec_request_fields
 def list_creatives_raw(
     media_buy_id: str = None,
     media_buy_ids: list[str] = None,
@@ -572,6 +574,11 @@ def list_creatives_raw(
     """List creative assets with filtering and pagination (raw function for A2A server use, AdCP v2.5).
 
     Delegates to the shared implementation.
+
+    @accepts_spec_request_fields additionally lets this function be CALLED
+    with every field ListCreativesRequest defines (e.g. ext) without raising
+    TypeError — accepted, not yet forwarded or honored by _impl
+    (salesagent-g6m2.10).
 
     Args:
         media_buy_id: Filter by single media buy ID (backward compat)

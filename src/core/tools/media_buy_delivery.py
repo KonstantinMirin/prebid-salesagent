@@ -114,6 +114,7 @@ from src.core.tools._media_buy_status import (
 )
 from src.core.utils import utc_flight_end, utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary
+from src.core.version_compat import accepts_spec_request_fields
 
 
 def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
@@ -808,6 +809,7 @@ async def get_media_buy_delivery(
     return mcp_result(response)
 
 
+@accepts_spec_request_fields
 def get_media_buy_delivery_raw(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -822,6 +824,11 @@ def get_media_buy_delivery_raw(
     identity: ResolvedIdentity | None = None,
 ):
     """Get delivery metrics for media buys (raw function for A2A server use).
+
+    @accepts_spec_request_fields additionally lets this function be CALLED
+    with every field GetMediaBuyDeliveryRequest defines (e.g. ext) without
+    raising TypeError — accepted, not yet forwarded or honored by _impl
+    (salesagent-g6m2.10).
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)

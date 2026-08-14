@@ -39,6 +39,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
+from src.core.version_compat import accepts_spec_request_fields
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -833,6 +834,7 @@ async def get_products(
     return mcp_result(response)
 
 
+@accepts_spec_request_fields
 async def get_products_raw(
     brief: str = "",
     brand: BrandReference | str | None = None,
@@ -847,6 +849,11 @@ async def get_products_raw(
     Raw function without @mcp.tool decorator for A2A server use.
     Returns a clean GetProductsResponse model — v2 compat is applied
     at the caller's boundary (A2A handler), not here.
+
+    @accepts_spec_request_fields additionally lets this function be CALLED
+    with every field GetProductsRequest defines (e.g. ext, account,
+    pagination) without raising TypeError — accepted, not yet forwarded
+    into the request or honored by _impl (salesagent-g6m2.10).
 
     Args:
         brief: Brief description of the advertising campaign or requirements

@@ -81,6 +81,7 @@ from src.core.schemas import (
 )
 from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
+from src.core.version_compat import accepts_spec_request_fields
 
 
 def _get_media_buys_impl(
@@ -349,6 +350,7 @@ async def get_media_buys(
     return mcp_result(response)
 
 
+@accepts_spec_request_fields
 def get_media_buys_raw(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -359,6 +361,19 @@ def get_media_buys_raw(
     identity: ResolvedIdentity | None = None,
 ):
     """Get media buys (raw function for A2A server use).
+
+    @accepts_spec_request_fields additionally lets this function be CALLED
+    with every field GetMediaBuysRequest (the SDK model) defines (e.g. ext)
+    without raising TypeError — accepted, not yet forwarded or honored by
+    _impl (salesagent-g6m2.10).
+
+    NOTE: this function currently has ZERO production callers — A2A's
+    ``_handle_get_media_buys_skill`` bypasses it entirely, validating
+    against a separate, locally-defined, non-SDK ``GetMediaBuysRequest``
+    (src/core/schemas) instead. That divergence is a live, deeper defect —
+    tracked separately as salesagent-hg1lu, not fixed by this decorator (see
+    the dead-path guard in tests/unit/test_guards_no_dead_path_raw_calls.py,
+    which names this exact function).
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to retrieve (optional)

@@ -39,11 +39,26 @@ class TestRawFunctionParameterValidation:
         # 1. Be passed to helper (except adcp_version which is NOT in helper)
         # 2. Be valid for some other purpose
 
+        # accepts_spec_request_fields (salesagent-g6m2.10) makes get_products_raw
+        # CALLABLE with every field the pinned GetProductsRequest schema defines,
+        # but deliberately does NOT forward any of them to create_get_products_request
+        # or anywhere else -- see that decorator's SCOPE docstring. Those are not
+        # "dropped" parameters this test should flag: nothing downstream honors them
+        # yet, by design, exactly like the MCP wrapper's identical mechanism.
+        # functools.wraps (used by that decorator) preserves __wrapped__, so the
+        # decorator-added params are exactly the set difference vs. the undecorated
+        # signature -- derived, not hand-listed, so a spec bump can't silently
+        # reopen this test.
+        wrapped = getattr(get_products_raw, "__wrapped__", None)
+        decorator_injected = (
+            set(raw_sig.parameters) - set(inspect.signature(wrapped).parameters) if wrapped is not None else set()
+        )
+
         # Known valid parameters that are NOT passed to helper
         valid_non_helper_params = {
             "min_exposures",  # Optional, not in helper
             "strategy_id",  # Optional, not in helper
-        }
+        } | decorator_injected
 
         # Parameters that SHOULD be in helper
         should_be_in_helper = raw_params - valid_non_helper_params
