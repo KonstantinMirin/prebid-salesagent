@@ -494,11 +494,12 @@ class TestOperationNamePerTransport:
             client = _client(env)
 
             with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
-                response = client.post(
-                    _MCP_PATH,
-                    content=_mcp_tool_call("get_products"),
-                    headers=_json_headers(None),
-                )
+                with _assert_verifier_looked():
+                    response = client.post(
+                        _MCP_PATH,
+                        content=_mcp_tool_call("get_products"),
+                        headers=_json_headers(None),
+                    )
 
             _assert_not_rejected(
                 response,
@@ -785,11 +786,12 @@ class TestWebhookAuthenticationForcesASignature:
             client = _client(env)
 
             with _declared_posture(**_supported_only()):
-                response = client.put(
-                    _UPDATE_MEDIA_BUY_PATH,
-                    content=self._webhook_body(with_authentication=False),
-                    headers=_json_headers(token),
-                )
+                with _assert_verifier_looked():
+                    response = client.put(
+                        _UPDATE_MEDIA_BUY_PATH,
+                        content=self._webhook_body(with_authentication=False),
+                        headers=_json_headers(token),
+                    )
 
             _assert_not_rejected(
                 response,
