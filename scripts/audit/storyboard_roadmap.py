@@ -48,7 +48,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.audit import storyboard_coverage_map, storyboard_spec  # noqa: E402
+from scripts.audit import ledger, storyboard_coverage_map, storyboard_spec  # noqa: E402
 
 COMPLY_TEST_CONTROLLER = "comply_test_controller"
 
@@ -144,30 +144,6 @@ def _gh_issue_cross_reference(repo: Path) -> dict[str, str]:
     return result
 
 
-ISSUE_MAP = Path("docs") / "test-obligations" / "storyboard-issue-map.yaml"
-
-
-def _load_issue_map(repo: Path) -> dict[str, dict[str, Any]]:
-    """Curated storyboard -> GitHub-issue map. The one hand-maintained input here.
-
-    Keyed by STORYBOARD, deliberately. The older cross-reference above joins by
-    SCENARIO, which structurally cannot express "this storyboard has no scenario
-    but issue #N tracks the gap" -- and that is the majority case (51 of 62
-    on-path storyboards have no scenario). Keying on the storyboard is what lets
-    an uncovered gap carry a ticket, or be explicitly marked as carrying none.
-
-    A `coverage: none` row with no issues is a real answer, not a hole: it means
-    3.1.1 grades this, we do not test it, and nobody is tracking it.
-    """
-    import yaml
-
-    path = repo / ISSUE_MAP
-    if not path.is_file():
-        return {}
-    loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return loaded.get("storyboards") or {}
-
-
 def check_issue_map_complete(repo: Path, on_path: list[str]) -> list[str]:
     """Return the on-path storyboards absent from the issue map.
 
@@ -176,7 +152,7 @@ def check_issue_map_complete(repo: Path, on_path: list[str]) -> list[str]:
     if the triage outcome is `coverage: none`. Same ratchet discipline as the
     structural guards: the map may not fall behind the spec.
     """
-    return sorted(set(on_path) - set(_load_issue_map(repo)))
+    return sorted(set(on_path) - set(ledger.load_issue_map(repo)))
 
 
 def build_row_status_fields(stem: str, text: str) -> dict[str, Any]:
@@ -233,15 +209,6 @@ def _render_issue_cell(entry: dict[str, Any] | None) -> str:
     return f"{refs} ({coverage})" if coverage != "full" else refs
 
 
-LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
-
-# Ledger ids are `protocol::track::storyboard::step` (the protocol segment arrived
-# with A2A grading). Storyboard is the THIRD segment; a three-group pattern silently
-# read the track as the storyboard and joined nothing -- caught by the zero-join
-# guard below rather than by rendering every row green.
-_LEDGER_ID_RE = re.compile(r"test_storyboard_check\[([^:]+)::([^:]*)::([^:]+)::(.+)\]\s*$")
-
-
 def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
     """storyboard_id -> failing step ids, from the in-network CI ledger.
 
@@ -257,20 +224,14 @@ def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
     code. The architect review's HIGH finding on this ticket says exactly that:
     host-side numbers do not carry over. They stay in the repo as history.
     """
-    path = repo / LEDGER
-    if not path.is_file():
-        return {}
     failures: dict[str, list[str]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if match := _LEDGER_ID_RE.search(line):
-            # Normalize to underscores: the ledger carries the runner's
-            # underscore spelling (webhook_emission) while coverage_map stems
-            # are hyphenated for universal/ (webhook-emission). Joining raw
-            # silently matched nothing and rendered every row as passing.
-            failures.setdefault(match.group(3).replace("-", "_"), []).append(match.group(4))
+    for check_id in ledger.load(repo / ledger.LEDGER):
+        # storyboard_key normalizes hyphens to underscores: the ledger carries
+        # the runner's underscore spelling (webhook_emission) while
+        # coverage_map stems are hyphenated for universal/ (webhook-emission).
+        # Joining raw (storyboard_id) silently matched nothing and rendered
+        # every row as passing.
+        failures.setdefault(check_id.storyboard_key, []).append(check_id.step_id)
     return failures
 
 
@@ -320,7 +281,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     runner_results_dir = repo / "tests" / "storyboard" / "runner" / "results"
     runner_scenarios, runner_summary = _load_runner_scenarios(runner_results_dir)
     gh_issues = _gh_issue_cross_reference(repo)
-    issue_map = _load_issue_map(repo)
+    issue_map = ledger.load_issue_map(repo)
     ledgered = _ledgered_failures(repo)
 
     on_path = [r for r in coverage["storyboards"] if r["status"] == "ON-PATH"]
@@ -391,7 +352,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
 
     if untriaged:
         raise SystemExit(
-            f"{len(untriaged)} on-path storyboard(s) are absent from {ISSUE_MAP}. A storyboard the "
+            f"{len(untriaged)} on-path storyboard(s) are absent from {ledger.ISSUE_MAP}. A storyboard the "
             "pinned spec grades us on must be triaged before this table can claim to be the "
             "conformance gap record — even if the triage outcome is `coverage: none`:\n"
             + "\n".join(f"  {s}" for s in untriaged)

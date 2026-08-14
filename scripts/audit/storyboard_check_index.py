@@ -36,14 +36,13 @@ Read-only. ``--jsonl`` for the source of truth, ``--markdown`` for the report.
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.audit import storyboard_coverage_map, storyboard_roadmap, storyboard_spec  # noqa: E402
+from scripts.audit import ledger, storyboard_binding_sweep, storyboard_coverage_map, storyboard_spec  # noqa: E402
 
 # A check whose storyboard needs this tool can never be graded here: the tool is
 # a production test-control backdoor we will not implement.
@@ -53,57 +52,32 @@ CONTROLLER = "comply_test_controller"
 def _ledger_steps(repo: Path) -> dict[tuple[str, str], list[str]]:
     """(storyboard_id, step_id) -> protocols on which the ledger records a failure."""
     failures: dict[tuple[str, str], list[str]] = {}
-    path = repo / storyboard_roadmap.LEDGER
-    if not path.is_file():
-        return failures
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        match = storyboard_roadmap._LEDGER_ID_RE.search(line)
-        if match:
-            key = (match.group(3).replace("-", "_"), match.group(4))
-            failures.setdefault(key, []).append(match.group(1))
+    for check_id in ledger.load(repo / ledger.LEDGER):
+        failures.setdefault((check_id.storyboard_key, check_id.step_id), []).append(check_id.protocol)
     return failures
 
 
-WIREABILITY = Path("docs") / "test-obligations" / "storyboard-wireability.yaml"
-BINDING_BASELINE = Path("docs") / "test-obligations" / "storyboard-binding-baseline.md"
-
-_BINDING_ROW_RE = re.compile(r"^\| `([^`]+)` \| ([^|]+) \| \*\*([A-E])\*\* \|")
-
-
-def _wireability(repo: Path) -> dict[str, dict[str, Any]]:
-    """Curated (storyboard, step) -> e2e-wireability verdict.
-
-    The one judgement in this index no program can derive: whether a step can be
-    driven and observed from outside a running agent. Same status as the issue
-    map — curated, reviewable, joined rather than inferred.
-    """
-    import yaml
-
-    path = repo / WIREABILITY
-    if not path.is_file():
-        return {}
-    return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("steps") or {}
-
-
-def _binding_buckets(repo: Path) -> dict[str, str]:
-    """Scenario id -> binding-baseline bucket (A verified … E blocked).
+def binding_buckets(repo: Path, adcp: Path) -> dict[str, str]:
+    """Scenario id -> binding-sweep bucket (A verified … E blocked).
 
     A scenario in bucket B cites a storyboard it does not actually claim, so
     "covered by that scenario" is a weaker statement than it looks. Carrying the
     bucket alongside the scenario is what stops this index from repeating the
     roadmap's overclaim in finer print.
+
+    Reads ``storyboard_binding_sweep.audit()``'s own structured findings —
+    never the RENDERED markdown table that sweep also produces for its
+    checked-in report. That report is a view of this same data; regexing it
+    back out risked silently reading zero if the emitter ever changed its
+    bolding, and there was no way for a caller here to tell "the sweep found
+    nothing" apart from "the render changed shape". Public (not
+    underscore-private) so the join can be exercised directly in a test,
+    offline, by monkeypatching ``storyboard_binding_sweep.audit`` — the
+    CI-runnable proof that no markdown formatting is load-bearing here
+    anymore.
     """
-    path = repo / BINDING_BASELINE
-    if not path.is_file():
-        return {}
-    return {
-        m.group(1): m.group(3)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if (m := _BINDING_ROW_RE.match(line.strip()))
-    }
+    result = storyboard_binding_sweep.audit(repo, adcp)
+    return {b["identifier"]: b["bucket"] for b in result["bindings"]}
 
 
 def _wire_fields(entry: dict[str, Any] | None, requires_controller: bool) -> dict[str, Any]:
@@ -135,10 +109,10 @@ def _wire_fields(entry: dict[str, Any] | None, requires_controller: bool) -> dic
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
     coverage = storyboard_coverage_map.build(repo, adcp)
     dist = storyboard_spec.dist_root(adcp, coverage["pinned_version"])
-    issue_map = storyboard_roadmap._load_issue_map(repo)
-    ledger = _ledger_steps(repo)
-    wireability = _wireability(repo)
-    buckets = _binding_buckets(repo)
+    issue_map = ledger.load_issue_map(repo)
+    ledger_failures = _ledger_steps(repo)
+    wireability = ledger.load_wireability(repo)
+    buckets = binding_buckets(repo, adcp)
 
     records: list[dict[str, Any]] = []
     for row in coverage["storyboards"]:
@@ -153,7 +127,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         seen: dict[tuple[str, str], int] = {}
         for step_id, check_type, phase_id in storyboard_spec.checks_by_owner(text):
             ordinal = seen[(step_id, check_type)] = seen.get((step_id, check_type), -1) + 1
-            failing = ledger.get((storyboard_id, step_id), [])
+            failing = ledger_failures.get((storyboard_id, step_id), [])
             # The controller gate is per-STEP as well as per-storyboard: several
             # pinned files seed through it in one step and grade ordinary client
             # traffic in the rest, so judging by the top-level block alone marks
@@ -203,9 +177,24 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     )
     if unexplained:
         raise SystemExit(
-            f"{len(unexplained)} step(s) are marked `conditional` in {WIREABILITY} with neither a "
+            f"{len(unexplained)} step(s) are marked `conditional` in {ledger.WIREABILITY} with neither a "
             "`requires` entry nor a `blocker`. A conditional verdict must name what has to be "
             "provisioned, or be a plain `wireable`:\n" + "\n".join(f"  {s}" for s in unexplained)
+        )
+
+    # A silent {} fallback here would repeat the exact bug this refactor kills:
+    # a bucket join that renders every row as if it were verified. audit() and
+    # coverage_map share a key space by construction (both walk the same
+    # @storyboard-v3.1-tagged scenarios), so a scenario named in covered_by
+    # that resolves no bucket is a genuine join break, never a legitimate
+    # "nothing to report" case.
+    unresolved_scenarios = sorted({s for r in records for s in r["scenarios"] if s not in buckets})
+    if unresolved_scenarios:
+        raise SystemExit(
+            f"{len(unresolved_scenarios)} scenario(s) are claimed by an on-path row's `covered_by` "
+            "but storyboard_binding_sweep.audit() resolved no binding bucket for them — the join is "
+            "broken, not the data. Fix binding_buckets() before trusting this output:\n"
+            + "\n".join(f"  {s}" for s in unresolved_scenarios)
         )
 
     gaps = [r for r in records if not r["scenarios"] and not r["issues"]]

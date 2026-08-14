@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -336,26 +337,15 @@ def check_inventory(text: str) -> dict[str, int]:
     (``universal/signed-requests.yaml`` published 2 field_present + 2
     field_value against 1 of each in the file).
 
-    Counts by absolute OFFSET of each check line, so overlapping windows
-    contribute it once. Deliberately not a whole-text ``findall``: keeping
-    the "graded under a phase" semantic means the file-literal line count
-    stays an INDEPENDENT oracle for the regression tests, and a future pin
-    that grades a check outside every phase window fails them loudly instead
-    of being silently absorbed.
+    :func:`checks_by_owner` already does the absolute-OFFSET-keyed traversal
+    that dedupes overlapping windows (a check line counted once regardless of
+    how many enclosing phase/step windows contain it) -- this is a Counter
+    over its check types, not a second traversal. Two implementations of the
+    same offset-keyed walk previously existed here and in
+    :func:`checks_by_owner`; keeping one is what stops them from silently
+    disagreeing about what a check is.
     """
-    by_offset: dict[int, str] = {}
-    for phase_id in phases(text):
-        window = _phase_window(text, phase_id)
-        if window is None:
-            continue
-        offset, body = window
-        for match in _CHECK_LINE_RE.finditer(body):
-            by_offset[offset + match.start()] = match.group(1)
-
-    counts: dict[str, int] = {}
-    for check_type in by_offset.values():
-        counts[check_type] = counts.get(check_type, 0) + 1
-    return dict(sorted(counts.items()))
+    return dict(sorted(Counter(check_type for _, check_type, _ in checks_by_owner(text)).items()))
 
 
 _STORYBOARD_ID_RE = re.compile(r"^id:\s*(\S+)", re.M)

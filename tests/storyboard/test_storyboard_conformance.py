@@ -37,6 +37,8 @@ from typing import Any
 
 import pytest
 
+from scripts.audit import ledger
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
 _ADCP_BIN = _RUNNER_DIR / "node_modules" / ".bin" / "adcp"
@@ -315,7 +317,13 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         )
         return
     checks = [check for protocol in _PROTOCOLS for check in _collect_checks(protocol)]
-    ids = [f"{c['protocol']}::{c['track']}::{c['storyboard_id']}::{c['step_id']}" for c in checks]
+    # Built through the shared grammar (scripts.audit.ledger.LedgerCheckId) so
+    # this producer and the ledger's parsers can never drift apart -- one
+    # owner for the id shape on both ends of the join. `track` is None for
+    # skip-cause entries; format()'s f-string renders that exactly the way
+    # the old literal f-string did (the string "None"), so behavior here is
+    # byte-for-byte unchanged.
+    ids = [ledger.LedgerCheckId(c["protocol"], c["track"], c["storyboard_id"], c["step_id"]).format() for c in checks]
     metafunc.parametrize("storyboard_check", checks, ids=ids)
 
 

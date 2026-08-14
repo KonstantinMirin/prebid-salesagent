@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scripts.audit import ledger
 from tests.helpers.ledger import load_ledger_nodeids
 
 # --- mcp half ---
@@ -129,13 +130,17 @@ def test_ledger_entries_are_storyboard_conformance_test_ids() -> None:
     entries key on (protocol, track, storyboard_id, step_id) per the Core Invariant, carried as a
     pytest parametrize id on the storyboard-conformance test module -- not a free-text
     reason (reason/reason_kind are non-key annotations reported on failure, per plan
-    step 2, never part of the ledger identity).
+    step 2, never part of the ledger identity). Parsed through the shared grammar
+    (scripts.audit.ledger.LedgerCheckId) rather than a hand-rolled partition split --
+    a malformed entry now fails loudly (parse() returns None) instead of silently
+    mis-parsing a prefix.
     """
     for entry in _load_ledger_nodeids():
         assert entry.startswith("tests/storyboard/"), f"non-storyboard ledger entry: {entry}"
         assert "::" in entry, f"ledger entry is not a test id: {entry}"
-        protocol = entry.partition("[")[2].partition("::")[0]
-        assert protocol in {"mcp", "a2a"}, f"ledger entry has no known protocol prefix: {entry}"
+        parsed = ledger.LedgerCheckId.parse(entry)
+        assert parsed is not None, f"ledger entry does not match the check-id grammar: {entry}"
+        assert parsed.protocol in {"mcp", "a2a"}, f"ledger entry has no known protocol prefix: {entry}"
 
 
 def test_conftest_loader_reads_this_ledger() -> None:
