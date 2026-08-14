@@ -135,6 +135,7 @@ from tests.helpers.signing import (
     SIGNING_TENANT_ID,
     UNRESOLVABLE_AGENT_URL,
     VERIFIED_METRIC,
+    assert_counter_delta,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
@@ -146,9 +147,6 @@ from tests.helpers.signing import (
 )
 from tests.helpers.signing import (
     counter_samples as _counter_samples,
-)
-from tests.helpers.signing import (
-    counter_total as _counter_total,
 )
 from tests.helpers.signing import (
     declared_posture as _declared_posture,
@@ -519,19 +517,21 @@ class TestShadowModeLadder:
             client = env.get_rest_client()
             headers, sent_body = self._tampered_signed_request(private_key, token)
 
-            before = _counter_total(FAILED_METRIC)
-            with _declared_posture(**bucketed_declaration(bucket, *LADDER_OPERATIONS)), counterparty_key(jwks):
+            with (
+                assert_counter_delta(
+                    FAILED_METRIC,
+                    1,
+                    why=f"bucket {bucket!r} must count the failure exactly once — it is the promotion "
+                    "evidence the shadow-mode ladder runs on",
+                ),
+                _declared_posture(**bucketed_declaration(bucket, *LADDER_OPERATIONS)),
+                counterparty_key(jwks),
+            ):
                 response = client.post(BODYLESS_ADCP_PATH, content=sent_body, headers=headers)
-            after = _counter_total(FAILED_METRIC)
 
             assert response.status_code == expected_status, (
                 f"bucket {bucket!r} must answer {expected_status} on the wire for a "
                 f"signed-but-invalid request, got {response.status_code}: {response.text}"
-            )
-            assert after == before + 1, (
-                f"bucket {bucket!r} must increment {FAILED_METRIC} exactly once "
-                f"(it is the promotion evidence the shadow-mode ladder runs on); "
-                f"went {before} -> {after}"
             )
             assert _samples_with(FAILED_METRIC, code=REQUEST_SIGNATURE_DIGEST_MISMATCH), (
                 f"the failure must be labelled with the spec code "
@@ -669,15 +669,14 @@ class TestVerifierSitsOutsideBodyRewriter:
             client = env.get_rest_client()
             headers, wire_body = self._signed_deprecated_field_request(private_key, token)
 
-            before = _counter_total(VERIFIED_METRIC)
-            with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)), counterparty_key(jwks):
+            with (
+                assert_counter_delta(
+                    VERIFIED_METRIC, 1, why="a successfully verified signature must be counted exactly once"
+                ),
+                _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
+                counterparty_key(jwks),
+            ):
                 client.post(REWRITTEN_ADCP_PATH, content=wire_body, headers=headers)
-            after = _counter_total(VERIFIED_METRIC)
-
-            assert after == before + 1, (
-                f"a successfully verified signature must increment {VERIFIED_METRIC} "
-                f"exactly once; went {before} -> {after}"
-            )
 
     def test_rest_compat_still_normalizes_the_deprecated_field(self, integration_db):
         """Companion guard on the re-registration: moving RestCompatMiddleware

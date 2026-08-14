@@ -741,6 +741,30 @@ def counter_samples(sample_name: str) -> dict[tuple[tuple[str, str], ...], float
     return out
 
 
+@contextmanager
+def assert_counter_delta(metric: str, expected: int, *, why: str = "") -> Iterator[None]:
+    """Assert *metric* moved by exactly *expected* across the block.
+
+    The before/after counter-delta idiom was open-coded at six sites across three
+    signing test modules, each re-deriving the same two reads and the same
+    message (salesagent-z6nr.40's DRY finding). One helper so a seventh cannot
+    drift: the reads are always the same distance apart, and the failure message
+    always names the metric and both values.
+
+    ``expected=0`` is a first-class case, not a degenerate one — "production did
+    NOT count this" is exactly as much of an observable as "it counted once", and
+    is what distinguishes a mechanism that declined to engage from one that never
+    ran.
+    """
+    before = counter_total(metric)
+    yield
+    after = counter_total(metric)
+    detail = f" {why}" if why else ""
+    assert after == before + expected, (
+        f"{metric} must move by {expected} across this block; it went {before} -> {after}.{detail}"
+    )
+
+
 def counter_total(sample_name: str) -> float:
     return sum(counter_samples(sample_name).values())
 

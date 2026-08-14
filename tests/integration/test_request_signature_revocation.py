@@ -187,6 +187,7 @@ from tests.helpers.signing import (
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
     always_authorized_brand_resolver,
+    assert_counter_delta,
     bucketed_declaration,
     counterparty_key,
     keypair_for,
@@ -579,15 +580,21 @@ class TestStaticSetIsConsultedFirst:
         an unrelated posture flag turns compliance vector 017 into a graded FAIL.
         """
         with _caller(counterparty_keypair) as caller:
-            before = _counter_total(_UNAVAILABLE_METRIC)
-            with _step_nine(
-                origin=_UNRESOLVABLE_ORIGIN,
-                jwks=caller.jwks,
-                revoked_keyids=COUNTERPARTY_KID,
-                require_revocation_list=True,
+            with (
+                assert_counter_delta(
+                    _UNAVAILABLE_METRIC,
+                    0,
+                    why="the static revocation set answers first, so the list is never consulted "
+                    "and its unavailability is never counted",
+                ),
+                _step_nine(
+                    origin=_UNRESOLVABLE_ORIGIN,
+                    jwks=caller.jwks,
+                    revoked_keyids=COUNTERPARTY_KID,
+                    require_revocation_list=True,
+                ),
             ):
                 response = caller.send()
-            after = _counter_total(_UNAVAILABLE_METRIC)
 
             assert _rejection_code(response) == REQUEST_SIGNATURE_KEY_REVOKED, (
                 "the static revocation set must be checked FIRST and answer immediately: a "
@@ -596,10 +603,6 @@ class TestStaticSetIsConsultedFirst:
                 f"{_rejection_code(response)!r} (status {response.status_code}) — "
                 f"{REQUEST_SIGNATURE_REVOCATION_STALE!r} here means the fetched checker was "
                 "consulted first, which makes vector 017 fail on a config flag"
-            )
-            assert after == before, (
-                f"the fetched checker must not be consulted at all for a statically revoked "
-                f"keyid; {_UNAVAILABLE_METRIC} went {before} -> {after}"
             )
 
 
