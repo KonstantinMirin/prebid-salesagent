@@ -48,9 +48,11 @@ class TestClientTransportParity:
         assert a2a_result.is_success, a2a_result.error
         assert rest_result.is_success, rest_result.error
 
-        mcp_ids = {p["product_id"] for p in mcp_result.payload["products"]}
-        a2a_ids = {p["product_id"] for p in a2a_result.payload["products"]}
-        rest_ids = {p["product_id"] for p in rest_result.payload["products"]}
+        # payload is the pinned GetProductsResponse model on every transport —
+        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        mcp_ids = {p.product_id for p in mcp_result.payload.products}
+        a2a_ids = {p.product_id for p in a2a_result.payload.products}
+        rest_ids = {p.product_id for p in rest_result.payload.products}
 
         assert mcp_ids == {"prod_parity"}
         assert mcp_ids == a2a_ids == rest_ids

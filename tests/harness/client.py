@@ -23,10 +23,11 @@ methods own the real auth-chain / factory-commit / FastMCP-middleware
 plumbing, and duplicating that here would violate this project's DRY
 invariant for no benefit. ``client.py`` only adds the tool-name-generic
 glue around them; passing ``response_cls=dict`` gets a plain dict back
-from ``_run_mcp_client``/``_run_a2a_handler`` instead of the per-tool
-Pydantic model those methods normally parse into (this is why ``call()``
-does not need a ``response_cls`` parameter — see the "typed payload"
-docstring note on ``TransportResult.payload`` below for the tradeoff).
+from ``_run_mcp_client``/``_run_a2a_handler`` — UNWRAP (not DELIVER) then
+parses that dict into ``tool_name``'s pinned SDK response model via
+``spec_response_model`` (salesagent-vuz9t.8.3), so ``call()`` still does not
+need a ``response_cls`` parameter — see the "typed payload" docstring note
+on ``TransportResult.payload`` below for the no-pinned-model case.
 
 All three E2E transports are now implemented — ``_deliver_e2e_rest``
 (salesagent-uz00/SB-3a), ``_deliver_e2e_mcp`` (salesagent-wu78/SB-3b), and
@@ -55,8 +56,9 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
+from src.core.version_compat import spec_response_model
 from tests.harness.address_table import ADDRESS_TABLE, ToolAddress
 from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport, TransportResult
 
@@ -476,21 +478,42 @@ DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = 
 # RestDispatcher.
 
 
-def _unwrap_mcp_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport) -> TransportResult:
-    # cast: TransportResult.payload is typed BaseModel | None — see the "typed
-    # payload" docstring note on AdCPTestClient.call for why this client
-    # deliberately puts a flat dict there instead (no per-tool response schema).
+def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
+    """Parse *raw* wire JSON back into ``tool_name``'s pinned SDK response model.
+
+    Mirrors the production request seam (``spec_request_model`` /
+    ``accepts_spec_request_fields``, ``src/core/version_compat.py``) on the
+    response side: ``spec_response_model(tool_name)`` resolves the one pinned
+    class for tools that have one. ``None`` is the explicit named case for
+    tools that don't — either genuinely no pinned schema, or (e.g.
+    ``create_media_buy``) a ``Union`` of outcome variants with no single class
+    to parse into (see ``spec_response_model``'s docstring) — callers keep
+    ``wire_response`` for those; there is nothing to hand-maintain per tool
+    here, so a spec bump that adds/renames a response model widens this
+    automatically.
+    """
+    model = spec_response_model(tool_name)
+    if model is None:
+        return None
+    return model(**raw)
+
+
+def _unwrap_mcp_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport, tool_name: str) -> TransportResult:
     # tag: transport.value, never a literal — Transport.MCP -> "mcp",
     # Transport.E2E_MCP -> "e2e_mcp" (this function serves both, see
     # UNWRAP_SUCCESS below), so an E2E dispatch is never mislabeled in-process.
     return TransportResult(
-        payload=cast(Any, raw), envelope={"transport": transport.value}, wire_response=env._last_wire_response
+        payload=_parse_pinned_response(tool_name, raw),
+        envelope={"transport": transport.value},
+        wire_response=env._last_wire_response,
     )
 
 
-def _unwrap_a2a_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport) -> TransportResult:
+def _unwrap_a2a_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport, tool_name: str) -> TransportResult:
     return TransportResult(
-        payload=cast(Any, raw), envelope={"transport": transport.value}, wire_response=env._last_wire_response
+        payload=_parse_pinned_response(tool_name, raw),
+        envelope={"transport": transport.value},
+        wire_response=env._last_wire_response,
     )
 
 
@@ -518,10 +541,11 @@ def unwrap_rest_response(
     ``"status"``), so handing them the SAME dict backing ``wire_response``
     would silently corrupt the stashed wire capture. Dispatchers pass
     ``env.parse_rest_response`` to get a typed Pydantic model; the
-    transport-generic ``AdCPTestClient`` core passes the identity function to
-    keep the flat dict (no per-tool response schema — see the docstring note
-    on ``_dispatch_core``). Either way, ``payload`` and ``wire_response`` are
-    built from separate dict objects — they never alias.
+    transport-generic ``AdCPTestClient`` core (``_unwrap_rest`` below) passes
+    ``_parse_pinned_response`` bound to the dispatched tool, same
+    ``spec_response_model(tool)`` parse-back MCP/A2A UNWRAP use. Either way,
+    ``payload`` and ``wire_response`` are built from separate dict objects —
+    they never alias.
     """
     envelope: dict[str, Any] = {
         "transport": transport.value,
@@ -566,12 +590,10 @@ def unwrap_rest_response(
     return TransportResult(payload=payload, envelope=envelope, raw_response=raw_response, wire_response=wire_response)
 
 
-def _unwrap_rest(env: BaseTestEnv, raw: Any, transport: Transport) -> TransportResult:
-    # No per-tool response schema in the generic client core (see the "typed
-    # payload" docstring note on _dispatch_core) — payload stays the flat
-    # wire dict, still deepcopy-isolated from wire_response by
-    # unwrap_rest_response above.
-    return unwrap_rest_response(env, raw, transport, lambda body: body)
+def _unwrap_rest(env: BaseTestEnv, raw: Any, transport: Transport, tool_name: str) -> TransportResult:
+    # spec_response_model(tool_name) parse-back, same as MCP/A2A UNWRAP —
+    # still deepcopy-isolated from wire_response by unwrap_rest_response above.
+    return unwrap_rest_response(env, raw, transport, lambda body: _parse_pinned_response(tool_name, body))
 
 
 def _dispatch_core(
@@ -598,16 +620,21 @@ def _dispatch_core(
     *tool_name* has no registered address on *transport* — expected for tools
     that are not exposed on every transport (e.g. A2A-only skills).
 
-    Note on ``TransportResult.payload``: this core has no per-tool response
-    schema to parse into (the whole point is not hand-maintaining one), so on
-    success ``payload`` holds the same flat dict as ``wire_response`` rather
-    than a parsed Pydantic model — every existing Then-step helper that only
-    checks ``is_success``/``is_error``/``wire_response``/``wire_error_envelope``
-    (i.e. ``assert_wire_error``) is unaffected; a step that reaches into
-    ``result.payload.<field>`` attribute-style needs
-    ``result.payload["<field>"]`` instead, or a follow-up can add an optional
-    ``response_cls`` parameter for typed parsing (not needed by any caller
-    yet — this is exactly the gap salesagent-vuz9t.8.3 closes).
+    Note on ``TransportResult.payload``: UNWRAP resolves ``tool_name``'s
+    pinned SDK response model via ``spec_response_model`` (mirroring the
+    production request seam, ``src/core/version_compat.py``) and parses the
+    wire dict back into it — ``result.payload.<field>`` attribute access,
+    never ``result.payload["<field>"]`` subscripting (salesagent-vuz9t.8.3).
+    Tools with no single pinned response class (no schema, or a ``Union`` of
+    outcome variants — see ``spec_response_model``'s docstring) get the
+    explicit named case instead: ``payload`` is ``None`` and
+    ``wire_response`` still carries the raw dict, so every existing
+    Then-step helper that only checks
+    ``is_success``/``is_error``/``wire_response``/``wire_error_envelope``
+    (i.e. ``assert_wire_error``) is unaffected — but ``is_success`` (which
+    requires ``payload is not None``) is FALSE for those tools' successful
+    dispatches; a caller that needs the flat wire dict for one of them reads
+    ``result.wire_response`` directly instead of relying on ``is_success``.
     """
     address = ADDRESS_TABLE.resolve(tool_name, transport)
     wrapped = WRAP[transport](address, payload)
@@ -622,7 +649,7 @@ def _dispatch_core(
         raise
     except Exception as exc:
         return UNWRAP_ERROR[transport](exc)
-    return UNWRAP_SUCCESS[transport](env, raw, transport)
+    return UNWRAP_SUCCESS[transport](env, raw, transport, tool_name)
 
 
 class AdCPTestClient:
@@ -703,7 +730,7 @@ def _rest_error_to_result(exc: Exception) -> TransportResult:
     return TransportResult(error=exc)
 
 
-UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport], TransportResult]] = {
+UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport, str], TransportResult]] = {
     Transport.MCP: _unwrap_mcp_success,
     Transport.E2E_MCP: _unwrap_mcp_success,
     Transport.A2A: _unwrap_a2a_success,

@@ -40,7 +40,9 @@ class TestClientMcpDispatchNoDb:
         assert result.is_success, result.error
         assert result.envelope["transport"] == "mcp"
         assert result.wire_response is not None
-        product_ids = [p["product_id"] for p in result.payload["products"]]
+        # payload is the pinned GetProductsResponse model, not the raw dict —
+        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        product_ids = [p.product_id for p in result.payload.products]
         assert product_ids == ["prod_001"]
 
     def test_unauthenticated_dispatch_surfaces_auth_required(self):
@@ -74,7 +76,9 @@ class TestClientA2ADispatchNoDb:
 
         assert result.is_success, result.error
         assert result.envelope["transport"] == "a2a"
-        product_ids = [p["product_id"] for p in result.payload["products"]]
+        # payload is the pinned GetProductsResponse model, not the raw dict —
+        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        product_ids = [p.product_id for p in result.payload.products]
         assert product_ids == ["prod_001"]
 
 
@@ -459,7 +463,13 @@ class TestClientE2eMcpDelivery:
 
         async def call_tool(self, name, arguments):
             self.calls.append((name, arguments))
-            return TestClientE2eMcpDelivery._FakeToolResult({"products": [{"product_id": "prod_e2e"}]})
+            # Empty products list — a full Product needs many required nested
+            # fields (publisher_properties, pricing_options,
+            # reporting_capabilities, ...) irrelevant to what these tests
+            # verify (transport wiring / headers / delegation); an empty list
+            # still round-trips through GetProductsResponse
+            # (salesagent-vuz9t.8.3's spec_response_model parse-back).
+            return TestClientE2eMcpDelivery._FakeToolResult({"products": []})
 
     def test_e2e_mcp_dispatch_builds_real_http_transport_and_succeeds(self, monkeypatch):
         from tests.harness._base import BaseTestEnv
@@ -482,7 +492,7 @@ class TestClientE2eMcpDelivery:
         # tag on an E2E dispatch (client.py's _unwrap_mcp_success is shared
         # by both Transport.MCP and Transport.E2E_MCP).
         assert result.envelope["transport"] == "e2e_mcp"
-        assert result.wire_response == {"products": [{"product_id": "prod_e2e"}]}
+        assert result.wire_response == {"products": []}
 
         fake_client = self._FakeMcpClient.instances[0]
         assert fake_client.transport.url == "http://e2e-host:9000/mcp/"
@@ -585,7 +595,14 @@ class TestClientE2eA2aDelivery:
         class _UnitEnv(BaseTestEnv):
             pass
 
-        artifact_data = {"products": [{"product_id": "prod_001"}], "message": "ok", "success": True}
+        # Empty products list — a full Product needs many required nested
+        # fields (publisher_properties, pricing_options, reporting_capabilities,
+        # ...) that are irrelevant to what this test actually verifies (the
+        # JSON-RPC envelope shape and the artifact-stripping behavior below);
+        # an empty list still round-trips through GetProductsResponse
+        # (salesagent-vuz9t.8.3's spec_response_model parse-back) without
+        # hand-maintaining an unrelated fixture of the full Product schema.
+        artifact_data = {"products": [], "message": "ok", "success": True}
         rpc_response = self._rpc_success_body(artifact_data=artifact_data)
 
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
@@ -600,7 +617,9 @@ class TestClientE2eA2aDelivery:
                 result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_A2A)
 
         assert result.is_success, result.error
-        assert result.payload == {"products": [{"product_id": "prod_001"}]}
+        # payload is the pinned GetProductsResponse model, not the raw dict —
+        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        assert result.payload.products == []
         assert result.wire_response == artifact_data  # unstripped — captured before pop
         assert env._last_wire_response == artifact_data
 
@@ -705,6 +724,15 @@ class TestClientE2eA2aDelivery:
         assert result.wire_error_envelope == envelope
 
     def test_task_state_submitted_synthesizes_submitted_wire(self):
+        """``create_media_buy`` is the named no-pinned-response-model case
+        (salesagent-vuz9t.8.3): its SDK response type is a ``Union`` of
+        outcome variants (``spec_response_model`` returns ``None`` for it, see
+        that function's docstring), so UNWRAP cannot pick a single class to
+        parse the synthesized "submitted" wire into. ``payload`` stays
+        explicitly ``None`` — ``result.error is None`` (not ``is_success``,
+        which requires a non-``None`` payload) is the correct success check
+        here — and ``wire_response`` carries the raw dict, exactly as
+        production callers that only read the wire body already expect."""
         from unittest.mock import MagicMock, patch
 
         from tests.harness.transport import E2EConfig
@@ -735,8 +763,9 @@ class TestClientE2eA2aDelivery:
 
                 result = client.call("create_media_buy", {"buyer_ref": "x"}, Transport.E2E_A2A)
 
-        assert result.is_success, result.error
-        assert result.payload == {"status": "submitted", "task_id": "task_submitted_1"}
+        assert result.error is None, result.error
+        assert result.payload is None
+        assert result.wire_response == {"status": "submitted", "task_id": "task_submitted_1"}
 
     def test_missing_e2e_config_raises(self):
         class _UnitEnv(BaseTestEnv):
