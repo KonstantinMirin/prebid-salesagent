@@ -1072,15 +1072,15 @@ Feature: BR-UC-005 Discover Creative Formats
     And the formats array should contain at least one entry
     And formats[0].format_id should roundtrip verbatim with the captured {agent_url, id}
     And an empty formats[] would indicate a stale catalog reference and is a compliance failure
-    # media-buy/index.yaml list_formats_integrity phase: the buyer captures
-    # products[0].format_ids[0] from a get_products response and asks
+    # media-buy/index.yaml product_discovery / list_formats_integrity step: the buyer
+    # captures products[0].format_ids[0] from a get_products response and asks
     # list_creative_formats to resolve it. The sales agent MUST return the format
     # it advertised on its own product -- whether it hosts that format directly or
     # proxies to the creative agent named in format_ids[0].agent_url. An empty
     # formats[] means the catalog references a stale or typo'd format that would
     # have failed silently at sync_creatives after the buy was already committed.
     # list_formats_integrity: format_ids advertised on products MUST resolve through list_creative_formats
-    # @source repo=adcp ref=v3.1.1 phase=list_formats_integrity path=dist/compliance/3.1.1/protocols/media-buy/index.yaml#L352
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=product_discovery step=list_formats_integrity
 
   @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope @storyboard-v3.1 @v3-1 @format-id-roundtrip @third-party-agent
   Scenario: Format ID with agent_url pointing at a third-party creative agent is reported as observation, not failure

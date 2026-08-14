@@ -173,7 +173,8 @@ Feature: BR-UC-006 Sync Creative Assets
     # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
     # push-config endpoints map the same gate to InvalidParamsError with the
     # AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (recovery via enumMetadata)
+    # recovery=correctable comes from error-code.json's enumMetadata.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: TENANT_NOT_FOUND ---
 

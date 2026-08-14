@@ -82,9 +82,23 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
             title=scenario.title,
         )
         for match in re.finditer(r"@source\s+\S.*", scenario.block):
-            footer = storyboard_spec.parse_source_footer(match.group(0))
-            if footer and "path" in footer:
-                binding.sources.append({k: footer.get(k, "") for k in ("repo", "ref", "commit", "phase", "path")})
+            try:
+                footer = storyboard_spec.parse_source_footer(match.group(0))
+            except storyboard_spec.SourceFooterError as exc:
+                binding.findings.append(f"malformed @source footer: {exc}")
+                binding.bucket = "C"
+                continue
+            if footer is not None:
+                binding.sources.append(
+                    {
+                        "repo": footer.repo,
+                        "ref": footer.ref,
+                        "commit": footer.commit or "",
+                        "phase": footer.phase or "",
+                        "step": footer.step or "",
+                        "path": footer.path,
+                    }
+                )
 
         # Phases the scenario names in prose, whether or not it set `phase=`.
         #
@@ -143,7 +157,7 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
             continue
 
         for source in binding.sources:
-            raw_path, ref, phase = source["path"], source["ref"], source["phase"]
+            raw_path, ref, phase, step = source["path"], source["ref"], source["phase"], source["step"]
 
             if version not in ref:
                 binding.findings.append(f"stale ref {ref!r} — pinned version is {version}")
@@ -174,6 +188,17 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
                 elif grading == "prose":
                     binding.findings.append(f"phase {phase!r} is narrative (expected:) not graded (validations:)")
                     binding.bucket = "C"
+
+            if step:
+                # `step` is the addressable unit the conformance ledger keys on
+                # (protocol, track, storyboard_id, step_id) -- resolved against
+                # the cited file exactly like `phase` is, so a `step=` that
+                # names nothing real fails loudly instead of being carried
+                # unchecked (salesagent-vuz9t.4).
+                step_grading = storyboard_spec.phase_is_graded(text, step)
+                if step_grading == "absent":
+                    binding.findings.append(f"step {step!r} not in cited file at {version}")
+                    binding.bucket = "B"
 
             if tier == "specialisms":
                 name = rel.split("/")[1]

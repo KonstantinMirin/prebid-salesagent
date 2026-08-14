@@ -395,10 +395,17 @@ TAG = "@storyboard-v3.1"
 _TAGLINE_RE = re.compile(r"^\s*@[\w.\-]+(?:\s+@[\w.\-]+)*\s*$")
 _SCENARIO_RE = re.compile(r"^\s*Scenario(?: Outline)?:\s*(?P<title>.+?)\s*$")
 _IDENT_TAG_RE = re.compile(r"@(T-[A-Za-z0-9_\-]+)")
-_SOURCE_LINE_RE = re.compile(r"@source\s+((?:\w+=\S+\s*)+)")
-_KV_RE = re.compile(r"(\w+)=(\S+)")
+_SOURCE_LINE_RE = re.compile(r"^\s*#?\s*@source[ \t]+(?P<rest>.+)$", re.M)
+_KV_TOKEN_RE = re.compile(r"^(\w+)=(\S+)$")
 _CITED_PATH_PREFIX_RE = re.compile(r"^(?:dist/compliance/[^/]+/|static/compliance/source/)")
 _SELF_DECLARED_NAME_RE = re.compile(r"^\s*#\s*([a-z][a-z0-9_]{3,}):\s", re.M)
+
+# The closed @source footer grammar. Any key outside this set (a `phases=`
+# pluralization typo) or a bare `key=value` token that fails to parse (trailing
+# prose like `(recovery via enumMetadata)`) is a WRITER error, not a fact to
+# silently drop -- see SourceFooterError.
+_SOURCE_FOOTER_KEYS = frozenset({"repo", "ref", "commit", "phase", "step", "path"})
+_REQUIRED_SOURCE_FOOTER_KEYS = frozenset({"repo", "ref", "path"})
 
 
 @dataclass
@@ -456,22 +463,80 @@ def tagged_scenarios(features_dir: Path, tag: str = TAG) -> list[TaggedScenario]
     return found
 
 
-def parse_source_footer(block: str) -> dict[str, str] | None:
-    """Parse an ``@source repo=... ref=... [commit=...] [phase=...] path=...`` footer.
+class SourceFooterError(ValueError):
+    """An ``@source`` line does not match the closed footer grammar.
 
-    Order-agnostic over every ``key=value`` pair (a prior implementation
+    Raised, never silently swallowed: an unknown key (``phases=``, a
+    pluralization typo) or a non-``key=value`` token (trailing prose like
+    ``(recovery via enumMetadata)``) used to parse clean and vanish -- the
+    unknown key was dropped, the trailing prose was never even attempted.
+    Both are writer-side mistakes and must fail loudly at ``make quality``,
+    not ship as a footer that looks valid and isn't (salesagent-vuz9t.4).
+    """
+
+
+@dataclass(frozen=True)
+class SourceFooter:
+    """One parsed ``@source`` footer.
+
+    ``repo``, ``ref``, ``path`` are always present -- :func:`parse_source_footer`
+    raises :class:`SourceFooterError` rather than return a partial footer.
+    ``commit``, ``phase``, ``step`` are optional and ``None`` when the footer
+    omits them. ``step`` names the addressable unit a scenario or ticket maps
+    onto (the conformance ledger's ``(protocol, track, storyboard_id, step_id)``
+    key) -- callers that resolve bindings must check it, not just carry it.
+    """
+
+    repo: str
+    ref: str
+    path: str
+    commit: str | None = None
+    phase: str | None = None
+    step: str | None = None
+
+
+def parse_source_footer(block: str) -> SourceFooter | None:
+    """Parse an ``@source repo=... ref=... [commit=...] [phase=...] [step=...] path=...`` footer.
+
+    Returns ``None`` only when no ``@source`` line is present at all -- a
+    tagged scenario simply carrying no footer, which is its own (separately
+    reported) violation. When an ``@source`` line IS present, its grammar is
+    enforced strictly and unforgivingly: every token must be ``key=value``
+    with ``key`` drawn from the closed set ``{repo, ref, commit, phase, step,
+    path}``, no key repeats, and ``repo``/``ref``/``path`` are all present --
+    anything else raises :class:`SourceFooterError`. ``path``'s ``#L..``
+    line-fragment suffix is stripped.
+
+    Order-agnostic over the ``key=value`` tokens (a prior implementation
     required an exact ``repo ref [commit] [phase] path`` order and silently
-    failed to match any footer that didn't follow it; another dropped
-    ``phase`` capture entirely). ``path``'s ``#L..`` line-fragment suffix is
-    stripped.
+    failed to match any footer that didn't follow it).
     """
     match = _SOURCE_LINE_RE.search(block)
     if match is None:
         return None
-    result = dict(_KV_RE.findall(match.group(1)))
-    if "path" in result:
-        result["path"] = result["path"].split("#", 1)[0]
-    return result
+    line = match.group(0)
+    values: dict[str, str] = {}
+    for token in match.group("rest").split():
+        kv = _KV_TOKEN_RE.match(token)
+        if kv is None:
+            raise SourceFooterError(f"non key=value token {token!r} in @source footer: {line!r}")
+        key, value = kv.group(1), kv.group(2)
+        if key not in _SOURCE_FOOTER_KEYS:
+            raise SourceFooterError(f"unknown key {key!r} in @source footer: {line!r}")
+        if key in values:
+            raise SourceFooterError(f"repeated key {key!r} in @source footer: {line!r}")
+        values[key] = value
+    missing = _REQUIRED_SOURCE_FOOTER_KEYS - values.keys()
+    if missing:
+        raise SourceFooterError(f"missing required key(s) {sorted(missing)} in @source footer: {line!r}")
+    return SourceFooter(
+        repo=values["repo"],
+        ref=values["ref"],
+        path=values["path"].split("#", 1)[0],
+        commit=values.get("commit"),
+        phase=values.get("phase"),
+        step=values.get("step"),
+    )
 
 
 def normalize_cited_path(raw_path: str) -> str:
@@ -518,6 +583,8 @@ def run_cli(
 
 __all__ = [
     "TAG",
+    "SourceFooter",
+    "SourceFooterError",
     "Storyboard",
     "TaggedScenario",
     "check_inventory",

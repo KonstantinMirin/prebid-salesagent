@@ -190,9 +190,12 @@ def covered_storyboards(repo: Path) -> dict[str, list[str]]:
         # Prefer the scenario's self-declared storyboard name over its (often wrong) @source.
         for name in scenario.self_declared_names:
             claims.setdefault(name, []).append(scenario.identifier)
-        footer = storyboard_spec.parse_source_footer(scenario.block)
-        if footer and "path" in footer and "schemas" not in footer["path"]:
-            rel = storyboard_spec.normalize_cited_path(footer["path"])
+        try:
+            footer = storyboard_spec.parse_source_footer(scenario.block)
+        except storyboard_spec.SourceFooterError:
+            continue  # malformed footer -- reported by the make quality guard, not this map
+        if footer and "schemas" not in footer.path:
+            rel = storyboard_spec.normalize_cited_path(footer.path)
             claims.setdefault(storyboard_spec.storyboard_key(rel), []).append(scenario.identifier)
     return claims
 

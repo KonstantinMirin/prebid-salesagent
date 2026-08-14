@@ -83,12 +83,16 @@ def _violations() -> dict[str, str]:
     bad: dict[str, str] = {}
 
     for scenario in storyboard_spec.tagged_scenarios(FEATURES):
-        footer = storyboard_spec.parse_source_footer(scenario.block)
-        if footer is None or "ref" not in footer or "path" not in footer:
+        try:
+            footer = storyboard_spec.parse_source_footer(scenario.block)
+        except storyboard_spec.SourceFooterError as exc:
+            bad[scenario.identifier] = f"{scenario.feature}: malformed @source footer: {exc}"
+            continue
+        if footer is None:
             bad[scenario.identifier] = f"{scenario.feature}: no @source footer"
             continue
 
-        ref, raw_path = footer["ref"], footer["path"]
+        ref, raw_path = footer.ref, footer.path
         if version not in ref:
             bad[scenario.identifier] = (
                 f"{scenario.feature}: @source ref {ref!r} does not name the pinned version {version}"
@@ -125,6 +129,18 @@ def _violations() -> dict[str, str]:
             continue
 
         known = set(entry.get("phases", []))
+
+        # The footer's own `phase=`/`step=` resolve against the cited file's ids
+        # directly -- `step` is the addressable unit the conformance ledger keys
+        # on (protocol, track, storyboard_id, step_id); a `step=` naming nothing
+        # real must fail here, not carry unchecked (salesagent-vuz9t.4).
+        if footer.phase and footer.phase not in known:
+            bad[scenario.identifier] = f"{scenario.feature}: cites phase {footer.phase!r}, absent from cited {rel!r}"
+            continue
+        if footer.step and footer.step not in known:
+            bad[scenario.identifier] = f"{scenario.feature}: cites step {footer.step!r}, absent from cited {rel!r}"
+            continue
+
         for named in {m.group(1) for m in re.finditer(r"\b([a-z][a-z0-9_]{3,})\s+phase\b", scenario.block)}:
             if any(named in sb.get("phases", []) for sb in storyboards.values()) and named not in known:
                 bad[scenario.identifier] = f"{scenario.feature}: names phase {named!r}, absent from cited {rel!r}"
@@ -166,6 +182,18 @@ def test_allowlist_has_no_stale_entries() -> None:
             "  @T-X-storyboard-c @storyboard-v3.1\n  Scenario: x\n"
             "    # @source repo=adcp ref=v3.1.1 path=protocols/media-buy/scenarios/nope.yaml\n",
             "does not exist",
+        ),
+        (
+            "  @T-X-storyboard-d @storyboard-v3.1\n  Scenario: x\n"
+            "    # @source repo=adcp ref=v3.1.1 path=protocols/media-buy/index.yaml"
+            " phases=create_buy,create_media_buy\n",
+            "malformed @source footer",
+        ),
+        (
+            "  @T-X-storyboard-e @storyboard-v3.1\n  Scenario: x\n"
+            "    # @source repo=adcp ref=v3.1.1 path=protocols/media-buy/index.yaml"
+            " phase=create_buy step=not_a_real_step\n",
+            "cites step",
         ),
     ],
 )

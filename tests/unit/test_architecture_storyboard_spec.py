@@ -155,7 +155,7 @@ def test_tagged_scenarios_block_terminates_at_next_tagline():
 
     footer = storyboard_spec.parse_source_footer(target.block)
     assert footer is not None
-    cited_path = storyboard_spec.normalize_cited_path(footer["path"])
+    cited_path = storyboard_spec.normalize_cited_path(footer.path)
     assert "invalid_transitions" in cited_path
 
     # The bug this guards: a fixed-window extractor with no tag-line terminator

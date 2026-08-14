@@ -444,7 +444,8 @@ Feature: BR-UC-002 Create Media Buy
     # push-config endpoints (message/send configuration,
     # setTaskPushNotificationConfig) map the same gate to InvalidParamsError
     # with the AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (recovery via enumMetadata)
+    # recovery=correctable comes from error-code.json's enumMetadata.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
 
   @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3
   Scenario: Creative IDs not found in library
@@ -2725,7 +2726,7 @@ Feature: BR-UC-002 Create Media Buy
     # storyboard also asserts parity with update_media_buy (covered in UC-003)
     # so the buyer can manage list-bound buys post-creation.
     # inventory_list_targeting: list-based targeting honored on create
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_targeting.yaml phases=create_with_both_lists,verify_create_persisted
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_targeting.yaml phase=create_with_both_lists step=create_buy_with_lists
 
   @T-UC-002-storyboard-measurement-terms-rejected @storyboard-v3.1 @v3-1 @measurement-terms @rejection
   Scenario: Measurement terms unworkable for the seller -- TERMS_REJECTED with terms identified in error details
