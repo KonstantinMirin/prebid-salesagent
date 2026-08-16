@@ -259,11 +259,11 @@ class TestRestAliasesAndAbsence:
             with pytest.raises(UnresolvedRestHandlerName):
                 table.resolve("get_products", Transport.REST)
 
-    def test_get_adcp_capabilities_resolves_on_rest_via_alias(self):
+    def test_get_adcp_capabilities_resolves_on_rest_via_operation_id(self):
         """AC(1): get_adcp_capabilities genuinely resolves on REST — the ONE
         true rename mismatch (get_capabilities REST handler -> get_adcp_capabilities
-        AdCP tool name) — against the REAL production registries, not a
-        synthetic app."""
+        AdCP tool name), resolved via the route's self-declared operation_id —
+        against the REAL production registries, not a synthetic app."""
         table = AddressTable()
         address = table.resolve("get_adcp_capabilities", Transport.REST)
         assert address.name == "get_adcp_capabilities"
@@ -272,7 +272,8 @@ class TestRestAliasesAndAbsence:
 
     def test_raw_rest_handler_name_does_not_resolve_as_a_tool_name(self):
         """get_capabilities is the REST handler name, not an AdCP tool identity —
-        it must not ALSO resolve as its own address once aliased away."""
+        it must not ALSO resolve as its own address once resolved via
+        operation_id to get_adcp_capabilities."""
         table = AddressTable()
         with pytest.raises(NoAddressForTransport):
             table.resolve("get_capabilities", Transport.REST)
@@ -297,8 +298,10 @@ class TestRestAliasesAndAbsence:
 
     def test_rest_tool_aliases_pinned_exactly(self):
         """Reviewed-growth-only (CLAUDE.md allowlist convention): adding an
-        alias requires a deliberate edit to this test, not a silent map growth."""
-        assert REST_TOOL_ALIASES == {"get_capabilities": "get_adcp_capabilities"}
+        alias requires a deliberate edit to this test, not a silent map growth.
+        Empty since /api/v1/capabilities adopted operation_id="get_adcp_capabilities"
+        (the one prior divergence) — see address_table.py module docstring."""
+        assert REST_TOOL_ALIASES == {}
 
     def test_rest_tool_aliases_source_and_target_stay_live(self):
         """Mirror-direction staleness guard: an alias's source must still be a
@@ -393,11 +396,11 @@ class TestCrossRegistryConsistencyGuard:
         table = AddressTable()
         rest_names = table.all_tools(Transport.REST)
         assert len(rest_names) == 12, rest_names
-        assert "get_adcp_capabilities" in rest_names  # the one alias, resolved
+        assert "get_adcp_capabilities" in rest_names  # resolved via operation_id
         assert "get_capabilities" not in rest_names  # raw handler name, not a tool identity
         for absent_tool in REST_ABSENT_TOOLS:
             assert absent_tool not in rest_names
-        assert REST_TOOL_ALIASES == {"get_capabilities": "get_adcp_capabilities"}
+        assert REST_TOOL_ALIASES == {}
         assert REST_ABSENT_TOOLS == frozenset({"complete_task", "get_media_buys", "get_task", "list_tasks"})
 
 

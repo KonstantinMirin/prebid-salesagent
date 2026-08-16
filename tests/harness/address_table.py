@@ -9,17 +9,21 @@ those three sites becomes resolvable through :data:`ADDRESS_TABLE`
 automatically; a tool NOT registered on a transport raises
 :class:`NoAddressForTransport` instead of silently being unreachable.
 
-The one place hand-maintenance IS required: a REST route's Python handler
+The one place hand-maintenance CAN be required: a REST route's Python handler
 function name does not always equal the AdCP tool name it implements (e.g.
-``get_capabilities`` implements ``get_adcp_capabilities``). Those renames are
-recorded in :data:`REST_TOOL_ALIASES`, and tools with no REST route at all are
+the ``/api/v1/capabilities`` handler is named ``get_capabilities`` but
+implements the ``get_adcp_capabilities`` tool). The route declares that
+identity itself via ``operation_id`` (preferred — no hand-maintained entry
+needed); :data:`REST_TOOL_ALIASES` is the fallback for a route that hasn't
+adopted ``operation_id`` yet, and tools with no REST route at all are
 recorded in :data:`REST_ABSENT_TOOLS` — both reviewed-growth-only, both
 validated against live registration by tests (see
 ``tests/harness/test_address_table.py::TestRestAliasesAndAbsence``). A REST
-handler name that matches neither a known tool name nor an alias raises
-:class:`UnresolvedRestHandlerName` at table-build time — it is NEVER silently
-registered under the wrong name. See ``.claude/notes/storyboard-conformance/
-sb2a-transport-generic-client-design.md`` §4 for the design this implements.
+handler name that matches neither a known tool name, a declared
+``operation_id``, nor an alias raises :class:`UnresolvedRestHandlerName` at
+table-build time — it is NEVER silently registered under the wrong name. See
+``.claude/notes/storyboard-conformance/sb2a-transport-generic-client-design.md``
+§4 for the design this implements.
 
 Usage::
 
@@ -52,17 +56,18 @@ from tests.harness.transport import Transport
 PATH_PARAM_RE = re.compile(r"\{(\w+)\}")
 
 # REST handler function name -> AdCP tool name, for the (hopefully rare) case
-# where a route's Python handler is not named after the tool it implements.
-# This is the ONLY place a divergent REST handler name may be recorded — see
-# module docstring. Reviewed-growth-only: pinned exactly by
+# where a route's Python handler is not named after the tool it implements
+# AND the route does not (yet) self-declare its AdCP tool identity via
+# ``operation_id``. ``_index_rest`` prefers a route's declared ``operation_id``
+# over this map whenever it resolves to a known tool name — see
+# ``_index_rest``. This map is the fallback for routes that haven't adopted
+# ``operation_id`` yet; it is reviewed-growth-only: pinned exactly by
 # TestRestAliasesAndAbsence.test_rest_tool_aliases_pinned_exactly, so adding
-# an entry requires a deliberate, reviewed edit to that test too. The clean
-# endgame is REST routes self-declaring their AdCP tool identity via
-# operation_id (see the ticket's DESIGN section) — this map shrinks to empty
-# as routes adopt that.
-REST_TOOL_ALIASES: dict[str, str] = {
-    "get_capabilities": "get_adcp_capabilities",
-}
+# an entry requires a deliberate, reviewed edit to that test too. It reached
+# empty once ``/api/v1/capabilities`` adopted
+# ``operation_id="get_adcp_capabilities"`` (the one prior divergence) — the
+# endgame described above.
+REST_TOOL_ALIASES: dict[str, str] = {}
 
 # AdCP tool names known to have NO REST route at all (as opposed to a REST
 # route under a divergent name — that's REST_TOOL_ALIASES above). Documents
@@ -101,13 +106,15 @@ class UnresolvedRestHandlerName(RuntimeError):
 
     Unlike :class:`NoAddressForTransport` (an EXPECTED per-tool-per-transport
     miss), this is a BUG: a route exists, but its handler name is neither a
-    known MCP/A2A tool name nor an entry in :data:`REST_TOOL_ALIASES`. Fix by
-    adding a ``{handler_name: tool_name}`` entry to ``REST_TOOL_ALIASES`` (if
-    the handler really does implement an existing AdCP tool under a different
-    name) — never by weakening this check. If the route is legitimately NOT
-    an AdCP tool (e.g. a future webhook receiver or internal helper mounted
-    under ``/api/v1``), it is out of this indexer's scope; consult the
-    design doc (``sb2a-transport-generic-client-design.md`` §4) before adding
+    known MCP/A2A tool name, a declared ``operation_id`` that resolves to
+    one, nor an entry in :data:`REST_TOOL_ALIASES`. Fix by declaring
+    ``operation_id="<tool_name>"`` on the route (preferred), or by adding a
+    ``{handler_name: tool_name}`` entry to ``REST_TOOL_ALIASES`` if the
+    route can't yet adopt ``operation_id`` — never by weakening this check.
+    If the route is legitimately NOT an AdCP tool (e.g. a future webhook
+    receiver or internal helper mounted under ``/api/v1``), it is out of
+    this indexer's scope; consult the design doc
+    (``sb2a-transport-generic-client-design.md`` §4) before adding
     a broad exclusion, since ``/api/v1`` is documented as the AdCP tool
     surface.
     """
@@ -237,7 +244,14 @@ class AddressTable:
             if not path.startswith("/api/v1") or endpoint is None or not methods:
                 continue
             handler_name = endpoint.__name__
-            tool_name = REST_TOOL_ALIASES.get(handler_name, handler_name)
+            declared_operation_id = getattr(route, "operation_id", None)
+            if declared_operation_id in known_tool_names:
+                # Route self-declares its AdCP tool identity — prefer it over
+                # both the raw handler name and REST_TOOL_ALIASES (the
+                # endgame the alias map's docstring describes).
+                tool_name = declared_operation_id
+            else:
+                tool_name = REST_TOOL_ALIASES.get(handler_name, handler_name)
             if tool_name not in known_tool_names:
                 raise UnresolvedRestHandlerName(
                     f"REST route {path!r} handler {handler_name!r} resolves to tool name "

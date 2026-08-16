@@ -238,7 +238,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     return apply_version_compat("get_products", result, body.adcp_version)
 
 
-@router.get("/capabilities")
+@router.get("/capabilities", operation_id="get_adcp_capabilities")
 async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
     response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)

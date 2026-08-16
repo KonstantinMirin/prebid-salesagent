@@ -125,7 +125,8 @@ class TestClientRestWrapPathParamPeeling:
 
 class TestRestRequestKwargsBodilessVerbs:
     """salesagent-vuz9t.9: get_adcp_capabilities becoming REST-resolvable
-    (GET /api/v1/capabilities, via address_table.py's REST_TOOL_ALIASES)
+    (GET /api/v1/capabilities, resolved via the route's declared
+    operation_id — formerly via address_table.py's REST_TOOL_ALIASES)
     exposed that ``_deliver_rest``/``_deliver_e2e_rest`` sent ``json=`` for
     EVERY verb — a TypeError for GET, since neither starlette
     TestClient.get nor httpx.Client.get accept a ``json`` kwarg. Pins the
