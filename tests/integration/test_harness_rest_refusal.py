@@ -44,7 +44,7 @@ arm never runs under BDD at all — no BDD test reaches this seam, and driving t
 a test. The integration pin in this file is the grading path for the seam; the BDD
 conftest hook does not apply to it.
 
-beads: salesagent-3v5a.9 (F18); precedent for shape: tests/integration/test_harness_wire_response.py
+GH #1941 (review finding F18); precedent for shape: tests/integration/test_harness_wire_response.py
 """
 
 from __future__ import annotations

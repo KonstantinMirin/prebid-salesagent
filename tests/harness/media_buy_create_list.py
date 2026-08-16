@@ -18,7 +18,7 @@ no REST route, tests/bdd/conftest.py:2885-2895), so the create and list REST
 bodies never both apply in one scenario and wiring an ungraded second REST path
 would be speculative. The inherited create REST dispatch is left untouched.
 
-beads: salesagent-q9e6.1.12
+GH #1900
 """
 
 from __future__ import annotations

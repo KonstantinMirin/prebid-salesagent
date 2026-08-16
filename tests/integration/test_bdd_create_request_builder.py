@@ -32,7 +32,7 @@ difference is behaviourally irrelevant and not worth engineering away. The real 
 on the delegation is the uc002 + uc019 BDD run, with the replay-hash scenarios as the
 canary.
 
-beads: salesagent-3v5a.9 (F19, incl. BINDING #3)
+GH #1941 (review finding F19, incl. BINDING #3)
 """
 
 from __future__ import annotations

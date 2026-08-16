@@ -145,7 +145,8 @@ dc build postgres adcp-server proxy tests
 # governed by the DIRECTORY's write bit (which we own), not the file's own
 # owner, so `rm -f` succeeds even on a ci-owned file; the fresh file this
 # process then creates is ours. Verified live: ci:ci 0644 -> sacirunner:ci 0664.
-mkdir -p logs && chmod 2775 logs
+mkdir -p logs
+chmod 2775 logs
 for f in audit.log error.log structured.jsonl security.jsonl; do
     rm -f "logs/$f" 2>/dev/null || true
     # Two statements, not `: > "logs/$f" && chmod ...`. errexit exempts every command

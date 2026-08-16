@@ -67,7 +67,7 @@ def mock_gam_client():
 # test_start_approval_creates_sync_job lived here. It asserted the SyncJob's fields off
 # a MagicMock session's call_args (never a persisted row) and left the worker thread
 # running past the end of the test, where it reached the real DB and fired a webhook
-# into whatever test ran next (salesagent-egyz). Replaced by the real-DB path in
+# into whatever test ran next (found and fixed in GH #1941). Replaced by the real-DB path in
 # tests/integration/test_order_approval_background.py, which joins the thread.
 
 

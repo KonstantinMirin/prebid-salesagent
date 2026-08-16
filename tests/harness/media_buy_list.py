@@ -11,7 +11,7 @@ needs the SAME get_media_buys dispatch alongside the create path, and a second c
 of these four bodies would be a DRY violation — the next fix to the list dispatch
 would land in one copy only.
 
-beads: salesagent-4n0, salesagent-q9e6.1.12
+GH #1335, GH #1900
 """
 
 from __future__ import annotations

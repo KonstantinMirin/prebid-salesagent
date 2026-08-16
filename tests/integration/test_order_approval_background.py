@@ -7,7 +7,7 @@ live daemon thread past the end of the test. That thread later reached the real
 ``get_db_session()``, found no adapter config, and fired ``_send_approval_webhook`` ->
 ``httpx.Client`` from inside whatever test happened to be running by then, breaking
 ``test_approval_webhook_rejects_metadata_url_without_post``'s ``assert_not_called()``
-under an unlucky pytest-randomly seed (salesagent-egyz).
+under an unlucky pytest-randomly seed (found and fixed in GH #1941).
 
 Here the whole path runs for real: the row is INSERTed by production code, the worker
 thread reads the tenant's adapter config through AdapterConfigRepository, and the

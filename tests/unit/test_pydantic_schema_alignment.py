@@ -1318,6 +1318,57 @@ _DERIVED_HALVES = [
 ]
 
 
+class TestAllOfArmHarvest:
+    """The two allOf harvests read the SAME arms, in the same order.
+
+    ``_allof_required_fields`` and ``_allof_properties`` used to walk the top-level
+    ``allOf`` in two independent loops. They must agree: a field pulled out of an
+    arm's ``required`` without that arm's ``properties`` is reported as
+    schema-required and as not-defined-by-the-schema in the same breath, which is
+    the contradiction that produced 7 spurious failures once already.
+
+    Nothing graded the shared walk, so these pin the two properties a refactor can
+    silently break — arm ORDER (last arm wins on a key collision) and arm COVERAGE
+    (every arm contributes, not just the first).
+    """
+
+    @staticmethod
+    def _two_arm_schema() -> dict[str, Any]:
+        """Two inline arms that collide on one property and differ on required."""
+        return {
+            "allOf": [
+                {
+                    "required": ["from_first"],
+                    "properties": {"shared": {"type": "string"}, "only_first": {"type": "string"}},
+                },
+                {
+                    "required": ["from_second"],
+                    "properties": {"shared": {"type": "integer"}, "only_second": {"type": "string"}},
+                },
+            ]
+        }
+
+    def test_required_is_unioned_across_every_arm(self):
+        """A first-arm-only walk would drop ``from_second``."""
+        assert _allof_required_fields(self._two_arm_schema()) == {"from_first", "from_second"}
+
+    def test_properties_come_from_every_arm(self):
+        """A first-arm-only walk would drop ``only_second``."""
+        props = _allof_properties(self._two_arm_schema())
+        assert set(props) == {"shared", "only_first", "only_second"}
+
+    def test_last_arm_wins_on_a_property_collision(self):
+        """Pins the merge DIRECTION.
+
+        The sequential ``|=`` this was extracted from let later arms overwrite
+        earlier ones. A comprehension preserves that; a ``dict(...)`` built the other
+        way round, or a first-wins guard, would silently flip which spec a colliding
+        field is graded against — and every pinned response composes the shared
+        envelope arm alongside its domain arm, so collisions are the normal case.
+        """
+        assert _allof_properties(self._two_arm_schema())["shared"] == {"type": "integer"}
+
+
 class TestSampleSynthesisFailsLoud:
     """The instrument refuses to guess.
 

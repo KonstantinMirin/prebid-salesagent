@@ -44,7 +44,7 @@ typed-payload assertion cannot tell a real value from the default.
 (MCP) — the bytes the buyer receives. The dry-run case is the one exception and
 says why in its own docstring.
 
-beads: salesagent-3v5a.3 (finding F4)
+GH #1941 (review finding F4)
 """
 
 from __future__ import annotations

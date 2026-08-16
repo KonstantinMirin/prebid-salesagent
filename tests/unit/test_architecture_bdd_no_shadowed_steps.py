@@ -47,7 +47,8 @@ in an allowlist (an allowlist would re-admit the disease):
 
 Neither check has an allowlist, by design.
 
-beads: salesagent-g4cm, salesagent-3v5a.6
+beads: salesagent-g4cm (the original name-identity guard)
+GH #1941 — the match-overlap check added below
 """
 
 from __future__ import annotations

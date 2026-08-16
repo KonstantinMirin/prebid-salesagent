@@ -20,7 +20,7 @@ gives: get_media_buys has no REST route in the composite's UC (tests/bdd/conftes
 flow. Use the A2A and MCP wire transports, which stash the real
 ``wire_response``.
 
-beads: salesagent-3v5a.3
+GH #1941
 """
 
 from __future__ import annotations

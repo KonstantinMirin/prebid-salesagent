@@ -22,7 +22,7 @@ column, so a ``.status`` scan would be noise rather than a seam.
 
 Precedent: ``tests/unit/test_architecture_no_raw_media_package_select.py``.
 
-beads: salesagent-3v5a.1 (L1 — the media-buy write seam)
+GH #1941 (the media-buy write seam)
 """
 
 from __future__ import annotations

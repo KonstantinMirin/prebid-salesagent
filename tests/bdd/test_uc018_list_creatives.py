@@ -155,20 +155,14 @@ def _get_or_create_tenant_and_principal(env: Any) -> tuple[Any, Any]:
     return tenant, principal
 
 
-@given(parsers.parse('the Buyer is authenticated as principal "{principal_id}"'))
-def given_buyer_authenticated_as_principal(ctx: dict, principal_id: str) -> None:
-    """Authenticate the listing buyer as *principal_id* (Background).
-
-    Uses the shared ``authenticate_env_as`` helper (which clears the identity cache and
-    switches the env's principal) so list_creatives is principal-scoped to this buyer,
-    and records the principal so the seed steps own their creatives under the same id
-    the query authenticates as (list_creatives is principal-scoped — a mismatch returns
-    an empty library).
-
-    The helper owns the switch, the canonical ``ctx["principal_id"]``, and the
-    identity post-condition.
-    """
-    authenticate_env_as(ctx, principal_id)
+# 'the Buyer is authenticated as principal "{principal_id}"' is NOT registered here.
+# This module used to declare it, which meant the sentence had two definitions — this
+# one and the identical parser in steps/domain/uc003_ext_error_scenarios.py (registered
+# globally via conftest pytest_plugins). UC-018 silently got the local one and every
+# other feature got the plugin one; the two bodies differed only by a ctx["has_auth"]
+# flag, so the divergence was invisible until someone diffed them. Deleted so the
+# sentence has one meaning. Both call the same authenticate_env_as helper, and the
+# extra has_auth flag is read only by a UC-003 step, so nothing here changes.
 
 
 @given("the buyer recently synced three creatives in three different formats via sync_creatives")

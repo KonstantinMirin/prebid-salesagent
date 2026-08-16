@@ -20,7 +20,7 @@ is what the hand-rolled version it replaces did (``SASession(bind=get_engine())`
 ``session.close()``). A fixture that only bound a session someone else owned would
 leave every caller re-writing the create/close half.
 
-beads: salesagent-3v5a.9 (F20)
+GH #1941 (review finding F20)
 """
 
 from __future__ import annotations
