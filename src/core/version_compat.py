@@ -8,18 +8,140 @@ Transforms are registered per-tool and only applied for pre-3.0 clients.
 Also provides `accepts_spec_request_fields()`, the request-side counterpart: the
 decorator that lets an MCP tool (or an A2A/REST `_raw()` wrapper) RECEIVE every
 field its pinned request schema defines — including the AdCP version envelope,
-which those schemas compose in.
+which those schemas compose in — UNION the spec-prose envelope fields no
+per-tool request schema declares in its own `properties` (see
+`SPEC_ENVELOPE_FIELDS`).
 """
 
 import functools
 import inspect
+import posixpath
 from collections.abc import Callable
 from typing import Any
 
 from adcp import types as adcp_types
 from pydantic import BaseModel
 
+from src.core import adcp_pinned_schema
 from src.core.product_conversion import dump_products_v2_compat, needs_v2_compat
+
+# AdCP 3.1.1, dist/docs/3.1.1/building/by-layer/L1/security.mdx, "Server-side
+# tool wrapper conformance": a seller MUST accept idempotency_key on every task
+# request, and MUST accept context_id, context, push_notification_config, and
+# governance_context on EVERY tool -- including reads -- ignoring what it
+# cannot act on rather than rejecting the call. This is a spec-PROSE mandate,
+# not a schema-SHAPE one: `context_id` and `governance_context` appear in no
+# per-tool request schema's `properties` at the 3.1.1 pin -- they exist only
+# on `core/protocol-envelope.json`, which composes into RESPONSES, not
+# requests. `pinned_request_schema_fields()` below, sourced from each tool's
+# own request schema, therefore cannot see them either; this constant is the
+# union partner that closes that gap regardless of what an individual tool's
+# schema says. This is a known SDK-vs-spec divergence, filed upstream against
+# the adcp SDK; this set is the salesagent-side compensating seam until the
+# SDK models carry these fields themselves.
+SPEC_ENVELOPE_FIELDS = frozenset(
+    {
+        "idempotency_key",
+        "context_id",
+        "context",
+        "push_notification_config",
+        "governance_context",
+    }
+)
+
+# Real SDK types for the SPEC_ENVELOPE_FIELDS members no request model
+# declares (empirically: exactly these 4, across every 3.1.1 spec tool —
+# `context` itself is already a first-class field on every request model).
+# `test_architecture_wrapper_typed_params.py` forbids `Any`-typed parameters
+# on every registered MCP/A2A wrapper, so these are sourced from where the
+# SDK DOES type each name — `context_id`/`governance_context` are `str | None`
+# on every SDK response model that carries them (e.g.
+# `GetAdcpCapabilitiesResponse`); `push_notification_config` reuses the SDK's
+# own `PushNotificationConfig` type, the same type the tools that DO declare
+# this field already use.
+_ENVELOPE_ONLY_FIELD_ANNOTATIONS: dict[str, Any] = {
+    "context_id": str | None,
+    "governance_context": str | None,
+    "idempotency_key": str | None,
+    "push_notification_config": adcp_types.PushNotificationConfig | None,
+}
+
+
+def _category_qualified_ref(model: type[BaseModel]) -> str:
+    """The pinned schema tree's category-qualified ref for *model*'s request
+    schema, derived mechanically from the model's own ``__module__``.
+
+    The SDK's generated module path already carries the category directory
+    (``adcp.types.generated_poc.media_buy.get_products_request`` ->
+    ``media-buy/get-products-request.json``) -- the exact ref
+    ``adcp_pinned_schema.load()`` needs. Category-qualified, not a bare
+    filename: ``list-creative-formats-request.json`` exists at BOTH
+    ``creative/`` and ``media-buy/`` in the pinned tree, so a bare-filename
+    lookup for ``list_creative_formats`` would be ambiguous.
+    """
+    module_parts = model.__module__.split(".")
+    category = module_parts[-2].replace("_", "-")
+    name = module_parts[-1].replace("_", "-")
+    return f"{category}/{name}.json"
+
+
+def _resolve_composed_ref(ref: str, *, from_ref: str) -> str:
+    """Resolve a schema's own relative ``$ref`` (e.g. ``"../core/x.json"``,
+    the plain tree's convention, found inside a schema loaded FROM
+    *from_ref*) to the root-relative form ``adcp_pinned_schema.load()``
+    accepts."""
+    category_dir = posixpath.dirname(from_ref)
+    return posixpath.normpath(posixpath.join(category_dir, ref))
+
+
+def _flatten_request_schema(schema: dict[str, Any], *, ref: str) -> tuple[set[str], set[str]]:
+    """The (properties, required) pair for one request schema, following its
+    ``allOf`` composition one level deep (the AdCP convention for including
+    ``core/version-envelope.json``).
+
+    Only ``allOf`` branches contribute to ``required`` — a ``oneOf``/``anyOf``
+    branch is an ALTERNATIVE, not something every request carries, so folding
+    its ``required`` in would overstate what the schema actually mandates.
+    """
+    properties: set[str] = set(schema.get("properties", {}) or {})
+    required: set[str] = set(schema.get("required", []) or [])
+    for branch in schema.get("allOf", []) or []:
+        branch_ref = branch.get("$ref")
+        if not branch_ref:
+            properties |= set(branch.get("properties", {}) or {})
+            required |= set(branch.get("required", []) or [])
+            continue
+        try:
+            composed = adcp_pinned_schema.load(_resolve_composed_ref(branch_ref, from_ref=ref))
+        except adcp_pinned_schema.PinnedSchemaError:
+            continue
+        properties |= set(composed.get("properties", {}) or {})
+        required |= set(composed.get("required", []) or [])
+    return properties, required
+
+
+def pinned_request_schema_fields(tool_name: str) -> tuple[frozenset[str], frozenset[str]]:
+    """The (properties, required) pair for *tool_name*'s pinned 3.1.1 request
+    schema, read from the installed adcp SDK's own schema tree
+    (`src/core/adcp_pinned_schema.py` -- never the network, never an
+    independently vendored copy).
+
+    Returns two empty frozensets if the tool has no SDK request model, or if
+    its schema cannot be resolved (e.g. the SDK's generated module layout
+    changed) -- callers fall back to `SPEC_ENVELOPE_FIELDS` and the model's
+    own `model_fields` cross-check in that case, never a hard failure at
+    decoration time.
+    """
+    model = spec_request_model(tool_name)
+    if model is None:
+        return frozenset(), frozenset()
+    ref = _category_qualified_ref(model)
+    try:
+        schema = adcp_pinned_schema.load(ref)
+    except adcp_pinned_schema.PinnedSchemaError:
+        return frozenset(), frozenset()
+    properties, required = _flatten_request_schema(schema, ref=ref)
+    return frozenset(properties), frozenset(required)
 
 
 def spec_request_model(tool_name: str) -> type[BaseModel] | None:
@@ -57,6 +179,26 @@ def spec_response_model(tool_name: str) -> type[BaseModel] | None:
     return model if isinstance(model, type) and issubclass(model, BaseModel) else None
 
 
+def _field_annotation(model: type[BaseModel], name: str) -> Any:
+    """The best available type annotation for a newly-accepted parameter.
+
+    Prefers the SDK request model's own annotation when the model declares
+    the field. Falls back to ``_ENVELOPE_ONLY_FIELD_ANNOTATIONS`` for the
+    handful of names the model never declares at all — never ``Any``:
+    ``test_architecture_wrapper_typed_params.py`` forbids it on every
+    registered wrapper this decorator applies to, and a permissive-but-untyped
+    parameter would defeat the point of publishing an accurate tool schema.
+    A name in neither source falls back to ``str | None`` as the least-risky
+    guess (a widen-only "accept but don't act" field, same posture the model
+    fallback already carries) rather than raising at decoration time, which
+    would crash tool registration outright on the next spec bump.
+    """
+    field = model.model_fields.get(name)
+    if field is not None:
+        return field.annotation
+    return _ENVELOPE_ONLY_FIELD_ANNOTATIONS.get(name, str | None)
+
+
 def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     """Let an MCP tool (or A2A/REST ``_raw()`` wrapper) accept every field its
     pinned request schema defines.
@@ -85,12 +227,32 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     Pattern #7), so nothing absent from our models can ever reach the application
     layer and envelope validation stays out of application code.
 
-    The field set comes from the SDK request model, which is the only candidate
-    source that is both complete and available at runtime: the JSON bundle is
-    test-only and gitignored, and `ADCP_TOOL_DEFINITIONS[*]["inputSchema"]` is a
-    partial hint (4 properties for get_products against 18 in the real schema).
-    Because the model is pinned, a spec bump widens acceptance automatically
-    instead of silently re-opening this bug.
+    The field set is the UNION of three sources, in this priority order:
+
+    1. ``pinned_request_schema_fields(tool_name)`` — the tool's own pinned
+       JSON request schema (`src/core/adcp_pinned_schema.py`, reading the
+       installed adcp SDK's schema tree), flattened across its `allOf`
+       composition. This is the PRIMARY source: it is what a buyer's own
+       schema-validation actually checks against, and it is what carries
+       correct required-ness (see below) — the SDK request models diverge
+       from it (`get-products-request.json` requires `buying_mode`; the SDK's
+       `GetProductsRequest` does not mark it required).
+    2. ``SPEC_ENVELOPE_FIELDS`` — the spec-PROSE mandate
+       (security.mdx's "Server-side tool wrapper conformance") that no
+       per-tool schema's `properties` carries in its own shape:
+       `context_id` / `governance_context` live only on the RESPONSE-side
+       `core/protocol-envelope.json`, never a request schema.
+    3. ``model.model_fields`` — the SDK request model, demoted from primary
+       source to CROSS-CHECK/fallback. Kept because a schema-resolution
+       failure (SDK layout change) must not silently narrow acceptance below
+       what the model itself already declares, and because the model is what
+       ships with the pin, so a spec bump widens this arm automatically even
+       before `adcp_pinned_schema.py` is updated for a new layout.
+
+    Required-ness (`pinned_request_schema_fields`'s second element) is
+    recorded on the decorated function as `__spec_required_fields__` for
+    later callers that need it — this decorator's own job is acceptance, not
+    enforcement, so it never rejects a call for a missing required field.
 
     Applied once at the registration chokepoint (or once per ``_raw()``
     function definition) rather than as parameters on sixteen signatures, so a
@@ -125,17 +287,19 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     if model is None:
         return tool_func
 
-    # DEFINED fields only. `idempotency_key` is deliberately NOT added to read
-    # tools: the read-tool request schemas do not define it (only the mutating
-    # ones do), and a field the schema does not define is not ours to accept as
-    # a parameter. `universal/read-tool-idempotency.yaml` grades read tools for
-    # accepting it, but a grading tool does not outrank the schema — if the two
-    # disagree, the storyboard is what is wrong. See the note on that storyboard
-    # in docs/test-obligations/storyboard-issue-map.yaml.
+    # UNION of the tool's pinned schema, the spec-prose envelope set, and the
+    # SDK model itself (cross-check/fallback) — see the docstring's "field set
+    # is the UNION of three sources" section. `idempotency_key` is included
+    # via SPEC_ENVELOPE_FIELDS for every tool, including reads: security.mdx
+    # mandates it on every task request, and `universal/read-tool-idempotency
+    # .yaml` grades reads for accepting it (the 5 known_failures.txt entries
+    # this closes are graduated separately, by a live conformance run, not by
+    # this decorator edit).
+    schema_fields, schema_required = pinned_request_schema_fields(tool_func.__name__.removesuffix("_raw"))
+    accepted_names = sorted((schema_fields | SPEC_ENVELOPE_FIELDS | set(model.model_fields)) - declared)
     additions = [
-        inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=field.annotation)
-        for name, field in model.model_fields.items()
-        if name not in declared
+        inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=_field_annotation(model, name))
+        for name in accepted_names
     ]
     if not additions:
         return tool_func
@@ -177,6 +341,14 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     # `get_type_hints()`, not from the signature object, so a parameter present
     # only in __signature__ raises KeyError while the schema is generated.
     decorated.__annotations__ = {**tool_func.__annotations__, **{p.name: p.annotation for p in additions}}
+
+    # Required-ness per the PINNED SCHEMA (not the SDK model, which diverges —
+    # see the docstring). This decorator only ACCEPTS fields; it never rejects
+    # a call for a missing one. Recorded here so a later caller that DOES want
+    # to enforce required-ness (thread-or-reject each spec-required field
+    # instead of silently accepting-and-dropping it) has a single place to
+    # read it from rather than re-deriving it.
+    decorated.__spec_required_fields__ = schema_required
     return wrapper
 
 
