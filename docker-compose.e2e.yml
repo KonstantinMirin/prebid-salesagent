@@ -121,6 +121,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      # 60s, not creative-agent's 30s (below) -- adcp-server does more work
+      # at startup (DB migrations, etc.) and is the service that actually
+      # showed this bug live: marked genuinely UNHEALTHY (not just
+      # `starting`) under heavy concurrent test-suite load, because there
+      # was no grace period for Docker to report `starting` during
+      # (salesagent-g6l43).
+      start_period: 60s
 
   proxy:
     image: nginx:stable
