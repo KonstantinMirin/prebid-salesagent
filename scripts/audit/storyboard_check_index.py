@@ -43,7 +43,13 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.audit import ledger, storyboard_binding_sweep, storyboard_coverage_map, storyboard_spec  # noqa: E402
+from scripts.audit import (  # noqa: E402
+    ledger,
+    scenario_liveness_join,
+    storyboard_binding_sweep,
+    storyboard_coverage_map,
+    storyboard_spec,
+)
 
 # A check whose storyboard needs this tool can never be graded here: the tool is
 # a production test-control backdoor we will not implement.
@@ -64,9 +70,10 @@ class CheckRecord:
     ``CheckRecord``.
 
     Grouped exactly as :func:`build` assembles them: identity, provenance,
-    gating, measured, coverage, wireability, tracking. Record identity is
-    ``(storyboard, step_id, check_type, ordinal)`` — see the module
-    docstring for why the step, not the storyboard, is the addressable unit.
+    gating, measured, coverage, liveness, wireability, tracking. Record
+    identity is ``(storyboard, step_id, check_type, ordinal)`` — see the
+    module docstring for why the step, not the storyboard, is the
+    addressable unit.
     """
 
     # identity
@@ -89,6 +96,18 @@ class CheckRecord:
     scenarios: list[str]
     scenario_grain: str
     scenario_binding_buckets: dict[str, str]
+    # liveness — joined from a real BDD run (tests/bdd/scenario_liveness.py) plus
+    # the declarative ENV_ROUTES registry lookup (scripts/audit/scenario_liveness_join.py).
+    # claimed_by_scenario is bool(scenarios) made explicit for renderers; a check is
+    # graded_by_live_scenario when at least one claiming scenario has both its
+    # steps bound AND its harness registry-verified wired. graduation_candidate is
+    # true when a claiming scenario is locally ledgered (a curated xfail for a known
+    # gap) while this check's own conformance-ledger measurement is NOT "FAILING" —
+    # a mismatch worth taking through the xpass-graduation workflow.
+    claimed_by_scenario: bool
+    scenario_liveness: dict[str, dict[str, Any]]
+    graded_by_live_scenario: bool
+    graduation_candidate: bool
     # can a scenario for this check be wired end-to-end?
     e2e_wireable: str
     e2e_axes: dict[str, Any]
@@ -117,6 +136,10 @@ class CheckRecord:
             "scenarios": self.scenarios,
             "scenario_grain": self.scenario_grain,
             "scenario_binding_buckets": self.scenario_binding_buckets,
+            "claimed_by_scenario": self.claimed_by_scenario,
+            "scenario_liveness": self.scenario_liveness,
+            "graded_by_live_scenario": self.graded_by_live_scenario,
+            "graduation_candidate": self.graduation_candidate,
             "e2e_wireable": self.e2e_wireable,
             "e2e_axes": self.e2e_axes,
             "e2e_requires": self.e2e_requires,
@@ -192,6 +215,8 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     ledger_failures = _ledger_steps(repo)
     wireability = ledger.load_wireability(repo)
     buckets = binding_buckets(repo, adcp)
+    claiming_scenarios = {s for row in coverage["storyboards"] if row["status"] == "ON-PATH" for s in row["covered_by"]}
+    liveness = scenario_liveness_join.build_index(claiming_scenarios)
 
     records: list[CheckRecord] = []
     for row in coverage["storyboards"]:
@@ -213,6 +238,15 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             # gradable checks ungradable.
             step_controller = CONTROLLER in tools or CONTROLLER in storyboard_spec.step_tools(text, step_id)
             wire = _wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), step_controller)
+            measured = "FAILING" if failing else ("ungradable" if step_controller else "no ledger entry")
+            claiming = row["covered_by"]
+            live_facts = {s: liveness[s] for s in claiming}
+            # A ledgered claiming scenario (a curated xfail for a known gap) whose
+            # check the real conformance run does NOT currently measure FAILING is
+            # a graduation candidate — worth taking through the xpass-graduation
+            # workflow. `ungradable` (comply_test_controller-gated) is excluded on
+            # purpose: those checks can never graduate regardless of BDD status.
+            graduation_candidate = measured == "no ledger entry" and any(f.ledgered for f in live_facts.values())
             records.append(
                 CheckRecord(
                     # identity
@@ -230,11 +264,16 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                     requires_controller=step_controller,
                     # measured, from a real in-network run
                     measured_failing_protocols=sorted(failing),
-                    measured="FAILING" if failing else ("ungradable" if step_controller else "no ledger entry"),
+                    measured=measured,
                     # our coverage — declared per storyboard, carried to each check
-                    scenarios=row["covered_by"],
+                    scenarios=claiming,
                     scenario_grain="storyboard",
-                    scenario_binding_buckets={s: buckets.get(s, "-") for s in row["covered_by"]},
+                    scenario_binding_buckets={s: buckets.get(s, "-") for s in claiming},
+                    # liveness — joined from a real BDD run + the ENV_ROUTES registry
+                    claimed_by_scenario=bool(claiming),
+                    scenario_liveness={s: f.to_dict() for s, f in live_facts.items()},
+                    graded_by_live_scenario=any(f.graded_by_live_scenario for f in live_facts.values()),
+                    graduation_candidate=graduation_candidate,
                     # can a scenario for this check be wired end-to-end?
                     e2e_wireable=wire["e2e_wireable"],
                     e2e_axes=wire["e2e_axes"],
@@ -288,6 +327,8 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "checks": len(records),
             "storyboards": len({r.storyboard for r in records}),
             "with_scenario": sum(1 for r in records if r.scenarios),
+            "with_live_scenario": sum(1 for r in records if r.graded_by_live_scenario),
+            "graduation_candidates": sum(1 for r in records if r.graduation_candidate),
             "with_issue": sum(1 for r in records if r.issues),
             "neither": len(gaps),
             "failing": sum(1 for r in records if r.measured_failing_protocols),
@@ -330,11 +371,13 @@ def render(result: dict[str, Any]) -> str:
         "",
         f"- graded checks on our conformance path: **{totals['checks']}** across "
         f"**{totals['storyboards']}** storyboards",
-        f"- covered by a BDD scenario: **{totals['with_scenario']}**",
+        f"- claimed by a BDD scenario: **{totals['with_scenario']}**",
+        f"- graded by a LIVE scenario (steps bound + registry-verified harness): **{totals['with_live_scenario']}**",
         f"- tracked by an issue: **{totals['with_issue']}**",
         f"- **neither scenario nor ticket: {totals['neither']}**",
         f"- measured FAILING: **{totals['failing']}**",
         f"- permanently ungradable (`comply_test_controller`): **{totals['ungradable']}**",
+        f"- graduation candidates (ledgered, not measured FAILING): **{totals['graduation_candidates']}**",
         "",
         f"E2E wireability — **{totals['wireable']}** wireable as-is, **{totals['conditional']}** "
         f"conditional on provisioning, **{totals['not_wireable']}** not wireable"
@@ -344,7 +387,14 @@ def render(result: dict[str, Any]) -> str:
         "Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario "
         "to a storyboard, not to a check), so a scenario shown against a check means "
         '"this check\'s storyboard is claimed" — not that this check is asserted. That '
-        "distinction is the whole reason for indexing at this grain.",
+        "distinction is the whole reason for indexing at this grain, and the whole reason "
+        "**claimed by a BDD scenario** and **graded by a LIVE scenario** are reported as two "
+        "separate numbers rather than one: claimed only asks whether a scenario's tag names "
+        "this storyboard; graded additionally requires, from a real `pytest tests/bdd` run, "
+        "that every one of that scenario's steps has a bound step definition AND that its "
+        "harness routing resolves to a non-placeholder row in the declarative `ENV_ROUTES` "
+        "registry — a data lookup, never reason-text matching. A claim with no live scenario "
+        "behind it is a dormant claim, not coverage.",
         "",
         "## 1. Measured status",
         "",
@@ -377,17 +427,42 @@ def render(result: dict[str, Any]) -> str:
         "",
         "## 3. Scenario coverage",
         "",
-        "| Check | Scenario(s) claiming the storyboard |",
-        "|---|---|",
+        "`live?` is this row's `graded_by_live_scenario` — at least one claiming scenario with "
+        "steps bound and a registry-verified wired harness. A claim with no live scenario "
+        'renders "claimed only", not silently as covered.',
+        "",
+        "| Check | Scenario(s) claiming the storyboard | live? |",
+        "|---|---|---|",
     ]
     for r in records:
         if not r["scenarios"]:
             continue
-        out.append(f"| {_check_id(r)} | {', '.join(f'`{s}`' for s in r['scenarios'])} |")
+        live = "yes" if r["graded_by_live_scenario"] else "claimed only"
+        out.append(f"| {_check_id(r)} | {', '.join(f'`{s}`' for s in r['scenarios'])} | {live} |")
 
     out += [
         "",
-        "## 4. End-to-end wireability",
+        "## 4. Graduation candidates",
+        "",
+        "A claiming scenario locally xfails this check's storyboard as a known gap (the "
+        "`ledgered` bucket, from a real BDD run — see `tests/bdd/scenario_liveness.py`), but "
+        "the real conformance-ledger run (`tests/storyboard/known_failures.txt`) does not "
+        "currently measure this check FAILING. That mismatch is a candidate for the "
+        "xpass-graduation workflow — inspect per scenario before removing the xfail, per "
+        "scenario, never in bulk. Visibility only: no CI gate reads this table.",
+        "",
+        "| Check | Ledgered scenario(s) |",
+        "|---|---|",
+    ]
+    for r in records:
+        if not r["graduation_candidate"]:
+            continue
+        ledgered = ", ".join(f"`{s}`" for s, facts in r["scenario_liveness"].items() if facts["ledgered"])
+        out.append(f"| {_check_id(r)} | {ledgered} |")
+
+    out += [
+        "",
+        "## 5. End-to-end wireability",
         "",
         "Can a BDD scenario for this check be wired in the e2e environment — Given seeded by "
         "sending requests or by ordinary stack fixtures, When constructed and sent by a client, "
@@ -414,7 +489,7 @@ def render(result: dict[str, Any]) -> str:
 
     out += [
         "",
-        "## 5. Neither scenario nor ticket",
+        "## 6. Neither scenario nor ticket",
         "",
         "The list to take to triage: 3.1.1 grades these, we do not test them, and nothing in the tracker names them.",
         "",

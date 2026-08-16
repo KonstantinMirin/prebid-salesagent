@@ -267,6 +267,10 @@ def _min_record(**overrides) -> dict:
         "scenarios": [],
         "scenario_grain": "storyboard",
         "scenario_binding_buckets": {},
+        "claimed_by_scenario": False,
+        "scenario_liveness": {},
+        "graded_by_live_scenario": False,
+        "graduation_candidate": False,
         "e2e_wireable": "unassessed",
         "e2e_axes": {},
         "e2e_requires": [],
@@ -285,6 +289,8 @@ def _min_totals(records: list[dict]) -> dict:
         "checks": len(records),
         "storyboards": len({r["storyboard"] for r in records}),
         "with_scenario": sum(1 for r in records if r["scenarios"]),
+        "with_live_scenario": sum(1 for r in records if r["graded_by_live_scenario"]),
+        "graduation_candidates": sum(1 for r in records if r["graduation_candidate"]),
         "with_issue": sum(1 for r in records if r["issues"]),
         "neither": sum(1 for r in records if not r["scenarios"] and not r["issues"]),
         "failing": sum(1 for r in records if r["measured_failing_protocols"]),
@@ -297,7 +303,7 @@ def _min_totals(records: list[dict]) -> dict:
 
 
 def _wireability_section(rendered: str) -> str:
-    return rendered.split("## 4. End-to-end wireability")[1].split("## 5.")[0]
+    return rendered.split("## 5. End-to-end wireability")[1].split("## 6.")[0]
 
 
 def test_render_shows_an_unassessed_step_as_a_visible_gap() -> None:

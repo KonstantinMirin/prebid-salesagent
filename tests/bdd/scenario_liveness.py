@@ -19,22 +19,27 @@ each record carries the three facts the parent finding names:
   bound and fourth is not still reports ``steps_bound=False`` with the
   unbound step named, instead of silently stopping at the first failure the
   way a live run's exception would.
-* ``harness_wired`` — a best-effort signal for this task, derived from the
-  same auto-xfail reason text conftest.py already produces verbatim (e.g.
+* ``harness_wired`` — a best-effort signal for THIS module only, derived from
+  the same auto-xfail reason text conftest.py already produces verbatim (e.g.
   ``"No harness wired for {uc}"``, ``"UC-004 harness not yet wired for type:
   ..."``). ``None`` when the scenario's steps aren't bound at all (the
   question is unreached: a step that doesn't even parse never gets to the
-  harness-selection branch). Promoting this into a proper data lookup against
-  the declarative ``ENV_ROUTES`` registry (no reason-text matching) is
-  salesagent-vuz9t.12.2's job, once that registry covers more than its one
-  demonstrator row.
+  harness-selection branch). ``scripts/audit/scenario_liveness_join.py``
+  (salesagent-vuz9t.12.2) does not trust this field — it replaces it with a
+  proper data lookup against the declarative ``ENV_ROUTES`` registry (no
+  reason-text matching), which is why this module's own ``harness_wired`` is
+  documented as best-effort rather than promoted further here: any UC not yet
+  a row in ``ENV_ROUTES`` should read as not-wired downstream, not as
+  whatever this reason-text heuristic happens to guess.
 * ``ledgered`` — True when the observation's reason falls into neither of the
   above two buckets (an explicit, curated ``xfail`` marker for a known
   production/spec gap), or the scenario's e2e_rest nodeid appears in
-  ``tests/bdd/e2e_rest_known_failures.txt``. Joining this through the full
-  three-ledger L0 loaders (``scripts/audit/ledger.py``) is also
-  salesagent-vuz9t.12.2's job — this module only reads the one ledger BDD
-  itself already loads.
+  ``tests/bdd/e2e_rest_known_failures.txt``. ``scripts/audit/scenario_liveness_join.py``
+  reads this field straight through and combines it with the conformance-ledger
+  ``measured`` column ``storyboard_check_index.CheckRecord`` already carries
+  (the third ledger, via ``scripts/audit/ledger.py``'s L0 loaders) to flag
+  graduation candidates — this module only reads the one ledger BDD itself
+  already loads.
 
 Emits ``test-results/bdd_scenario_liveness.json`` (or
 ``$BDD_LIVENESS_ARTIFACT``) at session end — a per-run artifact, not a
