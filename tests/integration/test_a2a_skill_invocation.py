@@ -727,12 +727,19 @@ class TestA2ASkillInvocation:
             # UpdateMediaBuySuccess subclass reaches the wire (not the raw library type),
             # which is the whole point of du92.
             # Value-presence guard: status/revision must reach the wire. (Numbers are
-            # doubles on the A2A protobuf-Struct transport, so 1 arrives as 1.0 — a
+            # doubles on the A2A protobuf-Struct transport, so 2 arrives as 2.0 — a
             # transport-wide representation detail, not du92's concern; assert on value.)
+            #
+            # revision is 2, not 1: the buy is created at revision 1 and this test then
+            # applies ONE update, which the repository's write seam bumps. Pinning 1 here
+            # would pin the MODEL DEFAULT — precisely the fabricated optimistic-concurrency
+            # token GH #1941 stopped emitting, since a buyer who echoes a defaulted revision
+            # back is reporting a token they never read. The value being one greater than
+            # the create is what proves the wire carries the PERSISTED counter.
             assert result.artifacts, "update_media_buy skill returned no artifacts"
             payload = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
             assert payload["status"] == "completed", f"missing/incorrect status on wire: {payload!r}"
-            assert payload["revision"] == 1, f"missing/incorrect revision on wire: {payload!r}"
+            assert payload["revision"] == 2, f"missing/incorrect revision on wire: {payload!r}"
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_skill(

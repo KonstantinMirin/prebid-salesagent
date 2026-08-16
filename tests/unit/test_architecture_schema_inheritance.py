@@ -279,9 +279,17 @@ class TestSchemaInheritance:
             ("ListAccountsResponse", "accounts"),
             # Pattern #4: the get_media_buys item chain. Both narrowings are load-bearing
             # — our Targeting adds ~30 fields the library's TargetingOverlay lacks, and
-            # serializing through the library annotation would drop them. Note what is
-            # NOT here: snapshot, creative_approvals and snapshot_unavailable_reason are
-            # inherited outright, because those local subclasses add no fields.
+            # serializing through the library annotation would drop them.
+            #
+            # Note what is NOT here, and why, because the two reasons are different:
+            #   snapshot, creative_approvals — local SUBCLASSES that add no fields, so
+            #     they inherit the parent's declaration outright.
+            #   snapshot_unavailable_reason, approval_status — not subclasses at all.
+            #     Their types are plain ALIASES of the library enums
+            #     (SnapshotUnavailableReason, ApprovalStatus), so there is no local
+            #     declaration for this guard to see in the first place. Aliasing is what
+            #     stopped the members drifting; the local SnapshotUnavailableReason copy
+            #     had lost one of the pinned three.
             ("GetMediaBuysPackage", "targeting_overlay"),
             ("GetMediaBuysMediaBuy", "packages"),
             ("GetMediaBuysResponse", "media_buys"),

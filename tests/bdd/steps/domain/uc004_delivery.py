@@ -957,7 +957,8 @@ def when_validate_webhook_config(ctx: dict) -> None:
     rejection happens in PRODUCTION, not in test code. A 32-char credential is
     accepted and the create succeeds.
     """
-    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _pricing_option_id
+    from tests.bdd.steps.generic._create_request import pricing_option_id
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     secret = ctx.get("webhook_secret", "")
     kwargs = _ensure_request_defaults(ctx)
@@ -966,7 +967,7 @@ def when_validate_webhook_config(ctx: dict) -> None:
     if product is not None:
         kwargs["packages"][0]["product_id"] = product.product_id
     if pricing_option is not None:
-        kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
+        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(pricing_option)
     kwargs["reporting_webhook"] = {
         "url": _WEBHOOK_URL,
         "reporting_frequency": "daily",

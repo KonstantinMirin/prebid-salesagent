@@ -45,6 +45,13 @@ in an allowlist (an allowlist would re-admit the disease):
     unit-test guard can only cover ``pytest_plugins`` modules; covering test modules
     needs a collection-time hook.
 
+All three limits are tracked on GH #1938, which owns the duplicate-step class and
+carries the measurement behind them (11 cross-module collision classes, 34 further
+intra-module texts, and the fact that for the deliberate-narrowing classes the winner
+is decided purely by ``pytest_plugins`` registration ORDER). They are declared here
+rather than allowlisted because an allowlist would re-admit the disease this guard
+exists to remove.
+
 Neither check has an allowlist, by design.
 
 beads: salesagent-g4cm (the original name-identity guard)
