@@ -40,17 +40,19 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 #   * RECOVERY_BY_WIRE_CODE — what each of those codes means for retry. Loaded
 #     from the pinned spec at import; the only recovery classification either
 #     TABLE in this module carries.
-# Scope note: raise sites do NOT read RECOVERY_BY_WIRE_CODE yet. Two hand-typed
-# surfaces survive, and they differ in whether anything checks them:
-#   * the per-class ``_default_recovery`` literals below — hand-typed but GRADED
-#     against this same pin by
-#     tests/unit/test_architecture_error_recovery_enum_conformance.py (every class
-#     whose code the pin defines).
-#   * the ``recovery=`` kwarg on ``AdCPError.__init__`` / ``synthesize`` — hand-typed
-#     and UNGRADED: a call site can pair a code with a recovery the pin contradicts
-#     and no oracle sees it (context_manager.py:405 does exactly that today,
-#     ``recovery="terminal"`` on a SERVICE_UNAVAILABLE the pin calls ``transient``).
-# Both go when ``recovery`` becomes a read-only property over this table.
+# Recovery is DERIVED, not stated. ``AdCPError.recovery`` is a read-only property
+# that looks its wire code up in RECOVERY_BY_WIRE_CODE, so the only way to say
+# "this is terminal" is to raise a class whose code the pinned enumMetadata
+# classifies terminal. There is no ``recovery=`` kwarg on ``__init__`` or on
+# ``synthesize`` to disagree with the pin through, and no raise site in ``src/``
+# carries a hand-typed recovery literal.
+#
+# One hand-typed surface remains, and it is graded: the per-class
+# ``_default_recovery`` literals below. They are the fallback for a code the pin
+# does not define, and
+# tests/unit/test_architecture_error_recovery_enum_conformance.py checks every
+# class whose code the pin DOES define against this same table — so a literal
+# that contradicts the pin fails a test rather than reaching a buyer.
 
 
 def _load_pinned_recovery() -> dict[str, RecoveryHint]:
