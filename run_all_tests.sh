@@ -258,15 +258,19 @@ fi
 # --use-aliases gives this run container the `tests` network alias so the server
 # can call webhooks back to it (ADCP_WEBHOOK_HOST=tests) by name.
 #
-# SERIAL (no `-p`): run_all_tests.sh runs `tox -p` on the HOST, where each env is
-# its own process tree with the full host RAM. Packing all six suites into ONE
-# container and running them concurrently OOM-kills them (exit -9) — and bdd's
-# `-n auto` alone spawns one worker per host CPU (~17), each loading the app.
-# Serial execution keeps peak memory to a single suite; PYTEST_XDIST_AUTO_NUM_WORKERS
-# (set on the tests service) caps bdd's worker count so it can't blow memory or
-# trip the xdist loadscope rescheduler. Same suites, same outcomes — just not
-# wall-clock parallel inside the one container.
-echo "Running suites in-network (serial): $SUITES"
+# PARALLEL (`-p`, re-enabled salesagent-8v2yu): this was serial from 2026-06-18
+# to 2026-08-16 over an OOM observed running all six suites concurrently in one
+# container, where bdd's `-n auto` alone could spawn one worker per host CPU
+# (~17), each loading the app. That OOM predates PYTEST_XDIST_AUTO_NUM_WORKERS
+# (added the same day, in response) ever reaching this container correctly —
+# a real, separate export-plumbing bug (cassini-i04) meant the cap this
+# comment used to cite was, for some callers, never actually applied. With
+# that bug fixed and the cap now confirmed to genuinely reach the container,
+# a real, monitored, disposable-worktree run of the full 7-suite `-p` (unit,
+# integration, bdd_inprocess, bdd_e2e, admin, e2e, ui) measured peak memory at
+# ~35GB of the box's 86.4GB (40.5%), no OOM, pass/fail counts matching a
+# serial baseline — see salesagent-8v2yu for the full live-test evidence.
+echo "Running suites in-network (parallel): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
 RC=0
@@ -282,7 +286,7 @@ RC=0
 chmod -R g+w . 2>/dev/null || true
 chmod -R go-w .git 2>/dev/null || true
 
-dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -e "$SUITES" || RC=$?
+dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -p -e "$SUITES" || RC=$?
 
 # tox writes per-suite JSON into /app/.tox, which is a plain bind-mounted dir
 # now (Aug 2026: the tox_data named volume it used to live on was removed --
