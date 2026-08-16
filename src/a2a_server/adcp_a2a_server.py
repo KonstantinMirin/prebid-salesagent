@@ -47,6 +47,7 @@ from a2a.types import (
     TaskStatus,
     UnsupportedOperationError,
 )
+from a2a.utils.constants import PROTOCOL_VERSION_0_3
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
@@ -2218,12 +2219,28 @@ def create_agent_card() -> AgentCard:
     )
 
     # Create the agent card with minimal required fields
+    #
+    # supported_interfaces carries TWO entries for the same JSON-RPC endpoint:
+    # the A2A 1.0 entry (protocol_version="1.0") and a legacy-compatible entry
+    # (protocol_version=PROTOCOL_VERSION_0_3) so a2a-sdk's own backward-compat
+    # bridge (a2a.compat.v0_3.conversions.to_compat_agent_card, wired through
+    # response_helpers.agent_card_to_dict()) can promote it to a top-level
+    # `url` field. Without a legacy-eligible interface entry, that bridge
+    # raises VersionNotSupportedError internally (caught, silently producing
+    # an empty compat dict) and no top-level `url` is ever emitted.
+    #
+    # This matters because clients still on pre-1.0 A2A SDKs (e.g. the
+    # storyboard conformance runner's bundled @a2a-js/sdk 0.3.14) read only
+    # the legacy top-level `url` and report the agent unreachable otherwise —
+    # a discovery skew, not a JSON-RPC gap (our route is already 0.3-compatible
+    # via enable_v0_3_compat=True in src/app.py). See GH #1440 (ChrisHuie).
     agent_card = AgentCard(
         name="Prebid Sales Agent",
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
         version=sales_agent_version,
         supported_interfaces=[
             AgentInterface(url=server_url, protocol_version="1.0"),
+            AgentInterface(url=server_url, protocol_version=PROTOCOL_VERSION_0_3),
         ],
         capabilities=AgentCapabilities(
             push_notifications=True,

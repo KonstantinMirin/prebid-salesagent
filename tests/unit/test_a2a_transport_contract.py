@@ -164,6 +164,21 @@ class TestA2ARouteExistence:
         assert len(card["supportedInterfaces"]) > 0
         assert "url" in card["supportedInterfaces"][0]
 
+    def test_agent_card_dual_emits_top_level_url(self, client):
+        """Agent card must also expose the endpoint as a top-level `url`.
+
+        The A2A 1.0 card shape only advertises the endpoint under
+        ``supportedInterfaces[0].url``. Clients still on the 0.3-era SDK
+        (e.g. the storyboard conformance runner's bundled ``@a2a-js/sdk``
+        0.3.14) read only the legacy top-level ``url`` field and report the
+        agent unreachable otherwise — a discovery skew, not a JSON-RPC gap
+        (the route itself is already 0.3-compatible). See GH #1440.
+        """
+        response = client.get("/.well-known/agent-card.json")
+        card = response.json()
+        assert "url" in card, "Agent card must dual-emit a top-level 'url' for 0.3-era A2A clients (GH #1440)"
+        assert card["url"] == card["supportedInterfaces"][0]["url"]
+
 
 # ---------------------------------------------------------------------------
 # Auth Contract
