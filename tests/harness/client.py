@@ -60,7 +60,14 @@ from typing import TYPE_CHECKING, Any
 
 from src.core.version_compat import spec_response_model
 from tests.harness.address_table import ADDRESS_TABLE, ToolAddress
-from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport, TransportResult
+from tests.harness.transport import (
+    NO_IDENTITY_OVERRIDE,
+    Transport,
+    TransportResult,
+    _envelope_from_adcp_error,
+    _envelope_from_mcp_error,
+    _wire_envelope_from_exception,
+)
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
@@ -700,14 +707,13 @@ class AdCPTestClient:
 def _mcp_error_to_result(exc: Exception) -> TransportResult:
     """Error-path ``TransportResult`` for MCP DELIVER failures.
 
-    Composes the SAME module-level envelope-extraction helpers
-    ``tests/harness/dispatchers.py``'s ``McpDispatcher`` already uses
-    (imported here, not re-implemented) so a wire-envelope regression is
-    caught identically whether dispatch went through an env's own
-    ``call_mcp`` or through this generic client.
+    Composes the SAME module-level envelope-extraction helpers (imported
+    from ``tests/harness/transport.py``, not re-implemented) that
+    ``tests/harness/dispatchers.py``'s ``McpDispatcher`` uses, so a
+    wire-envelope regression is caught identically whether dispatch went
+    through an env's own ``call_mcp`` or through this generic client.
     """
     from tests.harness._base import _unwrap_mcp_tool_error
-    from tests.harness.dispatchers import _envelope_from_adcp_error, _envelope_from_mcp_error
 
     # _run_mcp_client already unwraps ToolError -> AdCPError internally
     # (stashing _wire_error_envelope when reconstruction succeeds); this
@@ -730,8 +736,6 @@ def _a2a_error_to_result(exc: Exception) -> TransportResult:
     raising, so ``_wire_envelope_from_exception``'s getattr fast-path covers
     it — same helper ``A2ADispatcher.dispatch`` uses.
     """
-    from tests.harness.dispatchers import _wire_envelope_from_exception
-
     return TransportResult(error=exc, wire_error_envelope=_wire_envelope_from_exception(exc))
 
 

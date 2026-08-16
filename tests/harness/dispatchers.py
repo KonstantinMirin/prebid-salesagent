@@ -17,71 +17,26 @@ Usage (internal — called by BaseTestEnv.call_via)::
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
 
-from tests.harness.transport import Transport, TransportResult
+from tests.harness.transport import (
+    Transport,
+    TransportResult,
+    _envelope_from_adcp_error,
+    _envelope_from_mcp_error,
+    _wire_envelope_from_exception,
+)
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
 
-
-def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
-    """Build a SYNTHESIZED envelope from an AdCPError instance.
-
-    Used by ImplDispatcher to populate the separate
-    ``synthesized_error_envelope`` field — IMPL has no wire by definition
-    and ``wire_error_envelope`` is reserved for real wire bytes captured
-    by REST/MCP/A2A. Production code uses the same
-    ``build_two_layer_error_envelope`` helper at the boundary, so the
-    synthesized envelope matches what production would emit for the same
-    exception. It does NOT verify that a regression in
-    ``build_two_layer_error_envelope`` actually reaches the wire.
-
-    A2A and REST tests asserting on ``result.wire_error_envelope`` see
-    REAL wire bytes:
-        - A2A: the artifact DataPart, attached to the reconstructed
-          ``AdCPError`` as ``_wire_error_envelope`` by
-          ``tests.harness._base._envelope_to_adcp_error``.
-        - REST: the HTTP response body, captured directly by RestDispatcher.
-        - MCP: the JSON string in ``ToolError``, parsed by McpDispatcher.
-    """
-    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
-
-    if isinstance(exc, AdCPError):
-        return build_two_layer_error_envelope(exc)
-    return None
-
-
-def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
-    """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
-
-    When the A2A pipeline reconstructs an AdCPError from a failed Task's
-    artifact DataPart, ``tests.harness._base._envelope_to_adcp_error``
-    attaches the captured envelope to the exception as
-    ``_wire_error_envelope``. This helper returns that real wire envelope
-    if present; otherwise falls back to ``_envelope_from_adcp_error``
-    (synthesized — same helper production calls).
-    """
-    real_wire = getattr(exc, "_wire_error_envelope", None)
-    if isinstance(real_wire, dict):
-        return real_wire
-    return _envelope_from_adcp_error(exc)
-
-
-def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
-    """Extract the wire envelope from an MCP ToolError's JSON string."""
-    from fastmcp.exceptions import ToolError
-
-    if not isinstance(exc, ToolError):
-        return None
-    try:
-        envelope = json.loads(str(exc))
-        if isinstance(envelope, dict) and "errors" in envelope:
-            return envelope
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return None
+# The three envelope-extraction helpers above (_envelope_from_adcp_error,
+# _envelope_from_mcp_error, _wire_envelope_from_exception) live in
+# transport.py, not here — both this module and client.py need them, and
+# housing them in either would recreate the mutual lazy-import cycle
+# untangled by salesagent-vuz9t.17 (client.py used to lazily import them
+# back from this module, while this module lazily imports dispatch-core
+# functions FROM client.py — the two together being the "mutual" part).
 
 
 class ImplDispatcher:
