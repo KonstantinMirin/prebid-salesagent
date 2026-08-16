@@ -33,14 +33,17 @@ import asyncio
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import is_e2e
 from tests.bdd.steps.domain.uc006_sync_creatives import (
+    _E2E_AGENT_URL,
+    _E2E_FORMAT_ID,
     _action_str,
     _build_creative_payload,
     _ensure_tenant_principal,
     _setup_product_with_creative_policy,
     when_sync_creative,
 )
-from tests.factories.creative_asset import build_assets, image_spec, text_spec, video_spec
+from tests.factories.creative_asset import build_assets, image_spec, text_spec, url_spec, video_spec
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — provenance structural-rejection scenarios
@@ -209,6 +212,12 @@ def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     (same capture mechanism), but seeds a Product on CreativeSyncEnv's tenant
     instead of CreativeFormatsEnv's — the two envs are unrelated harnesses so
     the capture must run against whichever DB/session this scenario's env owns.
+
+    On e2e_rest, sync_creatives runs against the real Docker creative-agent
+    container (no format-registry mock), so the captured format_id must be one
+    that's actually registered there — the same real agent_url/format_id
+    ``uc006_sync_creatives._format_payload`` uses for e2e, not the mocked
+    in-process default.
     """
     from src.core.schemas import GetProductsRequest
     from src.core.tools.products import _get_products_impl
@@ -221,8 +230,12 @@ def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
-    agent_url = env.DEFAULT_AGENT_URL
-    format_id = "display_300x250"
+    if is_e2e(ctx):
+        agent_url = _E2E_AGENT_URL
+        format_id = _E2E_FORMAT_ID
+    else:
+        agent_url = env.DEFAULT_AGENT_URL
+        format_id = "display_300x250"
 
     product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": format_id}])
     PricingOptionFactory(product=product)
@@ -241,13 +254,25 @@ def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
 
 @when("the Buyer Agent sends sync_creatives carrying a creative whose format_id matches the captured object")
 def when_sync_creative_with_captured_format_id(ctx: dict) -> None:
-    """Send sync_creatives with a creative whose format_id is the captured {agent_url, id} verbatim."""
+    """Send sync_creatives with a creative whose format_id is the captured {agent_url, id} verbatim.
+
+    On e2e_rest the real Docker creative-agent expects assets matching its
+    registered format's asset roles, not the mocked in-process shape — mirrors
+    ``uc006_sync_creatives._format_payload``'s e2e asset set.
+    """
     captured = ctx["captured_format_id"]
+    if is_e2e(ctx):
+        assets = build_assets(
+            image_spec("banner_image", url="https://example.com/banner.png"),
+            url_spec("click_url", url="https://example.com/landing"),
+        )
+    else:
+        assets = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
     creative_payload = {
         "creative_id": "creative-format-roundtrip-001",
         "name": "Format ID Roundtrip Creative",
         "format_id": {"id": captured["id"], "agent_url": captured["agent_url"]},
-        "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
+        "assets": assets,
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     when_sync_creative(ctx)
