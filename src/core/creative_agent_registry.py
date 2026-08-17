@@ -150,7 +150,7 @@ class FormatFetchResult:
     errors: list[AdCPResponseError]
 
 
-from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
+from src.core.utils.mcp_client import call_mcp_tool  # Keep for custom tools (preview, build)
 
 
 def _get_reference_formats() -> list[Format]:
@@ -372,7 +372,7 @@ class CreativeAgentRegistry:
     ) -> list[Format]:
         """Fetch format list from an OPERATOR-configured creative agent, through the guarded MCP seam.
 
-        Routes through ``create_mcp_client`` — a real MCP handshake, IP-pinned,
+        Routes through ``call_mcp_tool`` — a real MCP handshake, IP-pinned,
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
         httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
         transport injection point; upstream adcp-client-python#1004). Closes the
@@ -412,13 +412,14 @@ class CreativeAgentRegistry:
 
         connection_url = _connection_agent_url(agent.agent_url)
         try:
-            async with create_mcp_client(
+            result = await call_mcp_tool(
                 agent_url=connection_url,
+                tool="list_creative_formats",
+                arguments=args,
                 auth=agent.auth,
                 auth_header=agent.auth_header,
                 timeout=agent.timeout,
-            ) as client:
-                result = await client.call_tool("list_creative_formats", args)
+            )
             payload = extract_tool_payload(result)
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"creative agent {agent.name}"), logger=logger)
@@ -820,23 +821,24 @@ class CreativeAgentRegistry:
         """
         # Use custom MCP client for non-standard tools (preview_creative not in AdCP spec)
         try:
-            async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
-                result = await client.call_tool(
-                    "preview_creative",
-                    {
-                        # The pinned reference agent's schema takes format_id as the
-                        # federation-identity OBJECT {agent_url, id} — the live public
-                        # host tolerated a bare string, which masked this mismatch
-                        # until connections were pinned in-network (salesagent-9qe2).
-                        # The identity keeps the CANONICAL agent_url, not the
-                        # connection alias. AnyUrl serialization yields the
-                        # trailing-slash form for path-less URLs — verified tolerated
-                        # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
-                        "format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json"),
-                        "creative_manifest": creative_manifest,
-                    },
-                )
-                return extract_tool_payload(result)
+            result = await call_mcp_tool(
+                agent_url=_connection_agent_url(agent_url),
+                tool="preview_creative",
+                arguments={
+                    # The pinned reference agent's schema takes format_id as the
+                    # federation-identity OBJECT {agent_url, id} — the live public
+                    # host tolerated a bare string, which masked this mismatch
+                    # until connections were pinned in-network (salesagent-9qe2).
+                    # The identity keeps the CANONICAL agent_url, not the
+                    # connection alias. AnyUrl serialization yields the
+                    # trailing-slash form for path-less URLs — verified tolerated
+                    # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
+                    "format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json"),
+                    "creative_manifest": creative_manifest,
+                },
+                timeout=30,
+            )
+            return extract_tool_payload(result)
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint("the creative agent"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
@@ -875,22 +877,23 @@ class CreativeAgentRegistry:
         """
         # Use custom MCP client for non-standard tools (build_creative not in AdCP spec)
         try:
-            async with create_mcp_client(agent_url=_connection_agent_url(agent_url), timeout=30) as client:
-                params = {
-                    "message": message,
-                    "format_id": format_id,
-                    "gemini_api_key": gemini_api_key,
-                    "finalize": finalize,
-                }
+            params = {
+                "message": message,
+                "format_id": format_id,
+                "gemini_api_key": gemini_api_key,
+                "finalize": finalize,
+            }
 
-                if promoted_offerings:
-                    params["promoted_offerings"] = promoted_offerings
+            if promoted_offerings:
+                params["promoted_offerings"] = promoted_offerings
 
-                if context_id:
-                    params["context_id"] = context_id
+            if context_id:
+                params["context_id"] = context_id
 
-                result = await client.call_tool("build_creative", params)
-                return extract_tool_payload(result)
+            result = await call_mcp_tool(
+                agent_url=_connection_agent_url(agent_url), tool="build_creative", arguments=params, timeout=30
+            )
+            return extract_tool_payload(result)
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint("the creative agent"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:

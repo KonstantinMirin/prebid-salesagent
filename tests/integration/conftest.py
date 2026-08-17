@@ -6,6 +6,7 @@ These fixtures are for tests that require database and service integration.
 
 import os
 import uuid
+from contextlib import ExitStack
 from datetime import UTC, date, datetime
 
 import psycopg2
@@ -20,6 +21,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
 from tests.fixtures import TenantFactory
 from tests.helpers.local_http_origin import run_local_origin
+from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
 from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 from tests.integration.migration_helpers import parse_postgres_url
 
@@ -106,6 +108,35 @@ def local_origin_tls(monkeypatch):
     monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
     with run_local_origin(ssl_context=server_ssl_context(gen_test_tls)) as origin:
         yield origin
+
+
+@pytest.fixture
+def mcp_origin_tls(monkeypatch):
+    """Start a real MCP origin over TLS, serving the tools a test hands it.
+
+    The MCP sibling of :func:`local_origin_tls`: same generated CA/leaf, same
+    ``SSL_CERT_FILE`` combined-bundle trust, but the origin speaks MCP, so a
+    test can reach past the handshake and grade what a TOOL call does. Yielded
+    as a factory rather than a started origin because the tools are the test's
+    own — a fixture cannot know whether the tool under test succeeds, fails, or
+    fails only the first time.
+    """
+    gen_test_tls = load_gen_test_tls()
+    gen_test_tls.ensure_test_tls()
+    monkeypatch.setenv("SSL_CERT_FILE", str(gen_test_tls.COMBINED_CERT))
+
+    with ExitStack() as stack:
+
+        def start(**tools) -> MCPOrigin:
+            return stack.enter_context(
+                run_mcp_origin(
+                    tools=tools,
+                    certfile=gen_test_tls.SERVER_CERT,
+                    keyfile=gen_test_tls.SERVER_KEY,
+                )
+            )
+
+        yield start
 
 
 @pytest.fixture

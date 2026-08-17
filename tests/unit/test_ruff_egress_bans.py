@@ -63,7 +63,7 @@ _NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*TID251[^\n]*")
 # creative_agent_registry.py / signals_agent_registry.py were listed here
 # for constructing adcp.ADCPMultiAgentClient on the un-pinned OPERATOR-agent
 # path (adcp 6.6.0 exposed no transport injection point — GH #1589). Both were
-# migrated onto the guarded MCP seam (src.core.utils.mcp_client.create_mcp_client)
+# migrated onto the guarded MCP seam (src.core.utils.mcp_client.call_mcp_tool)
 # by salesagent-4n88, so neither file constructs an adcp SDK client anymore —
 # the set SHRANK from 4 to 2, per this module's own non-vacuity contract
 # (case c/d): removing a noqa without a live violation is required, not

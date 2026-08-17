@@ -40,7 +40,7 @@ from src.core.helpers.mcp_tool_payload import extract_tool_payload
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import GetSignalsRequest
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
-from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError, create_mcp_client
+from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError, call_mcp_tool
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class SignalsAgentRegistry:
     async def _fetch_signals_operator(self, agent: SignalsAgent, brief: str) -> list[dict[str, Any]]:
         """Fetch signals from an OPERATOR-configured signals agent, through the guarded MCP seam.
 
-        Routes through ``create_mcp_client`` — a real MCP handshake, IP-pinned,
+        Routes through ``call_mcp_tool`` — a real MCP handshake, IP-pinned,
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
         httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
         transport injection point; upstream adcp-client-python#1004). Closes the
@@ -155,13 +155,14 @@ class SignalsAgentRegistry:
 
         logger.info(f"[TIMING] Calling agent {agent.name}, brief: {brief[:50]}...")
         try:
-            async with create_mcp_client(
+            result = await call_mcp_tool(
                 agent_url=agent.agent_url,
+                tool="get_signals",
+                arguments=args,
                 auth=agent.auth,
                 auth_header=agent.auth_header,
                 timeout=agent.timeout,
-            ) as client:
-                result = await client.call_tool("get_signals", args)
+            )
             payload = extract_tool_payload(result)
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"signals agent {agent.name}"), logger=logger)

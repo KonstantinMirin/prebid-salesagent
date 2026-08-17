@@ -18,7 +18,7 @@ Bug: prebid/salesagent#1136
 Beads: salesagent-kwws
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -42,7 +42,7 @@ class TestListAllFormatsErrorPropagation:
     async def test_operator_fetch_failure_produces_error(self, registry, monkeypatch):
         """When the guarded MCP seam fails, the failure lands in FormatFetchResult.errors.
 
-        Not the seam's business (asend/create_mcp_client's own retry/backoff is
+        Not the seam's business (asend/call_mcp_tool's own retry/backoff is
         graded elsewhere): what's graded here is that list_all_formats_with_errors
         turns a raised exception into a recorded error rather than an empty
         format list — a failed fetch must never look like "agent up, no formats".
@@ -54,11 +54,7 @@ class TestListAllFormatsErrorPropagation:
         agent = CreativeAgent(agent_url="https://creative.example.com", name="test-agent")
         monkeypatch.setattr(registry, "_get_tenant_agents", lambda tenant_id=None: [agent])
 
-        client_cm = MagicMock()
-        client_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("boom"))
-        client_cm.__aexit__ = AsyncMock(return_value=False)
-
-        with patch("src.core.creative_agent_registry.create_mcp_client", return_value=client_cm):
+        with patch("src.core.creative_agent_registry.call_mcp_tool", AsyncMock(side_effect=RuntimeError("boom"))):
             result = await registry.list_all_formats_with_errors(tenant_id="test")
 
         assert len(result.errors) > 0, (

@@ -1,7 +1,7 @@
 """Guard: a creative-agent registry dial must not let ``OutboundError`` fall into a bare catch-all.
 
 ``CreativeAgentRegistry.preview_creative``/``build_creative`` dial the egress
-seam (``create_mcp_client`` -> ``validate_url``), which raises
+seam (``call_mcp_tool`` -> ``validate_url``), which raises
 ``OutboundRequestBlocked``/``OutboundDeliveryFailed`` (``src/core/security/
 outbound_http.py``) — already correctly classified by the seam. A ``try``
 around one of these calls whose only broad handler is ``except Exception``

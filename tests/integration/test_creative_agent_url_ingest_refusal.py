@@ -3,7 +3,7 @@
 ``sync_creatives`` lets the buyer name the creative agent their creative's
 format lives on: ``creatives[].format_id.agent_url`` is read straight off the
 request (``src/core/tools/creatives/_validation.py``) and dialled — through
-``fetch_format_spec`` → ``CreativeAgentRegistry`` → ``create_mcp_client`` — to
+``fetch_format_spec`` → ``CreativeAgentRegistry`` → ``call_mcp_tool`` — to
 check the format exists. That makes it a buyer-supplied URL WE fetch, i.e. an
 SSRF vector in the same class as ``property_list.agent_url`` on
 ``get_products`` (salesagent-nbbe, exemplar
@@ -12,7 +12,7 @@ SSRF vector in the same class as ``property_list.agent_url`` on
 advertiser, the lowest privilege bar of any egress path in the tree
 (gh-#1790).
 
-The connection itself is already refused: ``create_mcp_client`` runs
+The connection itself is already refused: ``call_mcp_tool`` runs
 ``validate_url`` before its candidate loop. What this file grades is the half
 that is NOT closed — WHOSE error the refusal is reported as. The registry
 translates a seam refusal through ``raise_mapped_outbound_error``, whose

@@ -9,7 +9,7 @@ preview (``src/core/tools/creatives/_processing.py``). The dialled
 ``agent_url`` is ``format_obj.agent_url``: an entry out of the TENANT's own
 registered formats, not a buyer-supplied address. Provenance = operator.
 
-``create_mcp_client`` (``src/core/utils/mcp_client.py:159``) runs the seam's
+``call_mcp_tool`` (``src/core/utils/mcp_client.py:181``) runs the seam's
 ``validate_url`` before ever opening a connection and lets a refusal propagate
 as ``OutboundRequestBlocked`` "unretried and correctly classified" (its own
 comment). ``src/core/helpers/outbound_error_mapping.py`` names the operator

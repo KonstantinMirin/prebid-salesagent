@@ -12,7 +12,7 @@ application's egress policy — address validation, IP pinning, redirect refusal
 design call as of this writing).
 
 Fixed by routing the operator dial through
-``src.core.utils.mcp_client.create_mcp_client`` — the same guarded fastmcp seam
+``src.core.utils.mcp_client.call_mcp_tool`` — the same guarded fastmcp seam
 already used in this file for ``preview_creative``/``build_creative``, and
 already proven redirect-refusing by ``tests/integration/test_mcp_client_egress.py``.
 ``_fetch_formats_operator``/``_fetch_signals_operator`` are now the only
@@ -110,32 +110,25 @@ def _stub_mcp_tool_result(
     fastmcp — a fixture that would grade the protocol library, not the
     classification. The seam itself is graded over real sockets by the sibling
     classes in this file; here it is stubbed at exactly one point
-    (``create_mcp_client``) so the assertion is about what the registry does with
+    (``call_mcp_tool``) so the assertion is about what the registry does with
     an answer it cannot use.
 
     *payload* becomes ``structured_content``; *text* instead becomes a legacy
     ``TextContent`` block, which is the only way to reach the ``json.loads``
     branch of ``extract_tool_payload``. *registry_module* selects which
-    registry's ``create_mcp_client`` name is patched — both import it at module
+    registry's ``call_mcp_tool`` name is patched — both import it at module
     level, so both are patchable by the identical technique.
     """
     content = [MagicMock(text=text)] if text is not None else []
-    client = MagicMock()
-    client.call_tool = AsyncMock(return_value=MagicMock(structured_content=payload, content=content))
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=client)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    monkeypatch.setattr(f"{registry_module}.create_mcp_client", lambda **_: ctx)
+    result = MagicMock(structured_content=payload, content=content)
+    monkeypatch.setattr(f"{registry_module}.call_mcp_tool", AsyncMock(return_value=result))
     yield
 
 
 @contextlib.contextmanager
 def _stub_mcp_client_raising(monkeypatch: pytest.MonkeyPatch, exc: Exception):
     """Make the guarded seam fail the way it reports a status-bearing failure."""
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(side_effect=exc)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    monkeypatch.setattr("src.core.signals_agent_registry.create_mcp_client", lambda **_: ctx)
+    monkeypatch.setattr("src.core.signals_agent_registry.call_mcp_tool", AsyncMock(side_effect=exc))
     yield
 
 
@@ -148,7 +141,7 @@ class TestOperatorCreativeAgentRedirectIsRefused:
 
         ``local_origin_tls`` stands in for a tenant-configured creative agent (an
         operator agent, not a buyer-supplied URL). ``_fetch_formats_operator``
-        dials through ``create_mcp_client``, which pins the connection and sets
+        dials through ``call_mcp_tool``, which pins the connection and sets
         ``follow_redirects=False`` — the redirect is never followed
         (``metadata_standin.hits == 0``), matching the fixed MCP-seam behavior
         in ``test_mcp_client_egress.py``.

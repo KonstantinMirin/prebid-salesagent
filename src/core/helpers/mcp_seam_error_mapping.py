@@ -1,16 +1,16 @@
-"""Translate a guarded-MCP-seam (``create_mcp_client``) failure into this application's AdCP taxonomy.
+"""Translate a guarded-MCP-seam (``call_mcp_tool``) failure into this application's AdCP taxonomy.
 
 For OPERATOR-configured creative/signals agents (salesagent-4n88): routing the
-dial through ``src.core.utils.mcp_client.create_mcp_client`` closes the SSRF gap
+dial through ``src.core.utils.mcp_client.call_mcp_tool`` closes the SSRF gap
 left by ``adcp.ADCPMultiAgentClient`` (no transport injection point in adcp
 6.6.0 — upstream adcp-client-python#1004), but the seam's failure surface is not
 the SDK's typed ``ADCPError`` hierarchy — it is ``MCPConnectionError`` /
 ``MCPCompatibilityError`` (this application's own, from ``mcp_client.py``).
-``create_mcp_client``'s ``yield client`` sits INSIDE its own retry loop's
-``try``, so an exception the caller raises while using ``client`` — including a
-tool-level ``ToolError``/``McpError`` from ``call_tool`` — is thrown back into
-that generator, retried like any other connection attempt, and surfaces to the
-caller only as the final ``MCPConnectionError``. There is no separate
+``call_mcp_tool`` connects AND calls the tool inside the SAME per-attempt
+``try``, driving one shared ``Attempts`` sequence — so a tool-level exception
+from ``call_tool`` (including ``ToolError``/``McpError``) is retried exactly
+like a connection failure and, once the attempt budget is exhausted, surfaces
+to the caller as the same final ``MCPConnectionError``. There is no separate
 tool-level exception type callers of this function need to catch.
 
 ``MCPConnectionError`` looked, at first read, like it discarded the HTTP status
@@ -22,7 +22,7 @@ the status on purpose. Every other non-2xx status is a normal
 ``httpx.HTTPStatusError`` that survives intact as ``__cause__`` (status code and
 headers, including ``Retry-After``, fully readable), because
 ``raise ... from ...`` chaining is exactly what both ``MCPConnectionError`` and
-``create_mcp_client``'s retry loop use. That is why the classification below can
+``call_mcp_tool``'s retry loop use. That is why the classification below can
 still distinguish 429 / other-4xx / 5xx: it just has to look past the causing
 exception the seam already used.
 

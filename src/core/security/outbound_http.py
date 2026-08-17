@@ -137,10 +137,11 @@ buyer's webhook URL) construct a ``CounterpartyUrl`` naming the request path so
 the refusal names the input to fix.
 
 The last entry point is :func:`sleep_backoff`, for the one retry loop that
-lives outside this module by design: the MCP seam owns a stateful session
-transport ``send``/``asend`` cannot carry, but it reads THIS schedule instead
-of recomputing one. It awaits the wait itself and returns nothing, so no call
-site ever holds a number it could quietly scale.
+lives outside this module by design: the MCP seam (``call_mcp_tool``) owns a
+stateful session transport ``send``/``asend`` cannot carry, but it drives the
+SAME :class:`~src.core.security.egress.attempts.Attempts` instance and hands
+it here for the wait rather than computing one. It awaits the wait itself and
+returns nothing, so no call site ever holds a number it could quietly scale.
 """
 
 from __future__ import annotations
@@ -162,7 +163,6 @@ from src.core.security.egress.attempts import (
     _RETRYABLE_STATUSES,  # noqa: F401 - re-exported; read as a seam attribute by tests
     Attempts,
     OutboundDeliveryFailed,  # noqa: F401 - re-exported; caught by name throughout the tree
-    _backoff_seconds,
 )
 from src.core.security.egress.policy import (
     EgressPolicy,
@@ -313,7 +313,7 @@ def find_wrapped_http_status_error(exc: BaseException) -> httpx.HTTPStatusError 
     """Walk *exc*'s cause/context chain (and any ``ExceptionGroup`` members) for a wrapped ``httpx.HTTPStatusError``.
 
     For a transport that does NOT go through ``send``/``asend`` — the guarded
-    MCP seam (``src.core.utils.mcp_client.create_mcp_client``) hands a
+    MCP seam (``src.core.utils.mcp_client.call_mcp_tool``) hands a
     ``guarded_client_factory``-built client to fastmcp/mcp, whose own
     session/retry logic wraps failures in its own exception types, but chains
     through the real ``httpx.HTTPStatusError`` via ``raise ... from ...``. This
@@ -453,23 +453,28 @@ def _async_transport(url: str, *, field: str | None, allow_private: bool) -> Asy
     return AsyncIpPinnedTransport(hostname=hostname, resolved_ip=resolved_ip, verify=True)
 
 
-async def sleep_backoff(attempt: int) -> None:
-    """Await BR-RULE-029's wait before the attempt after ``attempt`` (1-based).
+async def sleep_backoff(attempts: Attempts) -> None:
+    """Await the wait BR-RULE-029 owes before *attempts*' next attempt.
 
     For the MCP seam (``src/core/utils/mcp_client.py``), which owns its own
     transport for protocol reasons — a stateful MCP session that ``asend``'s
     one-shot request/response cannot carry — but must not own a second copy of
     the retry schedule. Sleeping HERE rather than returning the number is the
-    guard: the no-call-site-backoff detector follows same-module names only, so
-    a public ``backoff_seconds()`` would let ``sleep(backoff_seconds(1))`` or a
-    scaled variant drift invisibly; an awaitable that hands nothing back leaves
-    a call site nothing to get wrong but the attempt index.
+    guard: the no-call-site-backoff detector follows same-module names (and,
+    since salesagent-tbrk.2, same-module ``.wait_seconds()``-shaped attribute
+    calls) only, so a public wait-returning function callable from outside
+    this exempt module would let a scaled variant drift invisibly. Taking the
+    WHOLE :class:`~src.core.security.egress.attempts.Attempts` instance rather
+    than a bare attempt index means a call site cannot separately compute or
+    hold a wait duration at all — it can only hand back the SAME instance it
+    is already driving via ``next_attempt()``, so there is nothing left for it
+    to get wrong.
 
-    ``_backoff_seconds`` is imported from :mod:`src.core.security.egress.
-    attempts`, which owns the schedule now — this facade still performs the
-    wait itself, so the guarantee above is unchanged.
+    ``attempts.wait_seconds()`` reads the schedule from
+    :mod:`src.core.security.egress.attempts`, which owns it — this facade
+    still performs the wait itself, so the guarantee above is unchanged.
     """
-    await asyncio.sleep(_backoff_seconds(attempt))
+    await asyncio.sleep(attempts.wait_seconds())
 
 
 def retry_after_seconds(response: httpx.Response) -> float | None:

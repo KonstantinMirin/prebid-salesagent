@@ -40,7 +40,7 @@ from __future__ import annotations
 import pytest
 
 from src.core.security.outbound_http import OutboundRequestBlocked
-from src.core.utils.mcp_client import create_mcp_client
+from src.core.utils.mcp_client import call_mcp_tool
 from tests.helpers.local_http_origin import run_local_origin
 from tests.integration.property_list_helpers import allow_local_origin, enforce_egress_policy
 from tests.integration.test_outbound_http import fast_backoff
@@ -77,8 +77,7 @@ class TestRedirectIsNotFollowed:
             local_origin_tls.redirect_to(metadata_standin.base_url, status=302)
 
             with pytest.raises(Exception):  # noqa: B017 - the outcome is shared by both postures; the attempt is the grade
-                async with create_mcp_client(agent_url=local_origin_tls.base_url):
-                    pass
+                await call_mcp_tool(agent_url=local_origin_tls.base_url, tool="noop", arguments={})
 
             assert metadata_standin.hits == 0, (
                 f"the redirect to the metadata stand-in was followed: {metadata_standin.requests}"
@@ -101,5 +100,4 @@ class TestMetadataAddressIsRefusedWithoutDialing:
         enforce_egress_policy(monkeypatch)
 
         with pytest.raises(OutboundRequestBlocked):
-            async with create_mcp_client(agent_url="http://169.254.169.254/mcp"):
-                pass
+            await call_mcp_tool(agent_url="http://169.254.169.254/mcp", tool="noop", arguments={})

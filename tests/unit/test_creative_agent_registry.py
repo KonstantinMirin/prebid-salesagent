@@ -3,7 +3,7 @@
 ``TestCreativeAgentRegistry`` (build/fetch against a mocked ``adcp.ADCPMultiAgentClient``)
 was retired by salesagent-4n88: the OPERATOR agent path no longer constructs
 that SDK client at all — it dials through the guarded MCP seam
-(``src.core.utils.mcp_client.create_mcp_client``) instead, via
+(``src.core.utils.mcp_client.call_mcp_tool``) instead, via
 ``_fetch_formats_operator``. Its behavioral contracts (auth propagation,
 connection-alias routing, error taxonomy) are re-expressed as integration
 tests against a real local origin in

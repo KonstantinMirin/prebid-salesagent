@@ -12,7 +12,7 @@ wire-level federation identity (format_id.agent_url) is unchanged; only the
 transport connection reroutes.
 
 salesagent-4n88 moved the OPERATOR agent path off ``adcp.ADCPMultiAgentClient``
-onto the guarded MCP seam (``create_mcp_client``) — the routing/aliasing tests
+onto the guarded MCP seam (``call_mcp_tool``) — the routing/aliasing tests
 below mock that seam instead of the deleted SDK client.
 """
 
@@ -54,16 +54,9 @@ class TestConnectionAgentUrl:
         assert _connection_agent_url(PUBLIC_DEFAULT_AGENT_URL) == PUBLIC_DEFAULT_AGENT_URL
 
 
-def _mock_mcp_client_cm(formats_payload: dict) -> tuple[MagicMock, AsyncMock]:
-    """A ``create_mcp_client(...)`` async-context-manager mock yielding a client
-    whose ``call_tool`` returns *formats_payload* as ``structured_content``."""
-    call_tool = AsyncMock(return_value=MagicMock(structured_content=formats_payload, content=[]))
-    mock_client = MagicMock()
-    mock_client.call_tool = call_tool
-    client_cm = MagicMock()
-    client_cm.__aenter__ = AsyncMock(return_value=mock_client)
-    client_cm.__aexit__ = AsyncMock(return_value=False)
-    return client_cm, call_tool
+def _mock_call_mcp_tool(formats_payload: dict) -> AsyncMock:
+    """A ``call_mcp_tool(...)`` awaitable mock returning *formats_payload* as ``structured_content``."""
+    return AsyncMock(return_value=MagicMock(structured_content=formats_payload, content=[]))
 
 
 class TestRegistryConnectionRouting:
@@ -76,8 +69,8 @@ class TestRegistryConnectionRouting:
         monkeypatch.setenv("CREATIVE_AGENT_URL", _PINNED)
         registry = CreativeAgentRegistry()
 
-        client_cm, _call_tool = _mock_mcp_client_cm({"formats": []})
-        with patch("src.core.creative_agent_registry.create_mcp_client", return_value=client_cm) as cmc:
+        call_tool = _mock_call_mcp_tool({"formats": []})
+        with patch("src.core.creative_agent_registry.call_mcp_tool", call_tool) as cmc:
             await registry._fetch_formats_operator(CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="x"))
 
         assert cmc.call_args.kwargs["agent_url"] == _PINNED
@@ -87,13 +80,9 @@ class TestRegistryConnectionRouting:
         monkeypatch.setenv("CREATIVE_AGENT_URL", _PINNED)
         registry = CreativeAgentRegistry()
 
-        client_cm = MagicMock()
-        client_cm.__aenter__ = AsyncMock(
-            return_value=MagicMock(call_tool=AsyncMock(return_value=MagicMock(content=[])))
-        )
-        client_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_call_mcp_tool = AsyncMock(return_value=MagicMock(content=[]))
 
-        with patch("src.core.creative_agent_registry.create_mcp_client", return_value=client_cm) as cmc:
+        with patch("src.core.creative_agent_registry.call_mcp_tool", mock_call_mcp_tool) as cmc:
             try:
                 await registry.preview_creative(PUBLIC_DEFAULT_AGENT_URL, "display_300x250", {"assets": {}})
             except Exception:
@@ -107,8 +96,7 @@ class TestRegistryConnectionRouting:
         # CANONICAL agent_url. AnyUrl serialization yields the
         # trailing-slash form for path-less URLs — verified tolerated
         # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
-        call_tool = client_cm.__aenter__.return_value.call_tool
-        payload = call_tool.call_args.args[1]
+        payload = cmc.call_args.kwargs["arguments"]
         assert payload["format_id"] == {
             "agent_url": PUBLIC_DEFAULT_AGENT_URL + "/",
             "id": "display_300x250",
@@ -116,17 +104,18 @@ class TestRegistryConnectionRouting:
 
 
 async def _fetch_formats_with_mocked_seam(registry, agent):
-    """Drive registry.get_formats_for_agent twice with only create_mcp_client mocked.
+    """Drive registry.get_formats_for_agent twice with only call_mcp_tool mocked.
 
     The swap itself (_connection_agent_url / _fetch_formats_operator) and the
-    real request-building/parsing run unmocked; only create_mcp_client — the
-    true external that would dial the network — is replaced. Returns the
-    patched constructor (transport-config evidence), the call_tool AsyncMock
-    (fetch count), and both call results.
+    real request-building/parsing run unmocked; only call_mcp_tool — the true
+    external that would dial the network — is replaced. Returns the patched
+    mock twice (transport-config evidence and fetch-count observation are the
+    same call now that connect and call share one function), and both call
+    results.
     """
     formats_payload = {"formats": [FormatFactory.build().model_dump(mode="json")]}
-    client_cm, call_tool = _mock_mcp_client_cm(formats_payload)
-    with patch("src.core.creative_agent_registry.create_mcp_client", return_value=client_cm) as constructor:
+    call_tool = _mock_call_mcp_tool(formats_payload)
+    with patch("src.core.creative_agent_registry.call_mcp_tool", call_tool) as constructor:
         first = await registry.get_formats_for_agent(agent)
         second = await registry.get_formats_for_agent(agent)
     return constructor, call_tool, first, second
@@ -157,7 +146,7 @@ class TestAliasPreservesIdentity:
 
         constructor, fetch, first, second = await _fetch_formats_with_mocked_seam(registry, agent)
 
-        # Transport: create_mcp_client dials the pinned alias.
+        # Transport: call_mcp_tool dials the pinned alias.
         assert constructor.call_args.kwargs["agent_url"] == _PINNED
 
         # Identity: the cache key is byte-identical to the CANONICAL public

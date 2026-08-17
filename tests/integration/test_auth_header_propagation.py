@@ -3,7 +3,7 @@
 Before salesagent-4n88, both registries built an ``adcp.AgentConfig`` (via the
 deleted ``build_agent_config``/``_build_adcp_client``) and asserted on its
 ``auth_token``/``auth_header``/``auth_type`` fields. The OPERATOR agent path no
-longer builds that config at all — it calls ``create_mcp_client(auth=...,
+longer builds that config at all — it calls ``call_mcp_tool(auth=...,
 auth_header=...)`` directly, whose own ``_build_auth_headers`` (already unit-
 tested in ``tests/integration/test_mcp_client_util.py::TestBuildAuthHeaders``,
 including the exact Optable-shaped bearer/custom-header case) does the header
@@ -21,22 +21,16 @@ from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistr
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 
 
-def _mock_mcp_client_cm(payload: dict) -> MagicMock:
-    call_tool = AsyncMock(return_value=MagicMock(structured_content=payload, content=[]))
-    mock_client = MagicMock()
-    mock_client.call_tool = call_tool
-    client_cm = MagicMock()
-    client_cm.__aenter__ = AsyncMock(return_value=mock_client)
-    client_cm.__aexit__ = AsyncMock(return_value=False)
-    return client_cm
+def _mock_call_mcp_tool(payload: dict) -> AsyncMock:
+    return AsyncMock(return_value=MagicMock(structured_content=payload, content=[]))
 
 
 class TestAuthConfigForwardedToGuardedSeam:
-    """The registry forwards auth/auth_header/timeout to create_mcp_client unchanged."""
+    """The registry forwards auth/auth_header/timeout to call_mcp_tool unchanged."""
 
     @pytest.mark.asyncio
     async def test_creative_agent_custom_auth_header_forwarded(self):
-        """A custom Authorization header (like Optable) reaches create_mcp_client."""
+        """A custom Authorization header (like Optable) reaches call_mcp_tool."""
         registry = CreativeAgentRegistry()
         agent = CreativeAgent(
             agent_url="https://sandbox.optable.co/admin/adcp/creative/mcp",
@@ -47,8 +41,8 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.creative_agent_registry.create_mcp_client",
-            return_value=_mock_mcp_client_cm({"formats": []}),
+            "src.core.creative_agent_registry.call_mcp_tool",
+            _mock_call_mcp_tool({"formats": []}),
         ) as cmc:
             await registry._fetch_formats_operator(agent)
 
@@ -58,7 +52,7 @@ class TestAuthConfigForwardedToGuardedSeam:
 
     @pytest.mark.asyncio
     async def test_creative_agent_no_custom_header_forwards_none(self):
-        """auth_header=None is forwarded as-is — create_mcp_client applies its own default."""
+        """auth_header=None is forwarded as-is — call_mcp_tool applies its own default."""
         registry = CreativeAgentRegistry()
         agent = CreativeAgent(
             agent_url="https://creative.example.com/mcp",
@@ -68,8 +62,8 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.creative_agent_registry.create_mcp_client",
-            return_value=_mock_mcp_client_cm({"formats": []}),
+            "src.core.creative_agent_registry.call_mcp_tool",
+            _mock_call_mcp_tool({"formats": []}),
         ) as cmc:
             await registry._fetch_formats_operator(agent)
 
@@ -78,7 +72,7 @@ class TestAuthConfigForwardedToGuardedSeam:
 
     @pytest.mark.asyncio
     async def test_signals_agent_custom_auth_header_forwarded(self):
-        """A custom Authorization header (like Optable) reaches create_mcp_client for signals too."""
+        """A custom Authorization header (like Optable) reaches call_mcp_tool for signals too."""
         registry = SignalsAgentRegistry()
         agent = SignalsAgent(
             agent_url="https://sandbox.optable.co/admin/adcp/signals/mcp",
@@ -89,8 +83,8 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.signals_agent_registry.create_mcp_client",
-            return_value=_mock_mcp_client_cm({"signals": []}),
+            "src.core.signals_agent_registry.call_mcp_tool",
+            _mock_call_mcp_tool({"signals": []}),
         ) as cmc:
             await registry._fetch_signals_operator(agent, brief="test")
 
@@ -109,8 +103,8 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.signals_agent_registry.create_mcp_client",
-            return_value=_mock_mcp_client_cm({"signals": []}),
+            "src.core.signals_agent_registry.call_mcp_tool",
+            _mock_call_mcp_tool({"signals": []}),
         ) as cmc:
             await registry._fetch_signals_operator(agent, brief="test")
 

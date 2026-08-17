@@ -107,7 +107,7 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
 
     Uses the REAL registry/seam (only ``_get_format_spec_sync``'s mock
     ``side_effect`` is swapped for the real ``fetch_format_spec`` — everything
-    downstream of it, including ``create_mcp_client``'s ``validate_url``, is
+    downstream of it, including ``call_mcp_tool``'s ``validate_url``, is
     real) so the refusal is genuine, not injected.
     """
 

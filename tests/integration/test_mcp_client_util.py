@@ -26,15 +26,17 @@ skip_no_audience_agent = pytest.mark.skipif(
     reason="audience-agent.fly.dev is not reachable",
 )
 
+from src.core.exceptions import RECOVERY_BY_WIRE_CODE, AdCPError, build_two_layer_error_envelope
 from src.core.security import outbound_http as outbound_http_module
 from src.core.security.outbound_http import OutboundRequestBlocked
+from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 from src.core.utils import mcp_client as mcp_client_module
 from src.core.utils.mcp_client import (
     MCPConnectionError,
     _build_auth_headers,
-    create_mcp_client,
+    call_mcp_tool,
 )
-from tests.helpers import assert_backoff_schedule
+from tests.helpers import assert_backoff_schedule, assert_envelope_shape
 
 # Reused rather than restated (precedent: tests/integration/test_vendor_egress.py):
 # the jitter pin, the escape-hatch setter and the backoff-base knob name are the
@@ -98,40 +100,26 @@ class TestCreateMCPClient:
 
     @pytest.mark.skip_ci
     async def test_connect_to_creative_agent(self):
-        """Can connect to AdCP creative agent (known good server)."""
+        """Can connect to AdCP creative agent (known good server) and call a tool."""
         agent_url = "https://creative.adcontextprotocol.org/mcp"
 
-        async with create_mcp_client(agent_url=agent_url, timeout=10) as client:
-            # Should successfully connect
-            assert client is not None
+        result = await call_mcp_tool(agent_url=agent_url, tool="list_creative_formats", arguments={}, timeout=10)
 
-            # Should be able to list tools
-            tools = await client.list_tools()
-            assert isinstance(tools, list)
-            assert len(tools) > 0
-
-            # Should have expected tools
-            tool_names = [tool.name for tool in tools]
-            assert "list_creative_formats" in tool_names
+        assert result is not None
+        assert isinstance(result.structured_content, dict)
 
     @pytest.mark.skip_ci
     @skip_no_audience_agent
     async def test_connect_to_audience_agent(self):
-        """Can connect to audience/signals agent."""
+        """Can connect to audience/signals agent and call a tool."""
         agent_url = "https://audience-agent.fly.dev"
 
-        async with create_mcp_client(agent_url=agent_url, timeout=10) as client:
-            # Should successfully connect
-            assert client is not None
+        result = await call_mcp_tool(
+            agent_url=agent_url, tool="get_signals", arguments={"signal_spec": "test"}, timeout=10
+        )
 
-            # Should be able to list tools
-            tools = await client.list_tools()
-            assert isinstance(tools, list)
-            assert len(tools) > 0
-
-            # Should have expected tools
-            tool_names = [tool.name for tool in tools]
-            assert "get_signals" in tool_names
+        assert result is not None
+        assert isinstance(result.structured_content, dict)
 
     async def test_unresolvable_host_is_refused_before_dialling(self):
         """Invalid URL raises MCPConnectionError after retries."""
@@ -142,26 +130,24 @@ class TestCreateMCPClient:
         agent_url = "https://nonexistent.example.com/mcp"
 
         with pytest.raises(OutboundRequestBlocked) as exc_info:
-            async with create_mcp_client(agent_url=agent_url, timeout=5, max_retries=2):
-                pass
+            await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=5, max_attempts=2)
 
         # Opaque by design: the refusal must not echo which host or address failed.
         assert "nonexistent.example.com" not in str(exc_info.value)
 
     async def test_respects_max_retries(self, monkeypatch):
-        """Connection failures respect max_retries parameter."""
+        """Connection failures respect max_attempts parameter."""
         monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true")
         # A loopback port with nothing listening: resolves, fails fast, and the retry
         # budget is what is graded. It needs the private-range hatch because policy
         # refuses loopback addresses by default (https is required unconditionally now
-        # regardless of any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT a live origin — create_mcp_client never
+        # regardless of any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT a live origin — call_mcp_tool never
         # passes its timeout to the transport, so an origin that answers without speaking
         # MCP hangs instead of failing (a bug adjacent to this ticket, not fixed here).
         agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError) as exc_info:
-            async with create_mcp_client(agent_url=agent_url, timeout=1, max_retries=1):
-                pass
+            await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=1, max_attempts=1)
 
         # Should only try once
         assert "after 1 attempts" in str(exc_info.value)
@@ -174,26 +160,23 @@ class TestURLHandling:
     @pytest.mark.skip_ci
     @skip_no_audience_agent
     async def test_respects_user_url_exactly(self):
-        """Client uses the exact URL provided by user (no modifications)."""
+        """Uses the exact URL provided by user (no modifications)."""
         # Audience agent is at base URL (no path)
         agent_url = "https://audience-agent.fly.dev"
 
-        async with create_mcp_client(agent_url=agent_url, timeout=10) as client:
-            # Should use URL as-is
-            tools = await client.list_tools()
-            assert len(tools) > 0
-            assert any(tool.name == "get_signals" for tool in tools)
+        result = await call_mcp_tool(
+            agent_url=agent_url, tool="get_signals", arguments={"signal_spec": "test"}, timeout=10
+        )
+        assert isinstance(result.structured_content, dict)
 
     @pytest.mark.skip_ci
     async def test_strips_trailing_slashes_only(self):
-        """Client strips trailing slashes but preserves path."""
+        """Trailing slashes are stripped but the path is preserved."""
         # URL with trailing slash
         agent_url = "https://creative.adcontextprotocol.org/mcp/"
 
-        async with create_mcp_client(agent_url=agent_url, timeout=10) as client:
-            # Should strip trailing slash but keep /mcp path
-            tools = await client.list_tools()
-            assert len(tools) > 0
+        result = await call_mcp_tool(agent_url=agent_url, tool="list_creative_formats", arguments={}, timeout=10)
+        assert isinstance(result.structured_content, dict)
 
 
 @pytest.mark.asyncio
@@ -202,14 +185,17 @@ class TestErrorHandling:
 
     @pytest.mark.skip_ci
     async def test_client_cleanup_on_error(self):
-        """Client is properly cleaned up even if error occurs during usage."""
+        """The client is properly cleaned up even if an error occurs mid-call.
+
+        ``call_mcp_tool`` owns the client's lifetime entirely (``async with
+        client:`` lives inside the seam, not at the call site), so there is no
+        caller-visible client left dangling to grade — the only observable
+        behavior is that a successful call returns cleanly.
+        """
         agent_url = "https://creative.adcontextprotocol.org/mcp"
 
-        # Context manager should handle cleanup gracefully
-        async with create_mcp_client(agent_url=agent_url, timeout=10) as client:
-            # Successfully connected, just verify we can use the client
-            tools = await client.list_tools()
-            assert len(tools) > 0
+        result = await call_mcp_tool(agent_url=agent_url, tool="list_creative_formats", arguments={}, timeout=10)
+        assert isinstance(result.structured_content, dict)
 
         # If we reach here without hanging, cleanup worked correctly
         assert True
@@ -221,15 +207,14 @@ class TestErrorHandling:
         # Unchanged target: a loopback port with nothing listening, which fails fast.
         # It needs the private-range hatch because policy refuses loopback
         # addresses by default (https is required unconditionally now regardless of
-        # any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT repointed at a live origin: create_mcp_client accepts a timeout
-        # and never passes it to the transport (mcp_client.py:101-107 vs the transport
-        # construction), so an origin that ANSWERS but does not speak MCP hangs forever
-        # rather than timing out. That bug is adjacent to this ticket and not fixed here.
+        # any hatch, salesagent-e6h0 -- hence the scheme flip above). NOT repointed at a live origin: call_mcp_tool accepts a timeout
+        # and never passes it to the transport, so an origin that ANSWERS but does not
+        # speak MCP hangs forever rather than timing out. That bug is adjacent to this
+        # ticket and not fixed here.
         agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError):
-            async with create_mcp_client(agent_url=agent_url, timeout=1, max_retries=1):
-                pass
+            await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=1, max_attempts=1)
 
 
 class _SleepRecordingAsyncio:
@@ -302,7 +287,7 @@ def egress_hatches_closed(monkeypatch):
 class TestRefusedAgentUrlIsNotDialled:
     """A refused agent URL propagates as a policy refusal, not a transport failure.
 
-    ``create_mcp_client`` is the MCP seam's entry point, so the egress seam's
+    ``call_mcp_tool`` is the MCP seam's entry point, so the egress seam's
     address and scheme policy applies ONCE, at its top, before the connection
     candidates are built — outside the retry loop and outside the ``try`` whose
     arm is a bare ``except Exception``.
@@ -321,7 +306,7 @@ class TestRefusedAgentUrlIsNotDialled:
 
     # A correct refusal returns in microseconds — nothing is dialled. The bound
     # exists because the FAILING state is a hang, not a fast wrong answer:
-    # `create_mcp_client` accepts a `timeout` and never passes it to the
+    # `call_mcp_tool` accepts a `timeout` and never passes it to the
     # transport, so a client that reaches the wire waits out the OS connect
     # timeout on an unroutable address, four times over. Without this the whole
     # slice dies with no report instead of failing with one.
@@ -342,8 +327,7 @@ class TestRefusedAgentUrlIsNotDialled:
         agent_url = local_origin.base_url if destination == "local-origin-loopback" else METADATA_AGENT_URL
 
         with pytest.raises(OutboundRequestBlocked):
-            async with create_mcp_client(agent_url=agent_url, timeout=5, max_retries=3):
-                pass
+            await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=5, max_attempts=3)
 
         assert local_origin.hits == 0, f"the client dialled a refused address: {local_origin.requests}"
         assert recorded_retry_sleeps == [], (
@@ -393,8 +377,7 @@ class TestConnectionRetryBackoffSchedule:
         agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError):
-            async with create_mcp_client(agent_url=agent_url, timeout=1, max_retries=3):
-                pass
+            await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=1, max_attempts=3)
 
         # The shared grader accepts a matching PREFIX of the schedule, so the
         # count is pinned explicitly: 3 attempts must produce exactly 2 sleeps.
@@ -404,10 +387,10 @@ class TestConnectionRetryBackoffSchedule:
         assert_backoff_schedule(recorded_retry_sleeps, jitter=0.25)
 
     async def test_default_attempt_budget_is_the_rules_three(self, monkeypatch, recorded_retry_sleeps):
-        """Omitting ``max_retries`` grades the DEFAULT budget against the rule.
+        """Omitting ``max_attempts`` grades the DEFAULT budget against the rule.
 
         BR-RULE-029 says "up to 3 times". The schedule case above passes
-        ``max_retries=3`` explicitly, so on its own a silently raised default
+        ``max_attempts=3`` explicitly, so on its own a silently raised default
         (say, 5) would sail past it while every production caller that takes
         the default exceeds the rule. Three attempts leave exactly two sleeps
         and say so in the failure message.
@@ -416,10 +399,148 @@ class TestConnectionRetryBackoffSchedule:
         agent_url = "https://localhost:9999/mcp"
 
         with pytest.raises(MCPConnectionError) as exc_info:
-            async with create_mcp_client(agent_url=agent_url, timeout=1):
-                pass
+            await call_mcp_tool(agent_url=agent_url, tool="noop", arguments={}, timeout=1)
 
         assert "after 3 attempts" in str(exc_info.value)
         assert len(recorded_retry_sleeps) == 2, (
             f"default attempt budget slept {recorded_retry_sleeps} — expected 2 sleeps for 3 attempts"
         )
+
+
+def _always_failing_get_signals(signal_spec: str, discovery_mode: str = "brief") -> dict:
+    """A ``get_signals`` tool that fails every time it is called.
+
+    Takes the parameters ``GetSignalsRequest.model_dump(exclude_none=True)``
+    actually sends, so the call fails in the tool BODY — an origin that rejected
+    the arguments would fail during schema validation instead, which is a
+    different failure at a different layer than the one under test.
+    """
+    raise ValueError("the signals tool is broken")
+
+
+@pytest.mark.asyncio
+class TestToolFailureIsRetriedByReexecutingTheBody:
+    """A tool call that fails transiently is retried — with the tool called again.
+
+    This is the property the context-manager seam structurally cannot have. Under
+    ``create_mcp_client`` (this seam's predecessor) the ``yield`` sat inside the
+    retry loop's own ``try`` while the caller's ``client.call_tool(...)`` ran in the
+    CALLER's ``async with`` body — outside that ``try``. A tool-level failure is
+    therefore thrown back INTO the generator at the yield, caught by its
+    ``except Exception``, and the loop tries to yield a second time; contextlib
+    refuses (``RuntimeError: generator didn't stop after athrow()``). Verified
+    against the unmodified seam while authoring this test: the tool ran ONCE and
+    the caller got that RuntimeError.
+
+    ``call_mcp_tool`` owns the body instead of lending out a client, so the tool
+    call is inside the per-attempt ``try`` and a transient tool failure is
+    retried on the SAME attempt sequence a connect failure uses.
+
+    The origin's own invocation count is the grade. A client that re-dials but
+    does not re-issue the tool call would satisfy any assertion about the value
+    returned; only the counter separates "the body was re-executed" from "the
+    connection was re-established".
+    """
+
+    @pytest.mark.timeout(60)
+    async def test_transient_tool_failure_is_retried_and_the_tool_runs_twice(
+        self, mcp_origin_tls, monkeypatch, recorded_retry_sleeps
+    ):
+        """Attempt 1's tool call raises, attempt 2's succeeds, and the caller gets attempt 2's result."""
+        # The MCP origin is a loopback address, which egress policy refuses by
+        # default; https is required unconditionally regardless (salesagent-e6h0),
+        # and the origin serves real TLS off the shared generated leaf.
+        set_flags(monkeypatch, private=True)
+
+        outcomes = iter([ValueError("transient tool failure"), {"served_on_attempt": 2}])
+
+        def flaky() -> dict:
+            outcome = next(outcomes)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        origin = mcp_origin_tls(flaky=flaky)
+
+        result = await call_mcp_tool(
+            agent_url=origin.base_url,
+            tool="flaky",
+            arguments={},
+            timeout=10,
+            max_attempts=3,
+        )
+
+        assert result.structured_content == {"served_on_attempt": 2}
+        assert origin.invocations == ["flaky", "flaky"], (
+            f"the tool body was not re-executed on the retry: {origin.invocations}"
+        )
+        # One sleep between two attempts, through the seam's schedule — the tool
+        # failure was recorded on the shared attempt sequence, not retried by a
+        # loop of its own that happens to re-dial.
+        assert len(recorded_retry_sleeps) == 1, (
+            f"expected exactly 1 backoff sleep between the two attempts, got {recorded_retry_sleeps}"
+        )
+
+
+@pytest.mark.asyncio
+class TestExhaustedFailureReachesTheRegistryClassified:
+    """An exhausted TOOL failure classifies exactly as an exhausted CONNECT failure does.
+
+    Both legs run the same production path — ``SignalsAgentRegistry._fetch_signals_operator``,
+    whose ``except (MCPConnectionError, MCPCompatibilityError)`` arm delegates to
+    ``raise_mapped_mcp_error`` — and both must land on the one envelope that arm
+    produces for a seam failure carrying no HTTP status.
+
+    The connect leg is the reference: it passes today, so a failure of this test
+    is a statement about the tool leg and not about the fixture, the registry or
+    the classifier. The tool leg is the new obligation. Verified against the
+    unmodified seam while authoring: today the tool leg raises an unclassified
+    ``RuntimeError: generator didn't stop after athrow()`` that the registry's
+    ``except`` arm does not even catch — so this is a NEW obligation, not an
+    extension of a green one.
+    """
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.parametrize("failure", ["tool-level", "connection-level"])
+    async def test_seam_failure_surfaces_as_the_mapped_envelope(
+        self, failure, mcp_origin_tls, monkeypatch, recorded_retry_sleeps
+    ):
+        """Whichever layer fails, the buyer-facing envelope is the seam's one classified pair."""
+        set_flags(monkeypatch, private=True)
+
+        origin = None
+        if failure == "tool-level":
+            origin = mcp_origin_tls(get_signals=_always_failing_get_signals)
+            agent_url = origin.base_url
+        else:
+            # A loopback port with nothing listening: resolves, fails fast, and
+            # ends in /mcp so no fallback candidate is synthesised — one URL, one
+            # attempt budget, as in the tool-level leg.
+            agent_url = "https://localhost:9999/mcp"
+
+        agent = SignalsAgent(agent_url=agent_url, name="stub-signals-agent", enabled=True, timeout=10)
+
+        with pytest.raises(AdCPError) as exc_info:
+            await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="a brief")
+
+        # The recovery is read from the pinned enumMetadata rather than written as
+        # a literal, then pinned once here so the derivation cannot silently
+        # return something else.
+        expected_recovery = RECOVERY_BY_WIRE_CODE["SERVICE_UNAVAILABLE"]
+        assert expected_recovery == "transient", (
+            f"the pinned enumMetadata classifies SERVICE_UNAVAILABLE as {expected_recovery!r}, not 'transient' — "
+            "the premise this assertion is built on no longer holds"
+        )
+        assert_envelope_shape(
+            build_two_layer_error_envelope(exc_info.value),
+            "SERVICE_UNAVAILABLE",
+            recovery=expected_recovery,
+            message_substr="signals agent stub-signals-agent is unreachable.",
+        )
+        assert len(recorded_retry_sleeps) == 2, (
+            f"the failure was not retried on the seam's 3-attempt budget (slept {recorded_retry_sleeps})"
+        )
+        if origin is not None:
+            assert origin.invocations == ["get_signals"] * 3, (
+                f"the failing tool was not re-issued on every attempt: {origin.invocations}"
+            )
