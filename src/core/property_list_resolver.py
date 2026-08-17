@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 from adcp.types import GetPropertyListResponse, PropertyListReference
 
-from src.core.security.outbound_http import asend
+from src.core.security.outbound_http import CounterpartyUrl, asend
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
         method="GET",
         headers=headers,
         timeout=_DEFAULT_TIMEOUT,
-        field=_REFUSED_FIELD_PATH,
+        provenance=CounterpartyUrl(field=_REFUSED_FIELD_PATH),
     )
 
     # Parse response

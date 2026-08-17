@@ -39,7 +39,7 @@ from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
 from src.core.helpers.mcp_tool_payload import extract_tool_payload
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import GetSignalsRequest
-from src.core.security.outbound_http import OutboundError
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError, create_mcp_client
 
 logger = logging.getLogger(__name__)
@@ -163,7 +163,7 @@ class SignalsAgentRegistry:
             ) as client:
                 result = await client.call_tool("get_signals", args)
         except OutboundError as exc:
-            raise_mapped_outbound_error(exc, agent_label=f"signals agent {agent.name}", logger=logger)
+            raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"signals agent {agent.name}"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
             raise_mapped_mcp_error(exc, agent_label=f"signals agent {agent.name}", logger=logger)
 

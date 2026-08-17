@@ -11,7 +11,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
 )
 from src.core.schemas import *
-from src.core.security.outbound_http import OutboundError
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 
 
 class Kevel(AdServerAdapter):
@@ -754,4 +754,4 @@ class Kevel(AdServerAdapter):
                 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 
                 self.log(f"Error updating Kevel flight: {e}")
-                raise_mapped_outbound_error(e, agent_label="Kevel", logger=logging.getLogger(__name__))
+                raise_mapped_outbound_error(e, provenance=OperatorEndpoint("Kevel"), logger=logging.getLogger(__name__))

@@ -192,7 +192,7 @@ class TestLaunderedOutboundErrorDetector:
                     "    try:\n"
                     "        registry.preview_creative(agent_url='x', format_id='y', creative_manifest={})\n"
                     "    except OutboundError as e:\n"
-                    "        raise_mapped_outbound_error(e, agent_label='x', logger=logger)\n"
+                    "        raise_mapped_outbound_error(e, provenance=OperatorEndpoint('x'), logger=logger)\n"
                     "    except Exception as e:\n"
                     "        return e\n"
                 ),

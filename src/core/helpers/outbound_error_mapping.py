@@ -37,25 +37,39 @@ import logging
 from typing import NoReturn
 
 from src.core.security.outbound_http import (
+    CounterpartyUrl,
     OutboundDeliveryFailed,
     OutboundError,
     OutboundRequestBlocked,
+    UrlProvenance,
     terminal_client_error_status,
 )
 
 
-def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger: logging.Logger) -> NoReturn:
-    """Re-raise a seam failure as the AdCP error its call site's URL warrants.
+def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance, logger: logging.Logger) -> NoReturn:
+    """Re-raise a seam failure as the AdCP error *provenance* warrants.
 
-    For a call site whose URL is OPERATOR configuration — a registered agent
-    endpoint, a vendor host — not something the buyer supplied.
+    ``provenance`` is required — there is no "no opinion" default, because
+    provenance-by-omission (an optional field a caller either passes or doesn't)
+    is exactly what let a call site fabricate a locator or hand-branch on
+    ``None`` instead of stating whose URL it dialled.
+
+    A :class:`CounterpartyUrl` — the buyer supplied this URL — is re-raised
+    UNCHANGED: ``OutboundRequestBlocked`` already IS an ``AdCPBlockedUrlError``
+    (``VALIDATION_ERROR`` / correctable, naming the offending field when it has
+    one) and ``OutboundDeliveryFailed`` already IS an
+    ``AdCPServiceUnavailableError`` (``SERVICE_UNAVAILABLE`` / transient) — the
+    seam's own classification is already correct for a URL the buyer chose and
+    can fix, and rewrapping it would restate that classification in a second
+    place, which is what this module exists to prevent.
+
+    An :class:`OperatorEndpoint` — a registered agent endpoint, a vendor host,
+    not something the buyer supplied — gets the classification below, naming
+    ``provenance.name`` (a role, never an address):
 
     A refusal becomes ``CONFIGURATION_ERROR``/terminal rather than
     ``VALIDATION_ERROR``/correctable: the buyer did not choose this address and
-    cannot fix it, so telling them to correct their request would be false. (The
-    opposite case — a buyer-supplied URL — keeps the seam's own
-    ``AdCPBlockedUrlError`` (``VALIDATION_ERROR``) and names the offending field
-    instead.)
+    cannot fix it, so telling them to correct their request would be false.
 
     A 429 becomes ``RATE_LIMITED`` carrying the origin's ``retry_after``, which
     the seam has already bounded and clamped to the spec's [1, 3600].
@@ -63,15 +77,18 @@ def raise_mapped_outbound_error(exc: OutboundError, *, agent_label: str, logger:
     Any other 4xx is terminal: a rejected request will be rejected again.
 
     Everything else — a 5xx, or a transport failure with no status at all — is
-    re-raised UNCHANGED, because ``OutboundDeliveryFailed`` already IS an
-    ``AdCPServiceUnavailableError`` (SERVICE_UNAVAILABLE / transient). Rewrapping
-    it would restate the seam's own classification in a second place, which is
-    what this module exists to prevent.
+    re-raised UNCHANGED for the same reason as the ``CounterpartyUrl`` arm:
+    ``OutboundDeliveryFailed`` already IS the right AdCP class.
 
     Always raises; the ``NoReturn`` annotation lets a caller delegate from a
     single ``except OutboundError`` arm without a trailing ``raise``.
     """
     from src.core.exceptions import AdCPConfigurationError, AdCPRateLimitError
+
+    if isinstance(provenance, CounterpartyUrl):
+        raise exc
+
+    agent_label = provenance.name
 
     if isinstance(exc, OutboundRequestBlocked):
         logger.error("Egress policy refused the configured endpoint for %s", agent_label)

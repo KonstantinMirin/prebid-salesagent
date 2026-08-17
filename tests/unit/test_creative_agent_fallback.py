@@ -19,6 +19,7 @@ import pytest
 
 from src.core.creative_agent_registry import CreativeAgentRegistry
 from src.core.exceptions import AdCPValidationError
+from src.core.security.outbound_http import CounterpartyUrl
 
 
 @pytest.fixture
@@ -80,14 +81,14 @@ class TestParseMcpToolResult:
         response.text = _json.dumps(response.json.return_value)
 
         async def fake_asend(*args, **kwargs):
-            assert kwargs.get("field") == buyer_field, "the seam call lost the buyer field"
+            assert kwargs.get("provenance") == CounterpartyUrl(field=buyer_field), "the seam call lost the buyer field"
             return MagicMock(response=response)
 
         monkeypatch.setattr("src.core.creative_agent_registry.asend", fake_asend)
 
         agent = CreativeAgent(agent_url="https://buyer-agent.test", name="buyer-agent")
         with pytest.raises(AdCPValidationError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent, field=buyer_field)
+            await registry._fetch_formats_raw_mcp(agent, provenance=CounterpartyUrl(field=buyer_field))
 
         assert excinfo.value.field == buyer_field, (
             "the refusal reached the buyer without naming which input to fix — the fetch "
@@ -122,7 +123,7 @@ class TestParseMcpToolResult:
 
         agent = CreativeAgent(agent_url="https://buyer-agent.test", name="buyer-agent")
         with pytest.raises(AdCPValidationError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent, field=buyer_field)
+            await registry._fetch_formats_raw_mcp(agent, provenance=CounterpartyUrl(field=buyer_field))
 
         exc = excinfo.value
         assert exc.error_code == "VALIDATION_ERROR"
@@ -155,7 +156,7 @@ class TestParseMcpToolResult:
 
         agent = CreativeAgent(agent_url="https://buyer-agent.test", name="buyer-agent")
         with pytest.raises(AdCPValidationError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent, field=buyer_field)
+            await registry._fetch_formats_raw_mcp(agent, provenance=CounterpartyUrl(field=buyer_field))
 
         assert excinfo.value.error_code == "VALIDATION_ERROR"
         assert excinfo.value.field == buyer_field, "the SSE branch dropped the buyer field on its way to the parse step"

@@ -21,7 +21,7 @@ from src.core.exceptions import AdCPConfigurationError, wire_advisory
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
-from src.core.security.outbound_http import OutboundError
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
@@ -445,7 +445,7 @@ def _update_existing_creative(
             # forwards a typed error's own code/recovery onto the per-item result.
             raise_mapped_outbound_error(
                 outbound_error,
-                agent_label=f"creative agent {getattr(format_obj, 'agent_url', None)}",
+                provenance=OperatorEndpoint("the creative agent"),
                 logger=logger,
             )
         except Exception as validation_error:
@@ -738,7 +738,7 @@ def _create_new_creative(
             # forwards a typed error's own code/recovery onto the per-item result.
             raise_mapped_outbound_error(
                 outbound_error,
-                agent_label=f"creative agent {getattr(format_obj, 'agent_url', None)}",
+                provenance=OperatorEndpoint("the creative agent"),
                 logger=logger,
             )
         except Exception as validation_error:

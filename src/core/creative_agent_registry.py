@@ -38,7 +38,14 @@ from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
 from src.core.helpers.mcp_tool_payload import extract_tool_payload
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import Format, FormatId, canonical_agent_url
-from src.core.security.outbound_http import OutboundError, asend
+from src.core.security.outbound_http import (
+    OperatorEndpoint,
+    OutboundError,
+    UrlProvenance,
+    asend,
+    is_counterparty,
+    wire_field,
+)
 from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError
 
 
@@ -415,35 +422,31 @@ class CreativeAgentRegistry:
             ) as client:
                 result = await client.call_tool("list_creative_formats", args)
         except OutboundError as exc:
-            raise_mapped_outbound_error(exc, agent_label=f"creative agent {agent.name}", logger=logger)
+            raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"creative agent {agent.name}"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
             raise_mapped_mcp_error(exc, agent_label=f"creative agent {agent.name}", logger=logger)
 
         payload = extract_tool_payload(result)
         return _validate_formats_tolerant(payload.get("formats", []), logger)
 
-    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent, *, field: str | None = None) -> list[Format]:
+    async def _fetch_formats_raw_mcp(self, agent: CreativeAgent, *, provenance: UrlProvenance) -> list[Format]:
         """Fetch formats through the EGRESS SEAM, as a raw MCP tools/call.
 
-        Two callers, for two different reasons:
-
-        * the SDK-client path's fallback, when adcp rejects a TextContent
-          response (the original reason this existed), and
-        * every fetch of a COUNTERPARTY-SUPPLIED ``agent_url``, because the SDK
-          client dials through its own httpx stack that no policy of ours can
-          reach — adcp 6.6.0 exposes no transport knob (upstream
-          adcp-client-python#1004). Measured: a buyer URL sent down the SDK path
-          put 3 real requests on the wire against a destination egress policy
-          forbids. Here the seam owns address, TLS, redirect and retry, so the
-          request either goes to an allowed destination or never leaves.
-
-        ``field`` carries PROVENANCE, and it is the only thing that decides how a
-        refusal is reported. Present = the URL came out of the caller's request
-        document, so the seam's own ``OutboundRequestBlocked`` (VALIDATION_ERROR /
-        correctable, naming that field) is already the right answer and is
-        re-raised untouched. Absent = an operator-registered endpoint, where
-        ``raise_mapped_outbound_error`` is right: the buyer did not choose the
-        address and cannot fix it.
+        Its one caller today is every fetch of a COUNTERPARTY-SUPPLIED
+        ``agent_url`` (always a :class:`CounterpartyUrl`), because the SDK client
+        dials through its own httpx stack that no policy of ours can reach —
+        adcp 6.6.0 exposes no transport knob (upstream adcp-client-python#1004).
+        Measured: a buyer URL sent down the SDK path put 3 real requests on the
+        wire against a destination egress policy forbids. Here the seam owns
+        address, TLS, redirect and retry, so the request either goes to an
+        allowed destination or never leaves. ``provenance`` is required — not
+        optional — because it is the only thing that decides how a refusal is
+        reported: :func:`raise_mapped_outbound_error` re-raises a
+        ``CounterpartyUrl`` refusal unchanged (the seam's own
+        ``OutboundRequestBlocked`` is already VALIDATION_ERROR / correctable,
+        naming the field when there is one) and classifies an
+        ``OperatorEndpoint`` refusal as CONFIGURATION_ERROR / terminal — the
+        buyer did not choose that address and cannot fix it.
 
         The adcp SDK 3.6.0 requires structuredContent in MCP responses, but some
         creative agents return TextContent with JSON. This method calls the MCP
@@ -481,14 +484,13 @@ class CreativeAgentRegistry:
                 },
                 headers=headers,
                 timeout=agent.timeout,
-                field=field,
+                provenance=provenance,
             )
         except OutboundError as exc:
-            if field is not None:
-                raise
-            raise_mapped_outbound_error(exc, agent_label=f"Creative agent {agent.name}", logger=logger)
+            raise_mapped_outbound_error(exc, provenance=provenance, logger=logger)
 
         response = result.response
+        field = wire_field(provenance)
 
         # Parse SSE or JSON response
         content_type = response.headers.get("content-type", "")
@@ -538,7 +540,7 @@ class CreativeAgentRegistry:
         asset_types: list[str] | None = None,
         name_search: str | None = None,
         type_filter: str | None = None,
-        counterparty_field: str | None = None,
+        provenance: UrlProvenance | None = None,
     ) -> list[Format]:
         """Get formats from agent with caching.
 
@@ -553,6 +555,10 @@ class CreativeAgentRegistry:
             asset_types: Filter by asset types
             name_search: Search by name
             type_filter: Filter by format type (display, video, audio)
+            provenance: Whose URL ``agent.agent_url`` is. A :class:`CounterpartyUrl`
+                (even with no ``field``) routes through the egress seam; anything
+                else (an :class:`OperatorEndpoint`, or ``None``) is operator
+                configuration and is eligible for the testing short-circuit below.
 
         Returns:
             List of Format objects
@@ -567,15 +573,18 @@ class CreativeAgentRegistry:
         # buyer could name any destination and every test environment — including
         # the e2e stack, which also sets ADCP_TESTING=true — would return reference
         # formats and grade nothing. The security-relevant path would be the one
-        # path no test ever exercises.
-        if counterparty_field is not None and not _is_operator_agent(agent.agent_url):
+        # path no test ever exercises. Possession of a ``CounterpartyUrl`` is the
+        # test — not whether it happens to carry a field — so a stored creative's
+        # agent_url (``CounterpartyUrl(field=None)``, no canonical request path)
+        # still takes this branch instead of falling through to the short-circuit.
+        if is_counterparty(provenance) and not _is_operator_agent(agent.agent_url):
             # Straight to the seam: it refuses or it sends. Nothing is validated
             # first — a pre-check would add a TOCTOU window and a second copy of a
             # decision the seam already owns. The SDK client is not usable here at
             # all, since it dials through an httpx stack no policy of ours can
             # reach (upstream adcp-client-python#1004).
             return self._cache_formats(
-                agent, await self._fetch_formats_raw_mcp(agent, field=counterparty_field), has_filters=False
+                agent, await self._fetch_formats_raw_mcp(agent, provenance=provenance), has_filters=False
             )
 
         # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
@@ -748,31 +757,34 @@ class CreativeAgentRegistry:
 
         return results
 
-    async def get_format(self, agent_url: str, format_id: str, *, field: str | None = None) -> Format | None:
+    async def get_format(
+        self, agent_url: str, format_id: str, *, provenance: UrlProvenance | None = None
+    ) -> Format | None:
         """Get a specific format from an agent.
 
         ``agent_url`` here is an arbitrary URL handed in by a caller, not one of
-        this tenant's registered agents. Which path dials depends on ``field``:
-        with ``field`` set (a counterparty supplied the URL), the fetch goes
-        through the egress seam (``asend``); with ``field=None`` — e.g. the
-        registered-agent-gated caller in ``media_buy_create.py`` — it rides the
-        SDK client path, which dials un-pinned until adcp grows a transport
-        injection point (GH #1589).
+        this tenant's registered agents. Which path dials depends on
+        ``provenance``: a :class:`CounterpartyUrl` (a counterparty supplied the
+        URL) goes through the egress seam (``asend``); anything else (an
+        :class:`OperatorEndpoint`, or ``None`` — e.g. the registered-agent-gated
+        caller in ``media_buy_create.py``) rides the SDK client path, which
+        dials un-pinned until adcp grows a transport injection point (GH #1589).
 
         Args:
             agent_url: URL of the creative agent
             format_id: Format ID to retrieve
-            field: The request-document path this URL arrived on, when a
-                counterparty supplied it (e.g. ``creatives[0].format_id.agent_url``).
-                Carried so a refusal is reported as the buyer's correctable error
-                naming their own input, instead of a seller misconfiguration.
+            provenance: Whose URL this is. Construct a ``CounterpartyUrl``,
+                optionally naming the request-document path it arrived on (e.g.
+                ``creatives[0].format_id.agent_url``, or ``None`` when there is
+                no canonical path), so a refusal is reported as the buyer's
+                correctable error instead of a seller misconfiguration.
 
         Returns:
             Format object or None if not found
         """
         # Find agent
         agent = CreativeAgent(agent_url=agent_url, name="Unknown", enabled=True)
-        formats = await self.get_formats_for_agent(agent, counterparty_field=field)
+        formats = await self.get_formats_for_agent(agent, provenance=provenance)
 
         # Find matching format
         for fmt in formats:

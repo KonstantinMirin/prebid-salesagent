@@ -75,6 +75,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     build_two_layer_error_envelope,
 )
+from src.core.security.outbound_http import OperatorEndpoint
 from tests.helpers import assert_envelope_shape
 from tests.helpers.local_http_origin import LocalOrigin
 
@@ -140,6 +141,13 @@ def agent_at(origin: LocalOrigin) -> CreativeAgent:
     return CreativeAgent(agent_url=origin.base_url, name="test-agent", timeout=5)
 
 
+# ``_fetch_formats_raw_mcp`` now requires ``provenance`` — no default means "no
+# opinion" cannot compile. ``agent_at``'s agent is OPERATOR configuration (see its
+# docstring), so every direct call below constructs this rather than relying on
+# a since-deleted None-means-operator default.
+_OPERATOR_PROVENANCE = OperatorEndpoint("creative agent test-agent")
+
+
 class TestAttemptsThroughTheSeam:
     """How many times the origin is actually reached — the real behaviour change."""
 
@@ -158,7 +166,7 @@ class TestAttemptsThroughTheSeam:
         local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
 
         with pytest.raises(AdCPServiceUnavailableError):
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         assert local_origin_tls.hits == 3, f"expected the seam's three attempts, got {local_origin_tls.hits}"
 
@@ -174,7 +182,7 @@ class TestAttemptsThroughTheSeam:
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(200, body=_jsonrpc_body())
 
-        await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
+        await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         assert local_origin_tls.paths == ["/mcp"]
         assert local_origin_tls.last_request.json() == {
@@ -200,7 +208,7 @@ class TestParsing:
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(200, body=_jsonrpc_body())
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
+        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         assert [fmt.format_id.id for fmt in formats] == ["display_image"]
 
@@ -209,7 +217,7 @@ class TestParsing:
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(200, body=_sse_body(), content_type="text/event-stream")
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
+        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         assert [fmt.format_id.id for fmt in formats] == ["display_image"]
 
@@ -246,7 +254,7 @@ class TestTaxonomy:
         local_origin_tls.respond_with(404, body=b'{"error": "no such tool"}')
 
         with pytest.raises(AdCPConfigurationError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         assert_envelope_shape(
             build_two_layer_error_envelope(excinfo.value),
@@ -275,7 +283,7 @@ class TestTaxonomy:
         local_origin_tls.respond_with(429, body=b'{"error": "slow down"}', headers={"Retry-After": "0"})
 
         with pytest.raises(AdCPRateLimitError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         envelope = build_two_layer_error_envelope(excinfo.value)
         assert_envelope_shape(envelope, "RATE_LIMITED", recovery="transient")
@@ -305,7 +313,7 @@ class TestTaxonomy:
         enforce_egress_policy(monkeypatch)
 
         with pytest.raises(AdCPConfigurationError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin), provenance=_OPERATOR_PROVENANCE)
 
         envelope = build_two_layer_error_envelope(excinfo.value)
         assert_envelope_shape(envelope, "CONFIGURATION_ERROR", recovery="terminal")
@@ -329,7 +337,7 @@ class TestTaxonomy:
         local_origin_tls.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
 
         with pytest.raises(AdCPServiceUnavailableError) as excinfo:
-            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls))
+            await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         envelope = build_two_layer_error_envelope(excinfo.value)
         assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")

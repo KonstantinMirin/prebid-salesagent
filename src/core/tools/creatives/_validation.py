@@ -131,8 +131,11 @@ def _validate_creative_input(
         # creative problem (salesagent-mpo1). None = the agent genuinely
         # doesn't expose the format.
         from src.core.format_resolver import fetch_format_spec
+        from src.core.security.outbound_http import CounterpartyUrl
 
-        format_spec = fetch_format_spec(agent_url, format_id, field=f"creatives[{index}].format_id.agent_url")
+        format_spec = fetch_format_spec(
+            agent_url, format_id, provenance=CounterpartyUrl(field=f"creatives[{index}].format_id.agent_url")
+        )
         if not format_spec:
             raise AdCPValidationError(
                 f"Unknown format '{format_id}' from agent {agent_url}. "

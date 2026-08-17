@@ -436,3 +436,35 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         else:
             response = CreateMediaBuyError(**data)
         return CreateMediaBuyResult(response=response, status=status, replayed=replayed)
+
+
+class RealFormatResolverMediaBuyCreateEnv(MediaBuyCreateEnv):
+    """``MediaBuyCreateEnv`` with the format-spec fetch left UNPATCHED.
+
+    ``MediaBuyCreateEnv`` mocks ``_get_format_spec_sync`` so ordinary
+    create_media_buy tests never resolve a format over the network. This variant
+    drops exactly that one patch and changes nothing else, so the pre-adapter
+    creative validation runs the real ``format_resolver`` → ``CreativeAgentRegistry``
+    → egress-seam chain — which is the point: a refusal whose wire envelope is
+    under test has to be produced by production code, including the ``field``
+    the production call site chooses for it.
+
+    TRAP: because the mock is gone, ``self.mock["format_spec"]`` does not exist
+    after ``__enter__`` — the stand-in below is deleted as soon as the happy-path
+    wiring has finished with it. A test that wants to INJECT a format-spec result
+    or error wants plain ``MediaBuyCreateEnv``, not this class.
+    """
+
+    EXTERNAL_PATCHES = {
+        name: target for name, target in MediaBuyCreateEnv.EXTERNAL_PATCHES.items() if name != "format_spec"
+    }
+
+    def _configure_mocks(self) -> None:
+        # The happy-path wiring pokes ``self.mock["format_spec"]``. A throwaway
+        # stand-in keeps those lines harmless without forking the rest of the
+        # wiring, which this env does want.
+        self.mock["format_spec"] = MagicMock()
+        try:
+            super()._configure_mocks()
+        finally:
+            del self.mock["format_spec"]

@@ -777,6 +777,7 @@ class TestBuildAdapterAssetFormatFallback:
         return creative
 
     def test_cache_miss_uses_format_resolver_fallback(self):
+        from src.core.security.outbound_http import CounterpartyUrl
         from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
 
         spec = MagicMock()
@@ -792,6 +793,7 @@ class TestBuildAdapterAssetFormatFallback:
             agent_url="https://creative.adcontextprotocol.org",
             tenant_id="t1",
             product_id=None,
+            provenance=CounterpartyUrl(field=None),
         )
         assert err is None and asset is not None
 
@@ -842,6 +844,43 @@ class TestBuildAdapterAssetFormatFallback:
                 _build_adapter_asset_from_creative(
                     self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1"
                 )
+
+    def test_fallback_forwards_the_same_provenance_as_the_first_fetch(self):
+        """The fallback dial must carry the SAME provenance as the cached-fetch dial.
+
+        ``_build_adapter_asset_from_creative`` dials the SAME buyer-supplied
+        ``creative.agent_url`` twice: once through ``_get_format_spec_sync``
+        (already passes ``CounterpartyUrl(field=None)``), and again through
+        ``format_resolver.get_format`` when the first dial misses. Omitting
+        provenance on the second dial silently reclassifies a buyer-chosen URL
+        as operator configuration, so a subsequent refusal on that URL comes
+        back CONFIGURATION_ERROR/terminal instead of VALIDATION_ERROR/correctable
+        (salesagent-6gpt.1 diff-review round 1 BLOCKING finding, proven
+        load-bearing by round 2's executed trace: the fix routes the same
+        provenance through ``format_resolver.get_format`` ->
+        ``fetch_format_spec`` -> ``registry.get_format`` ->
+        ``get_formats_for_agent`` -> ``is_counterparty`` -> the egress seam).
+
+        Grades the WIRING at the ``fetch_format_spec`` boundary — the frame
+        the diff-review finding was actually about — rather than a live seam
+        refusal, which would make this test's outcome depend on the
+        ``ADCP_TESTING`` reference-format short-circuit two frames further
+        down (an environment detail unrelated to what this regression is).
+        """
+        from src.core.security.outbound_http import CounterpartyUrl
+        from src.core.tools.media_buy_create import _build_adapter_asset_from_creative
+
+        with (
+            patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=None),
+            patch("src.core.format_resolver.fetch_format_spec", return_value=None) as fetch_spec,
+        ):
+            _build_adapter_asset_from_creative(self._creative(), [{"package_id": "p1", "weight": 100}], tenant_id="t1")
+
+        fetch_spec.assert_called_once_with(
+            "https://creative.adcontextprotocol.org",
+            "display_300x250",
+            provenance=CounterpartyUrl(field=None),
+        )
 
 
 class TestCreateMediaBuyCreativeValidation:

@@ -149,6 +149,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     url as make_url,
 )
+from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -313,7 +314,7 @@ def _determine_media_buy_status(
     return MediaBuyStatus.active.value
 
 
-def _get_format_spec_sync(agent_url: str, format_id: str, *, field: str | None = None) -> Any | None:
+def _get_format_spec_sync(agent_url: str, format_id: str, *, provenance: UrlProvenance | None = None) -> Any | None:
     """Get format specification synchronously from the async registry.
 
     Thin delegate kept for its patch surface (tests/harness envs patch this
@@ -322,16 +323,17 @@ def _get_format_spec_sync(agent_url: str, format_id: str, *, field: str | None =
     become None (unknown-format) — lives in the SINGLE shared fetch path,
     format_resolver.fetch_format_spec (#1430 review).
 
-    ``field`` carries BUYER provenance for a stored creative's ``agent_url`` (it
-    came out of the buyer's own prior sync_creatives call, not this deployment's
-    configuration) — passing it routes a refusal through the seam's counterparty-
-    aware path (VALIDATION_ERROR/correctable) instead of the operator path
-    (CONFIGURATION_ERROR/terminal), UNLESS the url happens to also be a real
-    tenant-registered operator agent, which stays terminal regardless (salesagent-ypgd).
+    ``provenance`` carries BUYER provenance for a stored creative's ``agent_url``
+    (it came out of the buyer's own prior sync_creatives call, not this
+    deployment's configuration) — a ``CounterpartyUrl`` routes a refusal through
+    the seam's counterparty-aware path (VALIDATION_ERROR/correctable) instead of
+    the operator path (CONFIGURATION_ERROR/terminal), UNLESS the url happens to
+    also be a real tenant-registered operator agent, which stays terminal
+    regardless (salesagent-ypgd).
     """
     from src.core.format_resolver import fetch_format_spec
 
-    return fetch_format_spec(agent_url, format_id, field=field)
+    return fetch_format_spec(agent_url, format_id, provenance=provenance)
 
 
 def _validate_creatives_before_adapter_call(
@@ -418,14 +420,17 @@ def _validate_creatives_before_adapter_call(
         # broadstreet://<tenant_id>): those formats are served by the adapter
         # in-process, so no dialled agent could ever resolve them, and the
         # unconditional fetch below would reject a format the seller itself
-        # advertised (salesagent-ypgd). `field` carries BUYER provenance for a
-        # genuinely-dialled url — see _get_format_spec_sync's docstring.
+        # advertised (salesagent-ypgd). CounterpartyUrl marks BUYER provenance for
+        # a genuinely-dialled url — see _get_format_spec_sync's docstring. No
+        # field: create-media-buy-request.json defines no creative:{id} path, so
+        # there is no canonical request-document locator to name (a fabricated
+        # one is not honest — CounterpartyUrl(field=None) states that plainly).
         format_spec = None
         if creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
             format_spec = _get_format_spec_sync(
                 creative.agent_url,
                 str(creative.format),
-                field=f"creative:{creative.creative_id}.agent_url",
+                provenance=CounterpartyUrl(field=None),
             )
 
             # Fail validation if format spec not found (no skipping!) — only
@@ -709,7 +714,7 @@ def _build_adapter_asset_from_creative(
         format_spec = _get_format_spec_sync(
             creative.agent_url,
             str(creative.format),
-            field=f"creative:{creative.creative_id}.agent_url",
+            provenance=CounterpartyUrl(field=None),
         )
     if format_spec is None and creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
         from src.core.exceptions import AdCPFormatNotFoundError
@@ -721,6 +726,11 @@ def _build_adapter_asset_from_creative(
                 agent_url=creative.agent_url,
                 tenant_id=tenant_id,
                 product_id=None,
+                # Same buyer-supplied URL as the first fetch above — omitting
+                # provenance here would silently reclassify it as operator
+                # configuration and route it off the egress seam (salesagent-6gpt.1
+                # diff-review finding).
+                provenance=CounterpartyUrl(field=None),
             )
         except AdCPFormatNotFoundError as e:
             # Genuinely unknown format — proceed without a spec (extraction

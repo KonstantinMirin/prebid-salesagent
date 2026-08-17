@@ -110,20 +110,23 @@ shortens the base for test speed and nothing else — it cannot change the shape
 remove the jitter, it is deliberately not passed through ``tox.ini`` or either
 compose file, and it must never be set in a deployment.
 
-``send`` and ``asend`` take an optional ``field``: the request-payload path the
-URL arrived on, carried onto a refusal so the buyer learns which input to fix.
-It is a PASSTHROUGH, not a fourth decision — the seam sees a URL string, never a
+``send`` and ``asend`` take an optional ``provenance: UrlProvenance`` —
+:class:`CounterpartyUrl` (its ``field``, when it has one, is the request-payload
+path the URL arrived on, carried onto a refusal so the buyer learns which input
+to fix) or :class:`OperatorEndpoint` (a role, never a field or an address). It is
+a PASSTHROUGH, not a fourth decision — the seam sees a URL string, never a
 request document, so it cannot compute the path, and the path's namespace differs
-per call site. Callers pass it only for a URL that came from the caller's own
-request; an operator-configured endpoint has no such path.
+per call site. Callers construct ``CounterpartyUrl`` only for a URL that came
+from the caller's own request; an operator-configured endpoint has no such path.
 
 There is one more entry point, :func:`validate_url`, for URLs that are STORED
 rather than sent — a webhook URL accepted at ingest and fetched later. It runs
 the identical pre-connection policy and connects to nothing, so those call sites
 have no reason to grow a second copy of address policy either. It takes the same
-optional ``field``: admin ingest handlers build no AdCP envelope and omit it,
-while protocol ``_impl`` ingest sites (create/update/sync accepting a buyer's
-webhook URL) pass the request path so the refusal names the input to fix.
+optional ``provenance``: admin ingest handlers build no AdCP envelope and omit
+it, while protocol ``_impl`` ingest sites (create/update/sync accepting a
+buyer's webhook URL) construct a ``CounterpartyUrl`` naming the request path so
+the refusal names the input to fix.
 
 The last entry point is :func:`sleep_backoff`, for the one retry loop that
 lives outside this module by design: the MCP seam owns a stateful session
@@ -142,7 +145,7 @@ import random
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol, TypeGuard
 
 import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
 from adcp.signing import (
@@ -279,6 +282,47 @@ class OutboundRequestBlocked(OutboundError, AdCPBlockedUrlError):
     Scheme or address policy said no. Terminal — never retried, because nothing
     about the destination will change on a second look.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class CounterpartyUrl:
+    """A URL that arrived on the counterparty's own request document.
+
+    ``field`` is a JSONPath-lite locator into that document (e.g.
+    ``"property_list.agent_url"``) when one exists, or honestly ``None`` when
+    it does not (e.g. a stored creative's ``agent_url``, re-dialled later with
+    no live request document to point into). ``None`` is never spelled as a
+    fabricated path — possession of this type IS the "this is a counterparty
+    URL" fact; the field is optional detail on top of it, not the fact itself.
+    """
+
+    field: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorEndpoint:
+    """An operator-configured endpoint — a registered agent, a vendor host.
+
+    ``name`` identifies the ROLE this deployment stands behind (e.g. "the
+    creative agent", "Kevel"), never an address: a refusal naming an endpoint
+    the buyer did not choose would disclose network topology (AdCP 3.1.1,
+    security.mdx point 6), so the constructor refuses anything that looks like
+    one rather than relying on every call site to remember not to pass one.
+    """
+
+    name: str
+
+    def __post_init__(self) -> None:
+        if "://" in self.name:
+            raise ValueError(f"OperatorEndpoint.name must identify a role, not a URL: {self.name!r}")
+
+
+# Whose URL was refused, as a type: a counterparty-supplied URL (may name the
+# request-document field it arrived on) or an operator-configured endpoint
+# (may name a role, never a field or an address). Required wherever the seam
+# reports outward — there is no "no opinion" default, because "no opinion" is
+# exactly the provenance-by-omission this union replaces.
+UrlProvenance = CounterpartyUrl | OperatorEndpoint
 
 
 class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
@@ -455,14 +499,46 @@ def _blocked(exc: SSRFValidationError, field: str | None) -> OutboundRequestBloc
     return OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
 
 
-def _checked_field(field: str | None, url: str) -> str | None:
-    """Refuse a ``field`` that would leak the URL, instead of trusting the caller.
+def wire_field(provenance: UrlProvenance | None) -> str | None:
+    """The buyer-visible field *provenance* contributes to a refusal, if any.
 
-    ``field`` is buyer-visible, and the whole point of the opaque refusal message
-    is that a refusal discloses nothing about our network (spec point 6). A call
-    site that passed the URL — or anything containing it or a scheme — would
-    route around that in a field the message never touches. Documentation cannot
-    stop that; this can.
+    Only :class:`CounterpartyUrl` contributes one (its ``field``, which may
+    itself be ``None``); :class:`OperatorEndpoint` and bare ``None`` provenance
+    always contribute none, because there is no request-document path to point a
+    buyer at. Public — and the ONE place this derivation lives — because more
+    than the seam itself needs it: a call site that raises its own
+    ``AdCPValidationError`` at the locator a seam refusal would have carried
+    (e.g. ``creative_agent_registry``) reads it from here rather than re-deriving
+    whose-URL-is-this with a second ``isinstance`` check.
+    """
+    if isinstance(provenance, CounterpartyUrl):
+        return provenance.field
+    return None
+
+
+def is_counterparty(provenance: UrlProvenance | None) -> TypeGuard[CounterpartyUrl]:
+    """Whether *provenance* names a URL the counterparty (buyer) supplied.
+
+    The counterpart to :func:`wire_field`, for call sites that need the
+    CounterpartyUrl-vs-everything-else predicate itself rather than the field it
+    carries — e.g. deciding whether a URL is eligible for a testing
+    short-circuit that must never apply to a buyer-controlled destination. Kept
+    here, the ONE place either derivation lives, so no caller re-implements the
+    union's meaning with its own ``isinstance``. A ``TypeGuard`` so a caller that
+    branches on it gets ``CounterpartyUrl`` narrowing for free, the same as an
+    inline ``isinstance`` would.
+    """
+    return isinstance(provenance, CounterpartyUrl)
+
+
+def _checked_field(provenance: UrlProvenance | None, url: str) -> str | None:
+    """Derive the buyer-visible field from *provenance*, refusing one that would leak the URL.
+
+    The derived field is buyer-visible, and the whole point of the opaque
+    refusal message is that a refusal discloses nothing about our network (spec
+    point 6). A call site that passed the URL — or anything containing it or a
+    scheme — would route around that in a field the message never touches.
+    Documentation cannot stop that; this can.
 
     The containment check runs in the leak direction only (``url in field``,
     never ``field in url``): call sites pass fixed path constants, and the URL is
@@ -474,6 +550,7 @@ def _checked_field(field: str | None, url: str) -> str | None:
     means to name a field and instead names a URL has a bug, and swallowing it
     would ship the bug with a quietly fieldless envelope.
     """
+    field = wire_field(provenance)
     if field is None:
         return None
     if "://" in field or url in field:
@@ -483,7 +560,9 @@ def _checked_field(field: str | None, url: str) -> str | None:
     return field
 
 
-def _prepare[Validated](url: str, validator: Callable[..., Validated], field: str | None = None) -> Validated:
+def _prepare[Validated](
+    url: str, validator: Callable[..., Validated], provenance: UrlProvenance | None = None
+) -> Validated:
     """Run every pre-connection egress decision, once, and hand back what the caller asked for.
 
     Scheme policy, the escape-hatch read, the SDK's address validation and the
@@ -498,12 +577,13 @@ def _prepare[Validated](url: str, validator: Callable[..., Validated], field: st
     code rather than a claim a test has to keep re-proving.
 
     Raises :class:`OutboundRequestBlocked` — never lets ``SSRFValidationError``
-    out, because its message names the resolved IP (spec point 6). ``field``, when
-    the caller supplied one, rides that refusal onto both envelope layers so the
-    buyer learns which input to fix; both refusal causes carry it identically, so
-    it cannot become a scheme-versus-address discriminator.
+    out, because its message names the resolved IP (spec point 6). The field
+    :func:`_checked_field` derives from *provenance*, when there is one, rides
+    that refusal onto both envelope layers so the buyer learns which input to
+    fix; both refusal causes carry it identically, so it cannot become a
+    scheme-versus-address discriminator.
     """
-    field = _checked_field(field, url)
+    field = _checked_field(provenance, url)
     _require_tls(url, field)
     try:
         return validator(url, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
@@ -664,7 +744,7 @@ def _fail(attempts: int, last_status: int | None, retry_after: float | None = No
     )
 
 
-def validate_url(url: str, *, field: str | None = None) -> None:
+def validate_url(url: str, *, provenance: UrlProvenance | None = None) -> None:
     """Apply the seam's egress policy to a URL WITHOUT sending anything.
 
     For URLs that are *stored* rather than sent: a webhook or brand-manifest URL
@@ -675,11 +755,12 @@ def validate_url(url: str, *, field: str | None = None) -> None:
     second, hand-written copy of address policy, which is the recurrence this
     module exists to make impossible.
 
-    ``field`` is the same passthrough :func:`send` and :func:`asend` take — the
-    request-payload path the URL arrived on, carried onto the refusal so the
-    buyer learns which input to fix. Admin ingest handlers build no AdCP
-    envelope and omit it; protocol ``_impl`` ingest sites pass their request
-    path constant.
+    ``provenance`` is the same passthrough :func:`send` and :func:`asend` take —
+    whose URL this is, carried onto a refusal so a :class:`CounterpartyUrl`'s
+    field (when it has one) tells the buyer which input to fix, while an
+    :class:`OperatorEndpoint` or ``None`` contributes nothing. Admin ingest
+    handlers build no AdCP envelope and omit it; protocol ``_impl`` ingest sites
+    construct a ``CounterpartyUrl`` naming their request path.
 
     It refuses EXACTLY what :func:`send` and :func:`asend` refuse, because all
     three go through :func:`_prepare` and differ only in what they ask the SDK
@@ -695,7 +776,7 @@ def validate_url(url: str, *, field: str | None = None) -> None:
     resolved address would leak it to whatever logs or stores the result (spec
     point 6).
     """
-    _prepare(url, resolve_and_validate_host, field)
+    _prepare(url, resolve_and_validate_host, provenance)
 
 
 def guarded_async_client(
@@ -768,7 +849,7 @@ def send(
     content: Any = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
-    field: str | None = None,
+    provenance: UrlProvenance | None = None,
     sign: SignAttempt | None = None,
 ) -> OutboundResult:
     """Send one outbound HTTP request through the seam.
@@ -777,12 +858,14 @@ def send(
     ``max_attempts=1`` is how a non-idempotent or vendor call opts out of retry.
     ``duration_seconds`` on the result is total wall time across all attempts.
 
-    ``field`` names the request-payload path this URL arrived on, in AdCP
-    JSONPath-lite (e.g. ``"property_list.agent_url"``), and rides a refusal onto
-    both envelope layers so the buyer knows what to fix. Pass it ONLY when the
-    URL came from the caller's request document: an operator-configured endpoint
-    has no such path, and neither does a URL read back out of storage. See the
-    module docstring — this is carried, not decided.
+    ``provenance`` states whose URL this is. A :class:`CounterpartyUrl` may carry
+    a request-payload path in AdCP JSONPath-lite (e.g.
+    ``"property_list.agent_url"``), which rides a refusal onto both envelope
+    layers so the buyer knows what to fix; construct one WITHOUT a field when the
+    URL came from the caller's request document but there is no canonical path to
+    name it by (never fabricate one). An :class:`OperatorEndpoint` or ``None``
+    contributes no field. See the module docstring — this is carried, not
+    decided.
 
     ``sign`` is a :class:`SignAttempt` callback invoked once PER ATTEMPT, with
     the exact method, target URI and body bytes of that attempt, returning the
@@ -806,7 +889,7 @@ def send(
     request was not delivered. Both are ``OutboundError`` subclasses, so a call
     site that only logs can catch that one type.
     """
-    transport = _prepare(url, build_ip_pinned_transport, field)
+    transport = _prepare(url, build_ip_pinned_transport, provenance)
 
     started = time.monotonic()
     last_status: int | None = None
@@ -867,16 +950,17 @@ async def asend(
     content: Any = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
-    field: str | None = None,
+    provenance: UrlProvenance | None = None,
     sign: SignAttempt | None = None,
 ) -> OutboundResult:
     """Async twin of :func:`send` — same policy, same failure modes.
 
-    See :func:`send` for the contract, ``field`` included. The two differ only in
-    ``Client``/``AsyncClient`` and ``time.sleep``/``asyncio.sleep``; every
-    policy decision is a shared helper so neither path can drift from the other.
+    See :func:`send` for the contract, ``provenance`` included. The two differ
+    only in ``Client``/``AsyncClient`` and ``time.sleep``/``asyncio.sleep``;
+    every policy decision is a shared helper so neither path can drift from the
+    other.
     """
-    transport = _prepare(url, build_async_ip_pinned_transport, field)
+    transport = _prepare(url, build_async_ip_pinned_transport, provenance)
 
     started = time.monotonic()
     last_status: int | None = None

@@ -14,6 +14,7 @@ import logging
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPError, AdCPFormatNotFoundError, AdCPNotFoundError
 from src.core.schemas import Format
+from src.core.security.outbound_http import UrlProvenance
 from src.core.validation_helpers import run_async_in_sync_context
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ def is_dialled_agent_url(agent_url: str) -> bool:
     return agent_url.startswith(("http://", "https://"))
 
 
-def fetch_format_spec(agent_url: str, format_id: str, *, field: str | None = None) -> Format | None:
+def fetch_format_spec(agent_url: str, format_id: str, *, provenance: UrlProvenance | None = None) -> Format | None:
     """Fetch one format spec from the creative-agent registry (sync bridge).
 
     THE single fetch path for format specs (salesagent-mpo1) — create_media_buy,
@@ -52,12 +53,17 @@ def fetch_format_spec(agent_url: str, format_id: str, *, field: str | None = Non
     - Untyped exceptions are logged and become ``None``: the registry types all
       its network errors, so an untyped one here is a programming surprise, not
       a transport signal.
+
+    ``provenance`` passes straight through to the registry — a
+    :class:`CounterpartyUrl` when a buyer's request document supplied
+    ``agent_url``, optionally naming the request path; ``None`` for an
+    operator-registered agent.
     """
     from src.core.creative_agent_registry import get_creative_agent_registry
 
     registry = get_creative_agent_registry()
     try:
-        return run_async_in_sync_context(registry.get_format(agent_url, format_id, field=field))
+        return run_async_in_sync_context(registry.get_format(agent_url, format_id, provenance=provenance))
     except AdCPError:
         raise
     except Exception as e:
@@ -66,7 +72,12 @@ def fetch_format_spec(agent_url: str, format_id: str, *, field: str | None = Non
 
 
 def get_format(
-    format_id: str, agent_url: str | None = None, tenant_id: str | None = None, product_id: str | None = None
+    format_id: str,
+    agent_url: str | None = None,
+    tenant_id: str | None = None,
+    product_id: str | None = None,
+    *,
+    provenance: UrlProvenance | None = None,
 ) -> Format:
     """Resolve format with priority: product override → creative agent discovery.
 
@@ -75,6 +86,12 @@ def get_format(
         agent_url: Optional creative agent URL (defaults to AdCP standard agent)
         tenant_id: Optional tenant ID for agent lookup
         product_id: Optional product ID for product-level overrides
+        provenance: Whose URL ``agent_url`` is, forwarded to
+            :func:`fetch_format_spec` unchanged. A caller re-dialling a
+            buyer-supplied URL it already fetched once (e.g. a fallback path)
+            MUST pass the same ``CounterpartyUrl`` it used the first time —
+            omitting it silently reclassifies the same URL as operator
+            configuration and routes it off the egress seam entirely.
 
     Returns:
         Format object with all configuration
@@ -96,7 +113,7 @@ def get_format(
     # If agent_url provided, get format directly from that agent
     # Coerce to str: FormatId.agent_url is Pydantic AnyUrl (not a str subclass)
     if agent_url:
-        fmt = fetch_format_spec(str(agent_url), format_id)
+        fmt = fetch_format_spec(str(agent_url), format_id, provenance=provenance)
         if fmt:
             return fmt
     else:

@@ -10,7 +10,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
 )
 from src.core.schemas import *
-from src.core.security.outbound_http import OutboundError, send
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
 
 class TritonDigital(AdServerAdapter):
@@ -671,4 +671,6 @@ class TritonDigital(AdServerAdapter):
                 self.log(f"Error updating Triton campaign/flight: {e}")
                 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 
-                raise_mapped_outbound_error(e, agent_label="Triton Digital", logger=logging.getLogger(__name__))
+                raise_mapped_outbound_error(
+                    e, provenance=OperatorEndpoint("Triton Digital"), logger=logging.getLogger(__name__)
+                )
