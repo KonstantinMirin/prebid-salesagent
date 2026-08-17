@@ -278,7 +278,8 @@ class ProtocolWebhookService:
         # address it validated, so the resolve-then-connect rebinding window a
         # separate validator leaves open does not exist. Re-validating here would be
         # a second copy of address policy, which is what deleting the hand-rolled
-        # validator (src/core/security/url_validator.py) was for.
+        # validator (formerly src/core/security/url_validator.py, deleted; the shared
+        # predicate now lives in src/core/security/egress/policy.py) was for.
         url = push_notification_config.url
 
         # Prepare headers

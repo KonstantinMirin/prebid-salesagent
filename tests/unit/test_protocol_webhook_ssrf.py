@@ -93,21 +93,28 @@ def _egress_hatches(*, private: bool) -> Iterator[None]:
 def _dispatched_hops() -> Iterator[list[str]]:
     """Record every HTTP hop the egress seam actually puts on the wire.
 
-    WRAPS the real ``build_async_ip_pinned_transport`` rather than replacing it:
-    the SDK still resolves, validates and pins the destination, so nothing here
-    can turn a refusal into a pass. A URL the seam refuses never reaches the
-    builder at all, which is why an empty list is direct evidence that nothing
-    left the process — and every redirect hop httpx follows is dispatched
-    through the same client transport, so a followed redirect shows up as a
-    second entry naming where it went.
+    WRAPS the real ``outbound_http._async_transport`` rather than replacing
+    it: the real thin builder still calls ``EgressPolicy.resolve_for_dial``
+    (SDK resolve + validate + the shared address predicate) before returning
+    anything, so nothing here can turn a refusal into a pass — a refused URL
+    raises inside the real call and never reaches the wrapper at all, which
+    is why an empty list is direct evidence that nothing left the process.
+    Every redirect hop httpx follows is dispatched through the same client
+    transport, so a followed redirect shows up as a second entry naming
+    where it went.
+
+    Re-pointed from the pre-salesagent-tbrk.1 ``build_async_ip_pinned_
+    transport`` patch target: that SDK builder is no longer called directly
+    by ``guarded_async_client``/``asend`` (see ``_async_transport``), so
+    patching it would silently record nothing rather than fail loudly.
     """
     dispatched: list[str] = []
-    real_builder = outbound_http.build_async_ip_pinned_transport
+    real_builder = outbound_http._async_transport
 
-    def build(url: str, **kwargs: object) -> httpx.AsyncBaseTransport:
-        return _RecordingTransport(real_builder(url, **kwargs), dispatched)
+    def build(url: str, *, field: str | None, allow_private: bool) -> httpx.AsyncBaseTransport:
+        return _RecordingTransport(real_builder(url, field=field, allow_private=allow_private), dispatched)
 
-    with patch.object(outbound_http, "build_async_ip_pinned_transport", build):
+    with patch.object(outbound_http, "_async_transport", build):
         yield dispatched
 
 

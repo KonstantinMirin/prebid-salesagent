@@ -207,7 +207,7 @@ def then_refusal_message_is_exactly(ctx: dict, message: str) -> None:
     name-existence oracle — spec point 6's second half. The registration gate
     used to vary its ``<reason>`` per cause (which CIDR, which resolved
     address); that was the disclosure bug this scenario now pins closed, via
-    ``url_validator._RESTRICTED_RANGE_MESSAGE``. Non-disclosure of the
+    ``egress.policy._RESTRICTED_RANGE_MESSAGE``. Non-disclosure of the
     buyer's OWN supplied host/address is still carried by
     :func:`then_envelope_discloses_nothing`, not by sameness — the two Thens
     check different things.

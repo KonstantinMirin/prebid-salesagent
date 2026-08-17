@@ -13,9 +13,14 @@ Both of the seam's pre-connection entry points (``send``/``asend`` and
 ``validate_url``) go through ``adcp.signing.resolve_and_validate_host``, which
 ALWAYS resolves DNS. Registration is deliberately a no-DNS verdict — an
 unresolvable but public hostname must be ACCEPTED at registration and re-checked
-with DNS when the callback is actually dialled — so
-``validate_webhook_url_registration`` stays until the seam grows a no-DNS mode
-(gh-#1589), at which point it and ``src/core/security/url_validator.py`` go too.
+with DNS when the callback is actually dialled. ``WebhookURLValidator.
+validate_webhook_url_registration`` below is now a thin ``(bool, str)`` wrapper
+over :meth:`~src.core.security.egress.policy.EgressPolicy.check_registration` —
+the shared address predicate both verdicts read now lives in
+``src/core/security/egress/policy.py``, and ``src/core/security/
+url_validator.py`` (this module's former SSRF-computation dependency) has been
+deleted; nothing under ``src/`` computes address policy outside the egress
+package.
 
 There is no send-side gate here any more. There used to be
 (``validate_outbound_webhook_url`` and friends); it had no production callers and
@@ -24,12 +29,11 @@ intercepting nothing, so it was deleted. Any new outbound send goes through the
 seam — never a second copy of address policy here.
 
 The one thing this gate MUST NOT decide for itself is the scheme. That decision
-belongs to the seam (``_require_tls``), which requires https unconditionally
-(salesagent-e6h0 deleted its escape hatch) — see
-:meth:`WebhookURLValidator._require_https`, which does the same. An ingest gate
-that admitted a scheme the seam refuses would accept a buyer's webhook URL with
-a success envelope and then never deliver to it, which is the one failure mode
-the buyer cannot see or correct.
+belongs to :class:`~src.core.security.egress.policy.EgressPolicy`, which
+requires https unconditionally on both verdicts (salesagent-e6h0 deleted the
+send-side escape hatch). An ingest gate that admitted a scheme the seam refuses
+would accept a buyer's webhook URL with a success envelope and then never
+deliver to it, which is the one failure mode the buyer cannot see or correct.
 
 ``validate_webhook_task_type`` below is an unrelated concern (SDK payload enum
 coercion) that happens to live in this file.
@@ -37,7 +41,6 @@ coercion) that happens to live in this file.
 
 from __future__ import annotations
 
-import ipaddress
 import os
 from typing import Any
 from urllib.parse import urlparse
@@ -45,11 +48,7 @@ from urllib.parse import urlparse
 from adcp.types import ContextObject, TaskType
 
 from src.core.exceptions import AdCPBlockedUrlError, AdCPValidationError
-
-# ``_scheme_error`` is imported (not restated): ``_maybe_allow_localhost`` must
-# recognise a scheme refusal without re-implementing the scheme rule, or the
-# two copies can drift.
-from src.core.security.url_validator import _scheme_error, check_url_ssrf
+from src.core.security.egress.policy import EgressPolicy
 from src.core.security.webhook_egress import HmacSecretMissing, webhook_auth_for
 
 # Fallback used when an action label is not a member of the SDK's closed
@@ -199,83 +198,36 @@ def reject_invalid_webhook_registration(
 
 
 class WebhookURLValidator:
-    """Validates webhook URLs to prevent SSRF attacks."""
+    """Validates webhook URLs to prevent SSRF attacks.
 
-    @staticmethod
-    def _maybe_allow_localhost(url: str, is_valid: bool, error: str, *, allow_localhost: bool) -> tuple[bool, str]:
-        """Override a loopback-ADDRESS refusal when ADCP_TESTING allows it.
-
-        Re-derives loopback-ness structurally from *url* rather than sniffing
-        the refusal message: the address-cause message is now one fixed
-        non-disclosing string for every blocked range
-        (``url_validator._RESTRICTED_RANGE_MESSAGE``), so it no longer carries
-        "which range matched" for a substring check to key on.
-
-        Must NOT rescue a SCHEME refusal — ``_scheme_error`` is checked first
-        and unconditionally blocks the rescue when it fires, which is what
-        ``test_adcp_testing_localhost_allowance_does_not_reopen_plain_http``
-        pins: a loopback capture server must be reached over a REAL https URL
-        now (salesagent-e6h0 deleted the scheme hatch entirely — there is no
-        posture in which plain http is ever rescued).
-        """
-        if is_valid or not allow_localhost:
-            return is_valid, error
-        parsed = urlparse(url)
-        if _scheme_error(parsed, require_https=WebhookURLValidator._require_https()):
-            return is_valid, error
-        hostname = parsed.hostname
-        if hostname is None:
-            return is_valid, error
-        if hostname.lower() == "localhost":
-            return True, ""
-        try:
-            is_loopback = ipaddress.ip_address(hostname).is_loopback
-        except ValueError:
-            return is_valid, error
-        return (True, "") if is_loopback else (is_valid, error)
-
-    @staticmethod
-    def _require_https() -> bool:
-        """HTTPS is required, unconditionally — no escape hatch (salesagent-e6h0).
-
-        Kept as a method (not inlined at the 3 call sites — this one,
-        ``_maybe_allow_localhost``, and ``webhook_ssrf_suggestion``) so a
-        future second ingest gate has one place to ask, matching the send
-        seam's own unconditional rule
-        (``src/core/security/outbound_http.py`` ``_require_tls``). Ingest used
-        to require https only in production, so every non-production and
-        ADCP_TESTING process ACCEPTED a buyer's ``http://`` webhook URL at
-        registration and the seam then refused it at every send — a silent,
-        permanent non-delivery the buyer was never told about, at the one
-        moment they could still fix the URL.
-
-        This is the SCHEME decision only. The localhost/loopback allowance
-        under ``ADCP_TESTING`` is a separate concern and still keys off
-        :func:`_adcp_testing` (see ``_maybe_allow_localhost``): a capture
-        server on loopback must be reached over a real https URL now, exactly
-        as the seam requires.
-
-        Must stay in sync with ``outbound_http._require_tls``.
-        """
-        return True
+    ``_maybe_allow_localhost`` and ``_require_https`` (the localhost/loopback
+    rescue and the unconditional-https rule) deleted from this class —
+    :class:`~src.core.security.egress.policy.EgressPolicy` owns both now, so
+    this class no longer computes SSRF policy itself. It survives as a thin
+    ``(bool, str)`` wrapper because its call sites (this module's own
+    ``reject_unsafe_webhook_registration_url`` and one direct caller,
+    ``src/core/database/repositories/push_notification_config.py``) both
+    depend on that return shape.
+    """
 
     @classmethod
     def validate_webhook_url_registration(cls, url: str) -> tuple[bool, str]:
         """Registration-time SSRF gate (no DNS required).
 
-        Blocks known-bad hostnames and literal private IPs. Unresolvable
-        public hostnames are allowed here; the SEAM re-checks with DNS when the
-        callback is dialled (``src.core.security.outbound_http.send``). When
-        ``ADCP_TESTING=true``, localhost/loopback are allowed for capture
-        servers — graded on both arms in
+        Delegates entirely to
+        :meth:`~src.core.security.egress.policy.EgressPolicy.check_registration`.
+        ``AdCPBlockedUrlError`` defines no ``__str__`` override — it calls
+        ``Exception.__init__(message)`` — so ``str(exc)`` here is exactly the
+        bare message :meth:`EgressPolicy.check_registration` raised, and the
+        ``(bool, str)`` contract this method's own callers depend on survives
+        byte-identically.
+
+        When ``ADCP_TESTING=true``, localhost/loopback are allowed for
+        capture servers — graded on both arms in
         ``tests/unit/test_webhook_security.py::TestLocalhostAllowanceUnderTestingMode``.
-        HTTPS is required unless the seam's insecure hatch is open
-        (:meth:`_require_https`).
         """
-        allow_localhost = _adcp_testing()
-        is_valid, error = check_url_ssrf(
-            url,
-            resolve_dns=False,
-            require_https=cls._require_https(),
-        )
-        return cls._maybe_allow_localhost(url, is_valid, error, allow_localhost=allow_localhost)
+        try:
+            EgressPolicy.check_registration(url, allow_loopback=_adcp_testing())
+        except AdCPBlockedUrlError as exc:
+            return False, str(exc)
+        return True, ""

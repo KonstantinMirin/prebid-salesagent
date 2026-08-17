@@ -40,7 +40,7 @@ from adcp.signing.digest import content_digest_matches
 from adcp.signing.keygen import generate_signing_keypair
 from adcp.webhook_auth import JwkSignerStrategy
 
-from src.core.exceptions import build_two_layer_error_envelope
+from src.core.exceptions import AdCPBlockedUrlError, build_two_layer_error_envelope
 from src.core.security.outbound_http import CounterpartyUrl
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
 from tests.helpers.egress_hatches import egress_hatch_env
@@ -1026,11 +1026,22 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
 # own classification (not a bug in this repo's call sites) goes red here
 # first. No address-classification logic of its own — every verdict below is
 # produced by calling validate_url, never recomputed.
+#
+# The classes adcp.signing does NOT classify — the #974 supplement, CGNAT
+# included — are graded in section 12, against this repo's own policy object
+# rather than against the SDK.
 # ---------------------------------------------------------------------------
 
 # One representative literal-IP URL per reserved class. IP literals (not
 # hostnames) so the case tests the SDK's classification directly, with no DNS
 # resolution step to also be right about.
+#
+# The last three arrived from tests/unit/test_ssrf_url_validator.py, which grades
+# them against ``check_url_ssrf`` — the second copy of address policy
+# salesagent-tbrk.1 deletes. They are not redundant here: they are the classes
+# whose refusal that suite attributed to this repo's own CIDR list and which the
+# SDK in fact classifies on its own (multicast, multicast, reserved), so keeping
+# them means the deletion loses no live coverage.
 _RESERVED_RANGE_URLS = {
     "loopback": "https://127.0.0.1/",
     "link-local": "https://169.254.1.1/",
@@ -1041,17 +1052,10 @@ _RESERVED_RANGE_URLS = {
     "zero-net": "https://0.0.0.0/",
     "ipv6-ula": "https://[fc00::1]/",
     "ipv4-mapped-ipv6": "https://[::ffff:127.0.0.1]/",
+    "ipv4-multicast": "https://224.0.0.1/",
+    "ipv6-multicast": "https://[ff02::1]/",
+    "nat64-well-known": "https://[64:ff9b::a9fe:a9fe]/",
 }
-
-# CGNAT / Shared Address Space (RFC 6598, 100.64.0.0/10) is the one class the
-# SDK does NOT refuse today: Python's ipaddress.IPv4Address neither
-# is_private nor is_reserved flags it (adcp-client-python#973/#974). This
-# repo compensates at ingest only (src/core/webhook_validator.py, commit
-# 29c45b199) — deliberately not at send time (GH #1792) — so validate_url
-# genuinely accepts it. Asserting ACCEPTED here, not refused, keeps this test
-# honest about the real boundary; if it ever flips, the fix landed and this
-# entry (and its special-casing below) should move into _RESERVED_RANGE_URLS.
-_CGNAT_URL = "https://100.64.0.1/"
 
 
 @pytest.mark.parametrize("range_name", sorted(_RESERVED_RANGE_URLS))
@@ -1068,26 +1072,321 @@ def test_reserved_range_is_refused_by_validate_url(range_name, monkeypatch):
     assert refused, f"{range_name} ({_RESERVED_RANGE_URLS[range_name]!r}) is no longer refused by validate_url"
 
 
-def test_cgnat_is_the_one_documented_gap_not_refused_by_validate_url(monkeypatch):
-    """CGNAT (100.64.0.0/10) is accepted today -- a known, compensated-at-ingest gap.
+# ---------------------------------------------------------------------------
+# 12. Verdict parity — one address predicate, two verdicts (salesagent-tbrk.1)
+#
+# The seam offers a resolve-and-dial verdict only. A URL that is STORED at ingest
+# and fetched later needs a second, DNS-FREE verdict at registration time,
+# because an unresolvable but public hostname must be ACCEPTED then and
+# re-checked when it is actually dialled. That second verdict was built OUTSIDE
+# the seam (``src/core/security/url_validator.py``), and once outside it grew its
+# own range set — which then drifted: the six ranges below are refused at ingest
+# and dialled happily (salesagent-634hc, the live gap this section closes).
+#
+# So the obligation is not "each verdict refuses bad URLs". Two independent
+# copies of address policy satisfy that too, and that IS the disease. It is that
+# the two verdicts agree row for row, diverging only on the two axes they are
+# DEFINED to differ on: DNS (registration performs none) and the loopback
+# allowance (registration-only, for capture servers under ADCP_TESTING).
+#
+# The tables are stated HERE and never derived from the policy module's own
+# frozenset. A row read out of production would vanish along with the CIDR a
+# mutation deletes and the test would stay green — and the mutations are where
+# this section's teeth are:
+#
+#   * drop ONE entry from the policy's supplement frozenset and the matching row
+#     reddens in BOTH ``test_a_supplement_range_is_refused_at_registration`` and
+#     ``test_a_supplement_range_is_refused_at_dial``. Two rows, one edit: that is
+#     the proof the address predicate is genuinely shared rather than two copies
+#     that happen to agree today. At HEAD, with two range sets, no single edit
+#     can do it.
+#   * drop the FLAG half of the shared predicate (leaving only the supplement
+#     frozenset) and ``test_a_reserved_range_is_refused_at_registration`` reddens
+#     while its dial twin ``test_reserved_range_is_refused_by_validate_url``
+#     (section 11) stays green — adcp.signing catches those classes
+#     independently, and registration never reaches adcp.signing. That asymmetry
+#     is the proof the flag half is load-bearing for the DNS-free verdict
+#     specifically rather than decorative.
+#
+# The dial half of every row is graded through ``validate_url`` rather than
+# ``send``/``asend`` for one reason: an accepted row would otherwise open a real
+# socket to a reserved address and hang until the connect timeout. Section 10
+# already pins validate_url's verdict against send's and asend's case for case,
+# so nothing is lost by grading the address decision on the entry point that
+# makes no connection.
+#
+# Every case writes the private-range hatch explicitly, dial-only rows included.
+# The registration verdict takes its loopback allowance as a PARAMETER and reads
+# no environment of its own — so a future implementation that quietly read the
+# seam's hatch instead would be graded here rather than passing by accident.
+# ---------------------------------------------------------------------------
 
-    If this starts failing because CGNAT is now refused, the upstream fix
-    (adcp-client-python#973/#974) landed: move "cgnat" into
-    _RESERVED_RANGE_URLS and delete this test.
+# The #974 supplement: reserved allocations ``adcp.signing`` does not classify,
+# so this repo carries them itself (``src/core/security/url_validator.py`` at
+# HEAD; ``src/core/security/egress/policy.py`` after salesagent-tbrk.1). CGNAT
+# leads the list because this file previously pinned it as an ACCEPTED gap
+# (``test_cgnat_is_the_one_documented_gap_not_refused_by_validate_url``, deleted
+# here per its own docstring instruction now that the gap closes rather than
+# staying open to keep a canary green).
+# FIXME(adcontextprotocol/adcp-client-python#974): drop this table once we adopt
+# a release that carries these ranges upstream — every row then belongs in
+# _RESERVED_RANGE_URLS above, where the SDK's own coverage is pinned.
+_SUPPLEMENT_RANGE_URLS = {
+    "cgnat": "https://100.64.0.1/",  # RFC 6598 shared address space
+    "6to4-relay": "https://192.88.99.1/",  # RFC 7526
+    "as112-v4": "https://192.31.196.1/",  # RFC 7535
+    "amt": "https://192.52.193.1/",  # RFC 7450
+    "as112-direct": "https://192.175.48.1/",  # RFC 7534
+    "orchidv2": "https://[2001:20::1]/",  # RFC 7343
+}
+
+# Hostnames refused by NAME, before any address is known: cloud-metadata aliases
+# and the Docker-internal names that resolve to a private address on a developer
+# machine and to nothing at all in CI. Migrated from
+# tests/unit/test_ssrf_url_validator.py, which grades them against the
+# ``check_url_ssrf`` copy this lane deletes.
+#
+# The two halves of these rows refuse for different REASONS — registration knows
+# the name is blocked, while dial resolves it and refuses either the private
+# address it gets back or the NXDOMAIN. Both are refusals, which is what parity
+# is about, and ``test_blocked_envelope_hides_the_resolved_address_and_the_reason``
+# already pins that the two are indistinguishable on the wire, so the difference
+# is not one any caller can act on.
+_BLOCKED_HOSTNAME_URLS = {
+    "gcp-metadata": "https://metadata.google.internal/computeMetadata/v1/",
+    "docker-host": "https://host.docker.internal/",
+    "docker-gateway": "https://gateway.docker.internal/",
+}
+
+# The one rule with three spellings at HEAD (``outbound_http._require_tls``,
+# ``url_validator._scheme_error``, ``WebhookURLValidator._require_https``) and
+# one spelling after this lane. Both verdicts must refuse all of it: an ingest
+# gate that admitted a scheme the fetcher refuses accepts a buyer's webhook URL
+# with a success envelope and then never delivers to it — the one failure mode
+# the buyer can neither see nor correct.
+_NON_HTTPS_URLS = {
+    "plain-http": "http://example.com/webhook",
+    "ftp": "ftp://example.com/webhook",
+    "file": "file:///etc/passwd",
+    "no-scheme": "/no/scheme",
+}
+
+# The loopback allowance's two shapes. They travel different branches of the
+# registration verdict — ``localhost`` is refused by NAME and ``127.0.0.1`` by
+# ADDRESS — so an allowance implemented as a flag on the address predicate alone
+# would rescue one and not the other.
+_LOOPBACK_URLS = {
+    "loopback-ip": "https://127.0.0.1/",
+    "localhost-name": "https://localhost/",
+}
+
+# The registration-side testing hatch, written as a literal for the same reason
+# ``set_flags`` writes the seam's: these tests drive the env surface from
+# outside. The registration verdict itself takes ``allow_loopback`` as a
+# parameter; this name exists here only so a case can prove the DIAL verdict is
+# deaf to it.
+ADCP_TESTING_ENV = "ADCP_TESTING"
+
+
+def _policy():
+    """Import the registration verdict lazily, for the same reason as :func:`_seam`.
+
+    A module-level import would turn "the policy object does not exist yet" into
+    a collection error for the whole file — which would also stop the local
+    origin fixture from ever running and take the dial-side rows down with it,
+    including the ones that grade the live gap independently of this import.
+    """
+    from src.core.security.egress.policy import EgressPolicy
+
+    return EgressPolicy
+
+
+def registration_refused(url: str, *, allow_loopback: bool = False) -> bool:
+    """Whether the DNS-free registration verdict refuses ``url``.
+
+    Graded on ``AdCPBlockedUrlError``, which is the ONE refusal type both
+    verdicts raise — ``OutboundRequestBlocked`` is a subclass of it — rather than
+    on two types that happen to map to the same wire code today.
+    """
+    try:
+        _policy().check_registration(url, allow_loopback=allow_loopback)
+    except AdCPBlockedUrlError:
+        return True
+    return False
+
+
+def dial_refused(url: str) -> bool:
+    """Whether the dial-time verdict refuses ``url``, without opening a socket."""
+    return was_refused_before_connecting(lambda: _seam().validate_url(url))
+
+
+@pytest.mark.parametrize("range_name", sorted(_SUPPLEMENT_RANGE_URLS))
+def test_a_supplement_range_is_refused_at_registration(range_name, monkeypatch):
+    """Every #974 range the repo compensates for is refused by the DNS-free verdict.
+
+    This is the half that works at HEAD, through ``check_url_ssrf``'s literal-IP
+    branch. It is restated against the policy object because the lane's mutation
+    proof needs a registration row and a dial row reading ONE table: with the two
+    range sets HEAD has, no single edit can redden both.
+    """
+    set_flags(monkeypatch)
+    url = _SUPPLEMENT_RANGE_URLS[range_name]
+
+    assert registration_refused(url), f"{range_name} ({url!r}) is accepted by the registration verdict"
+
+
+@pytest.mark.parametrize("range_name", sorted(_SUPPLEMENT_RANGE_URLS))
+def test_a_supplement_range_is_refused_at_dial(range_name, monkeypatch):
+    """The same six ranges are refused when the destination is actually dialled.
+
+    RED at HEAD for all six, and that failure IS salesagent-634hc: the seam never
+    imports the supplement, so ``adcp.signing`` alone decides — and none of these
+    ranges trips any flag it tests. A URL refused at ingest and dialled happily
+    is not a partial fix, it is the gap wearing the fix's clothes: the buyer's
+    webhook was refused, while a range that reaches the same networks is fetched
+    by anything already holding one (a stored creative agent_url, a vendor
+    endpoint) with no ingest gate in front of it.
+    """
+    set_flags(monkeypatch)
+    url = _SUPPLEMENT_RANGE_URLS[range_name]
+
+    assert dial_refused(url), f"{range_name} ({url!r}) is accepted by the dial-time verdict"
+
+
+@pytest.mark.parametrize("range_name", sorted(_RESERVED_RANGE_URLS))
+def test_a_reserved_range_is_refused_at_registration(range_name, monkeypatch):
+    """The DNS-free verdict refuses the SDK's classes too — from its own predicate.
+
+    ``check_registration`` never reaches ``adcp.signing``: it has no address to
+    resolve, only the literal one already in the URL. So the flag half of the
+    shared predicate (``is_private``/``is_loopback``/``is_link_local``/
+    ``is_multicast``/``is_reserved``/``is_unspecified``, the SDK's own list) is
+    what refuses these here, and it is load-bearing exactly once — on this side.
+
+    THIS is the row that carries the second mutation obligation: delete the flag
+    half of the shared predicate and every case here reddens, while its dial twin
+    ``test_reserved_range_is_refused_by_validate_url`` stays green because the SDK
+    catches these independently. A predicate reduced to the supplement frozenset
+    would therefore regress registration silently — accepting literal 10.0.0.1 —
+    and pass every dial-side test in this file.
+    """
+    set_flags(monkeypatch)
+    url = _RESERVED_RANGE_URLS[range_name]
+
+    assert registration_refused(url), f"{range_name} ({url!r}) is accepted by the registration verdict"
+
+
+@pytest.mark.parametrize("case_id", sorted(_BLOCKED_HOSTNAME_URLS))
+def test_a_blocked_hostname_is_refused_by_both_verdicts(case_id, monkeypatch):
+    """A hostname on the blocklist is refused at registration and at dial.
+
+    Asserted as "both refuse" rather than "the two agree": two verdicts that both
+    ACCEPTED would agree perfectly, and a parity table graded only on agreement
+    is satisfied by a policy object that refuses nothing.
+    """
+    set_flags(monkeypatch)
+    url = _BLOCKED_HOSTNAME_URLS[case_id]
+
+    assert registration_refused(url), f"{case_id} ({url!r}) is accepted by the registration verdict"
+    assert dial_refused(url), f"{case_id} ({url!r}) is accepted by the dial-time verdict"
+
+
+@pytest.mark.parametrize("case_id", sorted(_NON_HTTPS_URLS))
+def test_a_non_https_url_is_refused_by_both_verdicts(case_id, monkeypatch):
+    """https is required by both verdicts, from one predicate.
+
+    ``example.com`` is a public address and ``/no/scheme`` has none at all, so
+    nothing but the scheme rule can be refusing these — which is what makes this
+    a scheme row rather than a restatement of the address rows above.
+    """
+    set_flags(monkeypatch)
+    url = _NON_HTTPS_URLS[case_id]
+
+    assert registration_refused(url), f"{case_id} ({url!r}) is accepted by the registration verdict"
+    assert dial_refused(url), f"{case_id} ({url!r}) is accepted by the dial-time verdict"
+
+
+def test_an_unresolvable_public_hostname_is_the_first_documented_divergence(monkeypatch):
+    """Accepted at registration, refused at dial — the whole reason two verdicts exist.
+
+    A buyer registering ``https://hooks.buyer.example/`` for an endpoint that is
+    not serving yet must not be told their URL is invalid; the fetcher decides
+    that when it dials. Losing this row collapses the two verdicts into one and
+    makes every registration surface reject public-but-not-yet-resolvable URLs.
+
+    The dial half also carries what the dropped ``resolve_dns=True`` branch of
+    ``check_url_ssrf`` used to express (``test_unresolvable_hostname_rejected``
+    in tests/unit/test_ssrf_url_validator.py): an unresolvable host IS refused —
+    at the verdict that resolves, by the SDK's single pinned resolution rather
+    than by a second ``socket.gethostbyname``.
+    """
+    set_flags(monkeypatch)
+    url = "https://no-such-host.invalid/webhook"
+
+    assert not registration_refused(url), (
+        f"{url!r} is refused at registration: a public hostname that does not resolve YET "
+        "must be accepted at ingest and re-checked when it is dialled"
+    )
+    assert dial_refused(url), f"{url!r} is accepted by the dial-time verdict"
+
+
+@pytest.mark.parametrize("case_id", sorted(_LOOPBACK_URLS))
+def test_the_loopback_allowance_is_the_second_documented_divergence(case_id, monkeypatch):
+    """``allow_loopback`` rescues a capture server at registration, and never at dial.
+
+    Both shapes are graded because they travel different branches: ``localhost``
+    is on the hostname blocklist and has no address for the predicate to test,
+    while ``127.0.0.1`` is refused by the predicate. An allowance implemented as
+    a flag on the address predicate would rescue the second and not the first,
+    and the ADCP_TESTING capture-server flow uses both spellings.
+
+    ``ADCP_TESTING`` is set here to pin the other half of the asymmetry: the dial
+    verdict does not read it. Two hatches, one per verdict — the registration
+    allowance is a parameter its caller derives from ADCP_TESTING, and the dial
+    path has only ``ADCP_OUTBOUND_ALLOW_PRIVATE``. A single hatch reaching both
+    would make a test-mode process fetch loopback URLs in earnest.
+    """
+    set_flags(monkeypatch)
+    monkeypatch.setenv(ADCP_TESTING_ENV, "true")
+    url = _LOOPBACK_URLS[case_id]
+
+    assert not registration_refused(url, allow_loopback=True), (
+        f"{case_id} ({url!r}) is refused at registration with the loopback allowance open"
+    )
+    assert registration_refused(url, allow_loopback=False), (
+        f"{case_id} ({url!r}) is accepted at registration with the allowance CLOSED — "
+        "the allowance is not the default posture"
+    )
+    assert dial_refused(url), f"{case_id} ({url!r}) is accepted by the dial-time verdict under ADCP_TESTING"
+
+
+@pytest.mark.parametrize(
+    ("label", "url"),
+    [
+        ("a base private range", _RESERVED_RANGE_URLS["rfc1918-10"]),
+        ("a supplement range", _SUPPLEMENT_RANGE_URLS["cgnat"]),
+        ("a blocked hostname", _BLOCKED_HOSTNAME_URLS["gcp-metadata"]),
+        ("plain http", _NON_HTTPS_URLS["plain-http"]),
+    ],
+)
+def test_the_loopback_allowance_rescues_nothing_but_loopback(label, url, monkeypatch):
+    """``allow_loopback`` is not ``allow_private`` — it is a rescue, not a posture.
+
+    The tempting implementation threads the allowance into the address predicate
+    as its ``allow_private`` argument, which would make an ADCP_TESTING process
+    accept ``10.0.0.1``, every #974 range, the metadata hostnames and plain http
+    at registration — a test-mode knob that quietly disarms the whole ingest
+    gate, on the one code path a buyer's URL enters through.
     """
     set_flags(monkeypatch)
 
-    refused = was_refused_before_connecting(lambda: _seam().validate_url(_CGNAT_URL))
-
-    assert not refused, (
-        "CGNAT (100.64.0.0/10) is now refused by validate_url -- the upstream gap "
-        "(adcp-client-python#973/#974) appears to have closed. Move 'cgnat' into "
-        "_RESERVED_RANGE_URLS and delete this test."
+    assert registration_refused(url, allow_loopback=True), (
+        f"the loopback allowance rescued {label} ({url!r}) at registration"
     )
 
 
 # ---------------------------------------------------------------------------
-# 12. Retry-After — the origin's own instruction, honoured in ONE direction
+# 13. Retry-After — the origin's own instruction, honoured in ONE direction
 #
 # Section 6 grades the schedule the seam picks for itself. This section grades
 # what an origin is allowed to do to that schedule, and it is deliberately
@@ -1406,7 +1705,7 @@ def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monk
 
 
 # ---------------------------------------------------------------------------
-# 13. The terminal-client-error predicate — WHICH 4xx the seam refused to retry
+# 14. The terminal-client-error predicate — WHICH 4xx the seam refused to retry
 # ---------------------------------------------------------------------------
 #
 # ``terminal_client_error_status`` lives in ``src/core/helpers/outbound_error_mapping.py``,

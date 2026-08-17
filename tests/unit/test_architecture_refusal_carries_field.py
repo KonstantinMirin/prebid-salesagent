@@ -17,10 +17,12 @@ that address and cannot correct it. That is a call-site decision about whose URL
 it is; this guard is about the seam always CARRYING the field, so either
 disposition remains possible.
 
-The seam has two refusal paths today (scheme in ``_require_tls``, address in
-``_blocked``) and both carry it. This guard is about the third one somebody adds
-later: a body-size pre-check, a method allowlist, a new SDK refusal. It fails
-that change at ``make quality`` rather than at a buyer.
+The seam has three refusal sites today, all inside
+``EgressPolicy.resolve_for_dial`` (scheme, the SDK's ``SSRFValidationError``,
+and the shared supplement-range predicate) and all carry it. This guard is
+about the next one somebody adds later: a body-size pre-check, a method
+allowlist, a new SDK refusal. It fails that change at ``make quality`` rather
+than at a buyer.
 
 What it cannot check, stated plainly so nobody mistakes its silence for proof:
 whether a CALL SITE passes a ``field`` when it should. That is semantic — only
@@ -42,7 +44,7 @@ from tests.unit._architecture_helpers import (
     repo_root,
 )
 
-SEAM_FILE = "src/core/security/outbound_http.py"
+SEAM_FILE = "src/core/security/egress/policy.py"
 REFUSAL_CLASS = "OutboundRequestBlocked"
 
 FIX_HINT = (

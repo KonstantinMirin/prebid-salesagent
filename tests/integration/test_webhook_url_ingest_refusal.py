@@ -98,10 +98,10 @@ _UPDATE_REPORTING_WEBHOOK_TRANSPORTS = [Transport.MCP, Transport.A2A, Transport.
 #
 # The five ``192.x``/``2001:20::/28`` rows are the reserved ranges carried
 # verbatim from adcontextprotocol/adcp-client-python#974 into
-# ``url_validator.BLOCKED_NETWORKS`` rather than by bumping to adcp 7.x (owner
-# decision, salesagent-yw69 — that bump is a major version jump carrying far
-# more than this SSRF fix). ``cgnat-metadata-address`` is the one address the
-# spike actually found leaking (Alibaba Cloud's metadata service at
+# ``egress.policy._SUPPLEMENT_NETWORKS`` rather than by bumping to adcp 7.x
+# (owner decision, salesagent-yw69 — that bump is a major version jump
+# carrying far more than this SSRF fix). ``cgnat-metadata-address`` is the one
+# address the spike actually found leaking (Alibaba Cloud's metadata service at
 # 100.100.100.200, inside the CGNAT block) — it is graded on its own row,
 # distinct from the generic ``cgnat-range`` row, because it is the specific
 # gap that motivated re-scoping this ticket.
@@ -268,7 +268,8 @@ class TestCreateMediaBuyRefusedPushNotificationConfigUrl:
         even with ADCP_OUTBOUND_ALLOW_PRIVATE=true.
 
         This is the address the original spike actually found leaking (salesagent-yw69):
-        the registration gate (``src/core/security/url_validator.py`` ``BLOCKED_NETWORKS``)
+        the registration gate (``src/core/security/egress/policy.py``
+        ``_SUPPLEMENT_NETWORKS``, read via ``EgressPolicy.check_registration``)
         never reads that hatch at all — it is a SEND-time seam knob — so this pins that
         fact rather than the seam's own metadata-outranks-the-override behaviour, which
         is graded separately in ``tests/integration/test_outbound_http.py``.

@@ -46,7 +46,7 @@ class TestWebhookURLValidator:
     (see the outbound-fetch tests). Both roles are graded here and there respectively.
 
     The ADDRESS cases below use ``https://`` so the address verdict is what they
-    grade: the scheme is checked first (url_validator._scheme_error), so a plain-http
+    grade: the scheme is checked first (egress.policy._scheme_error), so a plain-http
     fixture here would be refused for its scheme under the default posture and the
     ``10.0.0.0/8``-style assertions would stop grading the address policy at all.
     The scheme decision itself is graded on its own, in
@@ -248,7 +248,7 @@ class TestLocalhostAllowanceUnderTestingMode:
 class TestWebhookSchemeGateTracksTheEgressSeam:
     """Ingest requires https on exactly the condition the SEND seam does.
 
-    ``src/core/security/outbound_http.py`` ``_require_tls`` refuses anything but
+    ``src/core/security/egress/policy.py`` ``_scheme_error`` refuses anything but
     ``https://`` — unconditionally now (salesagent-e6h0 deleted the
     ``ADCP_OUTBOUND_ALLOW_INSECURE`` hatch entirely). Ingest used to require
     https only when ``is_production() and not ADCP_TESTING``, so in every
@@ -328,25 +328,40 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
         assert error == ""
 
     def test_ingest_and_seam_agree_on_the_scheme_verdict(self, monkeypatch):
-        """The two gates are graded against each other, not against a copy of the rule.
+        """The two GATES reach the same scheme verdict, via two call paths.
 
-        A restated rule in webhook_validator would satisfy every case above and
-        still drift the day the seam's rule changes. This one asks BOTH
-        implementations the same question and requires the same answer, so the
-        shared condition is a property under test rather than a comment. No
-        hatch to loop over anymore — one posture, asked once.
+        Before salesagent-tbrk.1, ingest (webhook_validator) and the
+        dial-time seam (outbound_http) each maintained their own scheme
+        check, which could drift. Both now call
+        ``EgressPolicy.check_registration`` / ``EgressPolicy.resolve_for_dial``
+        respectively, and both of THOSE call the same shared, private
+        ``_scheme_error`` — but asserting that fact by calling
+        ``_scheme_error`` directly proves nothing: any gate can be made to
+        "agree" with the very predicate it happens to call. This drives the
+        REAL registration gate and the REAL dial gate, so a future edit that
+        forks either off the shared predicate (or mis-wires it) reddens here.
+
+        DNS resolution is stubbed to always succeed — this test grades the
+        SCHEME verdict, not address policy, and ``resolve_for_dial`` checks
+        scheme before ever resolving, so the stub is only reached for the
+        accepted (``https``) case.
         """
-        from src.core.security.outbound_http import OutboundRequestBlocked, _require_tls
+        from urllib.parse import urlparse
 
-        def seam_admits(url: str) -> bool:
-            try:
-                _require_tls(url)
-            except OutboundRequestBlocked:
-                return False
-            return True
+        from src.core.security.egress.policy import EgressPolicy, OutboundRequestBlocked
+
+        monkeypatch.setattr(
+            "src.core.security.egress.policy.resolve_and_validate_host",
+            lambda url, **kwargs: (urlparse(url).hostname, "93.184.216.34", 443),
+        )
 
         for url in (self.HTTP_URL, self.HTTPS_URL):
             ingest_admits = WebhookURLValidator.validate_webhook_url_registration(url)[0]
-            assert ingest_admits == seam_admits(url), (
-                f"ingest and seam disagree on {url}: ingest={ingest_admits}, seam={seam_admits(url)}"
+            try:
+                EgressPolicy.resolve_for_dial(url)
+                dial_admits = True
+            except OutboundRequestBlocked:
+                dial_admits = False
+            assert ingest_admits == dial_admits, (
+                f"ingest and the dial-time seam disagree on {url}: ingest={ingest_admits}, dial={dial_admits}"
             )

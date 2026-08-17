@@ -6,11 +6,14 @@ redirect re-validation. Every one of those belongs to a maintained library:
 
 * ``adcp.signing`` owns address validation, cloud-metadata blocking, and
   resolve-once + IP pinning (DNS-rebinding defence), via
-  :func:`adcp.signing.build_ip_pinned_transport`.
+  :func:`adcp.signing.resolve_and_validate_host`.
 * ``httpx`` owns the response state machine — status, redirects, 1xx,
   decompression, TLS, pooling.
-* This module owns only what neither decides for us: requiring TLS, capping the
-  response body, and what counts as retryable.
+* ``src.core.security.egress.policy.EgressPolicy`` owns the one address/scheme
+  decision neither of those makes for us — see :meth:`EgressPolicy.
+  resolve_for_dial`, which every pre-connection check in this module goes
+  through (imported here, not restated).
+* This module owns capping the response body and what counts as retryable.
 
 SSRF recurred in this codebase because policy lived at call sites, so each new
 outbound call shipped without it. Centralising *our own* copy of that policy
@@ -148,14 +151,14 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol, TypeGuard
 
 import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
-from adcp.signing import (
-    SSRFValidationError,
-    build_async_ip_pinned_transport,
-    build_ip_pinned_transport,
-    resolve_and_validate_host,
-)
+from adcp.signing import AsyncIpPinnedTransport, IpPinnedTransport
 
-from src.core.exceptions import AdCPBlockedUrlError, AdCPServiceUnavailableError, clamp_retry_after
+from src.core.exceptions import AdCPServiceUnavailableError, clamp_retry_after
+from src.core.security.egress.policy import (
+    EgressPolicy,
+    OutboundError,
+    OutboundRequestBlocked,  # noqa: F401 - re-exported; ~30 call sites import it from this module
+)
 
 logger = logging.getLogger(__name__)
 
@@ -242,46 +245,15 @@ _RETRYABLE_EXCEPTIONS = (
     httpx.WriteError,
 )
 
-# Spec point 6: one fixed message for every refusal, whatever the real cause.
-# The SDK's own text says "resolved IP <IP> is in a reserved range" versus
-# "cannot resolve host '<host>'" — echoing either back hands the party that
-# supplied the URL both the resolved address and whether the name exists, which
-# is an internal host and port scanner. These messages never interpolate
-# anything.
-_BLOCKED_MESSAGE = "Outbound request to the supplied URL was refused by egress policy."
+# Spec point 6: one fixed message for every DELIVERY-failure refusal (a
+# destination reached but not delivered — see OutboundDeliveryFailed below).
+# The dial-time ADDRESS/SCHEME refusal message (_BLOCKED_MESSAGE) now lives in
+# src/core/security/egress/policy.py, next to the OutboundRequestBlocked raise
+# sites that use it — OutboundError and OutboundRequestBlocked live there too;
+# imported above and re-exported here so this seam's ~30 existing
+# ``except OutboundError`` / ``except OutboundRequestBlocked`` catchers see no
+# change.
 _DELIVERY_FAILED_MESSAGE = "Outbound request to the supplied URL could not be delivered."
-
-
-class OutboundError(Exception):
-    """Marker base for every failure this seam raises — NEVER raised directly.
-
-    It exists so a call site that only logs can write one ``except``. It is
-    deliberately *not* an ``AdCPError``: raising it directly would degrade to a
-    bare INTERNAL_ERROR at a transport boundary and would be invisible to the
-    error-taxonomy guards that walk ``AdCPError.iter_concrete_subclasses()``.
-    Raise one of the two concrete subclasses instead.
-
-    It defines no ``__init__`` on purpose — one would shadow ``AdCPError``'s
-    through the MRO of those subclasses. Class attributes are safe: they do
-    not touch ``__init__``, and declaring them here — rather than leaving
-    ``last_status``/``attempts`` as fields only ``OutboundDeliveryFailed``
-    happens to set — is what makes ``exc.last_status`` a typed read on
-    ``OutboundError`` instead of a ``getattr(exc, "last_status", None)`` at
-    every call site that only has the base type. ``OutboundRequestBlocked``
-    never overrides either, so both read as ``None`` on a refusal — which is
-    the honest value: nothing was attempted, so there is no status or count.
-    """
-
-    last_status: int | None = None
-    attempts: int | None = None
-
-
-class OutboundRequestBlocked(OutboundError, AdCPBlockedUrlError):
-    """The URL was refused before any connection was attempted.
-
-    Scheme or address policy said no. Terminal — never retried, because nothing
-    about the destination will change on a second look.
-    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,29 +448,6 @@ def _env_float(name: str, default: float) -> float:
     return value
 
 
-def _require_tls(url: str, field: str | None = None) -> None:
-    """Reject anything but https:// — unconditionally, no escape hatch (salesagent-e6h0).
-
-    The one address-adjacent rule the seam owns: the SDK validator deliberately
-    permits plain http, because it is a transport validator, not a transport
-    policy.
-    """
-    if url.lower().startswith("https://"):
-        return
-    logger.warning("Outbound request refused: scheme is not https")
-    raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
-
-
-def _blocked(exc: SSRFValidationError, field: str | None) -> OutboundRequestBlocked:
-    """Translate an SDK refusal into an opaque typed refusal.
-
-    The SDK detail is logged and never returned: ``str(exc)`` names the resolved
-    IP and distinguishes "unresolvable" from "reserved".
-    """
-    logger.warning("Outbound request refused by address policy: %s", exc)
-    return OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
-
-
 def wire_field(provenance: UrlProvenance | None) -> str | None:
     """The buyer-visible field *provenance* contributes to a refusal, if any.
 
@@ -560,35 +509,22 @@ def _checked_field(provenance: UrlProvenance | None, url: str) -> str | None:
     return field
 
 
-def _prepare[Validated](
-    url: str, validator: Callable[..., Validated], provenance: UrlProvenance | None = None
-) -> Validated:
-    """Run every pre-connection egress decision, once, and hand back what the caller asked for.
+def _sync_transport(url: str, *, field: str | None, allow_private: bool) -> IpPinnedTransport:
+    """The sync pinned transport for *url*, after EgressPolicy.resolve_for_dial's verdict.
 
-    Scheme policy, the escape-hatch read, the SDK's address validation and the
-    translation of its refusal are ONE decision, not three implementations of
-    one. ``Validated`` — what the caller gets out of the validated URL: a sync
-    transport, an async transport, or the resolved triple a validate-only caller
-    discards — is the ONLY thing that varies between the three, and each of
-    those is a call into ``adcp.signing`` that runs the identical
-    resolve-and-validate step (``build_ip_pinned_transport`` is literally
-    ``resolve_and_validate_host`` plus a transport constructor). That is what
-    makes "validate-only refuses exactly what send refuses" a property of the
-    code rather than a claim a test has to keep re-proving.
-
-    Raises :class:`OutboundRequestBlocked` — never lets ``SSRFValidationError``
-    out, because its message names the resolved IP (spec point 6). The field
-    :func:`_checked_field` derives from *provenance*, when there is one, rides
-    that refusal onto both envelope layers so the buyer learns which input to
-    fix; both refusal causes carry it identically, so it cannot become a
-    scheme-versus-address discriminator.
+    A thin builder, not a policy decision: :meth:`EgressPolicy.resolve_for_dial`
+    owns the scheme check, the single resolution and the address-policy verdict
+    (including OutboundRequestBlocked's raise); this function only turns the
+    resolved triple into the transport the caller asked for.
     """
-    field = _checked_field(provenance, url)
-    _require_tls(url, field)
-    try:
-        return validator(url, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
-    except SSRFValidationError as exc:
-        raise _blocked(exc, field) from exc
+    hostname, resolved_ip, _port = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
+    return IpPinnedTransport(hostname=hostname, resolved_ip=resolved_ip, verify=True)
+
+
+def _async_transport(url: str, *, field: str | None, allow_private: bool) -> AsyncIpPinnedTransport:
+    """The async twin of :func:`_sync_transport` — see its docstring."""
+    hostname, resolved_ip, _port = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
+    return AsyncIpPinnedTransport(hostname=hostname, resolved_ip=resolved_ip, verify=True)
 
 
 def _should_retry_status(status: int) -> bool:
@@ -763,8 +699,8 @@ def validate_url(url: str, *, provenance: UrlProvenance | None = None) -> None:
     construct a ``CounterpartyUrl`` naming their request path.
 
     It refuses EXACTLY what :func:`send` and :func:`asend` refuse, because all
-    three go through :func:`_prepare` and differ only in what they ask the SDK
-    to return; here that is the resolved ``(hostname, ip, port)``, which is
+    three go through :meth:`EgressPolicy.resolve_for_dial` and differ only in
+    what they do with the resolved ``(hostname, ip, port)``; here it is
     discarded. No transport is built, no socket is opened, no DNS answer is
     reused: validation at ingest is a policy verdict, and a *later* fetch must
     resolve again through its own :func:`send` call, because a resolution
@@ -776,7 +712,8 @@ def validate_url(url: str, *, provenance: UrlProvenance | None = None) -> None:
     resolved address would leak it to whatever logs or stores the result (spec
     point 6).
     """
-    _prepare(url, resolve_and_validate_host, provenance)
+    field = _checked_field(provenance, url)
+    EgressPolicy.resolve_for_dial(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
 
 
 def guarded_async_client(
@@ -801,11 +738,12 @@ def guarded_async_client(
     It is a client BUILDER, not a send loop, precisely because the caller owns
     the request/response lifecycle the send functions own for their own callers;
     everything up to the socket is still decided here, once, through
-    :func:`_prepare`. Raises :class:`OutboundRequestBlocked` before returning if
-    the scheme or address is refused — the identical verdict :func:`validate_url`
-    and :func:`asend` reach, because all three go through :func:`_prepare`.
+    :meth:`EgressPolicy.resolve_for_dial`. Raises :class:`OutboundRequestBlocked`
+    before returning if the scheme or address is refused — the identical
+    verdict :func:`validate_url` and :func:`asend` reach, because all three go
+    through the same policy method.
     """
-    transport = _prepare(url, build_async_ip_pinned_transport)
+    transport = _async_transport(url, field=None, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
     kwargs: dict[str, Any] = {**client_kwargs}
     if headers is not None:
         kwargs["headers"] = headers
@@ -889,7 +827,8 @@ def send(
     request was not delivered. Both are ``OutboundError`` subclasses, so a call
     site that only logs can catch that one type.
     """
-    transport = _prepare(url, build_ip_pinned_transport, provenance)
+    field = _checked_field(provenance, url)
+    transport = _sync_transport(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
 
     started = time.monotonic()
     last_status: int | None = None
@@ -960,7 +899,8 @@ async def asend(
     every policy decision is a shared helper so neither path can drift from the
     other.
     """
-    transport = _prepare(url, build_async_ip_pinned_transport, provenance)
+    field = _checked_field(provenance, url)
+    transport = _async_transport(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
 
     started = time.monotonic()
     last_status: int | None = None

@@ -89,7 +89,7 @@
 # though it no longer carries its own code; an unresolvable host is not one of
 # them, and its message is the registration gate's own. The <reason> itself
 # is now the SAME fixed, non-disclosing text for every address cause
-# (`url_validator._RESTRICTED_RANGE_MESSAGE`) — no CIDR, no resolved address —
+# (`egress.policy._RESTRICTED_RANGE_MESSAGE`) — no CIDR, no resolved address —
 # matching the seam's one-message-for-every-cause posture, so every row below
 # expects the identical message.
 Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
@@ -171,17 +171,18 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   #
   # Why THESE causes: the ingest gate is DNS-free, so an unresolvable host is
   # ACCEPTED here (correctly — send time re-checks it) and cannot be an example.
-  # A reserved-range LITERAL needs no DNS and is refused with the hatches open
-  # (the gate reads BLOCKED_NETWORKS in src/core/security/url_validator.py, not
-  # the egress hatches), so it grades one production on every transport. Both
-  # rows are IPv6 reserved ranges spec point 2 covers — unique-local (RFC 4193)
-  # and multicast. Loopback (::1) is deliberately NOT an example here even
-  # though the fix below makes its message non-disclosing too: ADCP_TESTING is
-  # ambient true in this harness, and ::1 is loopback exactly like 127.0.0.1
-  # (tests/unit/conftest.py's own _LOOPBACK_PREFIXES treats it identically), so
-  # the registration gate's testing-mode allowance (WebhookURLValidator.
-  # _maybe_allow_localhost) RESCUES it here — the request would succeed, not
-  # refuse. A cloud-metadata literal and any IPv4 literal are not used here
+  # A reserved-range LITERAL needs no DNS and is refused via the shared address
+  # predicate in src/core/security/egress/policy.py (EgressPolicy.check_
+  # registration, not the dial-time egress hatches), so it grades one
+  # production on every transport. Both rows are IPv6 reserved ranges spec
+  # point 2 covers — unique-local (RFC 4193) and multicast. Loopback (::1) is
+  # deliberately NOT an example here even though the fix below makes its
+  # message non-disclosing too: ADCP_TESTING is ambient true in this harness,
+  # and ::1 is loopback exactly like 127.0.0.1 (tests/unit/conftest.py's own
+  # _LOOPBACK_PREFIXES treats it identically), so the registration gate's
+  # testing-mode allowance (EgressPolicy.check_registration's allow_loopback
+  # parameter) RESCUES it here — the request would succeed, not refuse. A
+  # cloud-metadata literal and any IPv4 literal are not used here
   # only because the IPv6 set already exercises every address-cause branch
   # (named-network match and the loopback/private fallback) — not because
   # either would still leak: the message below is now identical for every
@@ -191,7 +192,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # registration gate used to report a per-cause reason (which CIDR, which
   # resolved address) — the bug fixed here — and now returns the SAME fixed,
   # non-disclosing text regardless of which reserved range matched
-  # (`url_validator._RESTRICTED_RANGE_MESSAGE`). The non-disclosure Then below
+  # (`egress.policy._RESTRICTED_RANGE_MESSAGE`). The non-disclosure Then below
   # holds that line independently of the exact-message Then above.
   @T-EGRESS-SSRF-ingest-refused-webhook-url @egress_create @invariant
   Scenario Outline: a refused push_notification_config.url is a correctable buyer error at ingest

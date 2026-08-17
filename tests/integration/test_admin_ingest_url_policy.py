@@ -270,7 +270,10 @@ def test_signals_agent_add_refusal_reason_reaches_the_logs(
 
     post_signals_agent(authenticated_admin_client, METADATA_URL)
 
-    seam_records = [r for r in caplog.records if r.name == "src.core.security.outbound_http"]
+    # The refusal-cause log line moved with EgressPolicy.resolve_for_dial into
+    # src/core/security/egress/policy.py (salesagent-tbrk.1) -- same seam,
+    # different logger name.
+    seam_records = [r for r in caplog.records if r.name == "src.core.security.egress.policy"]
     assert [r.getMessage() for r in seam_records if "169.254.169.254" in r.getMessage()], (
         f"the seam did not log the real refusal reason; got {[r.getMessage() for r in caplog.records]}"
     )
