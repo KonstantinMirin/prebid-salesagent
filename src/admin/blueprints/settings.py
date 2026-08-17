@@ -1402,13 +1402,13 @@ def get_approximated_token(tenant_id):
             # is propagated from the typed error -- an operator with bad
             # Approximated credentials must still see 401 here, not a blanket 500.
             try:
-                token_data = get_dns_token(approximated_api_key)
+                dns = get_dns_token(approximated_api_key)
             except OutboundError as exc:
                 logger.error("Approximated API error requesting a DNS token: %s", exc)
                 return jsonify({"success": False, "error": "Approximated API error"}), exc.last_status or 502
 
-            logger.info("Approximated API response: %s", token_data)
-            return jsonify({"success": True, "token": token_data.get("token"), "proxy_ip": approximated_proxy_ip})
+            logger.info("Approximated API response: %s", dns)
+            return jsonify({"success": True, "token": dns.token, "proxy_ip": approximated_proxy_ip})
 
     except Exception as e:
         logger.error(f"Error generating Approximated token: {e}", exc_info=True)

@@ -78,7 +78,7 @@ class WebhookVerifier:
         self.webhook_secret = webhook_secret
         self.replay_window_seconds = replay_window_seconds
 
-    def verify_webhook(self, body: bytes, headers: Mapping[str, str]) -> Any:
+    def verify_webhook(self, body: bytes, headers: Mapping[str, str]) -> dict[str, Any] | None:
         """Verify a webhook's ``X-AdCP-Signature``/``X-AdCP-Timestamp`` over ``body``.
 
         Args:
@@ -89,10 +89,13 @@ class WebhookVerifier:
         Returns:
             The parsed JSON payload once the signature verifies and the body
             contains no duplicate object key at any depth. If ``body`` is not
-            valid JSON at all (e.g. empty), duplicate-key detection does not
-            apply and ``True`` is returned instead — this method only adds
-            the duplicate-key MUST on top of signature verification, it does
-            not require the body to be JSON.
+            a JSON OBJECT at all — not valid JSON, or valid JSON that parses
+            to something other than an object (a top-level array, a scalar,
+            the literal ``null``) — ``None`` is returned instead. Duplicate-
+            key detection only applies to objects, so this method does not
+            require the body to be JSON, or JSON-object-shaped, to succeed;
+            it only adds the duplicate-key MUST on top of signature
+            verification for the bodies that are.
 
             Returning the parsed payload (rather than ``True``) eliminates a
             double-parse: this method used to instruct callers to
@@ -131,14 +134,23 @@ class WebhookVerifier:
             raise WebhookVerificationError(str(exc)) from exc
 
         try:
-            return loads_rejecting_duplicate_keys(body)
+            payload = loads_rejecting_duplicate_keys(body)
         except DuplicateKeyInput as exc:
             raise WebhookBodyMalformedError(str(exc)) from exc
         except ValueError:
             # Not valid JSON at all (e.g. an empty body) -- the duplicate-key
             # check doesn't apply to non-JSON content; the signature already
             # verified, so this webhook is accepted.
-            return True
+            return None
+
+        # loads_rejecting_duplicate_keys parses arbitrary JSON, not just
+        # objects -- a top-level array, scalar, or ``null`` all parse
+        # cleanly and are none of them a duplicate-key candidate. Narrowing
+        # here (rather than returning `payload` unconditionally) is what
+        # makes ``None`` mean exactly one thing: "not a JSON object", never
+        # conflated with "JSON object that happens to be empty" or "the
+        # literal JSON null".
+        return payload if isinstance(payload, dict) else None
 
 
 def verify_adcp_webhook(
@@ -146,7 +158,7 @@ def verify_adcp_webhook(
     body: bytes,
     request_headers: Mapping[str, str],
     replay_window_seconds: int = 300,
-) -> Any:
+) -> dict[str, Any] | None:
     """Convenience function to verify an AdCP webhook in one call.
 
     Args:
@@ -160,8 +172,8 @@ def verify_adcp_webhook(
         replay_window_seconds: Maximum age of webhook (default: 300s = 5 min)
 
     Returns:
-        The parsed JSON payload (or ``True`` for a non-JSON body) — see
-        :meth:`WebhookVerifier.verify_webhook`.
+        The parsed JSON payload (or ``None`` for a body that isn't a JSON
+        object) — see :meth:`WebhookVerifier.verify_webhook`.
 
     Raises:
         WebhookVerificationError: Signature/timestamp/format failure.

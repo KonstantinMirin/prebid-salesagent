@@ -51,6 +51,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from adcp import sign_legacy_webhook
 
 from src.core.security.webhook_egress import prepare_signed_request
 from src.core.security.webhook_strict_json import DuplicateKeyInput, loads_rejecting_duplicate_keys
@@ -107,13 +108,14 @@ class TestVerifierAcceptsSpecVectors:
     the property under test is signature validity over raw bytes, not clock
     freshness (that's graded separately by the rejection vectors below).
 
-    salesagent-47n9.19: ``verify_webhook`` now returns the parsed JSON payload
-    (duplicate-key-checked) instead of a bare ``True``, to eliminate a
-    double-parse -- except for a body that isn't valid JSON at all (e.g. the
-    ``empty-body``/``null-bytes`` vectors), where duplicate-key detection
-    doesn't apply and ``True`` is still returned. Compute the expected value
-    the same way production does (attempt a plain parse, fall back to
-    ``True``) rather than hardcoding which vectors are JSON-shaped.
+    salesagent-47n9.19: ``verify_webhook`` returns the parsed JSON payload
+    (duplicate-key-checked) instead of a bare sentinel, to eliminate a
+    double-parse -- except for a body that carries no JSON object at all (e.g.
+    the ``empty-body``/``null-bytes`` vectors), where duplicate-key detection
+    doesn't apply and ``None`` is returned: the signature verified, there is
+    just no object payload to hand back. Compute the expected value the same
+    way production does (attempt a plain parse, fall back to ``None``) rather
+    than hardcoding which vectors are JSON-shaped.
     """
 
     @pytest.mark.parametrize("vector", _VERIFIER_ACCEPT_VECTORS, ids=[v["id"] for v in _VERIFIER_ACCEPT_VECTORS])
@@ -131,9 +133,63 @@ class TestVerifierAcceptsSpecVectors:
         try:
             expected = json.loads(vector["raw_body"])
         except ValueError:
-            expected = True
+            expected = None
 
         assert result == expected
+
+
+class TestVerifierReturnsNoPayloadForValidNonObjectJson:
+    """A correctly signed body that IS valid JSON but is NOT an object returns ``None``.
+
+    Not reachable from ``vectors``: every one of the 14 accept vectors is
+    either a JSON object or not JSON at all (``empty-body``, ``null-bytes``),
+    so the narrowing arm in ``verify_webhook`` (``return payload if
+    isinstance(payload, dict) else None``) is graded by nothing in the pinned
+    fixture -- reverting it to a bare ``return payload`` leaves the rest of
+    this file, and the whole suite, green. This class is that arm's grader.
+
+    The obligation: ``None`` carries exactly ONE meaning -- "the signature
+    verified and the body carries no JSON-object payload" -- so a top-level
+    array/scalar must not leak its parsed value back to a caller that has
+    been told to expect ``dict[str, Any] | None``. The ``json-null`` case is
+    included as the boundary the narrowing exists to disambiguate (it reached
+    ``None`` even before the narrowing, since ``json.loads(b"null")`` is
+    ``None``); the array and scalar cases are the ones that regress if the
+    narrowing is dropped.
+
+    Signing goes through the SDK's ``sign_legacy_webhook`` rather than our own
+    ``prepare_signed_request`` because the latter is dict-typed by Core
+    Invariant salesagent-47n9.1 and so structurally cannot emit a non-object
+    body -- and signing here by hand would put a second copy of the HMAC
+    scheme in the tests.
+    """
+
+    @pytest.mark.parametrize(
+        ("payload", "raw_body"),
+        [
+            ([1, 2, 3], b"[1,2,3]"),
+            ([], b"[]"),
+            ("just-a-string", b'"just-a-string"'),
+            (17, b"17"),
+            (True, b"true"),
+            (None, b"null"),
+        ],
+        ids=["json-array", "empty-json-array", "json-string", "json-number", "json-true", "json-null"],
+    )
+    def test_returns_none_for_valid_non_object_json(self, payload: object, raw_body: bytes) -> None:
+        timestamp = 1700000000
+        headers, body = sign_legacy_webhook(_SECRET, payload, timestamp=timestamp)  # type: ignore[arg-type]
+        assert body == raw_body, "the SDK signer must sign the exact non-object bytes this case is about"
+
+        verifier = WebhookVerifier(webhook_secret=_SECRET, replay_window_seconds=300)
+        with patch("src.services.webhook_verification.time.time", return_value=float(timestamp)):
+            result = verifier.verify_webhook(body=body, headers=headers)
+
+        assert result is None, (
+            f"a signed body of {raw_body!r} is valid JSON but not an object, so verify_webhook must report "
+            f"'no JSON-object payload' as None rather than hand back {result!r} -- its declared return is "
+            "dict[str, Any] | None, and a caller reading result['...'] on that value would fail at runtime"
+        )
 
 
 class TestVerifierRejectsMalformedOrTamperedRequests:

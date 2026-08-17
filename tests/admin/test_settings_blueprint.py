@@ -287,6 +287,23 @@ class TestApproximatedToken:
         mock_result.json.return_value = {"token": "opaque-widget-token-123"}
 
         with patch("src.services.approximated_client.send", return_value=mock_result) as mock_get:
+            # The client's own return type, graded directly: the route-level
+            # assertions below are byte-identical whether get_dns_token hands
+            # back a raw dict or a typed outcome, so they cannot grade the type
+            # at all. Driven BEFORE the route so mock_get.call_args below still
+            # belongs to the route's call, not this one.
+            from src.services.approximated_client import get_dns_token
+
+            dns = get_dns_token("fake-api-key")
+            assert not isinstance(dns, dict), (
+                "get_dns_token must hand back a typed outcome, not an open dict a caller reads "
+                f"with .get() -- got {dns!r}"
+            )
+
+            from src.services.approximated_client import DnsToken
+
+            assert dns == DnsToken(token="opaque-widget-token-123")
+
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
 
         assert response.status_code == 200

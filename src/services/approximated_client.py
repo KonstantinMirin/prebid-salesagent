@@ -130,7 +130,21 @@ def unregister_domain(domain: str, api_key: str) -> UnregisterResult:
     return UnregisterResult(already_unregistered=False)
 
 
-def get_dns_token(api_key: str) -> dict[str, Any]:
+@dataclass(frozen=True)
+class DnsToken:
+    """The outcome of requesting an Approximated DNS widget token.
+
+    A stricter variant of this module's outcome-dataclass pattern
+    (``DomainStatus``/``RegisterResult``/``UnregisterResult`` are plain
+    ``@dataclass``): ``token`` is the one field this call site ever reads off
+    the vendor response, typed instead of left as an open dict a caller reads
+    with ``.get()``.
+    """
+
+    token: str | None
+
+
+def get_dns_token(api_key: str) -> DnsToken:
     """Request an Approximated DNS widget token.
 
     Every status this operation can receive is a genuine failure -- there is
@@ -138,4 +152,4 @@ def get_dns_token(api_key: str) -> dict[str, Any]:
     directly (e.g. ``exc.last_status`` to propagate an upstream 401/403).
     """
     response = _api("GET", "/api/dns/token", api_key)
-    return response.json()
+    return DnsToken(token=response.json().get("token"))
