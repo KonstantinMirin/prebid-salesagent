@@ -99,30 +99,101 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core
 
 # ============================ a2a ============================
 #
-# SEEDED from the same measured in-network run as the mcp half above
-# (sa-67ae7993, this branch). The a2a pass graded ZERO checks:
-#   overall_status=unreachable, 0 passed / 0 failed / 0 skipped, 0.9s
-#   headline: "Agent unreachable — Provided Agent Card does not contain a valid
-#             'url' for the service endpoint."
+# Card discovery was previously the sole a2a blocker: the app's only card path
+# (`/.well-known/agent-card.json`) served an A2A 1.0 shape (endpoint under
+# `supportedInterfaces[0].url`) while the runner's bundled `@a2a-js/sdk` 0.3.14
+# client reads only a top-level `url` and rejected the card outright, so the a2a
+# pass graded ZERO checks (overall_status=unreachable). Fixed in this branch —
+# create_agent_card()/`_create_dynamic_agent_card()` now dual-emit both a
+# top-level `url` and the 1.0 `supportedInterfaces[0].url` for the same
+# endpoint — so the SDK's own 0.3 compat bridge accepts the card.
 #
-# Root cause, verified live against the e2e stack rather than inferred:
-# `/.well-known/agent-card.json` (the ONLY card path the app serves — /agent.json
-# and /.well-known/agent.json both 404) is an A2A **1.0** card, advertising its
-# endpoint as `supportedInterfaces[0].url`. The runner's bundled A2A client is
-# `@a2a-js/sdk` **0.3.14**, which reads only the A2A 0.3 top-level `url` and
-# rejects the card outright. The JSON-RPC route itself is 0.3-compatible
-# (`enable_v0_3_compat=True` in src/app.py) — it is only DISCOVERY that is
-# version-skewed, so nothing downstream of the card is reached or measured.
+# SEEDED from the first real in-network run of the a2a axis (run 32027922014,
+# commit 6d16d9b1e, this branch): 32 failed, 1 passed, 38 skipped across the
+# graded checks. Discovery is fixed; these are the checks the fix newly exposed
+# — nothing here was previously gradable, so none of this is a regression.
 #
-# So this is exactly ONE entry, not an a2a mirror of the 80 mcp ones: no a2a
-# storyboard has ever been graded, and inventing entries for checks that never
-# ran would be the fabrication this ledger's Core Invariant forbids. Tracked as
-# GH #1440 (owner: ChrisHuie) — the agent-card dual-emit that adds a top-level
-# `url` alongside `supportedInterfaces[0].url`. When #1440 lands (or the SDK
-# moves to an A2A 1.0 client) this entry xpasses and the real a2a checks arrive
-# un-ledgered, failing CI until triaged — which is the intended signal, and the
-# point of grading the axis at all.
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::_runner::agent_reachability::graded_checks_produced]
+# Two shapes below, both genuine production gaps, not test-harness artifacts:
+#   - webhook_emission (7) + notification_config_*/error_compliance/
+#     billing_gate_dispatch/security_baseline/version_negotiation/
+#     read_tool_idempotency (10): identical check id to an already-ledgered
+#     mcp:: twin above — same production behavior, now double-graded per the
+#     header comment's stated design (an MCP-only fix graduates one twin and
+#     leaves the other, which is exactly the drift this axis exists to expose).
+#   - media_buy_seller/* + creative_reception (15): no mcp:: twin exists yet —
+#     first-ever grading of these storyboards on either protocol. Several share
+#     one root cause visible in the raw assertion text: webhook_emission's five
+#     "trigger_*"/"fetch_brand_json"/"assert_webhook_signing_key_present" checks
+#     and creative_reception::sync_creatives all fail with a runner-side
+#     ACCOUNT_NOT_FOUND for the storyboard's synthetic brand/operator — the
+#     remainder are per-check schema/error-code validation gaps (missing
+#     product_id, format_ids, error codes, etc.), each independent.
+
+# --- notification_config_event_scope (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
+
+# --- notification_config_lifecycle (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
+
+# --- notification_config_rejections (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
+
+# --- read_tool_idempotency (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
+
+# --- version_negotiation (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::version_negotiation::get_capabilities_with_version]
+
+# --- webhook_emission (7) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::webhook_emission::assert_webhook_signing_key_present]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::webhook_emission::fetch_brand_json]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::webhook_emission::trigger_idempotent_webhook_initial]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::webhook_emission::trigger_operation_id_echo]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::webhook_emission::trigger_retry_scenario]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::webhook_emission::trigger_signed_webhook]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::webhook_emission::trigger_webhook_operation]
+
+# --- error_compliance (4) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::nonexistent_product]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::reversed_dates_error]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::unsupported_major_version]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::unsupported_release_version]
+
+# --- billing_gate_dispatch (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::get_capabilities]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
+
+# --- security_baseline (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::assert_mechanism]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::probe_unauth]
+
+# --- media_buy_seller/creative_fate_after_cancellation (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]
+
+# --- media_buy_seller/inline_creatives_without_sync (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]
+
+# --- media_buy_seller/invalid_transitions (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]
+
+# --- media_buy_seller/inventory_list_no_match (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]
+
+# --- media_buy_seller/inventory_list_targeting (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]
+
+# --- media_buy_seller/measurement_terms_rejected (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]
+
+# --- media_buy_seller/refine_products (2) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/refine_products::get_products_brief]
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/refine_products::sync_accounts]
+
+# --- creative_reception (1) ---
+tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::sync_creatives]
 
 # --- newly reachable after the version-envelope fix (15) ---
 # Exposed, not caused, by GH #1512: with the AdCP 3.1 version envelope
