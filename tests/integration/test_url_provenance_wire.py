@@ -64,7 +64,7 @@ from tests.harness.creative_sync import CreativeSyncEnv
 from tests.harness.media_buy_create import RealFormatResolverMediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
-from tests.integration.media_buy_helpers import _make_create_request
+from tests.integration.media_buy_helpers import _single_creative_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -119,19 +119,7 @@ class TestACounterpartyRefusalNamesNoFabricatedLocator:
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
-            result = env.call_via(
-                transport,
-                req=_make_create_request(
-                    packages=[
-                        {
-                            "product_id": "prod_1",
-                            "budget": 5000.0,
-                            "pricing_option_id": "cpm_usd_fixed",
-                            "creative_ids": [creative_id],
-                        }
-                    ]
-                ),
-            )
+            result = env.call_via(transport, req=_single_creative_request(creative_id))
 
             assert result.is_error, (
                 f"a creative whose agent_url egress policy refuses must fail create_media_buy: {result.payload!r}"
