@@ -30,21 +30,23 @@ of the change. The origin itself is served over real TLS (``local_origin_tls``,
 salesagent-e6h0) since the seam requires https unconditionally now — there is
 no scheme hatch left to open.
 
-Two of the ten sites have no origin-driven case here, and that is a finding
-rather than a gap. They are stated as failing assertions rather than skip
-markers, because a skip claims a test exists:
+Two of the ten sites had no origin-driven case here, and that was a finding
+rather than a gap: a host spelled as a literal at its call site leaves a test
+nothing to point anywhere. Both have since been hoisted to a module-level
+constant in the services layer, so the gates they blocked are writable:
 
-* ``src/admin/blueprints/settings.py`` (4 calls) hardcodes
-  ``https://cloud.approximated.app/...`` as a string literal at each call site.
-* ``src/admin/blueprints/auth.py`` (1 call) hardcodes
-  ``https://oauth2.googleapis.com/token``.
+* ``src/admin/blueprints/settings.py``'s four Approximated calls became one
+  ``APPROXIMATED_BASE_URL`` in ``src/services/approximated_client.py``
+  (salesagent-47n9.7). Still no origin-driven case here — the affordance
+  exists, the happy paths remain to be written.
+* ``src/admin/blueprints/auth.py``'s token exchange became
+  ``GOOGLE_TOKEN_URL`` in ``src/services/google_oauth_client.py``
+  (salesagent-6gpt.4), which is what lets the Google cases below drive real
+  production code — service and ``gam_callback`` alike — at a real origin.
 
-Neither can be pointed at a local origin without changing ``src/``, so the
-ticket's own gates 2 and 3 ("succeeds against a local origin standing in for
-Google") are unreachable until the implementer hoists those hosts to a
-module-level constant. The two cases at the bottom of this file assert exactly
-that affordance exists, and fail today with a message naming it. They are the
-red that unblocks the gate, not a substitute for it.
+The injectability cases in section 3 pin both constants in place. They were the
+red that unblocked the gates, and they stay as the regression that would name
+the cause if either host were ever inlined back into a call site.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ import gzip
 import io
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import requests
@@ -233,6 +236,48 @@ def _broadstreet(origin: LocalOrigin):
     from src.adapters.broadstreet.client import BroadstreetClient
 
     return BroadstreetClient(access_token="test-token", network_id="456", base_url=origin.base_url)
+
+
+# ---------------------------------------------------------------------------
+# Google's OAuth token exchange — the credentials a case sends, in one place.
+#
+# Named rather than inlined because the happy-path case asserts the very values
+# the exchange was handed: a second copy of the secret written into the
+# assertion could drift from the one that was sent and still pass, which is the
+# opposite of grading what crossed the socket.
+# ---------------------------------------------------------------------------
+
+_GOOGLE_CLIENT_ID = "gam-oauth-client.apps.googleusercontent.com"
+_GOOGLE_CLIENT_SECRET = "GOCSPX-gam-oauth-client-secret"
+_GOOGLE_AUTH_CODE = "4/single-use-authorization-code"
+_GOOGLE_CALLBACK_URI = "https://sales-agent.example/admin/auth/gam/callback"
+
+
+def _point_google_token_url_at(origin: LocalOrigin, monkeypatch) -> None:
+    """Re-point the Google token endpoint at *origin*.
+
+    Monkeypatching the module constant IS the injection point: the service
+    holds Google's endpoint as a plain string, so a test can stand a local
+    origin in for Google without production growing a knob to be configured
+    wrong in a deployment. It is also why the exchange had to leave the Flask
+    view — a literal inside ``gam_callback`` had no seam at all.
+    """
+    from src.services import google_oauth_client
+
+    monkeypatch.setattr(google_oauth_client, "GOOGLE_TOKEN_URL", f"{origin.base_url}/token")
+
+
+def _exchange_at(origin: LocalOrigin, monkeypatch):
+    """Run the real token exchange against *origin* with the constants above."""
+    from src.services.google_oauth_client import exchange_authorization_code
+
+    _point_google_token_url_at(origin, monkeypatch)
+    return exchange_authorization_code(
+        _GOOGLE_AUTH_CODE,
+        client_id=_GOOGLE_CLIENT_ID,
+        client_secret=_GOOGLE_CLIENT_SECRET,
+        redirect_uri=_GOOGLE_CALLBACK_URI,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +508,105 @@ def test_admin_slack_test_message_does_not_retry_a_failing_origin(
     assert local_origin_tls.hits == 1
 
 
+def test_google_token_exchange_does_not_retry_a_rejecting_origin(local_origin_tls, monkeypatch):
+    """A rejected authorization code costs the token endpoint exactly ONE hit.
+
+    An authorization code is single-use, so a retried exchange cannot succeed —
+    it only burns the code and turns one operator-visible failure into three.
+
+    The failure is asserted to PROPAGATE out of the service uncaught, carrying
+    the status. Interpreting a vendor status is the caller's job — the
+    blueprint's flash wording keys off ``exc.last_status`` — and it is only
+    reachable if the service refuses to swallow or re-shape the error, the same
+    split ``approximated_client.get_dns_token`` documents.
+
+    NOTE: a 400 is terminal at the seam regardless of ``max_attempts`` (it is
+    not in ``_RETRYABLE_STATUSES``), so ``hits == 1`` here grades the
+    propagation split, not the attempt COUNT — a ``max_attempts`` regression
+    would not redden this case. See
+    ``test_google_token_exchange_does_not_retry_a_retryable_failure`` (503,
+    matching every other retry-drift case in this file) for that grader.
+    """
+    allow_local_origin(monkeypatch)
+    fast_backoff(monkeypatch)
+    local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
+
+    with pytest.raises(OutboundError) as exc_info:
+        _exchange_at(local_origin_tls, monkeypatch)
+
+    assert exc_info.value.last_status == 400
+    assert local_origin_tls.hits == 1
+
+
+def test_google_token_exchange_does_not_retry_a_retryable_failure(local_origin_tls, monkeypatch):
+    """A retryable (503) failure still costs the token endpoint exactly ONE hit.
+
+    The sibling 400 case above cannot see a ``max_attempts`` regression — 400
+    is terminal at the seam no matter what the call site asks for. 503 IS in
+    ``_RETRYABLE_STATUSES``, so this is the case (matching every other
+    retry-drift case in this file, e.g. ``test_kevel_update_does_not_retry_a_failing_origin``)
+    that would actually redden if the service's ``max_attempts=1`` regressed:
+    a retried exchange burns a single-use authorization code, turning one
+    operator-visible failure into three.
+    """
+    allow_local_origin(monkeypatch)
+    fast_backoff(monkeypatch)
+    local_origin_tls.respond_with(503, body=b'{"error": "unavailable"}')
+
+    with pytest.raises(OutboundError) as exc_info:
+        _exchange_at(local_origin_tls, monkeypatch)
+
+    assert exc_info.value.last_status == 503
+    assert local_origin_tls.hits == 1
+
+
+def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monkeypatch, admin_client):
+    """``GET /auth/gam/callback`` turns Google's 400 into the operator's message.
+
+    This is the arm of the extraction that must NOT move: the service raises,
+    and the status-keyed wording stays in the blueprint because it is UI copy,
+    not vendor logic. The message is asserted whole rather than by substring —
+    it names the three causes a 400 collapses (expired code, redirect-URI
+    mismatch, invalid credentials) precisely because Google's own body is gone
+    by the time the seam raises, so an operator who loses a word of it loses
+    the only diagnosis they get.
+
+    Driven at a real origin rather than by patching the exchange out: a mocked
+    exception proves the ``except`` arm can be entered, not that a real 400
+    from a real socket arrives there as an ``OutboundError`` whose
+    ``last_status`` is 400. Only the second claim survives the extraction.
+    """
+    from src.core import config
+    from src.core.config import GAMOAuthConfig
+
+    allow_local_origin(monkeypatch)
+    fast_backoff(monkeypatch)
+    _point_google_token_url_at(local_origin_tls, monkeypatch)
+    local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
+    # Real credentials object, not a mock: the view reads ``client_id`` and
+    # ``client_secret`` off it and puts both on the wire.
+    monkeypatch.setattr(
+        config,
+        "get_gam_oauth_config",
+        lambda: GAMOAuthConfig(client_id=_GOOGLE_CLIENT_ID, client_secret=_GOOGLE_CLIENT_SECRET),
+    )
+
+    response = admin_client.get(f"/auth/gam/callback?code={_GOOGLE_AUTH_CODE}&state=gam_oauth_tenant")
+
+    assert response.status_code == 302
+    assert urlsplit(response.headers["Location"]).path == "/tenant/gam_oauth_tenant/settings"
+    with admin_client.session_transaction() as session:
+        assert session["_flashes"] == [
+            (
+                "error",
+                "Google rejected the authorization code. This is usually an expired code, a "
+                "redirect-URI mismatch, or invalid OAuth credentials — try again, and contact "
+                "your administrator if it persists.",
+            )
+        ]
+    assert local_origin_tls.hits == 1
+
+
 # ---------------------------------------------------------------------------
 # 2. Happy paths — the vendor shapes the adapters actually parse.
 # ---------------------------------------------------------------------------
@@ -599,8 +743,81 @@ def test_gam_report_download_parses_the_gzipped_csv(local_origin_tls, monkeypatc
     assert local_origin_tls.hits == 1
 
 
+def test_google_token_exchange_posts_the_form_encoded_body(local_origin_tls, monkeypatch):
+    """The exchange puts the five OAuth fields on the wire, form-encoded, once.
+
+    Every assertion here reads bytes the server received. That matters more
+    than usual for this call: the seam offers ``json=`` and ``content=``, and a
+    ``json=`` body type-checks perfectly while sending ``application/json`` to
+    an endpoint that only accepts ``application/x-www-form-urlencoded`` — a
+    swap no unit test of the caller could see, and one Google would answer with
+    the same opaque 400 as a genuinely bad code.
+
+    The parsed return is asserted as a whole ``GoogleTokenResponse`` rather
+    than just ``.refresh_token``: constructing it is the parse boundary this
+    lane exists to create, so every field it claims to model is graded against
+    what the origin actually sent.
+    """
+    from src.services.google_oauth_client import GoogleTokenResponse
+
+    allow_local_origin(monkeypatch)
+    local_origin_tls.respond_with(
+        200,
+        body=(
+            b'{"refresh_token": "1//rt-graded", "access_token": "ya29.at-graded", '
+            b'"expires_in": 3599, "token_type": "Bearer", '
+            b'"scope": "https://www.googleapis.com/auth/dfp"}'
+        ),
+    )
+
+    result = _exchange_at(local_origin_tls, monkeypatch)
+
+    assert result == GoogleTokenResponse(
+        refresh_token="1//rt-graded",
+        access_token="ya29.at-graded",
+        expires_in=3599,
+        token_type="Bearer",
+        scope="https://www.googleapis.com/auth/dfp",
+    )
+    request = local_origin_tls.last_request
+    assert request.method == "POST"
+    assert request.headers["Content-Type"] == "application/x-www-form-urlencoded"
+    assert parse_qs(request.body.decode()) == {
+        "client_id": [_GOOGLE_CLIENT_ID],
+        "client_secret": [_GOOGLE_CLIENT_SECRET],
+        "code": [_GOOGLE_AUTH_CODE],
+        "grant_type": ["authorization_code"],
+        "redirect_uri": [_GOOGLE_CALLBACK_URI],
+    }
+    assert local_origin_tls.hits == 1
+
+
+def test_google_token_exchange_ignores_a_field_it_does_not_model(local_origin_tls, monkeypatch):
+    """A key the dataclass does not model must not fail a SUCCESSFUL exchange.
+
+    The dict this replaces read ``token_data.get("refresh_token")`` and ignored
+    everything else, so a field Google adds — or returns only for some scope
+    combination, ``id_token`` being the obvious one — was harmless. A
+    ``GoogleTokenResponse(**data)`` splat would turn the same body into a
+    ``TypeError`` raised inside ``gam_callback``'s try block, which the view's
+    outer ``except Exception`` reports to the operator as "OAuth callback
+    failed" on an exchange that in fact succeeded, with the refresh token
+    thrown away. Typing the response must not cost that tolerance: the parse is
+    a closed field set that DROPS what it does not model, not one that rejects
+    it.
+    """
+    allow_local_origin(monkeypatch)
+    local_origin_tls.respond_with(
+        200,
+        body=b'{"refresh_token": "1//rt-tolerant", "id_token": "eyJhbGciOi.stub", "a_field_google_adds_later": 1}',
+    )
+
+    assert _exchange_at(local_origin_tls, monkeypatch).refresh_token == "1//rt-tolerant"
+    assert local_origin_tls.hits == 1
+
+
 # ---------------------------------------------------------------------------
-# 3. The two hardcoded-host sites — the affordance their gates need.
+# 3. The two hoisted vendor hosts — the affordance their gates needed.
 # ---------------------------------------------------------------------------
 
 
@@ -629,19 +846,25 @@ def test_approximated_base_url_is_injectable():
 
 
 def test_google_token_url_is_injectable():
-    """``auth.py``'s OAuth token exchange must not hardcode Google's host.
+    """The OAuth token exchange must not hardcode Google's host at its call site.
 
     Gate 3 asks for the token POST to succeed against a local origin standing
     in for Google. That is unreachable while the URL is a literal inside the
     view function.
-    """
-    from src.admin.blueprints import auth
 
-    token_url = getattr(auth, "GOOGLE_TOKEN_URL", None)
+    Lives in ``src/services/google_oauth_client.py`` since salesagent-6gpt.4
+    moved the exchange out of the admin blueprint into the services layer —
+    the same move ``approximated_client`` made above, for the same reason: an
+    operator-configured vendor call belongs in ``src/adapters/`` or a service,
+    never in a Flask view.
+    """
+    from src.services import google_oauth_client
+
+    token_url = getattr(google_oauth_client, "GOOGLE_TOKEN_URL", None)
     assert token_url is not None, (
-        "src/admin/blueprints/auth.py hardcodes https://oauth2.googleapis.com/token "
-        "inside gam_callback, so the token exchange cannot be driven at a local "
-        "origin. Hoist it to a module-level GOOGLE_TOKEN_URL."
+        "The Google token exchange hardcodes https://oauth2.googleapis.com/token at its "
+        "call site, so it cannot be driven at a local origin. Hoist it to a module-level "
+        "GOOGLE_TOKEN_URL in src/services/google_oauth_client.py."
     )
 
 

@@ -13,7 +13,7 @@ Configuration priority:
 import json
 import logging
 import os
-from urllib.parse import unquote, urlencode, urlsplit
+from urllib.parse import unquote, urlsplit
 
 from authlib.integrations.flask_client import OAuth
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, session, url_for
@@ -30,12 +30,8 @@ from src.core.domain_config import (
     get_super_admin_domain,
     is_sales_agent_domain,
 )
-
-# The Google OAuth token endpoint, hoisted so the exchange can be driven at a
-# local origin. Operator-configured infrastructure, not a counterparty URL.
-GOOGLE_TOKEN_URL = os.environ.get("GOOGLE_TOKEN_URL", "https://oauth2.googleapis.com/token")
-
-from src.core.security.outbound_http import OutboundError, send
+from src.core.security.outbound_http import OutboundError
+from src.services.google_oauth_client import exchange_authorization_code
 
 logger = logging.getLogger(__name__)
 
@@ -1010,30 +1006,12 @@ def gam_callback():
         logger.info(f"Exchanging authorization code for tokens - tenant: {tenant_id}, callback_uri: {callback_uri}")
         logger.debug(f"Token exchange request - client_id: {gam_config.client_id[:20]}...")
 
-        # max_attempts=1: an authorization code is single-use, so a retried exchange
-        # cannot succeed and only burns the code. Not a behaviour change — this call
-        # never retried.
-        # Form-encoded, explicitly: the seam has no ``data=`` shortcut, and the token
-        # endpoint requires application/x-www-form-urlencoded. Building the body here
-        # keeps what goes on the wire visible instead of implied by a client default.
-        token_body = urlencode(
-            {
-                "client_id": gam_config.client_id,
-                "client_secret": gam_config.client_secret,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": callback_uri,
-            }
-        ).encode()
-
         try:
-            token_response = send(
-                GOOGLE_TOKEN_URL,
-                method="POST",
-                content=token_body,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                max_attempts=1,
-                timeout=30.0,
+            token_response = exchange_authorization_code(
+                code,
+                client_id=gam_config.client_id,
+                client_secret=gam_config.client_secret,
+                redirect_uri=callback_uri,
             )
         except OutboundError as exc:
             # The seam RAISES on a non-2xx rather than returning one, so what used to
@@ -1059,8 +1037,7 @@ def gam_callback():
 
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-        token_data = token_response.json()
-        refresh_token = token_data.get("refresh_token")
+        refresh_token = token_response.refresh_token
 
         if not refresh_token:
             logger.error("No refresh token in OAuth response")
