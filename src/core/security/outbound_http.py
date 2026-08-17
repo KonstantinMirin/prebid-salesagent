@@ -491,10 +491,10 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
     ``Retry-After: 0`` — and a test suite could not avoid sleeping for real.
 
     Public (not module-private): reused by
-    ``src.core.helpers.mcp_seam_error_mapping`` to parse the same header off
-    the ``httpx.HTTPStatusError`` a guarded MCP-seam dial surfaces, so the
-    429/Retry-After parsing rule has one home regardless of which transport
-    the seam used underneath.
+    ``src.core.helpers.outbound_error_mapping.raise_mapped_mcp_error`` to parse
+    the same header off the ``httpx.HTTPStatusError`` a guarded MCP-seam dial
+    surfaces, so the 429/Retry-After parsing rule has one home regardless of
+    which transport the seam used underneath.
     """
     raw = response.headers.get("Retry-After")
     if raw is None:

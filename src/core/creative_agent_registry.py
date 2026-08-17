@@ -34,9 +34,8 @@ from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.format_cache import load_reference_formats
-from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
 from src.core.helpers.mcp_tool_payload import extract_tool_payload
-from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
+from src.core.helpers.outbound_error_mapping import raise_mapped_mcp_error, raise_mapped_outbound_error
 from src.core.schemas import Format, FormatId, canonical_agent_url
 from src.core.security.outbound_http import (
     OperatorEndpoint,
@@ -424,7 +423,7 @@ class CreativeAgentRegistry:
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"creative agent {agent.name}"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
-            raise_mapped_mcp_error(exc, agent_label=f"creative agent {agent.name}", logger=logger)
+            raise_mapped_mcp_error(exc, provenance=OperatorEndpoint(f"creative agent {agent.name}"), logger=logger)
 
         return _validate_formats_tolerant(payload.get("formats", []), logger)
 
@@ -842,7 +841,7 @@ class CreativeAgentRegistry:
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint("the creative agent"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
-            raise_mapped_mcp_error(exc, agent_label="the creative agent", logger=logger)
+            raise_mapped_mcp_error(exc, provenance=OperatorEndpoint("the creative agent"), logger=logger)
 
     async def build_creative(
         self,
@@ -897,7 +896,7 @@ class CreativeAgentRegistry:
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint("the creative agent"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
-            raise_mapped_mcp_error(exc, agent_label="the creative agent", logger=logger)
+            raise_mapped_mcp_error(exc, provenance=OperatorEndpoint("the creative agent"), logger=logger)
 
 
 # Global registry instance

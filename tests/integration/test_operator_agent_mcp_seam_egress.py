@@ -84,8 +84,9 @@ def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
 def _assert_transient_by_code(exc: AdCPServiceUnavailableError) -> None:
     """SERVICE_UNAVAILABLE / transient — what a status-less seam failure maps to.
 
-    ``raise_mapped_mcp_error``'s no-recoverable-status arm
-    (``src/core/helpers/mcp_seam_error_mapping.py:76-77``) is the one an
+    ``raise_mapped_mcp_error``'s no-recoverable-status arm — delegated to
+    ``adcp_error_for_status``'s ``status is None`` branch
+    (``src/core/helpers/outbound_error_mapping.py``) — is the one an
     ``MCPCompatibilityError`` reaches: nothing HTTP is wrapped beneath it. The
     pinned 3.1.1 ``enums/error-code.json`` classifies SERVICE_UNAVAILABLE as
     ``transient``; INTERNAL_ERROR — what an unclassified ``AttributeError``
@@ -213,8 +214,9 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
     async def test_a_rejected_handshake_is_configuration_error(self, monkeypatch):
         """A terminal 4xx reported by the guarded seam -> CONFIGURATION_ERROR / terminal.
 
-        Grades ``raise_mapped_mcp_error``'s terminal-4xx arm
-        (``src/core/helpers/mcp_seam_error_mapping.py``) on the signals path:
+        Grades ``raise_mapped_mcp_error``'s terminal-4xx arm — delegated to
+        ``adcp_error_for_status``'s ``400 <= status < 500`` branch
+        (``src/core/helpers/outbound_error_mapping.py``) — on the signals path:
         "the endpoint this deployment is configured to use rejected us" is a
         deployment fault, not a buyer fault, and not a transient one — a 404 will
         be a 404 on the next attempt too.

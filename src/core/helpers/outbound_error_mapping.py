@@ -1,24 +1,51 @@
-"""Translate the egress seam's two failure classes into this application's taxonomy.
+"""Translate both egress seams' failures into this application's AdCP taxonomy.
 
 ``src/core/security/outbound_http.py`` deliberately raises exactly two errors:
 ``OutboundRequestBlocked`` (refused before connecting) and
 ``OutboundDeliveryFailed`` (reached the network, did not deliver). That is its
 whole public failure surface, and it stays that way — the seam must not learn
 which AdCP code a given caller wants a 429 to become, because the answer depends
-on whose URL it is and what the caller is doing with it.
+on whose URL it is and what the caller is doing with it. The guarded MCP seam
+(``src.core.utils.mcp_client.call_mcp_tool``) has its own failure surface —
+``MCPConnectionError`` / ``MCPCompatibilityError`` — for the same underlying
+reason: closing the SSRF gap ``adcp.ADCPMultiAgentClient`` left (no transport
+injection point in adcp 6.6.0 — upstream adcp-client-python#1004) meant routing
+through a different transport with a different exception vocabulary.
 
-The translation still has to live in ONE place, or every migrating call site
-re-derives it and they drift — which is the duplication the epic deletes. So it
-lives here: a leaf module importing only the seam and the exception taxonomy.
+The translation still has to live in ONE place per DECISION, or every migrating
+call site re-derives it and they drift — which is the duplication this module
+exists to delete. So both seams' mappers live here: a leaf module importing
+only the seams and the exception taxonomy. Both extract (status, retry_after)
+from their own failure surface and delegate the CLASS decision to
+:func:`adcp_error_for_status` — the one function under this file (and this
+codebase) that maps an HTTP status to an AdCP error class. They differ only in
+what they can attach to the result: ``raise_mapped_outbound_error`` re-raises
+its own ``OutboundDeliveryFailed`` for the 5xx/no-status case (preserving
+``attempts``/``last_status``, which the classifier has no object to carry);
+``raise_mapped_mcp_error`` has no such object and keeps the classifier's
+freshly-built one. One explanatory asymmetry, not a third behavior.
 
 NOT in ``src/core/helpers/adapter_helpers.py``. That module imports the
 ad-server adapters at module level, and the adapters are precisely the call
 sites that will use this mapper as the epic's remaining migrations land —
 importing it back would be a cycle. (Its former sibling ``raise_mapped_adcp_error``,
 for the adcp SDK's own exception hierarchy, was deleted by salesagent-4n88 once
-both callers moved off ``ADCPMultiAgentClient`` onto the guarded MCP seam — see
-``src.core.helpers.mcp_seam_error_mapping``, the analogous mapper for THAT
-seam's failure surface.)
+both callers moved off ``ADCPMultiAgentClient`` onto the guarded MCP seam.)
+
+``MCPConnectionError`` looked, at first read, like it discarded the HTTP status
+entirely. It does not, except for one case: the MCP Streamable HTTP transport
+(``mcp/client/streamable_http.py::_handle_post_request``) special-cases a plain
+404 on a session POST as "no such session" — a PROTOCOL-level signal, not a
+transport failure — and synthesizes an opaque ``McpError`` for it, discarding
+the status on purpose. Every other non-2xx status is a normal
+``httpx.HTTPStatusError`` that survives intact as ``__cause__`` (status code and
+headers, including ``Retry-After``, fully readable), because
+``raise ... from ...`` chaining is exactly what both ``MCPConnectionError`` and
+``call_mcp_tool``'s retry loop use. Only used for OPERATOR-configured agents —
+a counterparty-supplied ``agent_url`` never reaches ``raise_mapped_mcp_error``
+(``creative_agent_registry.py`` routes those through ``_fetch_formats_raw_mcp``,
+on the raw egress seam's own ``OutboundError`` taxonomy, unchanged by this
+migration).
 
 Spec grounding for the classification (AdCP 3.1.1,
 ``dist/schemas/3.1.1/enums/error-code.json`` enumMetadata):
@@ -36,18 +63,70 @@ from __future__ import annotations
 import logging
 from typing import NoReturn
 
+from src.core.exceptions import (
+    AdCPConfigurationError,
+    AdCPRateLimitError,
+    AdCPServiceUnavailableError,
+    clamp_retry_after,
+)
 from src.core.security.outbound_http import (
     CounterpartyUrl,
+    OperatorEndpoint,
     OutboundDeliveryFailed,
     OutboundError,
     OutboundRequestBlocked,
     UrlProvenance,
-    terminal_client_error_status,
+    find_wrapped_http_status_error,
+    retry_after_seconds,
 )
 
 
+def adcp_error_for_status(status: int | None, *, retry_after: float | None, provenance: UrlProvenance) -> NoReturn:
+    """The one status -> AdCP-error-class table both seams' mappers consume.
+
+    429 -> ``RATE_LIMITED`` carrying the clamped ``retry_after``; any other 4xx
+    -> ``CONFIGURATION_ERROR``/terminal (429 is checked first, so no second copy
+    of the retryable-status set is needed to exclude it — the drift #1802's F2
+    finding documented, where an inline ``400 <= status < 500`` was only correct
+    because 429 happened to be checked first, in TWO places that could drift
+    independently); ``status is None`` (a transport failure, never reached the
+    wire) -> ``SERVICE_UNAVAILABLE`` worded "unreachable"; any other status (a
+    5xx) -> ``SERVICE_UNAVAILABLE`` worded "unavailable".
+
+    Requires an :class:`OperatorEndpoint`. Structurally unreachable with a
+    :class:`CounterpartyUrl` today: ``raise_mapped_outbound_error`` re-raises
+    ``exc`` unchanged for that provenance before ever extracting a status, and
+    the MCP seam's own docstring establishes a counterparty-supplied
+    ``agent_url`` never reaches ``raise_mapped_mcp_error`` at all. Asserting
+    here keeps a future violation loud instead of silently misclassifying, and
+    avoids inventing a CounterpartyUrl status taxonomy neither caller nor any
+    RED grader exercises.
+
+    Always raises; the ``NoReturn`` annotation lets a caller delegate from a
+    single ``except`` arm without a trailing ``raise``. Deliberately takes no
+    ``logger``/original exception: it is only ever invoked from inside an
+    active exception-handling frame in both mappers, so the raised AdCP error's
+    ``__context__`` is set implicitly; logging is each mapper's own concern
+    (the wording differs per seam) and stays at the call site.
+    """
+    if not isinstance(provenance, OperatorEndpoint):
+        raise AssertionError(f"adcp_error_for_status classifies operator-endpoint failures only; got {provenance!r}")
+    label = provenance.name
+
+    if status == 429:
+        raise AdCPRateLimitError(
+            f"{label} is rate-limited.",
+            retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
+        )
+    if status is not None and 400 <= status < 500:
+        raise AdCPConfigurationError(f"{label} rejected the request.")
+    if status is None:
+        raise AdCPServiceUnavailableError(f"{label} is unreachable.")
+    raise AdCPServiceUnavailableError(f"{label} is unavailable.")
+
+
 def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance, logger: logging.Logger) -> NoReturn:
-    """Re-raise a seam failure as the AdCP error *provenance* warrants.
+    """Re-raise a raw-egress-seam failure as the AdCP error *provenance* warrants.
 
     ``provenance`` is required — there is no "no opinion" default, because
     provenance-by-omission (an optional field a caller either passes or doesn't)
@@ -64,45 +143,78 @@ def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance
     place, which is what this module exists to prevent.
 
     An :class:`OperatorEndpoint` — a registered agent endpoint, a vendor host,
-    not something the buyer supplied — gets the classification below, naming
-    ``provenance.name`` (a role, never an address):
-
-    A refusal becomes ``CONFIGURATION_ERROR``/terminal rather than
-    ``VALIDATION_ERROR``/correctable: the buyer did not choose this address and
-    cannot fix it, so telling them to correct their request would be false.
-
-    A 429 becomes ``RATE_LIMITED`` carrying the origin's ``retry_after``, which
-    the seam has already bounded and clamped to the spec's [1, 3600].
-
-    Any other 4xx is terminal: a rejected request will be rejected again.
-
-    Everything else — a 5xx, or a transport failure with no status at all — is
-    re-raised UNCHANGED for the same reason as the ``CounterpartyUrl`` arm:
-    ``OutboundDeliveryFailed`` already IS the right AdCP class.
-
-    Always raises; the ``NoReturn`` annotation lets a caller delegate from a
-    single ``except OutboundError`` arm without a trailing ``raise``.
+    not something the buyer supplied — gets classified below, naming
+    ``provenance.name`` (a role, never an address). A dial refusal
+    (``OutboundRequestBlocked``) becomes ``CONFIGURATION_ERROR``/terminal rather
+    than ``VALIDATION_ERROR``/correctable: the buyer did not choose this address
+    and cannot fix it, so telling them to correct their request would be false.
+    A delivered-but-failed dial (``OutboundDeliveryFailed``) delegates its
+    status to :func:`adcp_error_for_status` — EXCEPT the 5xx/no-status case,
+    caught back out and re-raised as the original ``exc``: it already IS
+    ``AdCPServiceUnavailableError`` and carries ``attempts``/``last_status`` the
+    classifier's freshly-built instance would not.
     """
-    from src.core.exceptions import AdCPConfigurationError, AdCPRateLimitError
-
     if isinstance(provenance, CounterpartyUrl):
         raise exc
 
-    agent_label = provenance.name
-
     if isinstance(exc, OutboundRequestBlocked):
-        logger.error("Egress policy refused the configured endpoint for %s", agent_label)
+        logger.error("Egress policy refused the configured endpoint for %s", provenance.name)
         raise AdCPConfigurationError(
-            f"The configured endpoint for {agent_label} is not reachable under this deployment's egress policy."
+            f"The configured endpoint for {provenance.name} is not reachable under this deployment's egress policy."
         ) from exc
 
-    if isinstance(exc, OutboundDeliveryFailed) and exc.last_status == 429:
-        logger.warning("%s rate-limited after %s attempts", agent_label, exc.attempts)
-        raise AdCPRateLimitError(f"{agent_label} is rate-limited.", retry_after=exc.retry_after) from exc
+    # OutboundError has exactly two concrete subclasses; OutboundRequestBlocked
+    # was excluded above, so this is OutboundDeliveryFailed -- a type narrowing,
+    # not a value comparison (AC1's ast-grep is about status VALUES).
+    assert isinstance(exc, OutboundDeliveryFailed)
 
-    terminal_status = terminal_client_error_status(exc)
-    if terminal_status is not None:
-        logger.error("%s rejected the request (HTTP %s)", agent_label, terminal_status)
-        raise AdCPConfigurationError(f"{agent_label} rejected the request.") from exc
+    try:
+        adcp_error_for_status(exc.last_status, retry_after=exc.retry_after, provenance=provenance)
+    except AdCPRateLimitError:
+        logger.warning("%s rate-limited after %s attempts", provenance.name, exc.attempts)
+        raise
+    except AdCPConfigurationError:
+        logger.error("%s rejected the request (HTTP %s)", provenance.name, exc.last_status)
+        raise
+    except AdCPServiceUnavailableError:
+        raise exc from None
 
-    raise exc
+
+def raise_mapped_mcp_error(exc: Exception, *, provenance: UrlProvenance, logger: logging.Logger) -> NoReturn:
+    """Re-raise a guarded-MCP-seam failure as the AdCP error *provenance* warrants.
+
+    Mirrors :func:`raise_mapped_outbound_error`'s classification by delegating
+    to the same :func:`adcp_error_for_status`, so the two seams name failures
+    the same way despite different transports. Unlike the outbound seam, the
+    MCP seam has no ``OutboundDeliveryFailed``-shaped object to re-raise for
+    the 5xx/no-status case — every outcome goes through the classifier, which
+    builds a fresh ``AdCPServiceUnavailableError`` there (see
+    :func:`adcp_error_for_status`'s own docstring).
+    """
+    # Mirrors adcp_error_for_status's own assertion (J1): a counterparty-
+    # supplied agent_url never reaches this mapper at all (module docstring).
+    # Narrows the type for the logging reads below; not a value comparison.
+    if not isinstance(provenance, OperatorEndpoint):
+        raise AssertionError(f"raise_mapped_mcp_error classifies operator-endpoint failures only; got {provenance!r}")
+
+    status: int | None = None
+    retry_after: float | None = None
+    http_error = find_wrapped_http_status_error(exc)
+    if http_error is not None:
+        status = http_error.response.status_code
+        retry_after = retry_after_seconds(http_error.response)
+
+    try:
+        adcp_error_for_status(status, retry_after=retry_after, provenance=provenance)
+    except AdCPRateLimitError:
+        logger.warning("%s rate-limited (HTTP 429)", provenance.name)
+        raise
+    except AdCPConfigurationError:
+        logger.error("%s rejected the request (HTTP %s)", provenance.name, status)
+        raise
+    except AdCPServiceUnavailableError:
+        if status is None:
+            logger.error("%s is unreachable: %s", provenance.name, exc)
+        else:
+            logger.error("%s returned HTTP %s", provenance.name, status)
+        raise

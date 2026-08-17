@@ -35,9 +35,8 @@ from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPConfigurationError
-from src.core.helpers.mcp_seam_error_mapping import raise_mapped_mcp_error
 from src.core.helpers.mcp_tool_payload import extract_tool_payload
-from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
+from src.core.helpers.outbound_error_mapping import raise_mapped_mcp_error, raise_mapped_outbound_error
 from src.core.schemas import GetSignalsRequest
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError, call_mcp_tool
@@ -167,7 +166,7 @@ class SignalsAgentRegistry:
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"signals agent {agent.name}"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
-            raise_mapped_mcp_error(exc, agent_label=f"signals agent {agent.name}", logger=logger)
+            raise_mapped_mcp_error(exc, provenance=OperatorEndpoint(f"signals agent {agent.name}"), logger=logger)
 
         if not payload:
             # An empty payload means neither structured_content nor a TextContent
