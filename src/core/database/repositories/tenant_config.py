@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -56,10 +57,33 @@ class TenantConfigRepository:
         load-then-mutate-then-stamp against a raw ``select(Tenant)``; two of
         them had drifted into literally identical bodies. One method means the
         ``updated_at`` stamp cannot be the thing a third copy forgets.
+
+        Every key is validated against a mapper-derived set before the
+        ``setattr`` loop runs — an unknown key raises ``ValueError`` naming
+        it, rather than landing as a plain Python attribute that ``setattr``
+        happily accepts and this method then reports as a successful write.
+        The set is derived, never hand-maintained, so a new ``Tenant`` column
+        needs no repository edit — but it is not just ``column_attrs``:
+        mapped attributes with a leading underscore (e.g. ``_gemini_api_key``)
+        are excluded, and ``Tenant``'s own public properties that declare a
+        setter (e.g. ``gemini_api_key``, which encrypts on write over that
+        private column) are included instead. A naive column-only set would
+        both reject the one correct spelling and admit the private one,
+        writing a secret in the clear around its own encrypting setter.
         """
         tenant = self.get_tenant()
         if tenant is None:
             return False
+
+        writable = {attr.key for attr in sa_inspect(Tenant).mapper.column_attrs if not attr.key.startswith("_")} | {
+            name
+            for name in dir(Tenant)
+            if isinstance(getattr(Tenant, name, None), property) and getattr(Tenant, name).fset is not None
+        }
+        unknown = sorted(set(columns) - writable)
+        if unknown:
+            raise ValueError(f"Unknown Tenant attribute(s): {', '.join(unknown)}")
+
         for column, value in columns.items():
             setattr(tenant, column, value)
         tenant.updated_at = datetime.now(UTC)

@@ -38,7 +38,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
-from src.core.exceptions import RECOVERY_BY_WIRE_CODE, AdCPConfigurationError, build_two_layer_error_envelope
+from src.core.exceptions import (
+    RECOVERY_BY_WIRE_CODE,
+    AdCPConfigurationError,
+    AdCPError,
+    AdCPServiceUnavailableError,
+    build_two_layer_error_envelope,
+)
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 from src.core.utils.mcp_client import MCPConnectionError
 from tests.helpers import assert_envelope_shape
@@ -49,8 +55,8 @@ from tests.integration.test_outbound_http import fast_backoff
 pytestmark = [pytest.mark.integration]
 
 
-def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
-    """Assert the buyer-visible envelope is CONFIGURATION_ERROR paired with terminal.
+def _assert_wire_pair(exc: AdCPError, code: str, *, pinned_recovery: str) -> None:
+    """Assert the buyer-visible envelope is *code* paired with its pinned recovery.
 
     Asserts on the two-layer WIRE envelope, not on the exception's attributes:
     the envelope is what a buyer receives, and reading the attributes would grade
@@ -58,36 +64,68 @@ def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
 
     The expected recovery is read from ``RECOVERY_BY_WIRE_CODE`` rather than
     written as a literal, so this cannot drift from the pin — if a spec bump
-    reclassified CONFIGURATION_ERROR, this test would follow it instead of
-    asserting yesterday's answer. The literal ``"terminal"`` is pinned once,
-    below, so the derivation itself cannot silently return the wrong thing.
+    reclassified the code, this test would follow it instead of asserting
+    yesterday's answer. *pinned_recovery* pins the derivation itself once per
+    call site, so it cannot silently return the wrong thing.
     """
-    expected = RECOVERY_BY_WIRE_CODE["CONFIGURATION_ERROR"]
-    assert expected == "terminal", (
-        f"the pinned enumMetadata classifies CONFIGURATION_ERROR as {expected!r}; this suite's whole "
-        "premise is that it is the TERMINAL code an operator-fault site should choose"
+    expected = RECOVERY_BY_WIRE_CODE[code]
+    assert expected == pinned_recovery, (
+        f"the pinned enumMetadata classifies {code} as {expected!r}, not {pinned_recovery!r} — "
+        "the premise this assertion is built on no longer holds"
     )
-    assert_envelope_shape(build_two_layer_error_envelope(exc), "CONFIGURATION_ERROR", recovery=expected)
+    assert_envelope_shape(build_two_layer_error_envelope(exc), code, recovery=expected)
+
+
+def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
+    """CONFIGURATION_ERROR / terminal — the operator-fault pair this suite is about."""
+    _assert_wire_pair(exc, "CONFIGURATION_ERROR", pinned_recovery="terminal")
+
+
+def _assert_transient_by_code(exc: AdCPServiceUnavailableError) -> None:
+    """SERVICE_UNAVAILABLE / transient — what a status-less seam failure maps to.
+
+    ``raise_mapped_mcp_error``'s no-recoverable-status arm
+    (``src/core/helpers/mcp_seam_error_mapping.py:76-77``) is the one an
+    ``MCPCompatibilityError`` reaches: nothing HTTP is wrapped beneath it. The
+    pinned 3.1.1 ``enums/error-code.json`` classifies SERVICE_UNAVAILABLE as
+    ``transient``; INTERNAL_ERROR — what an unclassified ``AttributeError``
+    becomes two frames later — would misgrade an agent's bad answer as the
+    seller's own bug.
+    """
+    _assert_wire_pair(exc, "SERVICE_UNAVAILABLE", pinned_recovery="transient")
 
 
 @contextlib.contextmanager
-def _stub_mcp_tool_result(monkeypatch: pytest.MonkeyPatch, *, payload: dict[str, Any]):
-    """Make the guarded seam hand ``_fetch_signals_operator`` a successful tool result.
+def _stub_mcp_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    payload: Any = None,
+    text: str | None = None,
+    registry_module: str = "src.core.signals_agent_registry",
+):
+    """Make the guarded seam hand a registry a successful tool result it must interpret.
 
-    The two raises under test sit AFTER a successful handshake and tool call, so
+    The raises under test sit AFTER a successful handshake and tool call, so
     reaching them over a real socket would mean speaking enough MCP to satisfy
     fastmcp — a fixture that would grade the protocol library, not the
     classification. The seam itself is graded over real sockets by the sibling
     classes in this file; here it is stubbed at exactly one point
     (``create_mcp_client``) so the assertion is about what the registry does with
     an answer it cannot use.
+
+    *payload* becomes ``structured_content``; *text* instead becomes a legacy
+    ``TextContent`` block, which is the only way to reach the ``json.loads``
+    branch of ``extract_tool_payload``. *registry_module* selects which
+    registry's ``create_mcp_client`` name is patched — both import it at module
+    level, so both are patchable by the identical technique.
     """
+    content = [MagicMock(text=text)] if text is not None else []
     client = MagicMock()
-    client.call_tool = AsyncMock(return_value=MagicMock(structured_content=payload, content=[]))
+    client.call_tool = AsyncMock(return_value=MagicMock(structured_content=payload, content=content))
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=client)
     ctx.__aexit__ = AsyncMock(return_value=False)
-    monkeypatch.setattr("src.core.signals_agent_registry.create_mcp_client", lambda **_: ctx)
+    monkeypatch.setattr(f"{registry_module}.create_mcp_client", lambda **_: ctx)
     yield
 
 
@@ -242,3 +280,132 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
                 await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="test brief")
 
         _assert_terminal_by_code(excinfo.value)
+
+
+_OPERATOR_FETCHES: dict[str, tuple[str, Any]] = {
+    "creative-format-fetch": (
+        "src.core.creative_agent_registry",
+        lambda: CreativeAgentRegistry()._fetch_formats_operator(
+            CreativeAgent(agent_url="https://creative.operator.test", name="operator-creative-agent")
+        ),
+    ),
+    "signals-fetch": (
+        "src.core.signals_agent_registry",
+        lambda: SignalsAgentRegistry()._fetch_signals_operator(
+            SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent"),
+            brief="test brief",
+        ),
+    ),
+}
+
+
+class TestAPayloadThatIsNotAJSONObjectIsClassified:
+    """An agent answering with something that is not a JSON object reaches the buyer CLASSIFIED.
+
+    ``extract_tool_payload`` is annotated ``-> dict[str, Any]`` but returns
+    whatever ``structured_content`` or ``json.loads`` produced. A creative agent
+    answering with a JSON ARRAY therefore reaches ``payload.get("formats", [])``
+    as a ``list``, and the ``AttributeError`` that follows is nobody's classified
+    error — it surfaces two frames later as INTERNAL_ERROR, which the pinned
+    3.1.1 taxonomy reserves for the seller's OWN bug. The origin's malformed
+    answer is not the seller's bug.
+
+    Both non-object shapes are graded, because both are the same fault class and
+    the fix must not cover only one: ``structured_content`` carrying a JSON array
+    (the isinstance hole), and a ``TextContent`` block whose ``.text`` is not
+    valid JSON at all (``json.loads`` raising ``JSONDecodeError``, a bare
+    ``ValueError`` that no ``except`` arm on either path catches).
+    """
+
+    @pytest.mark.parametrize("path", list(_OPERATOR_FETCHES), ids=list(_OPERATOR_FETCHES))
+    async def test_a_json_array_payload_is_service_unavailable(self, monkeypatch, path):
+        """``structured_content`` is a list, not an object -> SERVICE_UNAVAILABLE / transient."""
+        registry_module, call = _OPERATOR_FETCHES[path]
+
+        with _stub_mcp_tool_result(
+            monkeypatch,
+            payload=[{"format_id": "display_300x250"}],
+            registry_module=registry_module,
+        ):
+            with pytest.raises(AdCPServiceUnavailableError) as excinfo:
+                await call()
+
+        _assert_transient_by_code(excinfo.value)
+
+    @pytest.mark.parametrize("path", list(_OPERATOR_FETCHES), ids=list(_OPERATOR_FETCHES))
+    async def test_a_text_block_that_is_not_json_is_service_unavailable(self, monkeypatch, path):
+        """A ``TextContent`` block that will not parse -> SERVICE_UNAVAILABLE / transient.
+
+        The sibling hole of the array case: ``json.loads`` raises
+        ``JSONDecodeError`` from inside ``extract_tool_payload``, so the
+        annotation is untrue on this return path too, and the raise is equally
+        unclassified.
+        """
+        registry_module, call = _OPERATOR_FETCHES[path]
+
+        with _stub_mcp_tool_result(monkeypatch, text="not json{", registry_module=registry_module):
+            with pytest.raises(AdCPServiceUnavailableError) as excinfo:
+                await call()
+
+        _assert_transient_by_code(excinfo.value)
+
+
+_CREATIVE_AGENT_TOOLS: dict[str, Any] = {
+    "preview_creative": lambda registry: registry.preview_creative(
+        agent_url="https://creative.operator.test",
+        format_id="display_300x250",
+        creative_manifest={"creative_id": "c123", "name": "Banner Ad", "assets": {}},
+    ),
+    "build_creative": lambda registry: registry.build_creative(
+        agent_url="https://creative.operator.test",
+        format_id="display_300x250_generative",
+        message="a creative brief",
+        gemini_api_key="test-gemini-key",
+    ),
+}
+
+
+class TestPreviewAndBuildDoNotLeakAnUnclassifiedSeamFailure:
+    """``preview_creative``/``build_creative`` classify a seam failure at the REGISTRY boundary.
+
+    Deliberately graded here rather than at the wire. All four callers of these
+    two methods live in ``src/core/tools/creatives/_processing.py`` inside a
+    ``try`` whose blanket ``except Exception`` already collapses today's
+    unclassified failure into a per-item ``SERVICE_UNAVAILABLE`` result — and
+    would collapse the classified one into the same place. No wire-level
+    envelope test can distinguish before from after, so an envelope test here
+    would be a green mark that grades nothing. What IS observable, and is the
+    whole obligation for these two methods, is that the registry no longer hands
+    its callers a raw ``AttributeError``/``JSONDecodeError``: it raises this
+    application's own taxonomy, with the pair a buyer would be told.
+    """
+
+    @pytest.mark.parametrize("tool", list(_CREATIVE_AGENT_TOOLS), ids=list(_CREATIVE_AGENT_TOOLS))
+    async def test_a_non_object_payload_raises_a_classified_error(self, monkeypatch, tool):
+        """A JSON array from the creative agent -> SERVICE_UNAVAILABLE / transient, not a raw builtin."""
+        call = _CREATIVE_AGENT_TOOLS[tool]
+
+        with _stub_mcp_tool_result(
+            monkeypatch,
+            payload=["not", "an", "object"],
+            registry_module="src.core.creative_agent_registry",
+        ):
+            with pytest.raises(AdCPServiceUnavailableError) as excinfo:
+                await call(CreativeAgentRegistry())
+
+        _assert_transient_by_code(excinfo.value)
+
+    @pytest.mark.parametrize("tool", list(_CREATIVE_AGENT_TOOLS), ids=list(_CREATIVE_AGENT_TOOLS))
+    async def test_an_unparseable_text_block_raises_a_classified_error(self, monkeypatch, tool):
+        """A ``TextContent`` block that will not parse -> SERVICE_UNAVAILABLE / transient."""
+        call = _CREATIVE_AGENT_TOOLS[tool]
+
+        with _stub_mcp_tool_result(
+            monkeypatch,
+            text="not json{",
+            registry_module="src.core.creative_agent_registry",
+        ):
+            with pytest.raises(AdCPServiceUnavailableError) as excinfo:
+                await call(CreativeAgentRegistry())
+
+        _assert_transient_by_code(excinfo.value)

@@ -162,12 +162,12 @@ class SignalsAgentRegistry:
                 timeout=agent.timeout,
             ) as client:
                 result = await client.call_tool("get_signals", args)
+            payload = extract_tool_payload(result)
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"signals agent {agent.name}"), logger=logger)
         except (MCPConnectionError, MCPCompatibilityError) as exc:
             raise_mapped_mcp_error(exc, agent_label=f"signals agent {agent.name}", logger=logger)
 
-        payload = extract_tool_payload(result)
         if not payload:
             # An empty payload means neither structured_content nor a TextContent
             # block carried anything parseable. GetSignalsResponse.model_validate({})
