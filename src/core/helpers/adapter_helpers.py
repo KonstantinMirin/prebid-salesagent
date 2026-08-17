@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from adcp import AgentConfig
@@ -95,8 +95,8 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
-from src.core.exceptions import RecoveryHint
 from src.core.schemas import Principal
+from src.core.testing_hooks import MockTestBehavior
 
 logger = logging.getLogger(__name__)
 
@@ -162,32 +162,6 @@ def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
         logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
 
     return selected_adapter or "mock"
-
-
-class MockTestBehavior(BaseModel):  # type: ignore[explicit-any]  # BaseModel is Any-typed upstream; this module bans explicit Any
-    """The mock adapter's fault-injection config, VALIDATED at the read.
-
-    A model rather than a TypedDict because the value comes out of a JSON column:
-    a TypedDict describes a shape but checks nothing, so the reader had to
-    ``cast()`` arbitrary tenant-supplied JSON into it and every consumer trusted
-    a type nobody verified. ``recovery`` is the sharp edge -- it is handed
-    straight to ``AdCPAdapterError(recovery=...)``, so a typo in the column
-    would otherwise put an invalid recovery value on a buyer's wire.
-
-    ``extra="ignore"``: this column is written by test tooling and by hand, and
-    an unknown key must not fail a production read.
-
-    Every field is optional and defaults to "not configured", so an absent or
-    empty column behaves exactly as before.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    unavailable: bool = False
-    error_message: str | None = None
-    recovery: RecoveryHint = "transient"
-    targeting_capabilities: dict[str, bool] | None = None
-    default_channels: list[str] | None = None
 
 
 def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> MockTestBehavior:

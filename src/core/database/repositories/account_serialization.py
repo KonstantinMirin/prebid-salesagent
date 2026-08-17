@@ -34,7 +34,7 @@ __all__ = [
 ]
 
 
-def as_json_dict(value: object, *, exclude_none: bool = False) -> dict[str, object]:
+def as_json_dict(value: BaseModel | Mapping[str, object], *, exclude_none: bool = False) -> dict[str, object]:
     """A pydantic model or a mapping, as a JSON-serializable dict.
 
     The ONE place the "model or plain mapping?" question is answered. Four sites
@@ -43,10 +43,9 @@ def as_json_dict(value: object, *, exclude_none: bool = False) -> dict[str, obje
     forget a flag (``mode="json"``, ``exclude_none``) and serialize differently
     from the others.
     """
-    dump = getattr(value, "model_dump", None)
-    if callable(dump):
-        return dump(mode="json", exclude_none=exclude_none)
-    return dict(value)  # type: ignore[call-overload]
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", exclude_none=exclude_none)
+    return dict(value)
 
 
 def serialize_typed_list(

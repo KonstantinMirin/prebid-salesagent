@@ -21,7 +21,9 @@ from typing import TYPE_CHECKING, Any
 
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from src.core.exceptions import RecoveryHint
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +217,39 @@ class AdCPTestContext(BaseModel):
 TestingContext = AdCPTestContext  # Original name
 TestContext = AdCPTestContext  # Intermediate name (was briefly used)
 TestingHookContext = AdCPTestContext  # Another intermediate name
+
+
+class MockTestBehavior(BaseModel):
+    """The mock adapter's fault-injection config, VALIDATED at the read.
+
+    A model rather than a TypedDict because the value comes out of a JSON column:
+    a TypedDict describes a shape but checks nothing, so the reader had to
+    ``cast()`` arbitrary tenant-supplied JSON into it and every consumer trusted
+    a type nobody verified. ``recovery`` is the sharp edge -- it is handed
+    straight to ``AdCPAdapterError(recovery=...)``, so a typo in the column
+    would otherwise put an invalid recovery value on a buyer's wire.
+
+    ``extra="ignore"``: this column is written by test tooling and by hand, and
+    an unknown key must not fail a production read.
+
+    Every field is optional and defaults to "not configured", so an absent or
+    empty column behaves exactly as before.
+
+    Lives here, not in ``src/core/helpers/adapter_helpers.py`` (its only
+    caller), because that module scopes ``disallow_any_explicit = True``
+    (#1721 F5) and Pydantic's own ``BaseModel`` stub surfaces an explicit
+    ``Any`` on any subclass defined there -- an upstream-library collision, not
+    a fixable annotation. This module already subclasses ``BaseModel`` freely
+    with no such override.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    unavailable: bool = False
+    error_message: str | None = None
+    recovery: RecoveryHint = "transient"
+    targeting_capabilities: dict[str, bool] | None = None
+    default_channels: list[str] | None = None
 
 
 class NextEventCalculator:
