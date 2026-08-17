@@ -14,11 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
+from src.core.security.egress.destination import VendorConstant
 from src.core.security.outbound_http import send
 
 # The Google OAuth token endpoint, hoisted so the exchange can be driven at a
 # local origin. Operator-configured infrastructure, not a counterparty URL.
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+# A VendorConstant, matching APPROXIMATED_BASE_URL's typing (salesagent-tbrk.6).
+GOOGLE_TOKEN_URL = VendorConstant(url="https://oauth2.googleapis.com/token")
 
 
 @dataclass(frozen=True)
@@ -67,7 +69,7 @@ def exchange_authorization_code(
     # exchange cannot succeed and only burns the code. Not a behaviour
     # change — this call never retried.
     result = send(
-        GOOGLE_TOKEN_URL,
+        GOOGLE_TOKEN_URL.url,
         method="POST",
         content=token_body,
         headers={"Content-Type": "application/x-www-form-urlencoded"},

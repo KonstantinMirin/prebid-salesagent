@@ -11,16 +11,17 @@ the client that produces those statuses instead of inline in the blueprint.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any
 
+from src.core.security.egress.destination import VendorConstant
 from src.core.security.outbound_http import OutboundError, OutboundResult, send
 
 # The Approximated vhost API host, in ONE place. It was repeated at all four
 # call sites, which made the ticket's own "drive it at a local origin" gate
-# unreachable.
-APPROXIMATED_BASE_URL = os.environ.get("APPROXIMATED_BASE_URL", "https://cloud.approximated.app")
+# unreachable. A VendorConstant, never an env read: this is a credential-bearing
+# destination that must not become silently redirectable (salesagent-tbrk.6).
+APPROXIMATED_BASE_URL = VendorConstant(url="https://cloud.approximated.app")
 
 
 def _api(method: str, path: str, api_key: str, *, json_body: Any = None) -> OutboundResult:
@@ -31,7 +32,7 @@ def _api(method: str, path: str, api_key: str, *, json_body: Any = None) -> Outb
     drift this migration must not introduce.
     """
     return send(
-        f"{APPROXIMATED_BASE_URL}{path}",
+        f"{APPROXIMATED_BASE_URL.url}{path}",
         method=method,
         headers={"api-key": api_key, "Content-Type": "application/json", "Accept": "application/json"},
         json=json_body,

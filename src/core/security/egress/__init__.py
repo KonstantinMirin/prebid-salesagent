@@ -2,7 +2,8 @@
 that decides whether this application dials a URL, and one retry state
 machine shared by every attempt loop.
 
-``policy.py`` (Epic A lane 1) and ``attempts.py`` (lane 2) exist today. A
-sibling lane still to land adds ``response.py`` (the closed ``OutboundResult``
-shape) — see ``.claude/notes/pr1802-r2-class-fix-plan.md``.
+``policy.py`` (Epic A lane 1), ``attempts.py`` (lane 2), ``response.py`` (the
+closed ``OutboundResult`` shape, lane 5) and ``destination.py`` (the typed
+notion of WHERE a URL comes from, lane 6) exist today — see
+``.claude/notes/pr1802-r2-class-fix-plan.md``.
 """

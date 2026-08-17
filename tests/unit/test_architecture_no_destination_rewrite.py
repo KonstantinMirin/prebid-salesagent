@@ -204,3 +204,232 @@ class TestDestinationRewriteDetector:
         """
         seam = repo_root() / SEAM_FILE
         assert find_destination_rewrite_violations(parse_module(seam)) == []
+
+
+# ---------------------------------------------------------------------------
+# Env-sourced destination guard (salesagent-tbrk.6) — the class this file's
+# own module docstring admits the sibling detector above is blind to: it
+# "matches the stdlib REASSEMBLY spellings" only, so an env read placed in
+# front of a credential-bearing endpoint — ``APPROXIMATED_BASE_URL =
+# os.environ.get("APPROXIMATED_BASE_URL", "https://cloud.approximated.app")``,
+# the live shape at ``src/services/approximated_client.py:23`` today — never
+# rebuilds a URL from parts, so ``find_destination_rewrite_violations`` above
+# has nothing to flag. A caller could redirect a credentialed vendor client's
+# destination at import time without a single ``urlunparse``/``._replace``
+# call anywhere (triage F11 second half, R1 absence 2). This second detector
+# closes that gap: a module-level assignment sourced from
+# ``os.environ.get(...)``/``os.getenv(...)`` with a URL-shaped default is
+# flagged, wherever it sits in the assignment's expression tree (a bare
+# assignment or one nested inside a constructor kwarg).
+# ---------------------------------------------------------------------------
+
+_ENV_READ_FUNCTIONS = frozenset({"get", "getenv"})  # os.environ.get / os.getenv
+
+
+def _is_url_shaped(value: object) -> bool:
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
+
+
+def _env_read_default(call: ast.Call) -> ast.expr | None:
+    """The default-value AST node of an os.environ.get(...)/os.getenv(...) call, or None if not one."""
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.attr not in _ENV_READ_FUNCTIONS:
+        return None
+    # os.environ.get(...): func.value is `os.environ` (an Attribute); os.getenv(...): func.value is `os` (a Name).
+    is_os_environ_get = func.attr == "get" and isinstance(func.value, ast.Attribute) and func.value.attr == "environ"
+    is_os_getenv = func.attr == "getenv" and isinstance(func.value, ast.Name) and func.value.id == "os"
+    if not (is_os_environ_get or is_os_getenv):
+        return None
+    if len(call.args) >= 2:
+        return call.args[1]
+    for kw in call.keywords:
+        if kw.arg == "default":
+            return kw.value
+    return None
+
+
+def find_env_sourced_destination_violations(tree: ast.Module) -> list[int]:
+    """Line numbers of MODULE-LEVEL assignments sourced from an env-read with a URL-shaped default.
+
+    Matches both a bare ``X = os.environ.get(...)`` and one nested inside a
+    constructor kwarg, e.g. ``X = SomeClass(field=os.environ.get(...))``.
+    Deliberately module-scope only — a function-local env read cannot become
+    an import-time credential-redirection knob the way a module attribute can.
+    """
+    violations: list[int] = []
+    for stmt in tree.body:  # top-level only -- module scope, not function-local
+        if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
+            continue
+        for call in iter_call_expressions(stmt.value):
+            default = _env_read_default(call)
+            if default is not None and isinstance(default, ast.Constant) and _is_url_shaped(default.value):
+                violations.append(call.lineno)
+    return sorted(violations)
+
+
+# Two sanctioned exemptions, each excluded by FILE (not a growable per-symbol
+# allowlist) with its own distinct reason -- these are not one undifferentiated
+# escape hatch:
+#
+# * ``src/core/creative_agent_registry.py`` -- ``_connection_agent_url``'s
+#   ``CREATIVE_AGENT_URL`` alias is a deliberate transport-connection swap,
+#   bounded behaviourally by ``tests/unit/test_creative_agent_connection_alias.py``,
+#   not by this structural scan (exactly how the sibling detector above
+#   already documents its own one exemption: "That swap's bounds are graded
+#   behaviourally instead").
+# * ``src/app.py`` -- ``_cors_origins = os.getenv("ALLOWED_ORIGINS", "http://
+#   localhost:8000").split(",")`` configures ``CORSMiddleware.allow_origins``,
+#   an INBOUND allowlist of origins permitted to make cross-origin requests TO
+#   this application. It matches this detector's AST shape (env-read,
+#   URL-shaped default, module-level) but is out of the Destination concept's
+#   scope on the merits: it is neither credential-bearing (a public allowlist,
+#   not a secret-bearing endpoint) nor reached through the egress seam
+#   (``send``/``asend``) at all -- CORS configuration is a different subsystem
+#   than "where a URL this application DIALS comes from" (salesagent-tbrk.6
+#   design correction, found by this atom's own detector run).
+_ENV_SOURCED_DESTINATION_EXEMPT_FILES = frozenset(
+    {
+        "src/core/creative_agent_registry.py",
+        "src/app.py",
+    }
+)
+
+
+def _scan_env_sourced_destinations() -> dict[str, list[int]]:
+    """Map every offending module under src/ to its violation line numbers, minus the one file exemption."""
+    repo = repo_root()
+    violations: dict[str, list[int]] = {}
+    for path in src_python_files(repo):
+        rel = path.relative_to(repo).as_posix()
+        if rel in _ENV_SOURCED_DESTINATION_EXEMPT_FILES:
+            continue
+        lines = find_env_sourced_destination_violations(parse_module(path))
+        if lines:
+            violations[rel] = lines
+    return violations
+
+
+class TestNoEnvSourcedDestination:
+    """No module-level destination constant under src/ is sourced from an env read.
+
+    A URL that must never become silently env-overridable is a typed
+    ``VendorConstant`` (``src/core/security/egress/destination.py``), never a
+    bare string built from ``os.environ.get(...)``/``os.getenv(...)``. The one
+    sanctioned exception (``CREATIVE_AGENT_URL``) is excluded by file, pointing
+    at its own bounding behavioral test — there is no growable allowlist.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_env_sourced_destinations_anywhere(self):
+        offenders = _scan_env_sourced_destinations()
+
+        if offenders:
+            lines = ["Env-sourced URL destination found under src/:", ""]
+            lines.extend(
+                f"  {module}: line(s) {violation_lines}" for module, violation_lines in sorted(offenders.items())
+            )
+            lines += [
+                "",
+                "A URL that must never become silently env-overridable is a typed VendorConstant",
+                "(src/core/security/egress/destination.py), never a bare string built from",
+                "os.environ.get(...)/os.getenv(...). The one sanctioned exception (CREATIVE_AGENT_URL)",
+                "is excluded by file, bounded by tests/unit/test_creative_agent_connection_alias.py —",
+                "there is no growable allowlist.",
+            ]
+            raise AssertionError("\n".join(lines))
+
+
+class TestEnvSourcedDestinationDetector:
+    """The env-sourced-destination detector's own correctness, on synthetic sources."""
+
+    @pytest.mark.arch_guard
+    def test_detector_catches_known_bad(self):
+        """Every env-sourced-destination form is reported."""
+        assert_detector_catches_ast_snippets(
+            find_env_sourced_destination_violations,
+            snippets={
+                "bare os.environ.get with URL default": ('X_URL = os.environ.get("X_URL", "https://vendor.example")\n'),
+                "os.getenv spelling": ('X_URL = os.getenv("X_URL", "https://vendor.example")\n'),
+                "aliased os import, os.environ.get spelling": (
+                    'import os as o\nX_URL = o.environ.get("X_URL", "https://vendor.example")\n'
+                ),
+                "DEFAULT_AGENT-shaped nested-kwarg form": (
+                    "import os\n\n\n"
+                    "DEFAULT_AGENT = CreativeAgent(\n"
+                    '    agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),\n'
+                    '    name="AdCP Standard Creative Agent",\n'
+                    "    enabled=True,\n"
+                    "    priority=1,\n"
+                    ")\n"
+                ),
+            },
+        )
+
+    @pytest.mark.arch_guard
+    @pytest.mark.parametrize(
+        ("label", "source"),
+        [
+            (
+                "non-URL env default",
+                'X = os.environ.get("X", "not-a-url")\n',
+            ),
+            (
+                "URL literal with no env read",
+                'X_URL = "https://vendor.example"\n',
+            ),
+            (
+                "function-local env read",
+                'def f():\n    return os.environ.get("X_URL", "https://vendor.example")\n',
+            ),
+        ],
+    )
+    def test_detector_ignores_non_violations(self, label, source):
+        """A non-URL default, a plain literal, or a function-local read is not a violation."""
+        assert find_env_sourced_destination_violations(ast.parse(source)) == [], f"false positive on {label}"
+
+    @pytest.mark.arch_guard
+    def test_raw_detector_still_catches_the_exempted_shape(self):
+        """The CREATIVE_AGENT_URL exemption is FILE-level, not shape-level.
+
+        A standalone snippet reproducing ``creative_agent_registry.py``'s own
+        ``DEFAULT_AGENT`` line is still flagged by the raw detector function
+        given no knowledge of which file it came from — proving the exemption
+        below suppresses it by FILE, not because this shape is invisible to
+        the detector. A second, DIFFERENT env-sourced-URL bug introduced
+        elsewhere in a NEW module would not get this pass for free.
+        """
+        snippet = (
+            "import os\n\n\n"
+            "DEFAULT_AGENT = CreativeAgent(\n"
+            '    agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),\n'
+            '    name="AdCP Standard Creative Agent",\n'
+            "    enabled=True,\n"
+            "    priority=1,\n"
+            ")\n"
+        )
+        assert find_env_sourced_destination_violations(ast.parse(snippet)) != []
+
+    @pytest.mark.arch_guard
+    def test_exempted_file_is_skipped_by_the_full_scan(self):
+        """``creative_agent_registry.py`` never appears among the full scan's offenders."""
+        offenders = _scan_env_sourced_destinations()
+        assert "src/core/creative_agent_registry.py" not in offenders
+
+    @pytest.mark.arch_guard
+    def test_raw_detector_still_catches_the_cors_shape(self):
+        """The ``app.py`` exemption is FILE-level too, not shape-level.
+
+        A standalone snippet reproducing ``app.py``'s own ``_cors_origins``
+        line is still flagged by the raw detector given no knowledge of which
+        file it came from — the CORS default is out of the Destination
+        concept's scope on the MERITS (an inbound allowlist, not an outbound
+        dial destination), not because its syntactic shape is invisible.
+        """
+        snippet = 'import os\n\n_cors_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")\n'
+        assert find_env_sourced_destination_violations(ast.parse(snippet)) != []
+
+    @pytest.mark.arch_guard
+    def test_cors_exempted_file_is_skipped_by_the_full_scan(self):
+        """``app.py`` never appears among the full scan's offenders."""
+        offenders = _scan_env_sourced_destinations()
+        assert "src/app.py" not in offenders

@@ -257,14 +257,16 @@ def _point_google_token_url_at(origin: LocalOrigin, monkeypatch) -> None:
     """Re-point the Google token endpoint at *origin*.
 
     Monkeypatching the module constant IS the injection point: the service
-    holds Google's endpoint as a plain string, so a test can stand a local
-    origin in for Google without production growing a knob to be configured
-    wrong in a deployment. It is also why the exchange had to leave the Flask
-    view — a literal inside ``gam_callback`` had no seam at all.
+    holds Google's endpoint as a typed ``VendorConstant`` (salesagent-tbrk.6),
+    so a test can stand a local origin in for Google without production
+    growing a knob to be configured wrong in a deployment. It is also why the
+    exchange had to leave the Flask view — a literal inside ``gam_callback``
+    had no seam at all.
     """
+    from src.core.security.egress.destination import VendorConstant
     from src.services import google_oauth_client
 
-    monkeypatch.setattr(google_oauth_client, "GOOGLE_TOKEN_URL", f"{origin.base_url}/token")
+    monkeypatch.setattr(google_oauth_client, "GOOGLE_TOKEN_URL", VendorConstant(url=f"{origin.base_url}/token"))
 
 
 def _exchange_at(origin: LocalOrigin, monkeypatch):
@@ -892,6 +894,22 @@ def test_approximated_base_url_is_injectable():
         "origin. Hoist the host to a module-level APPROXIMATED_BASE_URL."
     )
 
+    # salesagent-tbrk.6: an injectable constant is not enough on its own — the
+    # ticket #1802/F11 shape was exactly this, an os.environ.get(...) default,
+    # which is "injectable" (this assertion passed against it too) yet also an
+    # import-time credential-redirection knob. The constant must be the typed
+    # VendorConstant (src/core/security/egress/destination.py), not a bare
+    # string built from an env read, so the destination-rewrite guard's env-
+    # sourced-destination detector has something to type-check against.
+    from src.core.security.egress.destination import VendorConstant
+
+    assert isinstance(base, VendorConstant), (
+        "APPROXIMATED_BASE_URL must be a VendorConstant (src/core/security/egress/destination.py), "
+        f"not a bare {type(base).__name__} built from os.environ.get(...) — the vendor-constant type "
+        "is what makes an env-sourced redirect of this credentialed endpoint unconstructible."
+    )
+    assert base.url == "https://cloud.approximated.app"
+
 
 def test_google_token_url_is_injectable():
     """The OAuth token exchange must not hardcode Google's host at its call site.
@@ -914,6 +932,18 @@ def test_google_token_url_is_injectable():
         "call site, so it cannot be driven at a local origin. Hoist it to a module-level "
         "GOOGLE_TOKEN_URL in src/services/google_oauth_client.py."
     )
+
+    # salesagent-tbrk.6: same requirement as APPROXIMATED_BASE_URL above — a
+    # non-None module attribute is not enough; it must be the typed
+    # VendorConstant, never a bare string (env-sourced or otherwise), so the
+    # env-sourced-destination guard has a type to check the site is built from.
+    from src.core.security.egress.destination import VendorConstant
+
+    assert isinstance(token_url, VendorConstant), (
+        "GOOGLE_TOKEN_URL must be a VendorConstant (src/core/security/egress/destination.py), "
+        f"not a bare {type(token_url).__name__} — see APPROXIMATED_BASE_URL's identical requirement above."
+    )
+    assert token_url.url == "https://oauth2.googleapis.com/token"
 
 
 # ---------------------------------------------------------------------------
