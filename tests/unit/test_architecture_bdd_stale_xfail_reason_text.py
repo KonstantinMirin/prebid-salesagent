@@ -85,22 +85,21 @@ class TestUC010MainReasonAccuracy:
     ever made forgiving.
     """
 
-    def test_main_reason_names_the_measured_gap_not_the_split_out_one(self) -> None:
-        """T-UC-010-main's own reason must name where it ACTUALLY stops.
+    def test_main_itself_is_no_longer_xfailed(self) -> None:
+        """The split's whole point: T-UC-010-main's other asserts must EXECUTE.
 
-        It stops at media_buy.portfolio.primary_channels (a harness write-through
-        gap, #1871), not at reporting_delivery_methods -- which is the claim the
-        pre-#1721 reason made, and which was never true: the scenario never
-        reached that assert. A reason naming a later assert than the real one
-        hides the real one.
+        Two separate causes kept this scenario from running, and both are fixed:
+        its one spec-blocked assert moved to @T-UC-010-main-reporting-delivery
+        (#1291), and its primary_channels failure turned out to be a malformed
+        Given -- the feature quoted the channel list as ONE string, so the
+        harness received a single bogus channel name and production fell back to
+        [display]. Re-routing this tag to xfail would mask the account.*,
+        supported_pricing_models, features, geo and portfolio asserts all over
+        again, which is the condition #1721 existed to end.
         """
-        reason = _xfail_tags_reasons()["T-UC-010-main"]
-        assert "primary_channels" in reason, (
-            f"T-UC-010-main's reason must name primary_channels as the measured gap. Got: {reason!r}"
-        )
-        assert "reporting_delivery_methods" not in reason, (
-            "T-UC-010-main's reason still claims reporting_delivery_methods, which the scenario "
-            f"never reaches -- that assert now lives in its own scenario. Got: {reason!r}"
+        assert "T-UC-010-main" not in _xfail_tags_reasons(), (
+            "T-UC-010-main is xfail-routed again — its account.*, supported_pricing_models, "
+            "features, geo and portfolio asserts are masked once more."
         )
 
     def test_reason_names_reporting_delivery_methods_as_the_live_gap(self) -> None:

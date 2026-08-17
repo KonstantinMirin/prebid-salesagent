@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, NoReturn, Protocol, TypedDict, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, NoReturn, Protocol
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 if TYPE_CHECKING:
     from adcp import AgentConfig
@@ -95,6 +98,8 @@ from src.adapters.triton_digital import TritonDigital
 from src.core.exceptions import RecoveryHint
 from src.core.schemas import Principal
 
+logger = logging.getLogger(__name__)
+
 
 def _resolve_tenant_id_and_fallback_adapter(tenant: DBTenant | IdentityTenant) -> tuple[str, str]:
     """Extract tenant_id and the tenant.ad_server fallback adapter type.
@@ -159,22 +164,30 @@ def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
     return selected_adapter or "mock"
 
 
-class MockTestBehavior(TypedDict, total=False):
-    """The mock adapter's fault-injection config, as its two consumers read it.
+class MockTestBehavior(BaseModel):  # type: ignore[explicit-any]  # BaseModel is Any-typed upstream; this module bans explicit Any
+    """The mock adapter's fault-injection config, VALIDATED at the read.
 
-    Shape taken from the consumers below (:214-222 and :240-247) rather than left as a
-    bare ``dict``, so the keys are checked at their use sites. ``recovery`` reuses
-    ``RecoveryHint`` from src/core/exceptions.py -- which is what makes
-    ``AdCPAdapterError(recovery=behavior.get("recovery", "transient"))`` an actually
-    verified argument instead of an unchecked string. ``total=False``: every key is
-    optional, matching the FormatParameters precedent in this package
-    (src/core/helpers/creative_helpers.py:27).
+    A model rather than a TypedDict because the value comes out of a JSON column:
+    a TypedDict describes a shape but checks nothing, so the reader had to
+    ``cast()`` arbitrary tenant-supplied JSON into it and every consumer trusted
+    a type nobody verified. ``recovery`` is the sharp edge -- it is handed
+    straight to ``AdCPAdapterError(recovery=...)``, so a typo in the column
+    would otherwise put an invalid recovery value on a buyer's wire.
+
+    ``extra="ignore"``: this column is written by test tooling and by hand, and
+    an unknown key must not fail a production read.
+
+    Every field is optional and defaults to "not configured", so an absent or
+    empty column behaves exactly as before.
     """
 
-    unavailable: bool
-    error_message: str
-    recovery: RecoveryHint
-    targeting_capabilities: dict[str, bool]
+    model_config = ConfigDict(extra="ignore")
+
+    unavailable: bool = False
+    error_message: str | None = None
+    recovery: RecoveryHint = "transient"
+    targeting_capabilities: dict[str, bool] | None = None
+    default_channels: list[str] | None = None
 
 
 def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> MockTestBehavior:
@@ -189,10 +202,12 @@ def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> MockTestBehav
     described a per-call ``get_db_session()`` here as the sanctioned seam;
     that was itself the D2 loophole, not the fix for it). Gated on
     ``adapter_type == "mock"`` so the fault-injection channel never leaks onto
-    real ad-server adapters. Returns ``{}`` when not applicable/configured.
+    real ad-server adapters. Returns an all-defaults ``MockTestBehavior`` when not
+    applicable/configured, so every consumer reads the same "nothing configured"
+    shape instead of branching on an empty mapping.
     """
     if adapter_type != "mock":
-        return {}
+        return MockTestBehavior()
 
     from src.core.database.repositories.adapter_config import read_adapter_config
 
@@ -200,8 +215,44 @@ def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> MockTestBehav
     if row and isinstance(row.config_json, dict):
         behavior = row.config_json.get("test_behavior", {})
         if isinstance(behavior, dict):
-            return cast(MockTestBehavior, behavior)
-    return {}
+            # Invalid values are ignored rather than raised: this is a
+            # fault-injection channel, and a malformed column must degrade to
+            # "not configured" instead of failing a real buyer's request.
+            try:
+                return MockTestBehavior.model_validate(behavior)
+            except ValidationError:
+                logger.warning("Ignoring malformed adapter test_behavior for tenant %s", tenant_id)
+    return MockTestBehavior()
+
+
+@dataclass(frozen=True)
+class AdapterContext:
+    """Who the tenant is and which adapter answers for it — resolved once.
+
+    Every adapter-facing helper needs the same three facts, and each used to
+    re-derive them inline. That is not merely repetitive: the steps must agree,
+    because ``adapter_type`` selects the class while ``tenant_id`` selects the
+    config row, and two helpers resolving differently would read one tenant's
+    column while acting as another's adapter.
+    """
+
+    tenant: DBTenant | IdentityTenant
+    adapter_type: str
+    tenant_id: str
+
+
+def resolve_adapter_context(tenant: TenantLike = None) -> AdapterContext:
+    """The ONE resolve every adapter helper starts from (#1721 Lane B, step 4.1)."""
+    resolved_tenant = _resolved_tenant(tenant)
+    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
+    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
+    return AdapterContext(tenant=resolved_tenant, adapter_type=adapter_type, tenant_id=tenant_id)
+
+
+def _test_behavior_for(tenant: TenantLike) -> MockTestBehavior:
+    """Resolve *tenant* -> its adapter type -> its fault-injection config."""
+    ctx = resolve_adapter_context(tenant)
+    return _read_mock_test_behavior(ctx.tenant_id, ctx.adapter_type)
 
 
 def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdapter]:
@@ -226,17 +277,16 @@ def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdap
     """
     from src.adapters import get_adapter_class
 
-    resolved_tenant = _resolved_tenant(tenant)
-    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
+    ctx = resolve_adapter_context(tenant)
+    adapter_type = ctx.adapter_type
 
-    test_behavior = _read_mock_test_behavior(tenant_id, adapter_type)
-    if test_behavior.get("unavailable"):
+    test_behavior = _read_mock_test_behavior(ctx.tenant_id, adapter_type)
+    if test_behavior.unavailable:
         from src.core.exceptions import AdCPAdapterError
 
         raise AdCPAdapterError(
-            test_behavior.get("error_message", "Adapter unavailable (test fault injection)"),
-            recovery=test_behavior.get("recovery", "transient"),
+            test_behavior.error_message or "Adapter unavailable (test fault injection)",
+            recovery=test_behavior.recovery,
             suggestion="Retry the operation or contact ad server support",
         )
 
@@ -252,18 +302,31 @@ def get_targeting_capabilities_override(tenant: TenantLike = None) -> TargetingC
     under ``test_architecture_repository_pattern.py``'s empty
     ``IMPL_SESSION_ALLOWLIST`` because the session lives in this file, not theirs.
     """
-    resolved_tenant = _resolved_tenant(tenant)
-    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
-
-    test_behavior = _read_mock_test_behavior(tenant_id, adapter_type)
-    override = test_behavior.get("targeting_capabilities")
-    if not isinstance(override, dict):
+    override = _test_behavior_for(tenant).targeting_capabilities
+    if not override:
         return None
 
     from src.adapters.base import TargetingCapabilities as _TargetingCapabilities
 
     return _TargetingCapabilities(**override)
+
+
+def get_adapter_channels_override(tenant: TenantLike = None) -> list[str] | None:
+    """Return the per-tenant mock-adapter channel override, if any.
+
+    Same ``test_behavior`` seam as :func:`get_targeting_capabilities_override`,
+    and it exists for the same reason: which channels a seller offers is a
+    per-tenant fact, but the adapter exposes it as a CLASS attribute
+    (``AdServerAdapter.default_channels``), so without an override the answer is
+    fixed per adapter type and cannot be configured for a tenant at all.
+
+    That gap is only visible over a real transport. In-process a test can patch
+    the adapter class; over HTTP the server resolves its own, so a scenario
+    configuring channels silently graded the adapter's defaults instead (#1871).
+
+    Returns None when nothing is configured, which means "use the class default".
+    """
+    return _test_behavior_for(tenant).default_channels or None
 
 
 #: Resolved adapter type -> the AdapterConfig column backing its manual-approval
@@ -297,13 +360,12 @@ def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool
     if tenant and tenant.get("human_review_required"):
         return True
 
-    resolved_tenant = _resolved_tenant(tenant)
-    adapter_type = resolve_tenant_adapter_type(resolved_tenant)
-    column = _MANUAL_APPROVAL_COLUMNS.get(adapter_type)
+    ctx = resolve_adapter_context(tenant)
+    column = _MANUAL_APPROVAL_COLUMNS.get(ctx.adapter_type)
     if not column:
         return False
 
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
+    tenant_id = ctx.tenant_id
 
     from src.core.database.repositories.adapter_config import read_adapter_config
 
@@ -325,13 +387,9 @@ def get_adapter(
         testing_context: Optional test context for simulations
         tenant: Tenant context (from identity.tenant). Falls back to ContextVar if not provided.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-    resolved_tenant = _resolved_tenant(tenant)
-    selected_adapter = resolve_tenant_adapter_type(resolved_tenant)
-    tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
+    ctx = resolve_adapter_context(tenant)
+    selected_adapter = ctx.adapter_type
+    tenant_id = ctx.tenant_id
 
     # Get adapter config via repository
     from src.core.database.repositories.adapter_config import AdapterConfigRepository, read_adapter_config

@@ -210,8 +210,7 @@ class TransportResult:
         error = self.wire_error_object() or {}
         details = error.get("details")
         assert isinstance(details, dict), (
-            f"expected a details object at errors[0].details for {code}, got {details!r}: "
-            f"{self.wire_error_envelope}"
+            f"expected a details object at errors[0].details for {code}, got {details!r}: {self.wire_error_envelope}"
         )
         return details
 

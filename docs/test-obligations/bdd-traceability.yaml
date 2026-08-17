@@ -4240,6 +4240,12 @@ mappings:
       upstream_refs: ["BR-RULE-037"]
       business_rules: ["BR-RULE-037"]
       status: new
+    - adcp_scenario_id: "T-UC-006-local-post-commit-ai-review-ordering"
+      adcp_feature: "local-uc006-post-commit-effect-ordering.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
     - adcp_scenario_id: "T-UC-006-rule-037-inv5"
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null

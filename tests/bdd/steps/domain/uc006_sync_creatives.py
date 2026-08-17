@@ -34,6 +34,7 @@ from tests.factories.creative_asset import (
     url_spec,
 )
 from tests.factories.principal import PrincipalFactory
+from tests.harness.creative_sync import creative_fingerprint
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -3312,6 +3313,33 @@ def then_no_ai_review_submitted(ctx: dict) -> None:
     )
 
 
+@then("each AI review submission observes the creative exactly as the sync committed it")
+def then_ai_review_observes_committed_creative(ctx: dict) -> None:
+    """The live-arm half of the seam: the effect runs AFTER its transaction commits.
+
+    The submitted job opens its own session, so committed state is the only
+    state it can read. CreativeSyncEnv records, at each submit, what an
+    INDEPENDENT connection sees; this compares that against what the finished
+    request actually left on the row. They are the same read of the same row, so
+    equality is the whole invariant, and each arm fails it differently while the
+    submit stays inside the transaction: the create arm's row is not there at all
+    (``None``), the update arm's is there carrying its PRE-update state.
+    """
+    _assert_success_response(ctx)
+    observed = ctx["env"].ai_review_commit_observations
+    expected_ids = [c["creative_id"] for c in ctx["creatives"]]
+    committed = _persisted_creative_fingerprints(ctx)
+
+    assert sorted(observed) == sorted(expected_ids), (
+        f"expected an AI-review observation for each of {expected_ids}, got {sorted(observed)}"
+    )
+    assert observed == {creative_id: committed.get(creative_id) for creative_id in expected_ids}, (
+        f"the AI review was handed creatives the sync had not committed: observed {observed}, "
+        f"committed {committed} — the job opens its own session, so it would have read exactly "
+        "what is observed here (None = no row yet; a differing fingerprint = pre-update state)"
+    )
+
+
 def _creative_agent_calls(ctx: dict) -> list[str]:
     """Outbound creative-agent calls the sync made, as method names.
 
@@ -3384,7 +3412,7 @@ def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
     with CreativeUoW(ctx["tenant"].tenant_id) as uow:
         assert uow.creatives is not None
         return {
-            c.creative_id: (c.status, repr(c.data))
+            c.creative_id: creative_fingerprint(c)
             for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
         }
 

@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from a2a.server.request_handlers.response_helpers import agent_card_to_dict
@@ -23,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.lifespan import combine_lifespans
+from starlette.responses import Response
 from starlette.routing import Route
 
 from src.a2a_server.adcp_a2a_server import (
@@ -295,7 +297,9 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-def _restore_a2a_wire_integers(endpoint):
+def _restore_a2a_wire_integers(
+    endpoint: Callable[[Request], Awaitable[Response]],
+) -> Callable[[Request], Awaitable[Response]]:
     """Wrap an a2a-sdk JSON-RPC endpoint to fix up integer fields on the response.
 
     The a2a-sdk builds the response body via
@@ -310,7 +314,7 @@ def _restore_a2a_wire_integers(endpoint):
     field list's spec citations.
     """
 
-    async def _wrapped(request):
+    async def _wrapped(request: Request) -> Response:
         response = await endpoint(request)
         if isinstance(response, JSONResponse) and response.body:
             fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))

@@ -238,6 +238,13 @@ class CapabilityDeclarations(BaseModel):
         The emitted wire for an undeclared tenant is unchanged (pre-#1592
         behavior), which is what every tenant that never declared anything must
         keep seeing.
+
+        READ SIDE ONLY. Nothing here writes ``capability_declarations`` — the
+        column is populated out of band (fixtures, operator SQL), which is why
+        the undeclared-tenant path is the one every scenario actually exercises
+        and why "operator declares X, then a buyer sees X" cannot be graded end
+        to end today. The write seam is #1856; when it lands, the round trip
+        becomes gradeable and the defaults above stop being the only covered arm.
         """
         from src.core.exceptions import AdCPConfigurationError
 
@@ -361,6 +368,20 @@ class CapabilityDeclarations(BaseModel):
         ids = sorted(
             feature_id
             for block, feature_id in _EXPERIMENTAL_FEATURE_BY_BLOCK.items()
-            if getattr(self, block, None) is not None
+            if getattr(self, block) is not None
         )
         return [ExperimentalFeature(root=i) for i in ids] or None
+
+
+# Every key in the table must name a real declarable block. With the previous
+# `getattr(self, block, None)` a key that no longer matched a field simply read as
+# "not declared", so renaming a block would silently stop emitting its experimental
+# feature id -- a wire regression with nothing to fail. Checked at import so the
+# mismatch is a startup error, not a quietly shorter list on a buyer's response.
+_UNKNOWN_BLOCKS = sorted(set(_EXPERIMENTAL_FEATURE_BY_BLOCK) - set(CapabilityDeclarations.model_fields))
+if _UNKNOWN_BLOCKS:
+    raise RuntimeError(
+        f"_EXPERIMENTAL_FEATURE_BY_BLOCK names blocks that are not fields of "
+        f"CapabilityDeclarations: {_UNKNOWN_BLOCKS}. Their experimental feature ids would "
+        f"never be emitted."
+    )

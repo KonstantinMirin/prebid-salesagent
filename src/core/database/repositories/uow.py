@@ -37,6 +37,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
+from src.core.database.repositories.effects import begin_effects, drain_after_commit, end_effects
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
@@ -66,10 +67,15 @@ class BaseUoW:
     which is the class of bug a shadow preview state machine reintroduces
     every time it drifts from the real one.
 
-    It disposes of the TRANSACTION only. An effect that escapes this session --
-    outbound HTTP, a background job that opens its own UoW, a write through a
-    different UoW -- is NOT undone by the rollback and must be gated at its own
-    call site by the caller.
+    Rolling back disposes of the TRANSACTION only -- an outbound HTTP call, a
+    job handed to a background executor, or a write through a different unit of
+    work is not undone by it. Those effects are therefore routed through this
+    same boundary rather than gated at their call sites (see
+    ``repositories/effects.py``): register a deferrable one with
+    ``repo.after_commit(fn)`` and it runs only if this transaction commits;
+    wrap an effect whose RESULT you need with ``repo.outbound(call)`` and it is
+    suppressed for a preview. A call site inside the transaction should never
+    need to ask whether it is a preview.
 
     Args:
         tenant_id: Tenant scope for all repository queries.
@@ -104,6 +110,7 @@ class BaseUoW:
     def __enter__(self) -> Self:
         self._session_cm = get_db_session()
         self._session = self._session_cm.__enter__()
+        begin_effects(self._session, preview=self._dry_run)
         self._init_repos()
         return self
 
@@ -115,15 +122,18 @@ class BaseUoW:
     ) -> None:
         assert self._session is not None
         assert self._session_cm is not None
+        session = self._session
+        committed = False
         try:
             if exc_type is None:
                 # dry_run is a preview: discard the identical write path's work
                 # rather than skipping it, so the results the caller already
                 # built describe exactly what a live run would have persisted.
                 if self._dry_run:
-                    self._session.rollback()
+                    session.rollback()
                 else:
-                    self._session.commit()
+                    session.commit()
+                    committed = True
         finally:
             # Always close the session CM and clear references, even if
             # commit() raises.  Without this, the get_db_session() generator
@@ -131,6 +141,18 @@ class BaseUoW:
             self._session_cm.__exit__(exc_type, exc_val, exc_tb)
             self._session = None
             self._clear_repos()
+
+        # Deferred effects run HERE -- after the session is closed, outside the
+        # finally. Every one of them opens its own unit of work, and the session
+        # is scoped: draining while this one was still open would let an inner
+        # unit close and de-register the session out from under this exit.
+        # Only a commit releases them; a rollback (preview or exception) drops
+        # the queue, which is what lets their call sites stop asking about dry_run.
+        try:
+            if committed:
+                drain_after_commit(session)
+        finally:
+            end_effects(session)
 
     def _init_repos(self) -> None:
         raise NotImplementedError

@@ -57,6 +57,20 @@ from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
 
 
+def creative_fingerprint(creative: Any) -> tuple[str, str]:
+    """The per-row state comparison every creative-effect oracle uses.
+
+    ONE definition, because two callers compare the same thing for two different
+    reasons: the dry_run oracle compares the tenant's library before and after a
+    preview, and the post-commit oracle compares what an escaping effect could
+    SEE against what the sync actually committed. ``status`` alone is too weak
+    for either -- the update arm re-writes ``data`` while leaving ``status`` at
+    ``pending_review``, so a status-only fingerprint reads a stale row and a
+    freshly-updated one as identical.
+    """
+    return (creative.status, repr(creative.data))
+
+
 class CreativeSyncEnv(IntegrationEnv):
     """Integration test environment for _sync_creatives_impl.
 
@@ -88,6 +102,12 @@ class CreativeSyncEnv(IntegrationEnv):
     DEFAULT_AGENT_URL = "https://creative.test.example.com"
     REST_ENDPOINT = "/api/v1/creatives/sync"
 
+    #: {creative_id: fingerprint-or-None} as seen by an INDEPENDENT connection at
+    #: the instant the sync handed that creative to the AI-review executor. The
+    #: job the sync submits opens its own session, so this is exactly what that
+    #: job would read -- and ``None`` means it would find no row at all.
+    ai_review_commit_observations: dict[str, tuple[str, str] | None]
+
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
         # Registry: return a mock that supports list_all_formats() + get_format()
@@ -111,15 +131,55 @@ class CreativeSyncEnv(IntegrationEnv):
         # Audit log: no-op
         self.mock["audit_log"].return_value = None
 
-        # AI review executor: accept the submit and hand back an inert future.
+        # AI review executor: accept the submit, RECORD what a separate database
+        # connection can see at that instant, and hand back an inert future.
         # _processing.py stores the returned future in _ai_review_tasks; nothing
         # in the sync path reads it back.
-        self.mock["ai_review_executor"].submit.return_value = MagicMock()
+        self.ai_review_commit_observations = {}
+        self.mock["ai_review_executor"].submit.side_effect = self._observe_at_ai_review_submit
 
         # Config: default with no gemini key (safe for static creatives)
         mock_config = MagicMock()
         mock_config.gemini_api_key = None
         self.mock["config"].return_value = mock_config
+
+    def _observe_at_ai_review_submit(self, *args: Any, **kwargs: Any) -> MagicMock:
+        """Stand in for ``_ai_review_executor.submit`` and record DB visibility.
+
+        The submitted job opens its OWN session (``AdminCreativeUoW`` in
+        src/admin/blueprints/creatives.py), so the only state it can ever read is
+        COMMITTED state. Reading that here, from a connection the sync's
+        transaction does not own, is what turns "the effect was deferred until
+        its transaction committed" into an observable rather than an inference:
+        a flush leaves the row invisible to this read, a commit does not.
+        """
+        self.ai_review_commit_observations[kwargs["creative_id"]] = self._committed_creative_fingerprint(
+            creative_id=kwargs["creative_id"],
+            tenant_id=kwargs["tenant_id"],
+            principal_id=kwargs["principal_name"],
+        )
+        return MagicMock()
+
+    @staticmethod
+    def _committed_creative_fingerprint(
+        *, creative_id: str, tenant_id: str, principal_id: str
+    ) -> tuple[str, str] | None:
+        """The creative as a SEPARATE connection sees it, or None if not committed.
+
+        Deliberately not ``get_db_session()``: that returns the thread's SCOPED
+        session, which inside a request IS the transaction under test -- it would
+        see the caller's own uncommitted writes and grade nothing. Binding a new
+        Session to the engine takes a second pooled connection, which is the same
+        isolation the background job gets.
+        """
+        from sqlalchemy.orm import Session as SQLAlchemySession
+
+        from src.core.database.database_session import get_engine
+        from src.core.database.repositories.creative import CreativeRepository
+
+        with SQLAlchemySession(bind=get_engine()) as independent_session:
+            row = CreativeRepository(independent_session, tenant_id).get_by_id(creative_id, principal_id)
+            return None if row is None else creative_fingerprint(row)
 
     @realize_e2e(
         e2e_unsupported(

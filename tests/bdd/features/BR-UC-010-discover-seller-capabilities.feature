@@ -84,7 +84,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s15 @post-s18 @partition @boundary
   Scenario: not_provided — Not provided (no protocol filter), discover complete capabilities
     Given a tenant is resolvable from the request context
-    And the tenant has an adapter with channels "display, social, ctv"
+    And the tenant has an adapter with channels "display", "social", "ctv"
     And the tenant has registered publisher partnerships with domains "news.com", "sports.com"
     And the adapter provides targeting capabilities including geo
     And the tenant billing policy is configured as operator, agent
@@ -118,7 +118,11 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # reporting/targeting-geo pinned to exact values or spec-grounded shape. Exact
     # supported_pricing_models / reporting_delivery_methods SETS and per-flag feature VALUES are
     # config-derived (spec-silent on value) — the enum/shape is graded; the set is a production
-    # config surface (#1592, reported not improvised).
+    # config surface, reported not improvised.
+    # Graduated (#1721): this scenario carried no xfail once the channels Given got its
+    # AdapterConfig.test_behavior write-through (get_adapter_channels_override) and the
+    # channel list in the Given was quoted per-value instead of as one string. Its one
+    # spec-blocked assert lives on in @T-UC-010-main-reporting-delivery (#1291).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/adcp/properties/idempotency/oneOf
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/media-buy-features.json pointer=/properties

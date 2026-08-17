@@ -46,6 +46,7 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _TESTS_ROOT = _STEPS_DIR.parent.parent
 
+
 def _derive_wire_references() -> frozenset[str]:
     """The sanctioned wire primitives, DERIVED from the modules that define them.
 
@@ -66,11 +67,7 @@ def _derive_wire_references() -> frozenset[str]:
     # wide in the opposite direction.
     names = {name for name in dir(TransportResult) if "wire_error" in name}
     names.add("assert_wire_error")
-    names |= {
-        name
-        for name in vars(then_error)
-        if name.startswith("_wire_") and callable(getattr(then_error, name))
-    }
+    names |= {name for name in vars(then_error) if name.startswith("_wire_") and callable(getattr(then_error, name))}
     return frozenset(names)
 
 

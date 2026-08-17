@@ -19,6 +19,7 @@ from adcp.types.generated_poc.core.postal_area_support import (
 )
 from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.pricing_model import PricingModel
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     # Aliased: three distinct types in src/ are named Account -- the ORM row
     # (imported as DBAccount in accounts.py), the domain schema
@@ -54,7 +55,11 @@ from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPConfigurationError, normalize_advisory_errors
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
-from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant, get_targeting_capabilities_override
+from src.core.helpers.adapter_helpers import (
+    get_adapter_channels_override,
+    get_adapter_class_for_tenant,
+    get_targeting_capabilities_override,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.capability_declarations import (
     DEFAULT_SPECIALISMS,
@@ -102,6 +107,12 @@ _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
 # the declaration) to check specialism roll-up.
 _DEFAULT_SUPPORTED_PROTOCOLS = DEFAULT_SUPPORTED_PROTOCOLS
 _DEFAULT_SPECIALISMS = DEFAULT_SPECIALISMS
+
+#: Response sections that belong to ONE protocol domain, so `protocols` filters them.
+#: Derived from the request enum the buyer selects with, not hand-listed, so a domain
+#: the spec adds cannot silently keep surviving a filter that never heard of it.
+#: Pinned against the response model by test_architecture_capability_constant_parity.
+_PROTOCOL_DOMAIN_SECTIONS: frozenset[str] = frozenset(p.value for p in RequestProtocol)
 
 
 def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> None:
@@ -383,10 +394,15 @@ def _get_adcp_capabilities_impl(
     )
 
     def _map_adapter_channels() -> None:
-        if adapter and hasattr(adapter, "default_channels"):
-            for channel_name in adapter.default_channels:
-                if channel_name.lower() in CHANNEL_MAPPING:
-                    primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
+        # A per-tenant override wins over the adapter class's default, so a
+        # seller's configured channel set is honoured over a real transport and
+        # not just where the adapter object can be patched (#1871).
+        declared = get_adapter_channels_override(tenant)
+        if declared is None and adapter and hasattr(adapter, "default_channels"):
+            declared = adapter.default_channels
+        for channel_name in declared or []:
+            if channel_name.lower() in CHANNEL_MAPPING:
+                primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
 
     _resolve_or_degrade(advisories, "adapter channels", _map_adapter_channels, default=None)
 
@@ -595,11 +611,17 @@ def _get_adcp_capabilities_impl(
     # Filter protocol-domain sections to the requested protocols. adcp/
     # supported_protocols/account are protocol-invariant (describe the seller
     # as a whole, not a specific protocol domain) and always survive.
+    #
+    # The section names come from the request's own Protocol enum, not a literal
+    # tuple: the two are the same five names today, and a hand-copied list would
+    # silently stop filtering a domain the spec later adds — the response would
+    # then carry a section the buyer did not ask for. model_copy rather than
+    # setattr so the filtered response is built, not mutated after validation.
     if req and req.protocols:
         requested = {enum_value(p) for p in req.protocols}
-        for field_name in ("media_buy", "signals", "governance", "sponsored_intelligence", "creative"):
-            if field_name not in requested:
-                setattr(response, field_name, None)
+        dropped = {name: None for name in _PROTOCOL_DOMAIN_SECTIONS if name not in requested}
+        if dropped:
+            response = response.model_copy(update=dropped)
 
     return response
 

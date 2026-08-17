@@ -35,7 +35,7 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     # deployment implements, and it requires zero storyboard scenarios.
 
   @T-UC-010-local-unbacked-specialism @v31 @invariant @error-path
-  Scenario: declaring a specialism this deployment does not implement is rejected at config time
+  Scenario: declaring a specialism this deployment does not implement is rejected when capabilities are requested
     Given a tenant is resolvable from the request context
     And the tenant declares specialisms ["creative-generative"] with supported_protocols ["media_buy"]
     When the Buyer Agent calls get_adcp_capabilities
@@ -57,7 +57,7 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     # the specialism IS backed, so only the roll-up check can catch this.
 
   @T-UC-010-local-unbacked-protocol @v31 @invariant @error-path
-  Scenario: declaring a protocol this deployment does not serve is rejected at config time
+  Scenario: declaring a protocol this deployment does not serve is rejected when capabilities are requested
     Given a tenant is resolvable from the request context
     And the tenant declares supported_protocols ["creative"]
     When the Buyer Agent calls get_adcp_capabilities

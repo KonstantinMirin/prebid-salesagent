@@ -167,9 +167,9 @@ class TestSyncCreativesErrorHandling:
         """
         mock_uow, mock_creative_repo = _make_creative_uow()
 
-        # Mock begin_nested for savepoint
-        mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
-        mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
+        # Mock the per-creative savepoint
+        mock_creative_repo.savepoint.return_value.__enter__.return_value = None
+        mock_creative_repo.savepoint.return_value.__exit__.return_value = None
 
         identity = ResolvedIdentity(
             principal_id="test_principal",
@@ -251,9 +251,9 @@ class TestSyncCreativesAsyncScenario:
         """
         mock_uow, mock_creative_repo = _make_creative_uow()
 
-        # Mock begin_nested for savepoint
-        mock_creative_repo.begin_nested.return_value.__enter__.return_value = None
-        mock_creative_repo.begin_nested.return_value.__exit__.return_value = None
+        # Mock the per-creative savepoint
+        mock_creative_repo.savepoint.return_value.__enter__.return_value = None
+        mock_creative_repo.savepoint.return_value.__exit__.return_value = None
 
         identity = ResolvedIdentity(
             principal_id="test_principal",

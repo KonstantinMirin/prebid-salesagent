@@ -9,6 +9,7 @@ beads: salesagent-m44
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -274,9 +275,39 @@ class AccountRepository:
     # Write methods (flush, never commit)
     # ------------------------------------------------------------------
 
+    #: JSON columns whose stored shape is this repository's business, keyed to the
+    #: serializer that produces it.
+    _FIELD_SERIALIZERS = {
+        "notification_configs": "serialize_notification_configs",
+        "governance_agents": "serialize_governance_agents",
+        "billing_entity": "serialize_business_entity",
+    }
+
+    @classmethod
+    def serialize_field(cls, field: str, value: object) -> object:
+        """The stored form of *value* for *field*.
+
+        THE serialization boundary. Callers hand over whatever the buyer sent --
+        a model or a mapping -- and never need to know that these columns are
+        JSONType or what shape they hold; that is a property of how this
+        repository persists them, not of the business logic deciding what to
+        write. Idempotent, so a value that is already in stored form passes
+        through unchanged.
+        """
+        serializer_name = cls._FIELD_SERIALIZERS.get(field)
+        if serializer_name is None:
+            return value
+        from src.core.database.repositories import account_serialization
+
+        return getattr(account_serialization, serializer_name)(value)
+
     @staticmethod
-    def persisted_value(account: Account, field: str) -> object:
+    def persisted_value(account: Account | None, field: str) -> object:
         """The persisted value of *field*, serialized for comparison with a resolved one.
+
+        ``None`` account means nothing is persisted yet (the create path), which
+        answers ``None`` rather than making every caller guard -- the resolvers
+        ask this question with an optional row in hand.
 
         Serialization is a REPOSITORY concern: these columns are JSONType, and how
         a stored model round-trips to its JSON shape is a property of how this
@@ -291,6 +322,8 @@ class AccountRepository:
             serialize_notification_configs,
         )
 
+        if account is None:
+            return None
         current = getattr(account, field, None)
         if field == "notification_configs":
             return serialize_notification_configs(current)
@@ -321,7 +354,7 @@ class AccountRepository:
         brand_id: str | None,
         operator: str,
         principal_id: str | None,
-        created_fields: dict[str, object],
+        created_fields: Mapping[str, object],
     ) -> Account:
         """Build the Account row a provisioning entry would create.
 
@@ -347,8 +380,9 @@ class AccountRepository:
             principal_id=principal_id,
             # Every settable field comes from the one walk in the caller -- naming
             # them here is what let a field be added to the re-sync arm and
-            # forgotten at create.
-            **created_fields,
+            # forgotten at create. Serialized HERE, so the caller hands over what
+            # the buyer sent and this repository decides its stored shape.
+            **{field: AccountRepository.serialize_field(field, value) for field, value in created_fields.items()},
         )
 
     def create(self, account: Account) -> Account:
@@ -479,7 +513,7 @@ class AccountRepository:
         if account is None:
             return None
         for key, value in kwargs.items():
-            setattr(account, key, value)
+            setattr(account, key, self.serialize_field(key, value))
         self._session.flush()
         return account
 

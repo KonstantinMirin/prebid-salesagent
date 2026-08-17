@@ -199,13 +199,6 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
         (
             "tests/harness/capabilities.py",
-            "set_adapter_channels",
-            "no production test_behavior channel for overriding reported default_channels "
-            "(only 'unavailable' and 'targeting_capabilities' are wired to AdapterConfig "
-            "test_behavior) — #1871",
-        ),
-        (
-            "tests/harness/capabilities.py",
             "break_tenant_config_db",
             "no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP",
         ),

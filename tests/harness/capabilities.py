@@ -126,15 +126,22 @@ class CapabilitiesEnv(IntegrationEnv):
         self._capability_declarations.update(blocks)
         self.configure_tenant_field("capability_declarations", dict(self._capability_declarations))
 
-    @realize_e2e(
-        e2e_unsupported(
-            "no production test_behavior channel for overriding reported default_channels "
-            "(only 'unavailable' and 'targeting_capabilities' are wired to AdapterConfig "
-            "test_behavior) — #1871"
-        )
-    )
+    def _realize_adapter_channels(self, channels: list[str]) -> None:
+        """E2E realization: persist the channel set into test_behavior (#1871)."""
+        from tests.factories.core import set_adapter_test_behavior
+
+        set_adapter_test_behavior(self, self._tenant_id, default_channels=list(channels))
+
+    @realize_e2e(_realize_adapter_channels)
     def set_adapter_channels(self, channels: list[str]) -> None:
-        """Configure the channel names the adapter reports."""
+        """Configure the channel names the adapter reports.
+
+        In-process: overrides the adapter mock directly. E2E: persists the set
+        into AdapterConfig.config_json['test_behavior'], read back by
+        get_adapter_channels_override — the same shape set_targeting_capabilities
+        already uses, so a channels Given grades a real transport instead of
+        silently landing on the adapter class's defaults.
+        """
         self._adapter_mock.default_channels = list(channels)
 
     def _realize_targeting_capabilities(self, **dims: bool) -> None:

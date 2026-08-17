@@ -17,7 +17,7 @@ The non-AST-detectable slice (one invariant computed two ways) stays a review co
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions
 
 # Capability keywords whose value must be derived from an enforced constant, not a literal.
 _DERIVED_CAPABILITY_KEYWORDS = {"replay_ttl_seconds"}
@@ -140,7 +140,11 @@ class TestDerivationOnlyMatcherModelsTheForm:
         assert _declaration_reads_in_builders(src)
 
     def test_derived_builder_passes(self):
-        src = "def _build_account_block(tenant):\n    return tenant.get('account_sandbox', True)\n"
+        # Post-#1721 shape: the posture comes from the policy module, not an
+        # inline tenant read. (The old sample read the column directly, which is
+        # exactly what test_account_posture_derives_from_the_policy_module now
+        # forbids -- a self-test must not model a form the guard rejects.)
+        src = "def _build_account_block(tenant):\n    return resolve_account_sandbox(tenant)\n"
         assert not _declaration_reads_in_builders(src)
 
 
@@ -297,3 +301,81 @@ class TestDeclarationDrivenMatcherModelsTheForm:
     def test_unrelated_field_ignored(self):
         src = "def _get_adcp_capabilities_impl(req):\n    return Response(last_updated=now())\n"
         assert not _fields_never_declaration_driven(src)
+
+
+#: The policy module that owns account posture. Both the capabilities DECLARATION
+#: and the sync_accounts ENFORCEMENT read it, which is what stops the two from
+#: disagreeing about the same seller.
+_ACCOUNT_POLICY_RESOLVERS = ("resolve_supported_billing", "resolve_account_sandbox")
+
+#: Tenant keys that must never be read inline in the account block -- reading one
+#: here IS the divergence, because the gate reads it through the policy module.
+_POLICY_OWNED_TENANT_KEYS = ("account_sandbox", "supported_billing")
+
+
+def _inline_policy_reads_in_account_block(source: str) -> list[str]:
+    """``key@line`` for policy-owned tenant keys read directly inside _build_account_block."""
+    tree = ast.parse(source)
+    out: list[str] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef) or fn.name != "_build_account_block":
+            continue
+        for node in ast.walk(fn):
+            # tenant.get("account_sandbox", ...) or tenant["account_sandbox"]
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "get":
+                for arg in node.args[:1]:
+                    if isinstance(arg, ast.Constant) and arg.value in _POLICY_OWNED_TENANT_KEYS:
+                        out.append(f"{arg.value}@{node.lineno}")
+            elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+                if node.slice.value in _POLICY_OWNED_TENANT_KEYS:
+                    out.append(f"{node.slice.value}@{node.lineno}")
+    return out
+
+
+def test_account_posture_derives_from_the_policy_module():
+    """``_build_account_block`` must resolve posture through billing_policy, not inline.
+
+    The account block CLAIMS a posture that sync_accounts ENFORCES. When each
+    read its own ``tenant.get("account_sandbox", True)``, a seller could advertise
+    sandbox support the provisioning gate refused — and the true-by-default made
+    every unconfigured tenant advertise a capability it never opted into (#1721).
+    Both sides now call ``src/core/billing_policy.py``; this keeps them there.
+    """
+    source = (REPO_ROOT / "src/core/tools/capabilities.py").read_text()
+    inline = _inline_policy_reads_in_account_block(source)
+    assert not inline, (
+        f"_build_account_block reads policy-owned tenant key(s) inline: {inline}. "
+        "Resolve them through src/core/billing_policy.py "
+        f"({', '.join(_ACCOUNT_POLICY_RESOLVERS)}) so the declaration and the "
+        "sync_accounts gate cannot disagree about the same seller."
+    )
+    for resolver in _ACCOUNT_POLICY_RESOLVERS:
+        assert resolver in source, (
+            f"capabilities.py no longer calls {resolver} — the account block would be free to "
+            "re-derive posture on its own, which is the divergence this guard exists to prevent."
+        )
+
+
+class TestAccountPolicyMatcherModelsTheForm:
+    """Self-tests: the matcher flags an inline read and passes a policy-module call."""
+
+    def test_inline_get_is_flagged(self):
+        src = "def _build_account_block(tenant):\n    return tenant.get('account_sandbox', True)\n"
+        assert _inline_policy_reads_in_account_block(src)
+
+    def test_inline_subscript_is_flagged(self):
+        """The same defect wearing different syntax."""
+        src = "def _build_account_block(tenant):\n    return tenant['supported_billing']\n"
+        assert _inline_policy_reads_in_account_block(src)
+
+    def test_policy_module_call_passes(self):
+        src = (
+            "def _build_account_block(tenant):\n"
+            "    return resolve_account_sandbox(tenant), resolve_supported_billing(tenant)\n"
+        )
+        assert _inline_policy_reads_in_account_block(src) == []
+
+    def test_the_same_read_elsewhere_is_not_this_guards_business(self):
+        """Scoped to the account block: the gate reads the column too, legitimately."""
+        src = "def _check_sandbox_capability(tenant):\n    return tenant.get('account_sandbox', False)\n"
+        assert _inline_policy_reads_in_account_block(src) == []

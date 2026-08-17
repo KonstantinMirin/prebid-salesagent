@@ -20,18 +20,23 @@ docker-compose.yml (local dev), and docker-compose.multi-tenant.yml
 (adcp-server AND admin-ui). Parametrized across all four rather than
 guarding only the one that was reported.
 
-Read through `docker compose config` (Docker's own real resolution of
-each file, including env-var interpolation and YAML anchors) rather than
-a hand-parsed YAML load, so this checks what Docker will ACTUALLY run,
-not what the source file happens to say before merging/interpolation.
+Originally read through `docker compose config` so the guard saw what Docker
+ACTUALLY runs after interpolation and anchor merging, not the pre-merge source
+text. That made it unrunnable wherever the docker CLI is absent — which is the
+unit environment itself: on the CI box every one of these errored with
+`FileNotFoundError: 'docker'`, so the guard graded nothing exactly where it was
+meant to run. It now reads the YAML in-process and keeps the original concern as
+an explicit assertion: no healthcheck block may contain an anchor/merge key or
+`${...}` interpolation, so if someone later parameterizes one, this fails loudly
+instead of silently checking text Docker would have rewritten.
 """
 
 from __future__ import annotations
 
-import json
-import subprocess
+import re
 
 import pytest
+import yaml
 
 from tests.unit._architecture_helpers import repo_root
 
@@ -49,15 +54,23 @@ _MUST_HAVE_START_PERIOD = (
 )
 
 
+#: What would make a raw YAML read diverge from `docker compose config`.
+_NEEDS_DOCKER_RESOLUTION = re.compile(r"\$\{|^<<$|^\*")
+
+
 def _resolved_healthcheck(compose_file: str, service: str) -> dict:
-    out = subprocess.run(
-        ["docker", "compose", "-f", compose_file, "config", "--format", "json"],
-        cwd=repo_root(),
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    return json.loads(out)["services"][service].get("healthcheck") or {}
+    doc = yaml.safe_load((repo_root() / compose_file).read_text())
+    hc = doc["services"][service].get("healthcheck") or {}
+    unresolved = [
+        f"{k}: {v!r}"
+        for k, v in hc.items()
+        if _NEEDS_DOCKER_RESOLUTION.search(str(k)) or _NEEDS_DOCKER_RESOLUTION.search(str(v))
+    ]
+    assert not unresolved, (
+        f"{compose_file}:{service}'s healthcheck now needs Docker's own resolution "
+        f"(interpolation or anchor merge) — a raw YAML read no longer sees what Docker runs: {unresolved}"
+    )
+    return hc
 
 
 @pytest.mark.arch_guard

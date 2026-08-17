@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC
-from typing import TYPE_CHECKING, Annotated, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Literal, TypedDict, cast
 
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference as LibraryBrandReference
@@ -43,12 +43,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.account import AccountRepository, NaturalKey, NaturalKeyConflict
-from src.core.database.repositories.account_serialization import (
-    as_json_dict,
-    serialize_business_entity,
-    serialize_governance_agents,
-    serialize_notification_configs,
-)
+from src.core.database.repositories.account_serialization import as_json_dict
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 from src.core.helpers import enum_value
@@ -178,16 +173,16 @@ def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsR
     salesagent-tm97 disease scan; status/sandbox/account were 3 near-identical
     inline list-comprehension filters before this extraction).
     """
-    status_filter = getattr(req, "status", None)
+    status_filter = req.status
     if status_filter is not None:
         status_str = enum_value(status_filter)
         db_accounts = [a for a in db_accounts if a.status == status_str]
 
-    sandbox_filter = getattr(req, "sandbox", None)
+    sandbox_filter = req.sandbox
     if sandbox_filter is not None:
         db_accounts = [a for a in db_accounts if a.sandbox == sandbox_filter]
 
-    account_filter = getattr(req, "account", None)
+    account_filter = req.account
     if account_filter is not None:
         # account_filter is always AccountReference (a RootModel) when present.
         db_accounts = [a for a in db_accounts if _matches_account_ref(a, account_filter.root)]
@@ -445,7 +440,7 @@ def _resolve_notification_configs(
     submitted = getattr(entry, "notification_configs", None)
     if submitted is None:
         return False, persisted
-    return True, serialize_notification_configs(submitted) or []
+    return True, submitted or []
 
 
 def _resolve_scalar(entry: SyncEntry, existing: DBAccount | None, field: str) -> tuple[bool, object]:
@@ -478,11 +473,11 @@ def _resolve_governance_agents(
     """
     submitted = getattr(entry, "governance_agents", None)
     if submitted is None:
-        return False, serialize_governance_agents(getattr(existing, "governance_agents", None))
-    return True, serialize_governance_agents(submitted)
+        return False, getattr(existing, "governance_agents", None)
+    return True, submitted
 
 
-def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, dict[str, object] | None]:
+def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, object]:
     """Omission-preserves resolver for ``billing_entity`` (whole-object replace).
 
     "Permitted in both provisioning and settings-update modes — sellers MAY
@@ -495,10 +490,10 @@ def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tup
 
     submitted = getattr(entry, "billing_entity", None)
     if submitted is None:
-        return False, serialize_business_entity(getattr(existing, "billing_entity", None))
+        return False, getattr(existing, "billing_entity", None)
     if isinstance(submitted, dict):
         submitted = BusinessEntity.model_validate(submitted)
-    return True, serialize_business_entity(submitted)
+    return True, submitted
 
 
 def _resolve_sandbox(entry: SyncEntry, existing: DBAccount | None) -> tuple[bool, bool | None]:
@@ -661,6 +656,34 @@ _PREFERRED_PROTOCOL_CITATION = (
     "(offline_delivery_protocols declared unbacked, #1291). FIXME(#1291): revisit when offline delivery lands."
 )
 
+
+class ResolvedFields(TypedDict, total=False):
+    """The field bag :func:`_resolve_entry_changes` produces, per entry mode.
+
+    ONE walk of :data:`_FIELD_POLICY` feeds all three application sites (create,
+    provisioning re-sync, settings-update), so the bag they share is worth
+    naming: ``dict[str, object]`` told a reader nothing about which keys exist,
+    and every consumer had to ``cast()`` a value back to the type its own
+    resolver had just produced.
+
+    ``total=False`` because a field only appears when its resolver reported a
+    change -- an omitted field produces no key at all, which is what makes
+    "omission is not clearance" expressible.
+
+    Values are what the BUYER SENT, not stored shapes; the repository decides
+    how they persist (``AccountRepository.serialize_field``).
+    """
+
+    billing: str | None
+    payment_terms: str | None
+    rate_card: str | None
+    credit_limit: float | None
+    sandbox: bool | None
+    notification_configs: object
+    governance_agents: object
+    billing_entity: object
+
+
 #: THE record of what every ``sync_accounts`` entry field does, per entry mode.
 #:
 #: This table replaces two hand-maintained allowlists (``_KNOWN_ASYMMETRIC`` and
@@ -687,7 +710,8 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
         provisioning=_APPLIED,
         settings_update=_APPLIED,
         resolve=lambda entry, existing: _resolve_notification_configs(
-            entry, serialize_notification_configs(getattr(existing, "notification_configs", None))
+            entry,
+            cast("list[dict[str, object]] | None", AccountRepository.persisted_value(existing, "notification_configs")),
         ),
     ),
     "billing_entity": _FieldPolicy(
@@ -736,7 +760,7 @@ def _disposition(field: str, mode: EntryMode) -> _Disposition:
     return _FIELD_POLICY[field].for_mode(mode)
 
 
-def _resolve_entry_changes(entry: SyncEntry, existing: DBAccount | None, *, mode: EntryMode) -> dict[str, object]:
+def _resolve_entry_changes(entry: SyncEntry, existing: DBAccount | None, *, mode: EntryMode) -> ResolvedFields:
     """The ONE field-application walk, shared by all three sites.
 
     ``existing=None`` IS the create case — a create is "resolve against nothing",
@@ -755,7 +779,7 @@ def _resolve_entry_changes(entry: SyncEntry, existing: DBAccount | None, *, mode
         changed, value = policy.resolve(entry, existing)
         if changed:
             changes[field] = value
-    return changes
+    return cast("ResolvedFields", changes)
 
 
 def _rejected_field_errors(entry: SyncEntry, *, mode: EntryMode) -> list[GateFailure] | None:
@@ -803,7 +827,7 @@ def _account_fields_changed(db_account: DBAccount, entry: SyncEntry) -> dict[str
     return {
         field: value
         for field, value in changes.items()
-        if AccountRepository.persisted_value(db_account, field) != value
+        if AccountRepository.persisted_value(db_account, field) != AccountRepository.serialize_field(field, value)
     }
 
 
@@ -1286,7 +1310,9 @@ def _process_settings_update_entry(
     # disagree about which fields they apply, because neither names a field.
     resolved = _resolve_entry_changes(entry, existing, mode="settings_update")
     changes = {
-        field: value for field, value in resolved.items() if AccountRepository.persisted_value(existing, field) != value
+        field: value
+        for field, value in resolved.items()
+        if AccountRepository.persisted_value(existing, field) != AccountRepository.serialize_field(field, value)
     }
 
     action = "unchanged"

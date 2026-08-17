@@ -79,3 +79,31 @@ def test_error_code_mapping_targets_are_all_emittable() -> None:
         f"WIRE_STANDARD_CODES: {offenders}. Every translation target must itself be "
         "an emittable standard code."
     )
+
+
+def test_wire_standard_codes_carry_the_pinned_recovery_classification() -> None:
+    """Not just the CODE — the recovery value production emits must be the enum's.
+
+    The module docstring above states the Core Invariant as membership *carrying
+    that enum's recovery classification*, but the two tests above only graded
+    membership. A code could therefore sit in ``WIRE_STANDARD_CODES`` with a
+    recovery the spec does not give it, and every buyer would be told to retry
+    (or not to) against the spec's own classification — which is invisible to a
+    subset check.
+
+    Only codes present in the pinned enum are compared; membership itself is
+    ``test_wire_standard_codes_are_all_canonical``'s job, and duplicating it here
+    would report one defect as two.
+    """
+    pinned = _pinned_error_metadata()
+    drifted = {
+        code: (entry.get("recovery"), pinned[code].get("recovery"))
+        for code, entry in WIRE_STANDARD_CODES.items()
+        if code in pinned and entry.get("recovery") != pinned[code].get("recovery")
+    }
+    assert not drifted, (
+        "WIRE_STANDARD_CODES disagrees with the pinned AdCP error-code enum about "
+        f"recovery (code: (ours, pinned)): {drifted}. The enum is authoritative — "
+        "production must not tell a buyer a spec-terminal error is retryable, or "
+        "vice versa."
+    )

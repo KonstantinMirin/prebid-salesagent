@@ -205,8 +205,10 @@ def _sync_creatives_impl(
                     # Use the first matching policy (tenant-wide enforcement)
                     provenance_warning = check_provenance_required(validated_creative, provenance_policies[0])
 
-                # Use savepoint for individual creative transaction isolation
-                with creative_repo.begin_nested():
+                # Savepoint per creative: isolates this row's writes AND the effects
+                # queued while processing it, so a creative that fails takes its
+                # queued AI-review submit down with it (#1970).
+                with creative_repo.savepoint():
                     # Check if creative already exists (always check for upsert/patch behavior)
                     # SECURITY: Must filter by principal_id to prevent cross-principal modification
                     existing_creative = None
@@ -226,7 +228,6 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
-                            dry_run=dry_run,
                         )
 
                         # Handle failed updates
@@ -287,7 +288,6 @@ def _sync_creatives_impl(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
-                            dry_run=dry_run,
                         )
 
                         # Handle failed creates
@@ -402,8 +402,22 @@ def _sync_creatives_impl(
             uow=uow if dry_run else None,
         )
 
-    # Create workflow steps and send notifications for creatives requiring approval
-    # Skip in dry_run mode — no side effects
+    # Create workflow steps and send notifications for creatives requiring approval.
+    #
+    # The last surviving dry_run gate in this file, and it is load-bearing rather
+    # than left over: both calls run OUTSIDE the transaction above.
+    # _create_sync_workflow_steps opens its own WorkflowUoW, so its rows would
+    # commit independently and the creatives rollback would not reach them —
+    # a preview would leave orphan workflow steps behind. The notification is a
+    # Slack call, which no rollback undoes either, and it must not overtake the
+    # steps it refers to, so it cannot simply move to after_commit (drain runs at
+    # stack.close() above, BEFORE the steps exist).
+    #
+    # The real fix is for the workflow-step write to JOIN this unit of work
+    # (a workflow repository on CreativeUoW), which retires the gate for the same
+    # reason the other eight went away. Tracked as GH #2002 —
+    # until then a preview does not exercise this path, so an error it would raise
+    # (AdCPAuthRequiredError, AdCPAdapterError) surfaces only on the live run.
     if creatives_needing_approval and not dry_run:
         _create_sync_workflow_steps(
             creatives_needing_approval=creatives_needing_approval,

@@ -25,6 +25,7 @@ from src.core.database.models import (
     Principal,
     Product,
 )
+from src.core.database.repositories.effects import SessionEffectsMixin
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class CreativeListResult(NamedTuple):
     total_count: int
 
 
-class CreativeRepository:
+class CreativeRepository(SessionEffectsMixin):
     """Tenant-scoped data access for Creative.
 
     All queries filter by tenant_id automatically. Callers cannot bypass
@@ -242,10 +243,6 @@ class CreativeRepository:
     def flush(self) -> None:
         """Flush pending changes to the database without committing."""
         self._session.flush()
-
-    def begin_nested(self):
-        """Start a savepoint (nested transaction) for partial-success patterns."""
-        return self._session.begin_nested()
 
     def commit(self) -> None:
         """Commit the current transaction."""

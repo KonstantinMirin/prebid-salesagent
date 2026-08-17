@@ -150,3 +150,9 @@ test-results/
 
 # One-off presentation drafts
 docs/TRANSFORMATION_PRESENTATION.md
+
+# cassini run record, rewritten by every test slice — never a repo artifact
+manifest.json
+
+# adcp spec fetch cache (mirrored URL paths); no code reads the local copy
+/schemas/

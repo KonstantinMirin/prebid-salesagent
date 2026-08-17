@@ -154,6 +154,56 @@ def _failed_sync_result(
     )
 
 
+def _defer_ai_review(
+    creative_repo: CreativeRepository,
+    *,
+    creative_id: str,
+    tenant: dict[str, Any],
+    webhook_url: str | None,
+    principal_id: str,
+) -> None:
+    """Hand the creative to the background AI reviewer, AFTER this transaction commits.
+
+    The job opens its OWN AdminCreativeUoW, commits a review verdict, and then
+    sends Slack and the push webhook -- none of it inside this transaction, so a
+    rollback cannot reach any of it. Registering it on the unit of work instead
+    of calling it here means the preview arm needs no gate: a preview rolls back,
+    the queue is discarded, and nothing was submitted.
+
+    It also fixes an ordering bug that had nothing to do with previews. This used
+    to flush and submit inline, but flush() is not commit() and the job reads
+    through its own session -- so on the create arm the row might not exist yet,
+    and on the update arm the job read PRE-update state and committed a verdict
+    over it. Deferring past the commit removes the race by construction.
+
+    Captures scalars only. Holding the ORM row here would hand a detached
+    instance to a thread after this session is gone.
+    """
+    from src.admin.blueprints.creatives import _ai_review_executor, _ai_review_lock, _ai_review_tasks
+
+    def _submit() -> None:
+        from src.admin.blueprints.creatives import _ai_review_creative_async
+
+        task_id = f"ai_review_{creative_id}_{uuid.uuid4().hex[:8]}"
+        future = _ai_review_executor.submit(
+            _ai_review_creative_async,
+            creative_id=creative_id,
+            tenant_id=tenant["tenant_id"],
+            webhook_url=webhook_url,
+            slack_webhook_url=tenant.get("slack_webhook_url"),
+            principal_name=principal_id,
+        )
+        with _ai_review_lock:
+            _ai_review_tasks[task_id] = {
+                "future": future,
+                "creative_id": creative_id,
+                "created_at": time.time(),
+            }
+        logger.info(f"[sync_creatives] Submitted AI review for {creative_id} (task: {task_id})")
+
+    creative_repo.after_commit(_submit, label=f"ai_review:{creative_id}")
+
+
 def _update_existing_creative(
     creative: CreativeAsset,
     existing_creative: Any,
@@ -166,7 +216,6 @@ def _update_existing_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
-    dry_run: bool = False,
 ) -> tuple[SyncCreativeResult, bool]:
     """Update an existing creative with upsert semantics (AdCP 2.5).
 
@@ -237,53 +286,17 @@ def _update_existing_creative(
         elif approval_mode == "ai-powered":
             # Submit to background AI review (async)
 
-            from src.admin.blueprints.creatives import (
-                _ai_review_executor,
-                _ai_review_lock,
-                _ai_review_tasks,
-            )
-
             # Set status to pending_review for AI review
             existing_creative.status = CreativeStatusEnum.pending_review.value
             needs_approval = True
 
-            # OUT-OF-TRANSACTION EFFECT — gated, and only this. status and
-            # needs_approval above stay ungated: they are the preview's response
-            # content, and the workflow write they feed is gated separately.
-            # The submitted job opens its OWN AdminCreativeUoW and COMMITS a
-            # review verdict, then sends Slack and the push webhook. None of that
-            # is inside this transaction, so a preview's rollback cannot undo it:
-            # on this arm it would commit a verdict onto a real pre-existing row.
-            if not dry_run:
-                # Submit background task
-                task_id = f"ai_review_{existing_creative.creative_id}_{uuid.uuid4().hex[:8]}"
-
-                # Need to flush to ensure creative_id is available
-                creative_repo.flush()
-
-                # Import the async function
-                from src.admin.blueprints.creatives import _ai_review_creative_async
-
-                future = _ai_review_executor.submit(
-                    _ai_review_creative_async,
-                    creative_id=existing_creative.creative_id,
-                    tenant_id=tenant["tenant_id"],
-                    webhook_url=webhook_url,
-                    slack_webhook_url=tenant.get("slack_webhook_url"),
-                    principal_name=principal_id,
-                )
-
-                # Track the task
-                with _ai_review_lock:
-                    _ai_review_tasks[task_id] = {
-                        "future": future,
-                        "creative_id": existing_creative.creative_id,
-                        "created_at": time.time(),
-                    }
-
-                logger.info(
-                    f"[sync_creatives] Submitted AI review for {existing_creative.creative_id} (task: {task_id})"
-                )
+            _defer_ai_review(
+                creative_repo,
+                creative_id=existing_creative.creative_id,
+                tenant=tenant,
+                webhook_url=webhook_url,
+                principal_id=principal_id,
+            )
         else:  # require-human
             existing_creative.status = CreativeStatusEnum.pending_review.value
             needs_approval = True
@@ -363,10 +376,8 @@ def _update_existing_creative(
                         # creative agent's endpoint (same rule accounts.py states for
                         # activation proofs). None here is already the no-result case the
                         # consumer below guards for, so no second result path appears.
-                        build_result = (
-                            None
-                            if dry_run
-                            else run_async_in_sync_context(
+                        build_result = creative_repo.outbound(
+                            lambda: run_async_in_sync_context(
                                 registry.build_creative(
                                     agent_url=format_obj.agent_url,
                                     format_id=creative_format,
@@ -477,10 +488,8 @@ def _update_existing_creative(
                     # creative agent's endpoint (same rule accounts.py states for
                     # activation proofs). None here is already the no-result case the
                     # consumer below guards for, so no second result path appears.
-                    preview_result = (
-                        None
-                        if dry_run
-                        else run_async_in_sync_context(
+                    preview_result = creative_repo.outbound(
+                        lambda: run_async_in_sync_context(
                             registry.preview_creative(
                                 agent_url=format_obj.agent_url,
                                 format_id=format_id_str,
@@ -601,7 +610,6 @@ def _create_new_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
-    dry_run: bool = False,
 ) -> tuple[SyncCreativeResult, bool]:
     """Create a new creative and persist it to the database (AdCP 2.5).
 
@@ -690,10 +698,8 @@ def _create_new_creative(
                     # creative agent's endpoint (same rule accounts.py states for
                     # activation proofs). None here is already the no-result case the
                     # consumer below guards for, so no second result path appears.
-                    build_result = (
-                        None
-                        if dry_run
-                        else run_async_in_sync_context(
+                    build_result = creative_repo.outbound(
+                        lambda: run_async_in_sync_context(
                             registry.build_creative(
                                 agent_url=format_obj.agent_url,
                                 format_id=format_id_str,
@@ -782,10 +788,8 @@ def _create_new_creative(
                     # creative agent's endpoint (same rule accounts.py states for
                     # activation proofs). None here is already the no-result case the
                     # consumer below guards for, so no second result path appears.
-                    preview_result = (
-                        None
-                        if dry_run
-                        else run_async_in_sync_context(
+                    preview_result = creative_repo.outbound(
+                        lambda: run_async_in_sync_context(
                             registry.preview_creative(
                                 agent_url=format_obj.agent_url,
                                 format_id=format_id_str,
@@ -832,10 +836,13 @@ def _create_new_creative(
                         f"height={data.get('height')}, "
                         f"variants={len(preview_result.get('previews', []))}"
                     )
-                elif dry_run:
-                    # dry_run SUPPRESSED the call (an outbound request is not
+                elif creative_repo.is_preview:
+                    # The boundary SUPPRESSED the call (an outbound request is not
                     # undoable by the transaction's rollback), so a falsy result
                     # here means "we did not ask", NOT "the agent had none".
+                    # Asked of the TRANSACTION, deliberately: testing
+                    # `preview_result is None` would conflate those two, which is
+                    # the confusion this branch exists to prevent.
                     # Failing the entry would report a fault that does not exist
                     # and would break the pinned dry_run contract: a preview
                     # "returns what would be created/updated/deleted"
@@ -917,48 +924,17 @@ def _create_new_creative(
     elif approval_mode == "ai-powered":
         # Submit to background AI review (async)
 
-        from src.admin.blueprints.creatives import (
-            _ai_review_executor,
-            _ai_review_lock,
-            _ai_review_tasks,
-        )
-
         # Set status to pending_review for AI review
         db_creative.status = CreativeStatusEnum.pending_review.value
         needs_approval = True
 
-        # OUT-OF-TRANSACTION EFFECT — gated, and only this. status and
-        # needs_approval above stay ungated (preview response content). The
-        # submitted job opens its own AdminCreativeUoW and commits, then sends
-        # Slack and the push webhook; on THIS arm it would fire the LLM call and
-        # those notifications for a creative_id the preview's rollback erases.
-        if not dry_run:
-            # Submit background task
-            task_id = f"ai_review_{db_creative.creative_id}_{uuid.uuid4().hex[:8]}"
-
-            # Import the async function
-            from src.admin.blueprints.creatives import _ai_review_creative_async
-
-            future = _ai_review_executor.submit(
-                _ai_review_creative_async,
-                creative_id=db_creative.creative_id,
-                tenant_id=tenant["tenant_id"],
-                webhook_url=webhook_url,
-                slack_webhook_url=tenant.get("slack_webhook_url"),
-                principal_name=principal_id,
-            )
-
-            # Track the task
-            with _ai_review_lock:
-                _ai_review_tasks[task_id] = {
-                    "future": future,
-                    "creative_id": db_creative.creative_id,
-                    "created_at": time.time(),
-                }
-
-            logger.info(
-                f"[sync_creatives] Submitted AI review for new creative {db_creative.creative_id} (task: {task_id})"
-            )
+        _defer_ai_review(
+            creative_repo,
+            creative_id=db_creative.creative_id,
+            tenant=tenant,
+            webhook_url=webhook_url,
+            principal_id=principal_id,
+        )
     else:  # require-human
         db_creative.status = CreativeStatusEnum.pending_review.value
         needs_approval = True

@@ -75,6 +75,7 @@ from src.core.schemas import (
 )
 from tests.factories import PrincipalFactory
 from tests.factories.creative_asset import asset_spec, build_assets, image_spec, text_spec, video_spec
+from tests.harness._mock_uow import wire_effect_boundary
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -138,6 +139,10 @@ def _make_mock_creative_repo(creative_id: str = "c_test_1") -> MagicMock:
     fake_db.creative_id = creative_id
     fake_db.status = "pending_review"
     mock_repo.create.return_value = fake_db
+
+    # ONE definition of what a mocked repo's effect boundary does — a second copy
+    # here would keep answering the old signature after the real one changed.
+    wire_effect_boundary(mock_repo)
     return mock_repo
 
 
@@ -2161,7 +2166,7 @@ class TestGenerativeCreativeBuild:
         """
         from src.core.tools.creatives._processing import _update_existing_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         tenant = {"tenant_id": "t1", "approval_mode": "auto-approve", "slack_webhook_url": None}
         mock_format_obj, mock_config = self._setup_generative_mocks(mock_session)
 
@@ -2721,7 +2726,7 @@ class TestCreativePreviewFailed:
         """
         from src.core.tools.creatives._processing import _create_new_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
         # Creative with no url in assets
         creative = _make_creative_asset(
             creative_id="c_no_preview",
@@ -3861,7 +3866,7 @@ class TestSyncCreativesMainFlowGaps:
         """
         from src.core.tools.creatives._processing import _update_existing_creative
 
-        mock_session = MagicMock()
+        mock_session = _make_mock_creative_repo()
 
         mock_existing = MagicMock()
         mock_existing.creative_id = "c_test_1"

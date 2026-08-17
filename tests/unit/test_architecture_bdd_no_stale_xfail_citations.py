@@ -364,7 +364,7 @@ class TestGuardMechanics:
     def test_active_tags_include_known_xfail_tags_dict_key(self) -> None:
         """A known _XFAIL_TAGS key is recognized as active."""
         active = _active_xfail_tags()
-        assert "T-UC-010-main" in active
+        assert "T-UC-010-v31-webhook-signing-bounds" in active
 
     def test_active_tags_include_known_selective_xfail_tag(self) -> None:
         """A known _SELECTIVE_XFAIL tag is recognized as active."""
@@ -448,7 +448,7 @@ class TestGuardMechanics:
         though its body cites #1592 (the citation is accurate, not stale)."""
         violations = _find_stale_citations()
         flagged_tags = {tag for _rel, _lineno, tags in violations for tag in tags}
-        assert "T-UC-010-main" not in flagged_tags, (
-            "T-UC-010-main is still a live _XFAIL_TAGS entry citing #1592 for a "
-            "genuinely open gap (reporting_delivery_methods) — must not be flagged."
+        assert "T-UC-010-v31-webhook-signing-bounds" not in flagged_tags, (
+            "T-UC-010-v31-webhook-signing-bounds is still a live _XFAIL_TAGS entry citing "
+            "#1592 for a genuinely open gap — must not be flagged."
         )

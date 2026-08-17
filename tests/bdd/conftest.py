@@ -434,10 +434,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # pre-existing and not caused by #1721's changes.
     # The fix is the AdapterConfig.test_behavior write-through — owned by this
     # plan's Lane E step 2, tracked as #1871 — NOT a production defect.
-    "T-UC-010-main": "media_buy.portfolio.primary_channels degrades to the [display] default -- "
-    "set_adapter_channels configures only the in-process adapter mock, with no realize_e2e "
-    "write-through to AdapterConfig.test_behavior the way set_targeting_capabilities has, so the "
-    "real transport auth chain never sees the configured channels — #1871",
     # SPLIT (#1721): the scenario's one SPEC-blocked assert no longer sits here. Its single undeliverable
     # assert -- media_buy.reporting_delivery_methods -- moved to its own scenario,
     # @T-UC-010-main-reporting-delivery, which carries the xfail below. The rest of
