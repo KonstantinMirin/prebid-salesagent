@@ -155,7 +155,20 @@ for f in audit.log error.log structured.jsonl security.jsonl; do
     # 0. Verified A/B (with a directory planted at logs/audit.log to force the
     # failure): &&-list -> "REACHED-END", exit 0; split -> exit 1 at the truncate.
     : > "logs/$f"
-    chmod 664 "logs/$f"
+    # 666, not 664. The point of this block is that the adcp-server container can
+    # WRITE these; 664 only achieves that if the container's user shares the file's
+    # group, and it does not. The server runs as the image's `app` (uid/gid 1001,
+    # no supplementary groups), while these files are owned by whoever ran the
+    # script -- and the bind-mount of this directory onto /app SHADOWS the image's
+    # own `chown -R app:app /app`, so host-side permissions are what decide. Group
+    # never matches, so `app` falls through to the OTHER bits: r-- under 664, and
+    # the server dies on PermissionError while opening audit.log at import time,
+    # taking every per-worker server container unhealthy with it.
+    # The setgid bit set on the directory above does not rescue this either: it
+    # controls the GROUP of new files, not their write bit.
+    # 666 is also consistent with the rest of a run directory, which is already
+    # world-writable; these are ephemeral per-run test logs, not durable state.
+    chmod 666 "logs/$f"
 done
 
 dc up -d postgres adcp-server proxy creative-pg creative-agent
