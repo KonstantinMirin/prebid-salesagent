@@ -24,7 +24,7 @@ already know.
 
 from __future__ import annotations
 
-import ipaddress
+import ipaddress  # noqa: TID251 - the egress package's own address classification; the one sanctioned site (GH #1589)
 import logging
 from urllib.parse import ParseResult, urlparse
 

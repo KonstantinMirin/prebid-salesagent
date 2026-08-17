@@ -68,16 +68,23 @@ _NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*TID251[^\n]*")
 # the set SHRANK from 4 to 2, per this module's own non-vacuity contract
 # (case c/d): removing a noqa without a live violation is required, not
 # merely permitted. It does not grow beyond the two seam definitions.
+#
+# src/core/security/egress/policy.py was ADDED (3 -> the set now carries this
+# third entry) once ``ipaddress`` joined the module bans below: the egress
+# package is the one sanctioned site for address classification (GH #1589),
+# so its own ``import ipaddress`` line-scoped noqa is the live violation case
+# (c) proves. The set grows here by exactly this one entry, not by a fourth.
 # ---------------------------------------------------------------------------
 SEAM_FILES: frozenset[str] = frozenset(
     {
         "src/core/security/outbound_http.py",
         "src/core/utils/mcp_client.py",
+        "src/core/security/egress/policy.py",
     }
 )
 
 # Module-level bans: the bare import fires, so verb enumeration is moot.
-_MODULE_BANS: tuple[str, ...] = ("httpx", "requests", "aiohttp", "urllib.request")
+_MODULE_BANS: tuple[str, ...] = ("httpx", "requests", "aiohttp", "urllib.request", "ipaddress")
 
 # Symbol bans: every resolving import path per symbol. The non-first entries
 # are the bypass re-export spellings a single-path ban would miss
@@ -97,6 +104,9 @@ _SYMBOL_BAN_PATHS: dict[str, tuple[str, ...]] = {
     "ADCPClient": ("adcp", "adcp.client"),
     "ADCPMultiAgentClient": ("adcp", "adcp.client"),
     "get_adcp_signed_headers_for_webhook": ("adcp.webhooks", "adcp"),
+    # Resolve-then-check is a TOCTOU the egress package does not use (adcp.signing
+    # pins the resolved IP in one step) — one path, no bypass re-export exists.
+    "gethostbyname": ("socket",),
 }
 
 

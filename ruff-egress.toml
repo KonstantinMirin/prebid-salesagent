@@ -46,3 +46,10 @@ select = ["TID251"]
 # divergence bug (GH #1802 / salesagent-47n9.1) ---
 "adcp.webhooks.get_adcp_signed_headers_for_webhook".msg = "Discards the signed body bytes -- its own docstring example re-sends json=payload separately, reintroducing the signed-bytes-vs-wire-bytes divergence bug (GH #1802). Sign and send via src/core/security/outbound_http.py's send/asend with the signed byte string, not this helper."
 "adcp.get_adcp_signed_headers_for_webhook".msg = "Discards the signed body bytes -- its own docstring example re-sends json=payload separately, reintroducing the signed-bytes-vs-wire-bytes divergence bug (GH #1802). Sign and send via src/core/security/outbound_http.py's send/asend with the signed byte string, not this helper."
+
+# --- Address classification: owned by adcp.signing + the egress package's
+# own supplement/blocklist (src/core/security/egress/policy.py). Reinventing
+# either outside that one file is the disease #1589's own triage (F1) found:
+# a second range set added five CIDRs with no check going red. ---
+"ipaddress".msg = "Address classification belongs to adcp.signing + src/core/security/egress/policy.py's supplement/blocklist (GH #1589, adcontextprotocol/adcp-client-python#974). A second copy outside the egress package is the exact disease this backstop exists to prevent."
+"socket.gethostbyname".msg = "Resolve-then-check is a TOCTOU the egress package does not use (adcp.signing pins the resolved IP in one step). Address classification belongs to src/core/security/egress/policy.py (GH #1589)."
