@@ -61,10 +61,10 @@ import pytest
 import requests
 
 from src.core.exceptions import AdCPError
-from src.core.schemas import Principal
+from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.outbound_http import OutboundError
 from tests.harness._base import IntegrationEnv
-from tests.helpers.local_http_origin import LocalOrigin
+from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
 # Reused rather than restated: which escape hatches a case opens is one decision
 # with one home, and the backoff knob that keeps a retry case fast is the seam
@@ -631,6 +631,54 @@ def test_triton_status_check_reads_an_active_campaign(local_origin_tls, monkeypa
 
     assert response.status == "active"
     assert local_origin_tls.hits == 1
+
+
+def test_triton_delivery_report_csv_decodes_the_vendors_charset(local_origin_tls, monkeypatch):
+    """Triton's delivery-report CSV decodes using the origin's OWN Content-Type charset, not a silent guess.
+
+    ``OutboundResult.text`` (salesagent-tbrk.5) replicates
+    ``httpx.Response.text``'s charset-detection stdlib-only: the Content-Type
+    header's charset parameter when Python knows the codec, UTF-8 otherwise.
+    This is the one migrated ``.text`` read (``triton_digital.py:488``,
+    the delivery-report CSV parse) that mutation testing
+    (salesagent-16bhn.35) found had NO behavioral grader at all — the two
+    pre-existing Triton tests in this file exercise ``check_media_buy_status``,
+    which reads ``.json()``, not this CSV-report branch.
+
+    The report body is genuinely ``iso-8859-1`` (a single ``0xE9`` byte for
+    'é'), which is NOT valid UTF-8 — decoding it against the wrong charset
+    would corrupt the package name into the U+FFFD replacement character, not
+    merely look slightly off. Asserting the exact ``package_id`` string is
+    what makes this a real test of the charset-DETECTION path rather than of
+    ASCII-only bytes any decode would happen to get right.
+    """
+    allow_local_origin(monkeypatch)
+    report_url = f"{local_origin_tls.base_url}/reports/report-1.csv"
+    csv_body = "flightName,impressions,totalRevenue\r\nCafé Morning Drive,50000,1250.50\r\n".encode("iso-8859-1")
+
+    local_origin_tls.respond_in_sequence(
+        [
+            (200, b'{"id": "job-1"}'),
+            (200, f'{{"status": "COMPLETED", "url": "{report_url}"}}'.encode()),
+            OriginResponse(status=200, body=csv_body, content_type="text/csv; charset=iso-8859-1"),
+        ]
+    )
+
+    adapter = _triton(local_origin_tls)
+    date_range = ReportingPeriod(start=_TODAY - timedelta(days=7), end=_TODAY)
+
+    result = adapter.get_media_buy_delivery(media_buy_id="triton_999", date_range=date_range, today=_TODAY)
+
+    assert local_origin_tls.hits == 3, f"expected 3 dials (submit, poll, download); origin saw {local_origin_tls.hits}"
+    assert result.totals.impressions == 50000
+    assert result.totals.spend == 1250.50
+    assert len(result.by_package) == 1
+    assert result.by_package[0].package_id == "Café Morning Drive", (
+        f"package_id decoded as {result.by_package[0].package_id!r} — a UTF-8-only decode of this "
+        "iso-8859-1 byte sequence would corrupt 'é' into the U+FFFD replacement character"
+    )
+    assert result.by_package[0].impressions == 50000
+    assert result.by_package[0].spend == 1250.50
 
 
 def test_kevel_pause_succeeds_against_a_local_origin(local_origin_tls, monkeypatch):

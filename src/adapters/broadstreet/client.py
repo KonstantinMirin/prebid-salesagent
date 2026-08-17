@@ -133,7 +133,7 @@ class BroadstreetClient:
         except OutboundError as e:
             raise BroadstreetAPIError(f"Request failed: {e}") from e
 
-        body = result.json() if result.response.content else None
+        body = result.json() if result.content else None
         return body
 
     def get(self, path: str, query_params: dict[str, Any] | None = None) -> Any:

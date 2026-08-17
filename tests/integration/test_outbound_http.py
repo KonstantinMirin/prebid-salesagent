@@ -1716,8 +1716,8 @@ def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monk
 # 14. The terminal-client-error predicate — WHICH 4xx the seam refused to retry
 # ---------------------------------------------------------------------------
 #
-# ``terminal_client_error_status`` lives in ``src/core/helpers/outbound_error_mapping.py``,
-# but the fact it asserts is a property of THIS module: a 4xx is "terminal" only
+# ``terminal_client_error_status`` lives in this module (``outbound_http.py``),
+# and the fact it asserts is a property of THIS module: a 4xx is "terminal" only
 # if it is absent from ``_RETRYABLE_STATUSES``. 429 is the counter-example that
 # makes the distinction load-bearing — it is a 4xx the seam retries to
 # exhaustion, so a caller keying off ``400 <= status < 500`` logs "will not
@@ -1730,7 +1730,7 @@ def test_an_unparseable_retry_after_is_treated_as_absent(seam_call, header, monk
 
 def _terminal_client_error_status():
     """Import the predicate lazily, for the same reason as :func:`_seam`."""
-    from src.core.helpers.outbound_error_mapping import terminal_client_error_status
+    from src.core.security.outbound_http import terminal_client_error_status
 
     return terminal_client_error_status
 

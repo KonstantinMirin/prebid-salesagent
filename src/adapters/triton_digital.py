@@ -485,7 +485,7 @@ class TritonDigital(AdServerAdapter):
                 import csv
                 import io
 
-                report_reader = csv.reader(io.StringIO(report_response.response.text))
+                report_reader = csv.reader(io.StringIO(report_response.text))
                 header = next(report_reader)
                 col_map = {col: i for i, col in enumerate(header)}
 

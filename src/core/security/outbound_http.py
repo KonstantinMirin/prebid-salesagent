@@ -147,7 +147,6 @@ returns nothing, so no call site ever holds a number it could quietly scale.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -169,6 +168,7 @@ from src.core.security.egress.policy import (
     OutboundError,
     OutboundRequestBlocked,  # noqa: F401 - re-exported; ~30 call sites import it from this module
 )
+from src.core.security.egress.response import OutboundResult
 
 logger = logging.getLogger(__name__)
 
@@ -340,29 +340,6 @@ def _find_wrapped_http_status_error(exc: BaseException, seen: set[int]) -> httpx
                     return found
         current = current.__cause__ or current.__context__
     return None
-
-
-@dataclass(frozen=True)
-class OutboundResult:
-    """A delivered response, plus what it cost to get it."""
-
-    response: httpx.Response
-    attempts: int
-    duration_seconds: float
-    _body: bytes
-
-    @property
-    def status_code(self) -> int:
-        return self.response.status_code
-
-    def json(self) -> Any:
-        """Decode the body as JSON.
-
-        Raises ``json.JSONDecodeError`` on a non-JSON body. That is deliberately
-        *outside* the ``except OutboundError`` contract: a body that does not
-        parse is the call site's business, not a transport failure.
-        """
-        return json.loads(self._body)
 
 
 def _env_flag(name: str) -> bool:
@@ -546,27 +523,22 @@ def _over_cap(size: int) -> bool:
     return size > _MAX_RESPONSE_BYTES
 
 
-def _attach_body(response: httpx.Response, body: bytes) -> None:
-    """Make the streamed body readable through the response object itself.
-
-    The body has to be streamed so the size cap can be enforced while
-    accumulating, but a streamed response whose stream is exhausted raises
-    ``ResponseNotRead`` from ``.content`` / ``.text``. Every call site migrating
-    onto this seam logs one of those, so handing back a response that cannot be
-    read would be a trap. Assigning ``_content`` is how httpx itself records a
-    read body (``Response.read``); after this, ``.content``, ``.text`` and
-    ``.json()`` all behave as on a non-streamed response.
-    """
-    response._content = body
-
-
 def _result(response: httpx.Response, body: bytes, attempt: int, started: float) -> OutboundResult:
-    _attach_body(response, body)
+    """Build the closed :class:`OutboundResult` from a completed dial.
+
+    Reads only what ``response`` was constructed with (``status_code``,
+    ``headers``) plus the already-accumulated ``body`` -- no streamed-body
+    read is needed, so nothing pokes ``response._content`` the way the
+    deleted ``_attach_body`` had to. ``dict(response.headers)`` already yields
+    lowercased keys (httpx.Headers' own iteration), matching every
+    consumer's existing ``.get("content-type", ...)`` lookup.
+    """
     return OutboundResult(
-        response=response,
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        content=body,
         attempts=attempt,
         duration_seconds=time.monotonic() - started,
-        _body=body,
     )
 
 

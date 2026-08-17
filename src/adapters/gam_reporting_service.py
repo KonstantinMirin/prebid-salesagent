@@ -379,7 +379,7 @@ class GAMReportingService:
             try:
                 data = []
 
-                with gzip.open(io.BytesIO(response.response.content), "rt") as gz_file:
+                with gzip.open(io.BytesIO(response.content), "rt") as gz_file:
                     csv_reader = csv.DictReader(gz_file)
                     for i, row in enumerate(csv_reader):
                         if i >= ReportingConfig.MAX_ROWS_PER_REPORT:

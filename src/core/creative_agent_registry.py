@@ -485,19 +485,18 @@ class CreativeAgentRegistry:
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=provenance, logger=logger)
 
-        response = result.response
         field = wire_field(provenance)
 
         # Parse SSE or JSON response
-        content_type = response.headers.get("content-type", "")
+        content_type = result.headers.get("content-type", "")
         if "text/event-stream" in content_type:
-            for line in response.text.split("\n"):
+            for line in result.text.split("\n"):
                 if line.startswith("data: "):
                     event_data = json.loads(line[6:])
                     if "result" in event_data:
                         return self._parse_mcp_tool_result(event_data["result"], logger, field=field)
         else:
-            data = response.json()
+            data = result.json()
             if "result" in data:
                 return self._parse_mcp_tool_result(data["result"], logger, field=field)
 
