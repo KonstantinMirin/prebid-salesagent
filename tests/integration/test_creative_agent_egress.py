@@ -197,7 +197,7 @@ class TestParsing:
     """The two response framings the fallback exists to read.
 
     Migrating to the seam is a mechanical swap for this half —
-    ``result.response.headers`` / ``result.response.text`` / ``result.json()`` —
+    ``result.headers`` / ``result.text`` / ``result.json()`` —
     so these cases pass before and after. They are here because the unit tests
     that covered them patched ``httpx.AsyncClient`` and go away with the
     migration: the contract must not go away with them.

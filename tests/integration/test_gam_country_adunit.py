@@ -18,8 +18,10 @@ def mock_requests_get(url, **kwargs):
 
     The report download goes through src.core.security.outbound_http.send now, so
     this returns an OutboundResult-shaped double: the body is read off
-    ``result.response.content``, and the seam raises on a non-2xx rather than
-    handing back something to call raise_for_status() on.
+    ``result.content`` (salesagent-tbrk.5 closed OutboundResult over
+    content/text/headers directly -- no more ``.response`` reach-through),
+    and the seam raises on a non-2xx rather than handing back something to
+    call raise_for_status() on.
     """
     import csv
     import gzip
@@ -61,9 +63,9 @@ def mock_requests_get(url, **kwargs):
     with gzip.open(gz_buffer, "wt", newline="") as gz_file:
         gz_file.write(csv_buffer.getvalue())
 
-    # OutboundResult-shaped double: production reads result.response.content
+    # OutboundResult-shaped double: production reads result.content directly
     mock_result = unittest.mock.Mock()
-    mock_result.response.content = gz_buffer.getvalue()
+    mock_result.content = gz_buffer.getvalue()
     return mock_result
 
 

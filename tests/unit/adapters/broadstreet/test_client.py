@@ -11,11 +11,13 @@ from src.core.security.outbound_http import OutboundDeliveryFailed
 def _seam_result(*, content: bytes, body):
     """A stand-in for the seam's OutboundResult on a successful call.
 
-    The client reads ``result.response.content`` to decide whether there is a body
-    at all, then ``result.json()`` — the same two touchpoints the real result has.
+    The client reads ``result.content`` to decide whether there is a body at
+    all, then ``result.json()`` — the same two touchpoints the real result
+    has (salesagent-tbrk.5 closed OutboundResult over content/text/headers
+    directly -- no more ``.response`` reach-through).
     """
     result = MagicMock()
-    result.response.content = content
+    result.content = content
     result.json.return_value = body
     return result
 
