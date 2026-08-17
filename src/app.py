@@ -133,7 +133,7 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 
 
-def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
+def _envelope_response(request: Request, exc: AdCPError, *, log_as: Exception | None = None) -> JSONResponse:
     """Build a JSONResponse carrying the two-layer envelope for ``exc``.
 
     Single source of truth for the REST envelope-response shape — used by
@@ -150,9 +150,22 @@ def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
     way MCP and A2A do. Identity resolution never raises into the error path —
     a lookup miss degrades to anonymous and ``record_boundary_error`` falls
     back to the WARNING log line carrying the error code, message, and path.
+
+    ``log_as``: the object handed to ``record_boundary_error`` for logging,
+    defaulting to ``exc`` (existing behavior, unchanged for typed handlers).
+    The untyped-``Exception`` handler passes the ORIGINAL exception here
+    instead of the normalized ``exc`` — ``record_boundary_error`` logs
+    untyped errors (``not isinstance(error, AdCPError)``) at ERROR with
+    ``exc_info=True`` (full traceback), which on-call needs for a genuinely
+    unexpected failure; the normalized ``AdCPError`` alone (post prkv.8's
+    fix, just ``type(exc).__name__``) would silently drop both the traceback
+    and the original message from server-side logs, unlike the MCP/A2A
+    boundaries which always log the original exception.
     """
     tenant_id, principal_id = _best_effort_rest_identity(request)
-    record_boundary_error("rest", request.url.path, exc, tenant_id=tenant_id, principal_id=principal_id)
+    record_boundary_error(
+        "rest", request.url.path, log_as if log_as is not None else exc, tenant_id=tenant_id, principal_id=principal_id
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),
@@ -272,6 +285,29 @@ async def permission_error_handler(request: Request, exc: PermissionError) -> JS
     emit for the same condition.
     """
     return _envelope_response(request, normalize_to_adcp_error(exc))
+
+
+@app.exception_handler(Exception)
+async def untyped_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Cross-transport symmetry: REST catches arbitrary untyped exceptions too.
+
+    Mirror of the MCP (``_handle_tool_exception``) and A2A (``on_message_send``'s
+    ``except Exception`` fallthrough) boundaries, both of which already have a
+    catch-all so an unexpected/untyped exception still gets the AdCP two-layer
+    envelope instead of an unhandled 500. REST had no such handler — an
+    untyped exception fell through every typed handler above and reached
+    Starlette's default ``ServerErrorMiddleware`` response: not the two-layer
+    envelope the spec requires on every transport, and (with ``debug=True``,
+    not this app's default, but a real deployment misconfiguration risk) a raw
+    traceback in the response body — worse than the leak prkv.8 fixes in
+    ``normalize_to_adcp_error``.
+
+    Registered last so FastAPI's most-specific-handler-wins matching still
+    routes ``AdCPError``/``ValueError``/``RequestValidationError``/
+    ``PermissionError``/``ToolError`` to their own handlers above; this is
+    the fallback for everything else.
+    """
+    return _envelope_response(request, normalize_to_adcp_error(exc), log_as=exc)
 
 
 @app.exception_handler(ToolError)

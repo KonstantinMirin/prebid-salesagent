@@ -284,8 +284,18 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
 
     Use this helper at every non-skill ``InternalError(...)`` raise site that
     is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). The canonical prefix is ``"{operation} failed: {exc}"`` so
-    storyboard runners can parse the failure uniformly.
+    below). ``message`` is built from ``normalize_to_adcp_error(exc).message``,
+    NEVER the raw exception's own ``str()`` — the two are only the same value
+    when ``exc`` is already a typed ``AdCPError`` (passed through unchanged,
+    its message deliberately authored to be buyer-safe) or one of the other
+    typed branches (``ValueError``/``PermissionError``, our own deliberately-
+    raised validation text). For an arbitrary/untyped exception,
+    ``normalize_to_adcp_error`` itself replaces the message with
+    ``type(exc).__name__`` — the raw text has no provenance guarantee (AdCP
+    3.1.1 transport-errors.mdx Security Considerations MUST-NOT list) and must
+    not reach the JSON-RPC wire. This keeps ``message`` informative for the
+    common typed-error case (the same text ``data`` carries) without ever
+    re-deriving it from ``exc`` directly.
 
     The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
     this helper too — they have no async Task to carry a DataPart, so the two-layer
@@ -296,9 +306,10 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
     envelope.
     """
+    typed = normalize_to_adcp_error(exc)
     return InternalError(
-        message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
+        message=f"{operation} failed: {typed.message}",
+        data=build_two_layer_error_envelope(typed),
     )
 
 

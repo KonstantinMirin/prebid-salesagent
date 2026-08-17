@@ -91,16 +91,26 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         codes from ``STANDARD_ERROR_CODES`` even when the source was untyped.
         Recovery is transient — the pinned enumMetadata classification of the
         SERVICE_UNAVAILABLE wire code (salesagent-nr2q).
+
+        This ``response_data`` is a PERSISTED record (exceptions.py's
+        ``build_two_layer_error_envelope`` docstring: "wire responses and
+        persisted workflow_step.response_data share the same two-layer
+        shape"), read back by async webhook subscribers — so it gets the
+        SAME provenance protection prkv.8 gives the live transports:
+        ``normalize_to_adcp_error()``'s untyped-Exception fallback uses
+        ``type(exc).__name__``, never the exception's own ``str()``, which
+        has no guarantee of being safe to persist/replay to a subscriber
+        (a DSN, a stack fragment, an upstream response body).
         """
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
-        cm.audit_workflow_step_failure("step_abc", RuntimeError("kaboom"))
+        cm.audit_workflow_step_failure("step_abc", RuntimeError("postgres://admin:s3cr3t@10.0.0.5/prod"))
 
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="kaboom",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "kaboom", recovery="transient"),
+            error_message="RuntimeError",
+            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="transient"),
         )
 
     def test_empty_exception_message_falls_back_to_type_name(self):

@@ -429,18 +429,28 @@ class TestA2ADispatcherFailedSkillResult:
         ``AdCPError`` defaults to ``INTERNAL_ERROR`` which lives in
         ``INTERNAL_CODES`` — ``wire_error_code`` translates it to
         ``SERVICE_UNAVAILABLE`` so buyer agents only see standard codes.
+
+        The original exception's message is NOT preserved (prkv.8): a bare
+        untyped exception's ``str()`` has no provenance guarantee (it may be
+        a DB DSN, a stack fragment, an upstream response body — AdCP 3.1.1
+        transport-errors.mdx Security Considerations MUST-NOT list), and this
+        ``error_envelope`` is the buyer-facing artifact DataPart for a failed
+        skill. ``normalize_to_adcp_error()`` replaces it with
+        ``type(exc).__name__`` instead.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
-        result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError("unexpected boom"))
+        result = AdCPRequestHandler._build_failed_skill_result(
+            "get_products", RuntimeError("postgres://admin:s3cr3t@10.0.0.5/prod")
+        )
 
         assert result["success"] is False
         env = result["error_envelope"]
         # Wire code is translated via ERROR_CODE_MAPPING
         assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
-        # The original RuntimeError message is preserved verbatim
-        assert "unexpected boom" in env["errors"][0]["message"]
+        # The original exception's message is replaced with the safe type name.
+        assert env["errors"][0]["message"] == "RuntimeError"
 
     def test_exception_with_empty_message_falls_back_to_type_name(self):
         """Untyped exceptions with no string content get the exception class name.

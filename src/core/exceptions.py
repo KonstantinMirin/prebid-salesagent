@@ -1274,4 +1274,13 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
         return AdCPValidationError(str(exc))
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError(str(exc))
-    return AdCPError(str(exc) or type(exc).__name__)
+    # Deliberately NOT str(exc): an arbitrary/untyped exception's text has no
+    # provenance guarantee -- it may be a DB DSN, a stack fragment, or an
+    # upstream response body (AdCP 3.1.1 transport-errors.mdx Security
+    # Considerations MUST-NOT list). type(exc).__name__ was already this
+    # function's safe fallback for the empty-str(exc) case; using it
+    # unconditionally keeps some buyer-visible failure differentiation
+    # without carrying instance-specific internal detail onto the wire.
+    # The original exception is still logged in full server-side by the
+    # transport boundary's record_boundary_error() / audit logger.
+    return AdCPError(type(exc).__name__)
