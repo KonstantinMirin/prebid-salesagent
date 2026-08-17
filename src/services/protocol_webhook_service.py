@@ -15,6 +15,7 @@ Application-level webhooks are configured via:
 import logging
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -112,6 +113,72 @@ def _to_wire_dict(payload: Any) -> dict[str, Any]:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class WebhookTaskContext:
+    """A delivery's task identity, constructed once and consumed identically
+    by all three failure arms and the success path in
+    ``_send_with_retry_and_logging``.
+
+    Absorbs the metadata/payload pluck block that used to run inline at the
+    top of ``_send_with_retry_and_logging`` — repeating that pluck (or,
+    worse, re-threading its results as twelve independent kwargs at three
+    call sites) is how one of them ends up silently dropped at one site.
+    """
+
+    task_id: str
+    task_type: str | None
+    tenant_id: str | None
+    principal_id: str | None
+    media_buy_id: str | None
+    sequence_number: int
+    notification_type: str | None
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any], payload: dict[str, Any]) -> "WebhookTaskContext":
+        task_type = metadata["task_type"] if "task_type" in metadata else None
+        tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
+        principal_id = metadata["principal_id"] if "principal_id" in metadata else None
+        media_buy_id = metadata["media_buy_id"] if "media_buy_id" in metadata else None
+
+        # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
+        # returns dict at runtime but is typed as AdcpAsyncResponseData | None
+        result = cast(dict[str, Any] | None, extract_webhook_result_data(payload))
+        # After serialization, payload is always a dict - extract task_id accordingly.
+        # A2A Task uses 'id'; A2A TaskStatusUpdateEvent uses camelCase 'taskId' (proto
+        # json_name wire contract); MCP uses snake_case 'task_id'.
+        task_id = payload.get("id") or payload.get("taskId") or payload.get("task_id") or ""
+
+        # If we are delivering media buy delivery report
+        notification_type_from_result = result.get("notification_type") if result is not None else None
+        sequence_number_from_result = result.get("sequence_number") if result is not None else None
+        notification_type = notification_type_from_result
+        sequence_number = sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
+
+        return cls(
+            task_id=task_id,
+            task_type=task_type,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=media_buy_id,
+            sequence_number=sequence_number,
+            notification_type=notification_type,
+        )
+
+    @property
+    def records_delivery_log(self) -> bool:
+        """Whether this delivery is eligible for a ``webhook_delivery_log`` row.
+
+        Spells the gating condition that used to appear twice (once per
+        failure/success branch) exactly once.
+        """
+        return (
+            self.task_type in ("delivery_report", "media_buy_delivery")
+            and bool(self.media_buy_id)
+            and bool(self.tenant_id)
+            and bool(self.principal_id)
+        )
+
+
 class ProtocolWebhookService:
     """
     Service for sending protocol-level push notifications to clients.
@@ -125,15 +192,9 @@ class ProtocolWebhookService:
     def _record_delivery_failure(
         self,
         *,
+        ctx: WebhookTaskContext,
         log_id: str,
         url: str,
-        task_id: Any,
-        task_type: Any,
-        tenant_id: Any,
-        principal_id: Any,
-        media_buy_id: Any,
-        sequence_number: int,
-        notification_type: Any,
         attempts: int,
         http_status_code: int | None,
         error: str,
@@ -151,17 +212,21 @@ class ProtocolWebhookService:
         """
         response_time_ms = int((time.time() - start_time) * 1000)
 
-        if task_type in ("delivery_report", "media_buy_delivery") and media_buy_id and tenant_id and principal_id:
+        if ctx.records_delivery_log:
+            # records_delivery_log already requires all three of these truthy;
+            # the assert only narrows mypy's view from str | None to str (it
+            # cannot narrow through a property call) and can never fire.
+            assert ctx.tenant_id and ctx.principal_id and ctx.media_buy_id and ctx.task_type
             self._write_delivery_log(
                 log_id=log_id,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                media_buy_id=ctx.media_buy_id,
                 webhook_url=url,
-                task_type=task_type,
+                task_type=ctx.task_type,
                 status="failed",
-                sequence_number=sequence_number,
-                notification_type=notification_type,
+                sequence_number=ctx.sequence_number,
+                notification_type=ctx.notification_type,
                 attempt_count=attempts,
                 http_status_code=http_status_code,
                 payload_size_bytes=payload_size_bytes,
@@ -171,7 +236,7 @@ class ProtocolWebhookService:
             )
 
         if audit_logger:
-            audit_logger.log_warning(f"{task_type} webhook failed for task {task_id}: {error}")
+            audit_logger.log_warning(f"{ctx.task_type} webhook failed for task {ctx.task_id}: {error}")
 
         return False
 
@@ -351,24 +416,7 @@ class ProtocolWebhookService:
         """
         payload_size_bytes = len(body_bytes)
 
-        task_type = metadata["task_type"] if "task_type" in metadata else None
-        tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
-        principal_id = metadata["principal_id"] if "principal_id" in metadata else None
-        media_buy_id = metadata["media_buy_id"] if "media_buy_id" in metadata else None
-
-        # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
-        # returns dict at runtime but is typed as AdcpAsyncResponseData | None
-        result = cast(dict[str, Any] | None, extract_webhook_result_data(payload))
-        # After serialization, payload is always a dict - extract task_id accordingly.
-        # A2A Task uses 'id'; A2A TaskStatusUpdateEvent uses camelCase 'taskId' (proto
-        # json_name wire contract); MCP uses snake_case 'task_id'.
-        task_id = payload.get("id") or payload.get("taskId") or payload.get("task_id") or ""
-
-        # If we are delivering media buy delivery report
-        notification_type_from_result = result.get("notification_type") if result is not None else None
-        sequence_number_from_result = result.get("sequence_number") if result is not None else None
-        notification_type = notification_type_from_result
-        sequence_number = sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
+        ctx = WebhookTaskContext.from_metadata(metadata, payload)
 
         # Create webhook delivery log entry
         log_id = str(uuid4())
@@ -376,9 +424,11 @@ class ProtocolWebhookService:
 
         # Log to audit system (start)
         audit_logger = None
-        if tenant_id:
-            audit_logger = get_audit_logger("webhook", tenant_id)
-            audit_logger.log_info(f"Sending {task_type} webhook for task {task_id} (sequence #{sequence_number})")
+        if ctx.tenant_id:
+            audit_logger = get_audit_logger("webhook", ctx.tenant_id)
+            audit_logger.log_info(
+                f"Sending {ctx.task_type} webhook for task {ctx.task_id} (sequence #{ctx.sequence_number})"
+            )
 
         # One call through the egress seam. It owns address and TLS policy, the
         # refusal to follow redirects, the retry schedule and which statuses are
@@ -397,7 +447,7 @@ class ProtocolWebhookService:
         # The URL is logged sanitized (scheme://host/path): a buyer's webhook URL
         # may carry credentials in userinfo or a token in the query string, and a
         # log line is the one place they would sit in cleartext (#1697).
-        logger.info("Sending webhook for task %s to %s", task_id, webhook_url_for_log(url))
+        logger.info("Sending webhook for task %s to %s", ctx.task_id, webhook_url_for_log(url))
         try:
             result_out = await asend(
                 url,
@@ -410,17 +460,11 @@ class ProtocolWebhookService:
             # Refused before a connection was opened: attempts=0 is the honest count.
             # It still writes a row and an audit entry — a misconfigured destination
             # that leaves no trace is indistinguishable from one nobody configured.
-            logger.error(f"Webhook for task {task_id} was refused by egress policy")
+            logger.error(f"Webhook for task {ctx.task_id} was refused by egress policy")
             return self._record_delivery_failure(
+                ctx=ctx,
                 log_id=log_id,
                 url=url,
-                task_id=task_id,
-                task_type=task_type,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
-                sequence_number=sequence_number,
-                notification_type=notification_type,
                 attempts=0,
                 http_status_code=None,
                 error="refused by egress policy",
@@ -436,17 +480,11 @@ class ProtocolWebhookService:
                 error = f"failed after {exc.attempts} attempts (last status {exc.last_status})"
             else:
                 error = f"failed after {exc.attempts} attempts (no response received)"
-            logger.error(f"Webhook for task {task_id} {error}")
+            logger.error(f"Webhook for task {ctx.task_id} {error}")
             return self._record_delivery_failure(
+                ctx=ctx,
                 log_id=log_id,
                 url=url,
-                task_id=task_id,
-                task_type=task_type,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
-                sequence_number=sequence_number,
-                notification_type=notification_type,
                 attempts=exc.attempts,
                 http_status_code=exc.last_status,
                 error=error,
@@ -459,17 +497,11 @@ class ProtocolWebhookService:
             # else escape a function contracted ``-> bool``, and the delivery
             # scheduler re-raises what it catches. The pinned transport's own
             # wrong-host guard raises a bare RuntimeError, which belongs here.
-            logger.error(f"Unexpected error sending webhook for task {task_id}: {e}", exc_info=True)
+            logger.error(f"Unexpected error sending webhook for task {ctx.task_id}: {e}", exc_info=True)
             return self._record_delivery_failure(
+                ctx=ctx,
                 log_id=log_id,
                 url=url,
-                task_id=task_id,
-                task_type=task_type,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
-                sequence_number=sequence_number,
-                notification_type=notification_type,
                 attempts=0,
                 http_status_code=None,
                 error=str(e),
@@ -479,19 +511,23 @@ class ProtocolWebhookService:
             )
 
         response_time_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Successfully sent webhook for task {task_id} (status: {result_out.status_code})")
+        logger.info(f"Successfully sent webhook for task {ctx.task_id} (status: {result_out.status_code})")
 
-        if task_type in ("delivery_report", "media_buy_delivery") and media_buy_id and tenant_id and principal_id:
+        if ctx.records_delivery_log:
+            # records_delivery_log already requires all three of these truthy;
+            # the assert only narrows mypy's view from str | None to str (it
+            # cannot narrow through a property call) and can never fire.
+            assert ctx.tenant_id and ctx.principal_id and ctx.media_buy_id and ctx.task_type
             self._write_delivery_log(
                 log_id=log_id,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                media_buy_id=media_buy_id,
+                tenant_id=ctx.tenant_id,
+                principal_id=ctx.principal_id,
+                media_buy_id=ctx.media_buy_id,
                 webhook_url=url,
-                task_type=task_type,
+                task_type=ctx.task_type,
                 status="success",
-                sequence_number=sequence_number,
-                notification_type=notification_type,
+                sequence_number=ctx.sequence_number,
+                notification_type=ctx.notification_type,
                 attempt_count=result_out.attempts,
                 http_status_code=result_out.status_code,
                 payload_size_bytes=payload_size_bytes,
@@ -501,7 +537,7 @@ class ProtocolWebhookService:
 
         if audit_logger:
             audit_logger.log_success(
-                f"{task_type} webhook delivered successfully (sequence #{sequence_number}, "
+                f"{ctx.task_type} webhook delivered successfully (sequence #{ctx.sequence_number}, "
                 f"{response_time_ms}ms, {payload_size_bytes} bytes)"
             )
 

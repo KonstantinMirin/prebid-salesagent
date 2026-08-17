@@ -82,7 +82,7 @@ import requests
 from adcp.webhook_receiver import LegacyWebhookHmacError, LegacyWebhookHmacOptions, verify_webhook_hmac
 
 from src.services.protocol_webhook_service import ProtocolWebhookService
-from tests.harness.protocol_webhook import AUDIT_LOGGER_NAME, ProtocolWebhookEnv
+from tests.harness.protocol_webhook import AUDIT_LOGGER_NAME, DELIVERY_METADATA_TASK_TYPE, ProtocolWebhookEnv
 from tests.helpers import assert_signature_verifies_over_wire_body
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
@@ -101,6 +101,26 @@ MAX_ATTEMPTS = 3
 # and int(0.25) == 0 — so a swap is only observable against a delivery that
 # provably took real time.
 _MEASURABLE_DELAY_SECONDS = 0.25
+
+# A destination the egress seam refuses before opening a connection. RFC 6761
+# §6.4 reserves ``.invalid`` as a name guaranteed never to resolve, so the
+# refusal comes from the seam's ADDRESS policy and arrives without depending on
+# what is or is not listening anywhere — and it still arrives with the
+# private-range hatch ``LocalOriginMixin`` opens left open, which a loopback URL
+# could not manage. Deliberately ``https``: an ``http`` URL would be refused by
+# the seam's scheme rule first, grading the scheme instead of the destination.
+_UNRESOLVABLE_WEBHOOK_URL = "https://webhook-sink.invalid/webhook"
+
+# The identity values the refused delivery must carry onto its row. They are read
+# off the PAYLOAD's ``result`` (``extract_webhook_result_data``), NOT off the
+# metadata dict, and they are non-default on purpose: the env's default result
+# carries neither, so ``notification_type`` would be ``None`` and
+# ``sequence_number`` would take production's ``isinstance(..., int)`` fallback
+# of 1. Asserting those defaults would grade nothing — a sender that hardcoded
+# ``sequence_number=1`` or dropped ``notification_type`` entirely would still
+# pass.
+_REFUSAL_NOTIFICATION_TYPE = "delivery_report"
+_REFUSAL_SEQUENCE_NUMBER = 7
 
 
 def _audit_messages(caplog: pytest.LogCaptureFixture, level: int) -> list[str]:
@@ -311,6 +331,91 @@ class TestDeliveryLogParity:
             assert row.attempt_count == env.delivery_attempts
             assert row.http_status_code is None
             assert row.error_message is not None
+
+
+class TestRefusedDestinationRow:
+    """A destination refused by egress policy still leaves both operator records.
+
+    This is the arm production justifies at the ``OutboundRequestBlocked``
+    handler — "a misconfigured destination that leaves no trace is
+    indistinguishable from one nobody configured" — and it is the only failure
+    arm whose row and audit entry were graded nowhere: the four
+    ``TestDeliveryLogParity`` cases all land in the ``OutboundDeliveryFailed``
+    arm or on the success path, and the two cases that do reach a refusal
+    (``tests/unit/test_protocol_webhook_ssrf.py``) run without a database and so
+    can only see that nothing was sent.
+
+    ``attempt_count == 0`` is the load-bearing distinction from every other
+    failed row: nothing was attempted, so a count of 1 would report a delivery
+    that was tried and failed on the wire. The two identity fields are asserted
+    at exact non-default values because they travel the longest distance in this
+    file — plucked out of the payload's result at the top of
+    ``_send_with_retry_and_logging`` and consumed several frames later by the
+    recorder — which is precisely the threading a refactor of that path can drop
+    without any other case noticing.
+    """
+
+    async def test_refused_destination_records_zero_attempts_and_the_task_identity(self, integration_db, caplog):
+        with ProtocolWebhookEnv() as env:
+            buy = env.make_media_buy()
+            config = env.make_config(url=_UNRESOLVABLE_WEBHOOK_URL)
+
+            with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER_NAME):
+                delivered = await env.send(
+                    config=config,
+                    payload=env.make_payload(
+                        result={
+                            "media_buy_id": buy.media_buy_id,
+                            "notification_type": _REFUSAL_NOTIFICATION_TYPE,
+                            "sequence_number": _REFUSAL_SEQUENCE_NUMBER,
+                        }
+                    ),
+                    media_buy_id=buy.media_buy_id,
+                )
+
+            assert delivered is False
+            assert env.delivery_attempts == 0, (
+                "the local origin served a request for a notification aimed at an unresolvable "
+                "host — the refusal did not happen before the connection"
+            )
+
+            rows = env.delivery_logs(buy.media_buy_id)
+            assert len(rows) == 1, (
+                f"a refused delivery wrote {len(rows)} delivery-log rows — a misconfigured "
+                "destination that leaves no trace is indistinguishable from one nobody configured"
+            )
+            row = rows[0]
+            assert row.status == "failed"
+            assert row.attempt_count == 0, (
+                f"the row claims {row.attempt_count} attempts for a delivery refused before any "
+                "connection was opened — an operator cannot tell it apart from one the buyer's "
+                "endpoint actually rejected"
+            )
+            assert row.http_status_code is None
+            assert row.error_message == "refused by egress policy"
+            assert row.webhook_url == _UNRESOLVABLE_WEBHOOK_URL
+            assert row.task_type == DELIVERY_METADATA_TASK_TYPE
+            assert row.notification_type == _REFUSAL_NOTIFICATION_TYPE, (
+                f"the row recorded notification_type {row.notification_type!r} for a payload whose "
+                f"result carried {_REFUSAL_NOTIFICATION_TYPE!r} — the value was dropped between the "
+                "payload and the recorder"
+            )
+            assert row.sequence_number == _REFUSAL_SEQUENCE_NUMBER, (
+                f"the row recorded sequence #{row.sequence_number} for notification "
+                f"#{_REFUSAL_SEQUENCE_NUMBER} — the operator's view of which report in the series "
+                "failed no longer matches the notification that was refused"
+            )
+
+            # The audit entry is the refusal's second record, and the only one for a
+            # notification whose task_type writes no row at all. Asserted on the
+            # message TAIL so the whole sender-composed line — task type, task id and
+            # the failure wording — is pinned exactly, while the severity decoration
+            # the audit logger prepends stays the audit logger's business.
+            warnings = _audit_messages(caplog, logging.WARNING)
+            assert len(warnings) == 1, warnings
+            assert warnings[0].endswith(
+                f"{DELIVERY_METADATA_TASK_TYPE} webhook failed for task task_001: refused by egress policy"
+            ), warnings
 
 
 class TestAuditTrail:
