@@ -41,6 +41,7 @@ from adcp.signing.keygen import generate_signing_keypair
 from adcp.webhook_auth import JwkSignerStrategy
 
 from src.core.exceptions import build_two_layer_error_envelope
+from src.core.security.outbound_http import CounterpartyUrl
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
 from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import hangs_up, responds
@@ -757,8 +758,12 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
     """
     set_flags(monkeypatch)
 
-    reserved = assert_blocked(seam_call, "https://127.0.0.1/webhook", field=_CALLER_FIELD_PATH)
-    unresolvable = assert_blocked(seam_call, "https://no-such-host.invalid/webhook", field=_CALLER_FIELD_PATH)
+    reserved = assert_blocked(
+        seam_call, "https://127.0.0.1/webhook", provenance=CounterpartyUrl(field=_CALLER_FIELD_PATH)
+    )
+    unresolvable = assert_blocked(
+        seam_call, "https://no-such-host.invalid/webhook", provenance=CounterpartyUrl(field=_CALLER_FIELD_PATH)
+    )
 
     reserved_envelope = build_two_layer_error_envelope(reserved)
     unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
@@ -805,7 +810,7 @@ def test_a_field_carrying_a_url_is_refused_outright(seam_call, label, field, mon
     set_flags(monkeypatch)
 
     with pytest.raises(ValueError, match="not a URL"):
-        call_seam(seam_call, "https://127.0.0.1/webhook", field=field)
+        call_seam(seam_call, "https://127.0.0.1/webhook", provenance=CounterpartyUrl(field=field))
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
@@ -813,7 +818,7 @@ def test_a_jsonpath_lite_field_is_carried(seam_call, monkeypatch):
     """The legitimate form is not caught by the URL check — the guard has to let real paths through."""
     set_flags(monkeypatch)
 
-    error = assert_blocked(seam_call, "https://127.0.0.1/webhook", field=_CALLER_FIELD_PATH)
+    error = assert_blocked(seam_call, "https://127.0.0.1/webhook", provenance=CounterpartyUrl(field=_CALLER_FIELD_PATH))
 
     assert_envelope_shape(
         build_two_layer_error_envelope(error),
