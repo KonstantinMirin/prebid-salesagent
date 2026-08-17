@@ -107,13 +107,17 @@ def _principal(adapter: str, mappings: dict[str, Any] | None = None) -> Principa
 
 
 def _kevel(origin: LocalOrigin):
-    """A live-mode Kevel adapter whose API base is the local origin.
+    """A live-mode Kevel adapter whose vendor client dials the local origin.
 
-    ``base_url`` is assigned after construction because ``Kevel.__init__``
-    hardcodes ``https://api.kevel.co/v1`` and ignores ``config["base_url"]`` —
-    a fact worth knowing before the migration touches it.
+    ``Kevel.__init__`` hardcodes ``https://api.kevel.co/v1`` and ignores
+    ``config["base_url"]``, and its ``_vendor`` is a frozen
+    ``VendorHttpClient`` built inside ``__init__`` — a post-construction
+    ``adapter.base_url = ...`` no longer reaches the dial. Swapping the whole
+    frozen client (keeping its real headers) is the only way in; Kevel's own
+    constructor logic stays untouched.
     """
     from src.adapters.kevel import Kevel
+    from src.adapters.vendor_http import VendorHttpClient, require_vendor
 
     adapter = Kevel(
         config={"network_id": "456", "api_key": "test-key"},
@@ -121,8 +125,23 @@ def _kevel(origin: LocalOrigin):
         dry_run=False,
         tenant_id="test_tenant",
     )
-    adapter.base_url = origin.base_url
+    real_headers = require_vendor(adapter._vendor, vendor="Kevel").headers
+    adapter._vendor = VendorHttpClient(base_url=origin.base_url, headers=real_headers)
     return adapter
+
+
+def _dry_run_kevel():
+    """A dry-run Kevel adapter — constructed with no credentials at all."""
+    from src.adapters.kevel import Kevel
+
+    return Kevel(config={}, principal=_principal("kevel"), dry_run=True, tenant_id="test_tenant")
+
+
+def _dry_run_triton():
+    """A dry-run Triton adapter — constructed with no credentials at all."""
+    from src.adapters.triton_digital import TritonDigital
+
+    return TritonDigital(config={}, principal=_principal("triton"), dry_run=True, tenant_id="test_tenant")
 
 
 def _triton(origin: LocalOrigin):
@@ -554,6 +573,72 @@ def test_google_token_url_is_injectable():
         "inside gam_callback, so the token exchange cannot be driven at a local "
         "origin. Hoist it to a module-level GOOGLE_TOKEN_URL."
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. Construction is the proof — a dial exists only where credentials do.
+#
+# The cases above grade what a vendor call COSTS the origin. These grade
+# whether the call is reachable at all. ``AdServerAdapter._api`` type-checks on
+# every subclass — GAM, mock, Broadstreet — off two bare annotations no
+# ``__init__`` outside Kevel and Triton ever assigns, and on Kevel and Triton
+# it type-checks in the dry-run branch too, where the credentials were never
+# supplied. A frozen ``VendorHttpClient`` built where the credentials are
+# proven turns "can dial the vendor" into a value the type system can see, and
+# the un-credentialed case into ``None`` that ``require_vendor`` refuses by
+# name rather than an ``AttributeError`` mid-flight.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("vendor", ["Kevel", "Triton Digital"])
+def test_require_vendor_refuses_an_unconfigured_client(vendor):
+    """``require_vendor(None, ...)`` raises a typed, vendor-named configuration error.
+
+    The vendor is parametrized because the name has to be interpolated from the
+    argument, not baked into one adapter's copy of the guard: exactly one
+    ``require_vendor`` exists in ``src/`` (DRY tier-1), so it must be able to
+    speak for every vendor that holds a ``VendorHttpClient``.
+    """
+    from src.adapters.vendor_http import require_vendor
+    from src.core.exceptions import AdCPConfigurationError
+
+    with pytest.raises(AdCPConfigurationError) as exc_info:
+        require_vendor(None, vendor=vendor)
+
+    assert str(exc_info.value) == f"{vendor} credentials are not configured; cannot dial the vendor API."
+
+
+def test_vendor_client_refuses_post_construction_mutation():
+    """``VendorHttpClient`` is frozen: the dial cannot be re-pointed after construction.
+
+    The freeze is what makes the construction site the whole proof. If the base
+    or the headers could be swapped afterwards, an adapter could be handed a
+    client built from credentials it never had, which is the defect restated
+    one attribute over.
+    """
+    from dataclasses import FrozenInstanceError
+
+    from src.adapters.vendor_http import VendorHttpClient
+
+    client = VendorHttpClient(base_url="https://vendor.example/v1", headers={"X-Key": "k"})
+
+    with pytest.raises(FrozenInstanceError):
+        client.base_url = "https://elsewhere.example/v1"
+
+
+@pytest.mark.parametrize("build_dry_run_adapter", [_dry_run_kevel, _dry_run_triton], ids=["kevel", "triton"])
+def test_a_dry_run_adapter_holds_no_vendor_client(build_dry_run_adapter):
+    """A dry-run adapter constructs with ``_vendor is None`` — nothing to dial with.
+
+    Construction-side proof, and the half that ``require_vendor`` depends on:
+    dry-run supplies no ``api_key``/``auth_token``, so there is no credentialed
+    client to build, and the attribute must say so rather than be absent (an
+    absent attribute is the ``AttributeError`` the bare base-class annotations
+    already produce today).
+    """
+    adapter = build_dry_run_adapter()
+
+    assert adapter._vendor is None
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import pytest
 
 from src.adapters.kevel import Kevel
 from src.adapters.triton_digital import TritonDigital
+from src.adapters.vendor_http import VendorHttpClient
 from src.adapters.xandr import XandrAdapter
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
 
@@ -128,31 +129,35 @@ class TestKevelAdapterPackages:
             tenant_id="tenant_123",
         )
 
-        # Patch the adapter's own seam helper: production no longer calls
-        # requests.post, and the helper returns an OutboundResult whose .json()
-        # is the only thing these paths read. What this test grades is unchanged —
-        # every returned package must carry a package_id.
-        with patch.object(type(adapter), "_api", autospec=True) as mock_post:
-            # Mock campaign creation
-            campaign_response = Mock()
-            campaign_response.json.return_value = {"Id": 999}
+        # Swap the adapter's frozen vendor client for a Mock: production no
+        # longer calls requests.post, and the client's .call() returns an
+        # OutboundResult whose .json() is the only thing these paths read.
+        # A frozen slotted dataclass refuses patch.object on an instance
+        # attribute, so the client itself is replaced rather than patched.
+        # What this test grades is unchanged — every returned package must
+        # carry a package_id.
+        adapter._vendor = Mock(spec=VendorHttpClient)
 
-            # Mock flight creation (one per package)
-            flight_response_1 = Mock()
-            flight_response_1.json.return_value = {"Id": 111}
+        # Mock campaign creation
+        campaign_response = Mock()
+        campaign_response.json.return_value = {"Id": 999}
 
-            flight_response_2 = Mock()
-            flight_response_2.json.return_value = {"Id": 222}
+        # Mock flight creation (one per package)
+        flight_response_1 = Mock()
+        flight_response_1.json.return_value = {"Id": 111}
 
-            # Return campaign response first, then flight responses
-            mock_post.side_effect = [campaign_response, flight_response_1, flight_response_2]
+        flight_response_2 = Mock()
+        flight_response_2.json.return_value = {"Id": 222}
 
-            # Act
-            start_time = datetime.now()
-            end_time = start_time + timedelta(days=30)
-            response = adapter.create_media_buy(
-                request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-            )
+        # Return campaign response first, then flight responses
+        adapter._vendor.call.side_effect = [campaign_response, flight_response_1, flight_response_2]
+
+        # Act
+        start_time = datetime.now()
+        end_time = start_time + timedelta(days=30)
+        response = adapter.create_media_buy(
+            request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
+        )
 
         # Assert - Each package must have package_id (AdCP spec requirement)
         # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
@@ -223,31 +228,35 @@ class TestTritonAdapterPackages:
             tenant_id="tenant_123",
         )
 
-        # Patch the adapter's own seam helper: production no longer calls
-        # requests.post, and the helper returns an OutboundResult whose .json()
-        # is the only thing these paths read. What this test grades is unchanged —
-        # every returned package must carry a package_id.
-        with patch.object(type(adapter), "_api", autospec=True) as mock_post:
-            # Mock campaign creation
-            campaign_response = Mock()
-            campaign_response.json.return_value = {"id": 888}
+        # Swap the adapter's frozen vendor client for a Mock: production no
+        # longer calls requests.post, and the client's .call() returns an
+        # OutboundResult whose .json() is the only thing these paths read.
+        # A frozen slotted dataclass refuses patch.object on an instance
+        # attribute, so the client itself is replaced rather than patched.
+        # What this test grades is unchanged — every returned package must
+        # carry a package_id.
+        adapter._vendor = Mock(spec=VendorHttpClient)
 
-            # Mock flight creation (one per package)
-            flight_response_1 = Mock()
-            flight_response_1.json.return_value = {"id": 333}
+        # Mock campaign creation
+        campaign_response = Mock()
+        campaign_response.json.return_value = {"id": 888}
 
-            flight_response_2 = Mock()
-            flight_response_2.json.return_value = {"id": 444}
+        # Mock flight creation (one per package)
+        flight_response_1 = Mock()
+        flight_response_1.json.return_value = {"id": 333}
 
-            # Return campaign response first, then flight responses
-            mock_post.side_effect = [campaign_response, flight_response_1, flight_response_2]
+        flight_response_2 = Mock()
+        flight_response_2.json.return_value = {"id": 444}
 
-            # Act
-            start_time = datetime.now()
-            end_time = start_time + timedelta(days=30)
-            response = adapter.create_media_buy(
-                request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-            )
+        # Return campaign response first, then flight responses
+        adapter._vendor.call.side_effect = [campaign_response, flight_response_1, flight_response_2]
+
+        # Act
+        start_time = datetime.now()
+        end_time = start_time + timedelta(days=30)
+        response = adapter.create_media_buy(
+            request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
+        )
 
         # Assert - Each package must have package_id (AdCP spec requirement)
         # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec

@@ -6,6 +6,7 @@ from typing import Any
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.vendor_http import VendorHttpClient, require_vendor
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
@@ -51,6 +52,7 @@ class Kevel(AdServerAdapter):
         self.userdb_enabled = self.config.get("userdb_enabled", False)
         self.frequency_capping_enabled = self.config.get("frequency_capping_enabled", False)
 
+        self._vendor: VendorHttpClient | None = None
         if self.dry_run:
             self.log("Running in dry-run mode - Kevel API calls will be simulated", dry_run_prefix=False)
         else:
@@ -60,7 +62,10 @@ class Kevel(AdServerAdapter):
             self.api_key = self._require_config(
                 self.api_key, field="api_key", message="Kevel config is missing 'api_key'"
             )
-            self.headers = {"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"}
+            self._vendor = VendorHttpClient(
+                base_url=self.base_url,
+                headers={"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"},
+            )
 
     # Supported device types (Kevel doesn't support CTV)
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet"}
@@ -315,7 +320,7 @@ class Kevel(AdServerAdapter):
                 "IsActive": True,
             }
 
-            response = self._api("POST", "/campaign", json=campaign_payload)
+            response = require_vendor(self._vendor, vendor="Kevel").call("POST", "/campaign", json=campaign_payload)
             campaign_data = response.json()
             campaign_id = campaign_data["Id"]
             self.audit_logger.log_success(f"Created Kevel Campaign ID: {campaign_id}")
@@ -361,7 +366,9 @@ class Kevel(AdServerAdapter):
                             )  # Convert to hours, minimum 1 (int for Kevel API)
                             flight_payload["FreqCapType"] = 1  # 1 = per user (cookie-based)
 
-                flight_response = self._api("POST", "/flight", json=flight_payload)
+                flight_response = require_vendor(self._vendor, vendor="Kevel").call(
+                    "POST", "/flight", json=flight_payload
+                )
 
             # Use the actual campaign ID from Kevel
             media_buy_id = f"kevel_{campaign_id}"
@@ -407,7 +414,9 @@ class Kevel(AdServerAdapter):
         else:
             try:
                 # Get all flights for the campaign to map package names to flight IDs
-                flights_response = self._api("GET", "/flight", params={"campaignId": media_buy_id})
+                flights_response = require_vendor(self._vendor, vendor="Kevel").call(
+                    "GET", "/flight", params={"campaignId": media_buy_id}
+                )
                 flights = flights_response.json().get("items", [])
                 flight_map = {flight["Name"]: flight["Id"] for flight in flights}
 
@@ -434,7 +443,9 @@ class Kevel(AdServerAdapter):
                         continue
 
                     # Create the creative
-                    creative_response = self._api("POST", "/creative", json=creative_payload)
+                    creative_response = require_vendor(self._vendor, vendor="Kevel").call(
+                        "POST", "/creative", json=creative_payload
+                    )
                     creative_data = creative_response.json()
                     creative_id = creative_data["Id"]
 
@@ -446,7 +457,9 @@ class Kevel(AdServerAdapter):
                     if flight_ids_to_associate:
                         for flight_id in flight_ids_to_associate:
                             ad_payload = {"CreativeId": creative_id, "FlightId": flight_id, "IsActive": True}
-                            ad_response = self._api("POST", "/ad", json=ad_payload)
+                            ad_response = require_vendor(self._vendor, vendor="Kevel").call(
+                                "POST", "/ad", json=ad_payload
+                            )
 
                     created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="approved"))
 
@@ -542,7 +555,7 @@ class Kevel(AdServerAdapter):
                 "Filter": {"CampaignId": media_buy_id},
             }
 
-            response = self._api("POST", "/report/queue", json=report_request)
+            response = require_vendor(self._vendor, vendor="Kevel").call("POST", "/report/queue", json=report_request)
             report_id = response.json()["Id"]
 
             # Poll for report completion (simplified - in production would need proper polling)
@@ -551,7 +564,7 @@ class Kevel(AdServerAdapter):
             time.sleep(1)
 
             # Get report results
-            results_response = self._api("GET", f"/report/{report_id}/results")
+            results_response = require_vendor(self._vendor, vendor="Kevel").call("GET", f"/report/{report_id}/results")
 
             # Parse results and aggregate
             results = results_response.json()
@@ -680,11 +693,15 @@ class Kevel(AdServerAdapter):
                 if action in ["pause_media_buy", "resume_media_buy"]:
                     # Update campaign status
                     update_payload = {"IsActive": action == "resume_media_buy"}
-                    update_response = self._api("PUT", f"/campaign/{campaign_id}", json=update_payload)
+                    update_response = require_vendor(self._vendor, vendor="Kevel").call(
+                        "PUT", f"/campaign/{campaign_id}", json=update_payload
+                    )
 
                 elif action in ["pause_package", "resume_package"] and package_id:
                     # Get flight ID by name
-                    flights_response = self._api("GET", "/flight", params={"campaignId": campaign_id})
+                    flights_response = require_vendor(self._vendor, vendor="Kevel").call(
+                        "GET", "/flight", params={"campaignId": campaign_id}
+                    )
                     flights = flights_response.json().get("items", [])
 
                     flight = next((f for f in flights if f["Name"] == package_id), None)
@@ -694,7 +711,9 @@ class Kevel(AdServerAdapter):
                     # Update flight status
                     is_resume = action == "resume_package"
                     update_payload = {"IsActive": is_resume}
-                    update_response = self._api("PUT", f"/flight/{flight['Id']}", json=update_payload)
+                    update_response = require_vendor(self._vendor, vendor="Kevel").call(
+                        "PUT", f"/flight/{flight['Id']}", json=update_payload
+                    )
 
                     # Return affected package with paused state
                     return UpdateMediaBuySuccess(
@@ -716,7 +735,9 @@ class Kevel(AdServerAdapter):
                     and budget is not None
                 ):
                     # Get flight ID by name
-                    flights_response = self._api("GET", "/flight", params={"campaignId": campaign_id})
+                    flights_response = require_vendor(self._vendor, vendor="Kevel").call(
+                        "GET", "/flight", params={"campaignId": campaign_id}
+                    )
                     flights = flights_response.json().get("items", [])
 
                     flight = next((f for f in flights if f["Name"] == package_id), None)
@@ -733,7 +754,9 @@ class Kevel(AdServerAdapter):
 
                     # Update flight impressions
                     impressions_payload: dict[str, int] = {"Impressions": new_impressions}
-                    update_response = self._api("PUT", f"/flight/{flight['Id']}", json=impressions_payload)
+                    update_response = require_vendor(self._vendor, vendor="Kevel").call(
+                        "PUT", f"/flight/{flight['Id']}", json=impressions_payload
+                    )
 
                 return UpdateMediaBuySuccess(
                     media_buy_id=media_buy_id,
