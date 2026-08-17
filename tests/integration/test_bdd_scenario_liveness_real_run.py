@@ -42,8 +42,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str) -> dict:
+    """Shell out to a real, narrow pytest slice with a deliberately isolated env.
+
+    This test's assertions pin an exact 3-way in-process transport set
+    (mcp/a2a/rest). The nested subprocess must not silently inherit
+    ``BDD_E2E_ENABLED`` from whatever ambient environment this test itself
+    runs under (e.g. run_all_tests.sh, which sets it once the Docker e2e
+    stack is up for the outer suite) — that would make the nested slice
+    additionally parametrize over e2e_rest, and this test's fixed-3-transport
+    assertions would fail for reasons unrelated to what they're testing.
+    """
     artifact = tmp_path / "liveness.json"
     env = dict(os.environ)
+    env.pop("BDD_E2E_ENABLED", None)
     env["BDD_LIVENESS_ARTIFACT"] = str(artifact)
     env.setdefault("ADCP_TESTING", "true")
     result = subprocess.run(
