@@ -411,6 +411,11 @@ class TestCompletedTaskStatusMixinPin:
             parent_field.annotation if parent_field is not None else CompletedTaskStatusMixin.__annotations__["status"]
         )
 
+        assert "status" in local.model_fields, (
+            f"{local_name} composes no `status` field at all — CompletedTaskStatusMixin is not "
+            f"in its bases, or something removed the declaration. The envelope field the pinned "
+            f"protocol-envelope.json marks REQUIRED would be absent from the wire (GH #1900)."
+        )
         composed = local.model_fields["status"]
         assert composed.annotation == expected_annotation, (
             f"{local_name}.status composes to {composed.annotation!r}, not {expected_annotation!r} — "
