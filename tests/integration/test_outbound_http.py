@@ -44,7 +44,7 @@ from src.core.exceptions import AdCPBlockedUrlError, build_two_layer_error_envel
 from src.core.security.outbound_http import CounterpartyUrl
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
 from tests.helpers.egress_hatches import egress_hatch_env
-from tests.helpers.local_http_origin import hangs_up, responds
+from tests.helpers.local_http_origin import hangs_up, responds, sends_chunked_body
 
 # Both entry points get every case. Parametrising instead of duplicating the
 # module keeps the two paths literally the same test.
@@ -66,6 +66,11 @@ BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
 
 # The seam's logger, for grading the fallback warning on a malformed knob value.
 SEAM_LOGGER = "src.core.security.outbound_http"
+
+# The retry SCHEDULE's own logger — _env_float's fallback warning for the
+# backoff-base knob logs from here now that egress.attempts owns the schedule
+# (salesagent-tbrk.2), not from SEAM_LOGGER.
+SCHEDULE_LOGGER = "src.core.security.egress.attempts"
 
 # A rate-limited answer, as the origin sends it. The body is asserted against in
 # the opacity cases, so it carries a marker rather than a plausible payload.
@@ -127,12 +132,13 @@ def pin_jitter(monkeypatch, value: float) -> list[tuple]:
     that asserts a delay's magnitude has to pin it — otherwise the assertion is
     graded against a number the test does not know.
 
-    The patch target is the module attribute ``outbound_http.random``, which is
-    also the string target the UC-004 circuit-breaker harness patches
-    (``tests/harness/delivery_circuit_breaker.py``). Pinning it here for the same
+    The patch target is the module attribute ``egress.attempts.random``, which
+    is also the string target the UC-004 circuit-breaker harness patches
+    (``tests/harness/delivery_circuit_breaker.py``) — the schedule moved there
+    with ``_backoff_seconds`` (salesagent-tbrk.2). Pinning it here for the same
     obligation keeps the seam suite and the BDD suite grading one implementation:
-    a ``from random import uniform`` in the seam would break both at once, which
-    is the point.
+    a ``from random import uniform`` in ``egress.attempts`` would break both at
+    once, which is the point.
 
     Returns the list of ``(args)`` tuples the seam passed to ``uniform``, so a
     caller can grade the draw itself — one draw per sleep, with the literal
@@ -144,7 +150,7 @@ def pin_jitter(monkeypatch, value: float) -> list[tuple]:
         calls.append(args)
         return value
 
-    monkeypatch.setattr(_seam().random, "uniform", _pinned)
+    monkeypatch.setattr(_attempts_module().random, "uniform", _pinned)
     return calls
 
 
@@ -582,7 +588,7 @@ def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
     durations = record_sleeps(monkeypatch, seam_call)
     pin_jitter(monkeypatch, 0.25)
 
-    with caplog.at_level(logging.WARNING, logger=SEAM_LOGGER):
+    with caplog.at_level(logging.WARNING, logger=SCHEDULE_LOGGER):
         assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert_backoff_schedule(durations, jitter=0.25)
@@ -590,10 +596,12 @@ def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
     warnings = [
         record.getMessage()
         for record in caplog.records
-        if record.name == SEAM_LOGGER and record.levelno >= logging.WARNING and BACKOFF_BASE_ENV in record.getMessage()
+        if record.name == SCHEDULE_LOGGER
+        and record.levelno >= logging.WARNING
+        and BACKOFF_BASE_ENV in record.getMessage()
     ]
     assert warnings, (
-        f"{bad_value!r} was ignored silently: no WARNING from {SEAM_LOGGER} naming {BACKOFF_BASE_ENV}. "
+        f"{bad_value!r} was ignored silently: no WARNING from {SCHEDULE_LOGGER} naming {BACKOFF_BASE_ENV}. "
         f"Records seen: {[(r.name, r.levelname, r.getMessage()) for r in caplog.records]}"
     )
 
@@ -1809,6 +1817,265 @@ def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypat
 
     assert error.last_status is None
     assert _terminal_client_error_status()(error) is None
+
+
+# ---------------------------------------------------------------------------
+# 15. ONE retry state machine, stepped by both loops (salesagent-tbrk.2)
+#
+# Every section above grades the retry policy's arithmetic: how many attempts,
+# how long between them, what an origin's Retry-After may do to that. This one
+# grades where that policy LIVES. ``send`` and ``asend`` each carried their own
+# copy of the post-response fork — retry / succeed / give up — so the two paths
+# could agree today and drift tomorrow with nothing failing: every case above is
+# parametrised over both paths and would keep passing against two separate
+# implementations that happen to match.
+#
+# ``src.core.security.egress.attempts.Attempts`` is the one machine both loops
+# step. These cases grade it THROUGH the seam and never in isolation: the
+# machine is pure, so a direct test of it would say nothing about which loop
+# obeys it. Each case therefore records the machine's own decisions as well as
+# the outcome, because the outcome alone cannot tell the two shapes apart — a
+# loop that decided for itself raises exactly the same error and records no
+# decisions at all.
+#
+# Sleeps are recorded rather than served, as section 13 does, and for a sharper
+# reason here: these origins send a real ``Retry-After``, so a case that reached
+# an actual sleep would wait the origin's number out for real.
+# ---------------------------------------------------------------------------
+
+
+def _machine():
+    """Import the retry state machine lazily, mirroring :func:`_seam`.
+
+    Lazy for ``_seam``'s reason — a module-level import would turn "the machine
+    does not exist yet" into a collection error for the whole file instead of an
+    independently diagnosable failure per case.
+
+    Imported from ``egress.attempts`` rather than through the seam's re-exporting
+    facade on purpose: the lane's claim is that the retry policy has a home of
+    its own, and a helper that reached it as ``outbound_http.Attempts`` would go
+    on passing the day it moved back into the driver.
+    """
+    from src.core.security.egress.attempts import Attempts
+
+    return Attempts
+
+
+def _attempts_module():
+    """Import ``egress.attempts`` (the MODULE, not the class) lazily.
+
+    :func:`pin_jitter` needs the module object itself, to patch
+    ``random.uniform`` where ``_backoff_seconds`` now reads it — the same
+    lazy-import rationale as :func:`_machine`, which returns the ``Attempts``
+    class rather than this module.
+    """
+    from src.core.security.egress import attempts
+
+    return attempts
+
+
+def record_machine_run(monkeypatch, seam_call: str, *, base: str) -> tuple[list[float], list]:
+    """Set up this section's two observation points: the waits, and the decisions.
+
+    The waits come from the recorders section 6 and 13 already use. The
+    decisions come from wrapping the machine's own response fork — a RECORDER,
+    not a stub: the real method runs and its verdict is returned untouched,
+    exactly as ``pin_jitter`` wraps the real ``uniform`` and ``record_sleeps``
+    wraps the real sleep. What it adds is the one fact a raised
+    ``OutboundDeliveryFailed`` cannot show, which is that the decision was taken
+    by the shared machine at all.
+
+    The patch is on the CLASS, not on an instance, because the loop constructs
+    its own ``Attempts`` and a test never gets to see the object — which is also
+    why this grades both paths from outside without either loop knowing.
+
+    ``base`` is written explicitly for ``fast_backoff``'s reason: a bare host
+    ``pytest`` inherits the whole environ, and an ambient value would silently
+    change the magnitudes these cases assert.
+    """
+    monkeypatch.setenv(BACKOFF_BASE_ENV, base)
+    durations = record_sleeps(monkeypatch, seam_call)
+    pin_jitter(monkeypatch, 0.0)
+
+    machine = _machine()
+    decide = machine.record_response
+    decisions: list = []
+
+    def _recording(self, *args, **kwargs):
+        outcome = decide(self, *args, **kwargs)
+        decisions.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(machine, "record_response", _recording)
+    return durations, decisions
+
+
+# One scripted 429, both directions of the same comparison in a single run. The
+# geometric wait CROSSES the origin's Retry-After between the first sleep and
+# the second — 4s is below the header, 8s is above it — so one origin grades
+# both halves of section 13's asymmetry against one machine: the header
+# lengthens the wait it exceeds, and the wait it does not exceed is left alone.
+#
+# Spelled as literals rather than derived from the base: a test that recomputed
+# ``max(base * 2 ** step, header)`` would restate the implementation it grades,
+# and would agree with a machine that had the ordering backwards.
+_CROSSING_BASE = "4"
+_CROSSING_RETRY_AFTER = "6"
+_CROSSING_WAITS = [6.0, 8.0]
+
+# The rate-limited answer that precedes every multi-arm sequence below. The
+# header is the state a later attempt must not inherit: 30 seconds is a number
+# the buyer would act on, and it belongs to a 429 that is not the failure being
+# reported by the time these sequences end.
+_STALE_RETRY_AFTER = "30"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_one_machine_lengthens_a_wait_and_leaves_the_next_one_alone(seam_call, monkeypatch, local_origin_tls):
+    """A 6s Retry-After raises the 4s wait and does not cut the 8s one — same machine, both paths.
+
+    Section 13 grades each direction of BR-RULE-029's asymmetry against its own
+    origin. This grades both against one, in one run, so a machine that applied
+    the ceiling and the floor in the wrong order cannot pass by getting one
+    origin's case right: the crossing point is between the two sleeps.
+
+    The decisions are asserted alongside the durations because the durations
+    alone do not say who computed them. Three 429s are three retry decisions and
+    two waits — the third attempt exhausts ``max_attempts`` and is never slept.
+    """
+    set_flags(monkeypatch, private=True)
+    rate_limited(local_origin_tls, retry_after=_CROSSING_RETRY_AFTER)
+    durations, decisions = record_machine_run(monkeypatch, seam_call, base=_CROSSING_BASE)
+
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
+
+    outcome = _machine().Outcome
+    assert decisions == [outcome.RETRY, outcome.RETRY, outcome.RETRY], (
+        f"expected every 429 to be one RETRY decision on the shared machine, got {decisions}"
+    )
+    assert durations == pytest.approx(_CROSSING_WAITS), (
+        f"expected the {_CROSSING_RETRY_AFTER}s Retry-After to lengthen the first wait and leave the "
+        f"second alone ({_CROSSING_WAITS}), got {durations}"
+    )
+    assert error.attempts == 3
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_a_size_cap_abort_after_a_rate_limit_carries_no_stale_retry_after(seam_call, monkeypatch, local_origin_tls):
+    """The abort reports the attempt it died on and NO retry_after — not the earlier 429's.
+
+    The size cap aborts mid-read, before there is any status decision to take,
+    so the state the machine is holding at that moment is the PREVIOUS attempt's:
+    a 429 that asked for 30 seconds. Reporting that number here would tell the
+    buyer to come back in 30s because of a rate limit that is not the failure
+    being reported — the same drift
+    ``test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after``
+    closes one branch over, and wire-visible for the same reason (it is clamped
+    to the spec's [1, 3600] and emitted).
+
+    ``retry_after`` is asserted for exactly that reason: ``attempts`` and
+    ``last_status`` are identical whether or not the stale value leaks, so a case
+    that graded only those two would let it ship.
+
+    The empty decision record is the other half: an aborted read is not a status
+    the machine may read as success or as retryable, so it must never reach the
+    response fork at all — it is named as its own event.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_in_sequence(
+        [
+            responds(429, body=_RATE_LIMITED_BODY, headers={"Retry-After": _STALE_RETRY_AFTER}),
+            sends_chunked_body(_seam()._MAX_RESPONSE_BYTES + 1),
+        ]
+    )
+    _durations, decisions = record_machine_run(monkeypatch, seam_call, base="0.001")
+
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
+
+    assert error.attempts == 2
+    assert error.last_status == 200
+    assert error.retry_after is None, (
+        f"the first attempt's Retry-After: {_STALE_RETRY_AFTER} survived into a size-cap abort as "
+        f"{error.retry_after!r} — the buyer would be told to wait for a 429 that is not this failure"
+    )
+    assert local_origin_tls.hits == 2, (
+        f"the oversized body was retried: a body too large now is too large on a retry too, "
+        f"but the origin was reached {local_origin_tls.hits} times"
+    )
+    outcome = _machine().Outcome
+    assert decisions == [outcome.RETRY], (
+        f"expected only the 429 to reach the response fork — an aborted read has no status verdict — got {decisions}"
+    )
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_both_paths_walk_retry_retry_terminal_through_the_same_machine(seam_call, monkeypatch, local_origin_tls):
+    """503, then 429, then 404: two retries and a terminal arm, identically on both paths.
+
+    One origin exercising two of the machine's three arms in sequence, at
+    ``max_attempts=5`` so that what stops the walk is the TERMINAL decision and
+    not exhaustion — with the attempt budget spent, a machine that never routed
+    to the terminal arm would look the same from outside.
+
+    ``retry_after`` is None on the reported failure even though attempt 2 sent
+    one: the value belongs to the response being reported, and the 404 sent
+    none. A machine that carried its state forward instead of rewriting it per
+    response reports the 429's 30s here.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_in_sequence(
+        [
+            responds(503, body=b'{"error": "unavailable"}'),
+            responds(429, body=_RATE_LIMITED_BODY, headers={"Retry-After": _STALE_RETRY_AFTER}),
+            responds(404, body=b'{"error": "no such hook"}'),
+        ]
+    )
+    _durations, decisions = record_machine_run(monkeypatch, seam_call, base="0.001")
+
+    error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=5)
+
+    outcome = _machine().Outcome
+    assert decisions == [outcome.RETRY, outcome.RETRY, outcome.TERMINAL], (
+        f"expected the shared machine to decide retry, retry, terminal for 503/429/404, got {decisions}"
+    )
+    assert error.attempts == 3
+    assert error.last_status == 404
+    assert error.retry_after is None, (
+        f"the 429's Retry-After: {_STALE_RETRY_AFTER} survived into the 404 that actually failed: {error.retry_after!r}"
+    )
+    assert local_origin_tls.hits == 3, f"the terminal 404 was retried: {local_origin_tls.hits} hits"
+
+
+@pytest.mark.parametrize("seam_call", SEAM_CALLS)
+def test_both_paths_walk_retry_retry_success_through_the_same_machine(seam_call, monkeypatch, local_origin_tls):
+    """503, then 429, then 200: the same two retries and the machine's third arm.
+
+    The sibling of the terminal walk above, and the reason the fork has three
+    arms rather than a boolean: "not retryable" splits into a delivered response
+    and a failure, and a machine that returned the terminal arm where success is
+    due would fail every migrated call site's happy path. Graded on the same
+    scripted prefix so the two cases differ only in the final answer.
+    """
+    set_flags(monkeypatch, private=True)
+    local_origin_tls.respond_in_sequence(
+        [
+            responds(503, body=b'{"error": "unavailable"}'),
+            responds(429, body=_RATE_LIMITED_BODY, headers={"Retry-After": _STALE_RETRY_AFTER}),
+            responds(200, body=b'{"ok": true}'),
+        ]
+    )
+    _durations, decisions = record_machine_run(monkeypatch, seam_call, base="0.001")
+
+    result = call_seam(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=5)
+
+    outcome = _machine().Outcome
+    assert decisions == [outcome.RETRY, outcome.RETRY, outcome.SUCCESS], (
+        f"expected the shared machine to decide retry, retry, success for 503/429/200, got {decisions}"
+    )
+    assert result.status_code == 200
+    assert result.json() == {"ok": True}
+    assert result.attempts == 3
+    assert local_origin_tls.hits == 3, f"the recovered request was sent {local_origin_tls.hits} times"
 
 
 # ---------------------------------------------------------------------------

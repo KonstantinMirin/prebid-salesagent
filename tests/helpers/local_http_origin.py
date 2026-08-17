@@ -214,6 +214,20 @@ def hangs_up() -> OriginResponse:
     return OriginResponse(mode="error")
 
 
+def sends_chunked_body(total_bytes: int, *, status: int = 200, chunk_size: int = 64 * 1024) -> OriginResponse:
+    """A chunked answer of ``total_bytes``, as a SEQUENCE entry.
+
+    :meth:`LocalOrigin.respond_chunked` programs the same oversized answer for
+    every request, which can only ever trip a size cap on the FIRST attempt.
+    This is the per-answer form, so a sequence can put the oversized body after
+    something else — "429 with a Retry-After, then a 200 whose body runs past
+    the cap" is the only way to reach the cap on a later attempt, and that is
+    the sequence that grades whether the earlier answer's state leaks into the
+    abort.
+    """
+    return OriginResponse(mode="chunked", status=status, total_bytes=total_bytes, chunk_size=chunk_size)
+
+
 def sends_malformed_body() -> OriginResponse:
     """Answer with valid headers and a body that violates chunked framing.
 

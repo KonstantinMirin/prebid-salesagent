@@ -13,7 +13,12 @@ redirect re-validation. Every one of those belongs to a maintained library:
   decision neither of those makes for us — see :meth:`EgressPolicy.
   resolve_for_dial`, which every pre-connection check in this module goes
   through (imported here, not restated).
-* This module owns capping the response body and what counts as retryable.
+* ``src.core.security.egress.attempts.Attempts`` owns the retry SCHEDULE and
+  the retry/success/terminal decision — this module drives one instance per
+  call, it does not decide the policy itself.
+* This module owns capping the response body and the I/O verbs (sync vs
+  async client, chunked read, sleep) that differ between ``send`` and
+  ``asend``.
 
 SSRF recurred in this codebase because policy lived at call sites, so each new
 outbound call shipped without it. Centralising *our own* copy of that policy
@@ -144,16 +149,21 @@ import asyncio
 import json
 import logging
 import os
-import random
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol, TypeGuard
+from typing import Any, Protocol, TypeGuard
 
 import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
 from adcp.signing import AsyncIpPinnedTransport, IpPinnedTransport
 
-from src.core.exceptions import AdCPServiceUnavailableError, clamp_retry_after
+from src.core.security.egress.attempts import (
+    _MAX_HONOURED_RETRY_AFTER_SECONDS,  # noqa: F401 - re-exported; test-facing facade, no remaining src consumer
+    _RETRYABLE_STATUSES,  # noqa: F401 - re-exported; read as a seam attribute by tests
+    Attempts,
+    OutboundDeliveryFailed,  # noqa: F401 - re-exported; caught by name throughout the tree
+    _backoff_seconds,
+)
 from src.core.security.egress.policy import (
     EgressPolicy,
     OutboundError,
@@ -211,29 +221,6 @@ _SIGNER_RESERVED_HEADERS = frozenset({"content-length", "transfer-encoding", "ho
 # memory-exhaustion vector. httpx applies no default limit (spec point 5).
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
-# Retry backoff. BR-RULE-029 INV-3: a retried delivery waits 1s, 2s, 4s, each
-# plus jitter, so a fleet of clients retrying the same failed endpoint does not
-# thunder back in lockstep. That is production's schedule, and it is decided here
-# rather than at any call site.
-_BACKOFF_BASE_SECONDS = 1.0
-
-# Test-speed override for the base only — the shape (x2 per attempt) and the
-# jitter are not negotiable. Deliberately absent from tox.ini pass_env and from
-# both compose files: no deployed or CI environment has any business shortening
-# production backoff.
-_BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
-
-# The most of a counterparty's Retry-After this seam will actually wait. The
-# header is a request, not an instruction: honouring an unbounded value lets any
-# origin pin a worker for an hour with one response header. Retry-After can only
-# ever LENGTHEN a wait beyond BR-RULE-029 — never shorten it — and only this far.
-_MAX_HONOURED_RETRY_AFTER_SECONDS = 60.0
-
-# Statuses worth trying again. Everything else — including every 4xx and every
-# 3xx — is terminal: retrying a rejected or redirected request only doubles the
-# damage.
-_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
-
 # httpx signals these as exceptions, never as a status, so a status-only
 # classifier would let them escape the seam and force every migrated call site
 # to keep its own ``except httpx...`` — the duplication this module deletes.
@@ -245,15 +232,13 @@ _RETRYABLE_EXCEPTIONS = (
     httpx.WriteError,
 )
 
-# Spec point 6: one fixed message for every DELIVERY-failure refusal (a
-# destination reached but not delivered — see OutboundDeliveryFailed below).
-# The dial-time ADDRESS/SCHEME refusal message (_BLOCKED_MESSAGE) now lives in
-# src/core/security/egress/policy.py, next to the OutboundRequestBlocked raise
-# sites that use it — OutboundError and OutboundRequestBlocked live there too;
-# imported above and re-exported here so this seam's ~30 existing
-# ``except OutboundError`` / ``except OutboundRequestBlocked`` catchers see no
-# change.
-_DELIVERY_FAILED_MESSAGE = "Outbound request to the supplied URL could not be delivered."
+# The retry SCHEDULE (_backoff_seconds, _wait_seconds, _RETRYABLE_STATUSES,
+# _MAX_HONOURED_RETRY_AFTER_SECONDS), the retry/success/terminal decision, and
+# OutboundDeliveryFailed itself now live in src.core.security.egress.attempts
+# — imported above and re-exported so this seam's ~30 existing
+# ``except OutboundError`` / ``except OutboundDeliveryFailed`` catchers, and
+# the tests that read _RETRYABLE_STATUSES / _MAX_HONOURED_RETRY_AFTER_SECONDS
+# off this module, see no change.
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,39 +280,6 @@ class OperatorEndpoint:
 # reports outward — there is no "no opinion" default, because "no opinion" is
 # exactly the provenance-by-omission this union replaces.
 UrlProvenance = CounterpartyUrl | OperatorEndpoint
-
-
-class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
-    """The destination was reachable but the request was not delivered.
-
-    ``attempts`` is how many times it was tried; ``last_status`` is the last
-    HTTP status observed, or ``None`` when the failure was a transport
-    exception and there was never a response to read a status from.
-    """
-
-    # Narrower than the base's ``int | None``: a delivery that reaches this
-    # class was tried at least once (``__init__`` requires ``attempts: int``,
-    # no default), so callers that have already caught this concrete type
-    # read a plain ``int``, not ``int | None``. ``last_status`` stays inherited
-    # — it is genuinely optional even here (a transport exception vs a
-    # response).
-    attempts: int
-
-    # Only these two fields ride to the buyer. `details` is buyer-visible —
-    # build_two_layer_error_envelope passes it straight into the adcp_error
-    # payload — so nothing derived from the origin's response or from the httpx
-    # error string may be added here (spec point 6).
-    _DETAIL_KEYS: ClassVar[tuple[str, str]] = ("attempts", "last_status")
-
-    def __init__(self, *, attempts: int, last_status: int | None, retry_after: int | None = None) -> None:
-        super().__init__(
-            _DELIVERY_FAILED_MESSAGE,
-            details={"attempts": attempts, "last_status": last_status},
-            retry_after=retry_after,
-        )
-        self.attempts = attempts
-        self.last_status = last_status
-        self.retry_after = retry_after
 
 
 def terminal_client_error_status(exc: OutboundError) -> int | None:
@@ -422,32 +374,6 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").lower() == "true"
 
 
-def _env_float(name: str, default: float) -> float:
-    """Read a positive float env knob, falling back loudly.
-
-    Read at CALL time for the same reason as :func:`_env_flag`.
-
-    The value must be STRICTLY positive. Zero is rejected rather than honoured
-    because "no base delay, jitter only" is not a schedule this module offers,
-    and silently substituting the 1s production default for it would surprise in
-    exactly the direction this seam exists to close. Every rejection is logged at
-    WARNING naming the variable — an operator who cannot see which knob was
-    ignored cannot fix it.
-    """
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        logger.warning("%s=%r is not a number — using %ss", name, raw, default)
-        return default
-    if value <= 0:
-        logger.warning("%s=%r is not strictly positive — using %ss", name, raw, default)
-        return default
-    return value
-
-
 def wire_field(provenance: UrlProvenance | None) -> str | None:
     """The buyer-visible field *provenance* contributes to a refusal, if any.
 
@@ -527,25 +453,6 @@ def _async_transport(url: str, *, field: str | None, allow_private: bool) -> Asy
     return AsyncIpPinnedTransport(hostname=hostname, resolved_ip=resolved_ip, verify=True)
 
 
-def _should_retry_status(status: int) -> bool:
-    return status in _RETRYABLE_STATUSES
-
-
-def _backoff_seconds(attempt: int) -> float:
-    """Seconds to wait before the attempt after ``attempt`` (1-based).
-
-    BR-RULE-029 INV-3, in the one place both ``send`` and ``asend`` reach: the
-    base doubles per attempt (1s, 2s, 4s) and each wait carries its own
-    ``uniform(0, 1)`` draw. Because the schedule is computed here and nowhere
-    else, no call site can migrate onto this seam and quietly keep a different
-    one. Deliberately private: the one sanctioned external consumer gets
-    :func:`sleep_backoff`, which performs the wait itself so no call site ever
-    holds a number it could scale or replace.
-    """
-    base = _env_float(_BACKOFF_BASE_ENV, _BACKOFF_BASE_SECONDS)
-    return base * (2 ** (attempt - 1)) + random.uniform(0, 1)
-
-
 async def sleep_backoff(attempt: int) -> None:
     """Await BR-RULE-029's wait before the attempt after ``attempt`` (1-based).
 
@@ -557,6 +464,10 @@ async def sleep_backoff(attempt: int) -> None:
     a public ``backoff_seconds()`` would let ``sleep(backoff_seconds(1))`` or a
     scaled variant drift invisibly; an awaitable that hands nothing back leaves
     a call site nothing to get wrong but the attempt index.
+
+    ``_backoff_seconds`` is imported from :mod:`src.core.security.egress.
+    attempts`, which owns the schedule now — this facade still performs the
+    wait itself, so the guarantee above is unchanged.
     """
     await asyncio.sleep(_backoff_seconds(attempt))
 
@@ -588,24 +499,6 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
     except ValueError:
         logger.debug("Ignoring non-delta-seconds Retry-After: %r", raw)
         return None
-
-
-def _wait_seconds(attempt: int, retry_after: float | None) -> float:
-    """How long to wait before the attempt after ``attempt``.
-
-    BR-RULE-029 is a FLOOR: this returns the geometric wait, raised to the
-    origin's Retry-After when that asks for longer, and the ceiling clamps the
-    RETRY-AFTER CONTRIBUTION only.
-
-    The order matters and the obvious spelling is wrong. ``min(max(backoff,
-    retry_after), CEILING)`` applies the ceiling to the whole wait, so any time
-    the geometric wait exceeds the ceiling the seam would sleep LESS than the
-    rule — silently, in the one module that owns that rule, and reachable through
-    the public ``max_attempts`` parameter (the schedule is 1, 2, 4, 8, 16, 32,
-    64s, so it crosses a 60s ceiling at seven attempts).
-    """
-    honoured = min(retry_after or 0.0, _MAX_HONOURED_RETRY_AFTER_SECONDS)
-    return max(_backoff_seconds(attempt), honoured)
 
 
 def _build_request(
@@ -669,14 +562,6 @@ def _result(response: httpx.Response, body: bytes, attempt: int, started: float)
         attempts=attempt,
         duration_seconds=time.monotonic() - started,
         _body=body,
-    )
-
-
-def _fail(attempts: int, last_status: int | None, retry_after: float | None = None) -> OutboundDeliveryFailed:
-    return OutboundDeliveryFailed(
-        attempts=attempts,
-        last_status=last_status,
-        retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
     )
 
 
@@ -831,13 +716,12 @@ def send(
     transport = _sync_transport(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
 
     started = time.monotonic()
-    last_status: int | None = None
-    last_retry_after: float | None = None
+    attempts = Attempts(max_attempts)
 
     # One transport per call, never cached: the pin is per-destination and fails
     # closed when reused for another host.
     with httpx.Client(transport=transport, timeout=timeout) as client:
-        for attempt in range(1, max_attempts + 1):
+        for attempt in attempts.next_attempt():
             request = _build_request(
                 client,
                 method=method,
@@ -855,28 +739,25 @@ def send(
                     for chunk in response.iter_bytes():
                         body.extend(chunk)
                         if _over_cap(len(body)):
-                            # Terminal: a body too large now will be too large
-                            # on a retry too.
                             logger.warning("Outbound response exceeded the size cap; aborting read")
-                            raise _fail(attempt, response.status_code)
+                            attempts.record_oversized_response(response.status_code)
+                            raise attempts.failure()
                 finally:
                     response.close()
             except _RETRYABLE_EXCEPTIONS as exc:
                 logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
-                last_status = None
-                last_retry_after = None
+                attempts.record_transport_failure(exc)
             else:
-                last_status = response.status_code
-                last_retry_after = retry_after_seconds(response)
-                if not _should_retry_status(last_status):
-                    if response.is_success:
-                        return _result(response, bytes(body), attempt, started)
-                    raise _fail(attempt, last_status, last_retry_after)
+                outcome = attempts.record_response(response.status_code, retry_after_seconds(response))
+                if outcome is Attempts.Outcome.SUCCESS:
+                    return _result(response, bytes(body), attempt, started)
+                if outcome is Attempts.Outcome.TERMINAL:
+                    raise attempts.failure()
 
             if attempt < max_attempts:
-                time.sleep(_wait_seconds(attempt, last_retry_after))
+                time.sleep(attempts.wait_seconds())
 
-    raise _fail(max_attempts, last_status, last_retry_after)
+    raise attempts.failure()
 
 
 async def asend(
@@ -896,18 +777,17 @@ async def asend(
 
     See :func:`send` for the contract, ``provenance`` included. The two differ
     only in ``Client``/``AsyncClient`` and ``time.sleep``/``asyncio.sleep``;
-    every policy decision is a shared helper so neither path can drift from the
-    other.
+    every policy decision is a shared helper, driven by one Attempts
+    instance, so neither path can drift from the other.
     """
     field = _checked_field(provenance, url)
     transport = _async_transport(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
 
     started = time.monotonic()
-    last_status: int | None = None
-    last_retry_after: float | None = None
+    attempts = Attempts(max_attempts)
 
     async with httpx.AsyncClient(transport=transport, timeout=timeout) as client:
-        for attempt in range(1, max_attempts + 1):
+        for attempt in attempts.next_attempt():
             request = _build_request(
                 client,
                 method=method,
@@ -926,22 +806,21 @@ async def asend(
                         body.extend(chunk)
                         if _over_cap(len(body)):
                             logger.warning("Outbound response exceeded the size cap; aborting read")
-                            raise _fail(attempt, response.status_code)
+                            attempts.record_oversized_response(response.status_code)
+                            raise attempts.failure()
                 finally:
                     await response.aclose()
             except _RETRYABLE_EXCEPTIONS as exc:
                 logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
-                last_status = None
-                last_retry_after = None
+                attempts.record_transport_failure(exc)
             else:
-                last_status = response.status_code
-                last_retry_after = retry_after_seconds(response)
-                if not _should_retry_status(last_status):
-                    if response.is_success:
-                        return _result(response, bytes(body), attempt, started)
-                    raise _fail(attempt, last_status, last_retry_after)
+                outcome = attempts.record_response(response.status_code, retry_after_seconds(response))
+                if outcome is Attempts.Outcome.SUCCESS:
+                    return _result(response, bytes(body), attempt, started)
+                if outcome is Attempts.Outcome.TERMINAL:
+                    raise attempts.failure()
 
             if attempt < max_attempts:
-                await asyncio.sleep(_wait_seconds(attempt, last_retry_after))
+                await asyncio.sleep(attempts.wait_seconds())
 
-    raise _fail(max_attempts, last_status, last_retry_after)
+    raise attempts.failure()

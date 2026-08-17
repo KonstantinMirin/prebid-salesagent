@@ -375,7 +375,7 @@ class TestConnectionRetryBackoffSchedule:
         """max_retries=3 against a dead port sleeps base + pinned jitter, twice.
 
         The jitter draw is pinned to 0.25 via the seam suite's ``pin_jitter``
-        (patches ``outbound_http.random.uniform`` — the one home of the draw),
+        (patches ``egress.attempts.random.uniform`` — the one home of the draw),
         turning the grade exact: 1.25s then 2.25s. A schedule computed anywhere
         other than the seam never reaches that draw and shows up here as the
         bare bases. The base knob is ``delenv``'d so an ambient test-speed

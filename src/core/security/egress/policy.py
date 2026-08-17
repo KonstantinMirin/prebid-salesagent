@@ -97,9 +97,10 @@ class OutboundError(Exception):
     a bare INTERNAL_ERROR at a transport boundary and would be invisible to
     the error-taxonomy guards that walk ``AdCPError.iter_concrete_subclasses()``.
     Raise :class:`OutboundRequestBlocked` (defined here) or
-    ``OutboundDeliveryFailed`` (``src/core/security/outbound_http.py`` — a
-    delivery outcome, not an address-policy verdict, so it stays there)
-    instead.
+    ``OutboundDeliveryFailed`` (``src/core/security/egress/attempts.py`` — a
+    delivery outcome tied to the retry schedule, not an address-policy
+    verdict, so it lives beside :class:`~src.core.security.egress.attempts.
+    Attempts`) instead.
 
     Lives here (not in ``outbound_http.py``) because :func:`resolve_for_dial`
     must raise :class:`OutboundRequestBlocked` directly, and ``outbound_http``

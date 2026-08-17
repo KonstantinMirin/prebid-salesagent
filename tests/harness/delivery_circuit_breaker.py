@@ -85,7 +85,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
 
     EXTERNAL_PATCHES = {
         "sleep": "src.core.security.outbound_http.time.sleep",
-        "random": "src.core.security.outbound_http.random.uniform",
+        "random": "src.core.security.egress.attempts.random.uniform",
     }
 
     def __init__(self, **kwargs: Any) -> None:

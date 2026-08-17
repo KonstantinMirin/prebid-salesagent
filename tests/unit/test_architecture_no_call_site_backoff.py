@@ -65,6 +65,18 @@ EXEMPT_FILES = frozenset({SEAM_FILE})
 # name and the attribute form.
 SLEEP_NAME = "sleep"
 
+# Method names that, called as an ATTRIBUTE inside a sleep() argument, count as
+# schedule-derived — same principle as _functions_returning_a_power, but for a
+# call the detector's same-module ast.Name resolution cannot see.
+# ``wait_seconds`` is Attempts.wait_seconds (src/core/security/egress/
+# attempts.py, salesagent-tbrk.2): the seam itself now sleeps
+# time.sleep(attempts.wait_seconds()), an ast.Attribute-shaped call, and
+# WITHOUT this the seam's own exemption would exempt an already-clean file --
+# see TestNoCallSiteBackoff.test_seam_module_would_otherwise_be_flagged, which
+# exists precisely to catch that. Narrow and hardcoded on purpose: this is not
+# a call graph, it names the one method whose result IS the schedule.
+_SCHEDULE_METHOD_NAMES = frozenset({"wait_seconds"})
+
 # Sites: (module_path, geometric_sleep_count). Not pre-existing debt with a
 # removal ticket per entry — each is a taxonomy entry, kept visible because the
 # detector's proxy ("geometric sleep anywhere in src/") cannot statically tell
@@ -175,8 +187,16 @@ def find_call_site_backoff_violations(tree: ast.Module) -> list[int]:
         referenced = {sub.id for sub in ast.walk(duration) if isinstance(sub, ast.Name)}
         called = {
             sub.func.id for sub in ast.walk(duration) if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+        } | {
+            sub.func.attr
+            for sub in ast.walk(duration)
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
         }
-        if _contains_power(duration) or (referenced & power_names) or (called & power_functions):
+        if (
+            _contains_power(duration)
+            or (referenced & power_names)
+            or (called & (power_functions | _SCHEDULE_METHOD_NAMES))
+        ):
             violations.append(node.lineno)
     return violations
 
@@ -251,6 +271,10 @@ class TestGuardDetector:
                 ),
                 "bare imported sleep": "from time import sleep\nsleep(2**attempt)\n",
                 "multiplier power": "import time\ntime.sleep(base * multiplier**attempt)\n",
+                "attempts-machine method": "import time\ntime.sleep(attempts.wait_seconds())\n",
+                "async attempts-machine method": (
+                    "import asyncio\n\n\nasync def f(attempts):\n    await asyncio.sleep(attempts.wait_seconds())\n"
+                ),
             },
         )
 
@@ -269,6 +293,10 @@ class TestGuardDetector:
             ("header-driven wait", "import asyncio\n\n\nasync def f(r):\n    await asyncio.sleep(retry_after)\n"),
             ("power outside a sleep", "x = 2**attempt\nprint(x)\n"),
             ("seam usage", "from src.core.security.outbound_http import send\n\nr = send('https://x/', json={})\n"),
+            (
+                "unrelated attribute method",
+                "import time\ntime.sleep(r.retry_after_seconds())\n",
+            ),
         ],
     )
     def test_detector_ignores_non_backoff(self, label, source):
