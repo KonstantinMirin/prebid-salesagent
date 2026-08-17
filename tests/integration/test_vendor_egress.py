@@ -185,6 +185,29 @@ def _xandr(origin: LocalOrigin):
     )
 
 
+def _xandr_authenticated(origin: LocalOrigin):
+    """A Xandr adapter that has already authenticated — the auth dial short-circuits.
+
+    Seeding ``token``/``token_expiry`` alone used to be the whole shortcut, but a
+    token is no longer what ``_make_request`` dials with: the credentialed
+    ``VendorHttpClient`` is, and ``_authenticate`` is the only thing that builds
+    it. Skipping auth therefore has to hand over the post-auth state *whole* —
+    token, expiry and the client that carries the same token in its frozen
+    headers — or the adapter is left in a state no real authentication can
+    produce (a live token with nothing to dial through).
+    """
+    from src.adapters.vendor_http import VendorHttpClient
+
+    adapter = _xandr(origin)
+    adapter.token = "seeded-token"
+    adapter.token_expiry = datetime.now(UTC) + timedelta(hours=1)
+    adapter._vendor = VendorHttpClient(
+        base_url=origin.base_url,
+        headers={"Authorization": "seeded-token", "Content-Type": "application/json"},
+    )
+    return adapter
+
+
 def _mock_ad_server(origin: LocalOrigin):
     """A mock adapter configured to post its HITL completion webhook at *origin*."""
     from src.adapters.mock_ad_server import MockAdServer
@@ -249,9 +272,7 @@ def test_xandr_make_request_does_not_retry_a_failing_origin(local_origin_tls, mo
     fast_backoff(monkeypatch)
     local_origin_tls.respond_with(500, body=b'{"error": "boom"}')
 
-    adapter = _xandr(local_origin_tls)
-    adapter.token = "seeded-token"
-    adapter.token_expiry = datetime.now(UTC) + timedelta(hours=1)
+    adapter = _xandr_authenticated(local_origin_tls)
 
     with pytest.raises(_VENDOR_FAILURE):
         adapter._make_request("POST", "/campaign", {"name": "x"})
@@ -489,12 +510,61 @@ def test_xandr_make_request_returns_the_parsed_body(local_origin_tls, monkeypatc
     allow_local_origin(monkeypatch)
     local_origin_tls.respond_with(200, body=b'{"response": {"status": "OK", "id": 42}}')
 
-    adapter = _xandr(local_origin_tls)
-    adapter.token = "seeded-token"
-    adapter.token_expiry = datetime.now(UTC) + timedelta(hours=1)
+    adapter = _xandr_authenticated(local_origin_tls)
 
     assert adapter._make_request("GET", "/campaign") == {"response": {"status": "OK", "id": 42}}
     assert local_origin_tls.hits == 1
+
+
+def test_xandr_rebuilds_its_vendor_client_when_the_token_rotates(local_origin_tls, monkeypatch):
+    """A rotated Xandr token reaches the wire because the whole client was REBUILT.
+
+    Two calls, an expiry forced into the past between them, so both really
+    authenticate: the origin sees auth, request, auth, request and answers the
+    two auth dials with *different* tokens. What is graded is the header on the
+    two request dials — ``tok-1`` then ``tok-2`` — read off the bytes the server
+    received, plus the object identity of ``adapter._vendor`` across the
+    rotation. Identity is the load-bearing half: an equal-but-mutated client
+    would satisfy the header assertion today and still leave a live object whose
+    ``Authorization`` and ``base_url`` could drift apart under a partial update.
+    Replacing the frozen client whole is what makes that state unrepresentable.
+
+    The auth dials themselves must carry no ``Authorization`` at all — the
+    bootstrap client is uncredentialed by construction, which is precisely why
+    it can exist before a token does.
+    """
+    allow_local_origin(monkeypatch)
+    local_origin_tls.respond_in_sequence(
+        [
+            (200, b'{"response": {"status": "OK", "token": "tok-1"}}'),
+            (200, b'{"response": {"status": "OK", "id": 1}}'),
+            (200, b'{"response": {"status": "OK", "token": "tok-2"}}'),
+            (200, b'{"response": {"status": "OK", "id": 2}}'),
+        ]
+    )
+
+    adapter = _xandr(local_origin_tls)
+
+    assert adapter._make_request("POST", "/campaign", {"name": "first"}) == {"response": {"status": "OK", "id": 1}}
+    client_before_rotation = adapter._vendor
+
+    adapter.token_expiry = datetime.now(UTC) - timedelta(seconds=1)
+
+    assert adapter._make_request("POST", "/campaign", {"name": "second"}) == {"response": {"status": "OK", "id": 2}}
+    client_after_rotation = adapter._vendor
+
+    # auth #1, request #1, auth #2, request #2 — one attempt per dial, four dials.
+    assert local_origin_tls.hits == 4
+    assert [req.path for req in local_origin_tls.requests] == ["/auth", "/campaign", "/auth", "/campaign"]
+    # The auth dial's verb went from IMPLICIT (outbound_http.send's default
+    # POST) to EXPLICIT (_bootstrap.call("POST", ...)) in this migration —
+    # exactly where a typo hides, so it is graded on the wire like the rest.
+    assert [req.method for req in local_origin_tls.requests] == ["POST", "POST", "POST", "POST"]
+    assert local_origin_tls.requests[0].headers.get("Authorization") is None
+    assert local_origin_tls.requests[1].headers["Authorization"] == "tok-1"
+    assert local_origin_tls.requests[2].headers.get("Authorization") is None
+    assert local_origin_tls.requests[3].headers["Authorization"] == "tok-2"
+    assert client_before_rotation is not client_after_rotation
 
 
 def test_mock_ad_server_webhook_posts_the_completion_payload(local_origin_tls, monkeypatch):
@@ -590,7 +660,7 @@ def test_google_token_url_is_injectable():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("vendor", ["Kevel", "Triton Digital"])
+@pytest.mark.parametrize("vendor", ["Kevel", "Triton Digital", "Xandr"])
 def test_require_vendor_refuses_an_unconfigured_client(vendor):
     """``require_vendor(None, ...)`` raises a typed, vendor-named configuration error.
 
@@ -637,6 +707,24 @@ def test_a_dry_run_adapter_holds_no_vendor_client(build_dry_run_adapter):
     already produce today).
     """
     adapter = build_dry_run_adapter()
+
+    assert adapter._vendor is None
+
+
+def test_an_unauthenticated_xandr_adapter_holds_no_vendor_client(local_origin_tls):
+    """A freshly-constructed Xandr adapter has ``_vendor is None`` until it authenticates.
+
+    Xandr's ``None`` means something different from Kevel's and Triton's above:
+    the adapter has no dry-run concept at all, and its credential is not config,
+    it is a token the vendor issues. So the un-dialable state is not a mode, it
+    is simply "before the first ``/auth``" — and it must be the same ``None``
+    ``require_vendor`` refuses by name, not a missing attribute that surfaces as
+    an ``AttributeError`` halfway through a campaign create.
+
+    The origin fixture only supplies a base URL to construct against; this case
+    opens no egress hatch and dials nothing, which is the point.
+    """
+    adapter = _xandr(local_origin_tls)
 
     assert adapter._vendor is None
 

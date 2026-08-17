@@ -11,6 +11,7 @@ from typing import Any
 from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
+from src.adapters.vendor_http import VendorHttpClient, require_vendor
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     CreateMediaBuyRequest,
@@ -23,7 +24,7 @@ from src.core.schemas import (
     UpdateMediaBuyResponse,
     url,
 )
-from src.core.security.outbound_http import OutboundError, send
+from src.core.security.outbound_http import OutboundError
 
 # NOTE: Xandr adapter needs full refactor - it's using old schemas and patterns
 # The other methods (get_media_buy_status, get_media_buy_delivery, etc.) still use old schemas
@@ -225,6 +226,15 @@ class XandrAdapter(AdServerAdapter):
         self.token = None
         self.token_expiry = None
 
+        # _bootstrap: the un-credentialed client that dials /auth itself; a
+        # real VendorHttpClient exists the moment api_endpoint does (it
+        # always does — :214's default), which is what a client that
+        # carries no secret is allowed to prove. Built once, never rebuilt.
+        # _vendor: the credentialed client every OTHER call goes through —
+        # rebuilt whole on every successful authenticate; never mutated.
+        self._bootstrap = VendorHttpClient(base_url=self.api_endpoint, headers={"Content-Type": "application/json"})
+        self._vendor: VendorHttpClient | None = None
+
         # Manual approval mode
         self.manual_approval = config.get("manual_approval_required", False)
         self.manual_operations = config.get("manual_approval_operations", [])
@@ -236,7 +246,6 @@ class XandrAdapter(AdServerAdapter):
         if self.token and self.token_expiry and datetime.now(UTC) < self.token_expiry:
             return  # Token still valid
 
-        auth_url = f"{self.api_endpoint}/auth"
         auth_data = {"auth": {"username": self.username, "password": self.password}}
 
         try:
@@ -245,13 +254,22 @@ class XandrAdapter(AdServerAdapter):
             # decorator the two multiplied, costing 9 authentication POSTs against a
             # down Xandr with a cold token. Both decorators are gone; the seam is the
             # only thing that decides attempts here now.
-            result = send(auth_url, json=auth_data, timeout=30.0, max_attempts=1)
+            result = self._bootstrap.call("POST", "/auth", json=auth_data)
 
             data = result.json()
             if data.get("response", {}).get("status") == "OK":
                 self.token = data["response"]["token"]
                 # Xandr tokens typically last 2 hours
                 self.token_expiry = datetime.now(UTC) + timedelta(hours=2)
+                # Rotation replaces the client whole, never mutates the live
+                # one in place: frozen blocks REBINDING self._vendor.headers,
+                # but the dict that field points at is still mutable, so
+                # "never mutated" is a discipline this call site keeps, not
+                # one the dataclass enforces on its own.
+                self._vendor = VendorHttpClient(
+                    base_url=self.api_endpoint,
+                    headers={"Authorization": self.token, "Content-Type": "application/json"},
+                )
                 logger.info("Successfully authenticated with Xandr")
             else:
                 raise Exception(f"Authentication failed: {data}")
@@ -264,25 +282,18 @@ class XandrAdapter(AdServerAdapter):
         """Make authenticated request to Xandr API."""
         self._authenticate()
 
-        headers = {"Authorization": self.token, "Content-Type": "application/json"}
-
-        url = f"{self.api_endpoint}{endpoint}"
-
         if method not in ("GET", "POST", "PUT", "DELETE"):
             raise ValueError(f"Unsupported method: {method}")
 
         try:
-            # The verb branch is gone: the seam already takes method=, and a GET
+            # The verb branch is gone: the client already takes method=, and a GET
             # carries its dict as params while the others carry it as a body.
             # max_attempts=1 preserves this site's real behaviour — see _authenticate.
-            result = send(
-                url,
-                method=method,
-                headers=headers,
+            result = require_vendor(self._vendor, vendor="Xandr").call(
+                method,
+                endpoint,
                 params=data if method == "GET" else None,
                 json=data if method != "GET" and data is not None else None,
-                timeout=30.0,
-                max_attempts=1,
             )
             return result.json()
 
