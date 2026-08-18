@@ -17,8 +17,8 @@
 schema_version: 1
 source:
   repository: adcp-req
-  commit: render
-  compiled_at: "2026-06-04T09:53:13Z"
+  commit: 086fef81bc8681ca88dfebd1e518b74060df64dc
+  compiled_at: "2026-08-18T16:07:01Z"
 
 mappings:
   COMPAT-001:
@@ -10607,12 +10607,6 @@ mappings:
       business_rules: ["BR-RULE-209"]
       status: new
   UC-019:
-    - adcp_scenario_id: "T-UC-019-envelope-status"
-      adcp_feature: "BR-UC-019-query-media-buys.feature"
-      obligation_id: null
-      upstream_refs: ["core/protocol-envelope.json", "media-buy/get-media-buys-response.json"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-019-main-filter-ids"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
@@ -10884,6 +10878,18 @@ mappings:
       business_rules: ["BR-RULE-150"]
       status: new
     - adcp_scenario_id: "T-UC-019-inv-150-10"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
+    - adcp_scenario_id: "T-UC-019-envelope-status"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["GH-1900"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-150-11"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
       upstream_refs: ["BR-RULE-150"]

@@ -76,6 +76,8 @@ def make_media_buy(
     raw_request=None,
     status="active",
     is_paused=False,
+    revision=1,
+    confirmed_at=datetime(2025, 1, 1, tzinfo=UTC),
 ):
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
@@ -93,6 +95,11 @@ def make_media_buy(
     buy.is_paused = is_paused
     buy.created_at = datetime(2025, 1, 1, tzinfo=UTC)
     buy.updated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    # Real column values, not MagicMocks. Both are spec-required on media_buys[] and
+    # the read path now refuses a row it cannot legitimately publish, so a mock that
+    # leaves them auto-generated is a row no store could ever hold.
+    buy.revision = revision
+    buy.confirmed_at = confirmed_at
     return buy
 
 

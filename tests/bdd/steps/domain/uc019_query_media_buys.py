@@ -3055,6 +3055,29 @@ def _collect_media_buy_entries(node: Any) -> list[dict]:
     return found
 
 
+@then(parsers.parse('the request should be refused for "{mb_id}" with error code "{code}"'))
+def then_request_refused_with_error_code(ctx: dict, mb_id: str, code: str) -> None:
+    """Assert the buyer received a refusal carrying *code*, read off the WIRE envelope.
+
+    Routed through ``TransportResult.assert_wire_error`` rather than an isinstance
+    check on a reconstructed exception: the harness's reconstruction is lossy, and an
+    assertion that a refusal merely happened is exactly the vacuous grade this
+    scenario used to carry (the retired outcome named SCHEMA_VIOLATION, a
+    conformance-runner token that is not in the pinned wire enum at all, so nothing
+    could ever emit it and nothing could ever notice).
+
+    ``recovery`` is deliberately not passed: ``assert_wire_error`` defaults it from
+    the pinned enum for the code, so the assertion carries the spec's own
+    classification instead of one restated here.
+    """
+    result = ctx.get("result")
+    assert result is not None, (
+        f"no TransportResult in context for '{mb_id}' — the When step did not dispatch, "
+        f"so there is no wire envelope to grade"
+    )
+    result.assert_wire_error(code)
+
+
 @then(
     parsers.parse(
         'the media buy "{mb_id}" should not be published, and no returned media buy '

@@ -68,6 +68,7 @@ from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
+    AdCPPersistedStateError,
     AdCPValidationError,
 )
 from src.core.helpers.adapter_helpers import get_adapter
@@ -298,7 +299,7 @@ def _get_media_buys_impl(
                 # mutation counter. This function is a pure reader of what that seam
                 # decided.
                 confirmed_at=buy.confirmed_at,
-                revision=buy.revision,
+                revision=_persisted_revision(buy),
             )
         )
 
@@ -432,7 +433,7 @@ def _fetch_target_media_buys(
             status=buy.status,
             is_paused=buy.is_paused,
             confirmed_at=buy.confirmed_at,
-            revision=buy.revision,
+            revision=_persisted_revision(buy),
         )
         for buy in buys
         if filter_statuses is None or _compute_status(buy, today) in filter_statuses
@@ -479,6 +480,29 @@ def _resolve_status_filter(
             field="status_filter",
             suggestion="status_filter values must be valid media-buy statuses",
         ) from e
+
+
+# The pinned `get-media-buys-response.json` types media_buys[].revision as an integer
+# with `minimum: 1`. A row below it cannot be published at all — and the refusal has
+# to be raised HERE rather than left to the response model, because a model-level
+# ValidationError reaches the buyer as VALIDATION_ERROR/correctable: advice to "fix
+# field values" for a column the SELLER owns and the buyer has never seen. Same
+# reasoning, same typed error, and the same read boundary as an out-of-vocabulary
+# status (PersistedMediaBuyStatus.parse).
+_PINNED_REVISION_MINIMUM = 1
+
+
+def _persisted_revision(buy) -> int:
+    """The row's revision, or ``AdCPPersistedStateError``."""
+    revision = buy.revision
+    if revision is None or revision < _PINNED_REVISION_MINIMUM:
+        raise AdCPPersistedStateError(
+            f"media buy {buy.media_buy_id!r} carries persisted revision {revision!r}, below the "
+            f"pinned minimum of {_PINNED_REVISION_MINIMUM}; the optimistic-concurrency token "
+            f"cannot be published",
+            field="revision",
+        )
+    return revision
 
 
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:

@@ -1,4 +1,4 @@
-# Generated from adcp-req @ render on 2026-06-04T09:53:12Z (merge mode)
+# Generated from adcp-req @ 086fef81bc8681ca88dfebd1e518b74060df64dc on 2026-08-18T16:07:01Z (merge mode)
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-019 Query Media Buys
@@ -24,6 +24,9 @@ Feature: BR-UC-019 Query Media Buys
 
 
 
+
+
+
   @T-UC-019-main @main-flow
   Scenario: Query media buys with default filters
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
@@ -40,15 +43,17 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-envelope-status @envelope @schema @v3-1
   Scenario: A get_media_buys response carries the spec-required envelope status
-    # GH #1900: core/protocol-envelope.json marks `status` REQUIRED on every task
-    # response envelope, and get-media-buys-response.json composes that arm via a
-    # top-level allOf. GetMediaBuysResponse extended no library base, so a live
-    # response carried no status at all and nothing on any transport noticed.
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no filters
     Then the response envelope carries status completed
     And the response should be schema-valid against media-buy/get-media-buys-response.json
+    # core/protocol-envelope.json marks `status` REQUIRED on every task response
+    # envelope, and get-media-buys-response.json composes that arm via a top-level
+    # allOf — so the requirement reaches this response through composition rather
+    # than by being spelled out on it. That is exactly how it went missing in a
+    # real implementation: the response type declared no status at all and no
+    # transport noticed, because nothing graded the composed arm.
 
   @T-UC-019-main-filter-ids @main-flow @filtering
   Scenario: Query media buys by specific media_buy_ids
@@ -149,6 +154,18 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the media buy "mb-001" should have status "<expected_status>"
     # BR-RULE-150: Status computed from relationship between today and flight dates
+    # RETIRED (T-UC-019-partition-status-invalid): "Status computation with missing dates".
+    # Verified against AdCP 3.1 GA (spec pin v3.1-04f59d2d5): the core media-buy object
+    # (dist/schemas/2.5.0/core/media-buy.json) has NO date fields — flight dates are
+    # per-package — and `status` is REQUIRED, always emitted from the persisted status
+    # column (never computed FROM dates; dates only REFINE a serving window). A media
+    # buy with "missing dates" is therefore not a spec-level state. It is also
+    # schema-impossible: MediaBuy.start_date/end_date are NOT NULL, so a dateless buy
+    # cannot be persisted and get_media_buys can never receive one. This partition was a
+    # phantom (its error was synthesized test-side; production was never invoked), so it
+    # is retired rather than wired. The latent crash it implied (date compare vs a NULL
+    # edge) is fixed defensively in resolve_canonical_status (returns the persisted
+    # status, no TypeError). Retired at the source, so the merge does not re-add it.
 
     Examples: Valid partitions
       | partition                 | today      | start      | end        | expected_status |
@@ -156,19 +173,6 @@ Feature: BR-UC-019 Query Media Buys
       | active_refined_in_flight  | 2026-03-15 | 2026-03-01 | 2026-03-31 | active          |
       | active_refined_completed  | 2026-04-01 | 2026-03-01 | 2026-03-31 | completed       |
       | single_day_flight         | 2026-03-15 | 2026-03-15 | 2026-03-15 | active          |
-
-  # RETIRED (T-UC-019-partition-status-invalid): "Status computation with missing dates".
-  # Verified against AdCP 3.1 GA (spec pin v3.1-04f59d2d5): the core media-buy object
-  # (dist/schemas/2.5.0/core/media-buy.json) has NO date fields — flight dates are
-  # per-package — and `status` is REQUIRED, always emitted from the persisted status
-  # column (never computed FROM dates; dates only REFINE a serving window). A media
-  # buy with "missing dates" is therefore not a spec-level state. It is also
-  # schema-impossible: MediaBuy.start_date/end_date are NOT NULL, so a dateless buy
-  # cannot be persisted and get_media_buys can never receive one. This partition was a
-  # phantom (its error was synthesized test-side; production was never invoked), so it
-  # is retired rather than wired. The latent crash it implied (date compare vs a NULL
-  # edge) is fixed defensively in resolve_canonical_status (returns the persisted
-  # status, no TypeError). Reconcile upstream in adcp-req so --merge does not re-add it.
 
   @T-UC-019-boundary-status @boundary @status
   Scenario Outline: Status computation boundary - <boundary_point>
@@ -207,12 +211,12 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
     Given the principal "buyer-001" owns media buys in various statuses
-    # Pin the clock: the "various statuses" seed builds each buy's flight window
-    # around this date, so the query MUST evaluate status against it too (else all
-    # windows are in the past under the real clock and every buy reads completed).
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
+    # Pin the clock: the "various statuses" seed builds each buy's flight window
+    # around this date, so the query MUST evaluate status against it too (else all
+    # windows are in the past under the real clock and every buy reads completed).
     # BR-RULE-151: Status filter defaults and validation
 
     Examples: Valid partitions
@@ -239,11 +243,11 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given the principal "buyer-001" owns media buys in various statuses
-    # Pin the clock so the seed's flight windows and the query's status
-    # computation agree (see the partition scenario above).
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
+    # Pin the clock so the seed's flight windows and the query's status
+    # computation agree (see the partition scenario above).
     # BR-RULE-151: Boundary test for status filter
 
     Examples: Boundary values
@@ -425,13 +429,13 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-inv-151-1 @invariant @BR-RULE-151
   Scenario: INV-1 holds - default filter returns only active media buys
     Given the principal "buyer-001" owns active media buy "mb-001" and completed media buy "mb-002"
-    # Pin the clock: the seed builds mb-001/mb-002 flight windows around this same
-    # "today" (mock_today), so the query MUST evaluate status against it too, else
-    # mb-001's window is in the past under the real clock and it reads as completed.
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no status_filter
     Then the response should include media buy "mb-001"
     And the response should not include media buy "mb-002"
+    # Pin the clock: the seed builds mb-001/mb-002 flight windows around this same
+    # "today" (mock_today), so the query MUST evaluate status against it too, else
+    # mb-001's window is in the past under the real clock and it reads as completed.
     # BR-RULE-151 INV-1: null status_filter defaults to {active}
 
   @T-UC-019-inv-151-4 @invariant @BR-RULE-151 @error
@@ -524,38 +528,6 @@ Feature: BR-UC-019 Query Media Buys
       | rejected  | rejected  |
       | canceled  | canceled  |
 
-  @T-UC-019-confirmed-at-null-survives-exclude-none @hand-edited @BR-RULE-150 @schema-v3.1
-  Scenario Outline: A buy that was never confirmed still carries confirmed_at as null
-    # HAND-EDITED (#1900): authored locally, not rendered from adcp-req. The marker is
-    # load-bearing — compile_bdd's merge classifies a LEGACY-only scenario without one
-    # as LEGACY-DELETE, and an Examples row added to an UPSTREAM scenario is replaced
-    # wholesale by the EXAMPLES-ONLY bucket. So this obligation can only be graded
-    # locally as its own marked scenario.
-    #
-    # Why it exists: confirmed_at is required-and-nullable on the pinned item schema,
-    # and the library base serializes with exclude_none=True. Every other confirmed_at
-    # scenario seeds a NON-null value, so the key survives there on its own merit and
-    # the retention path is never exercised. These buys reach the buyer with the column
-    # still NULL, which is exactly where a dropped key produces an item that fails
-    # item-level validation.
-    #
-    # The seeds are the statuses OUTSIDE _SELLER_COMMITTED_STATUSES (models.py) that
-    # get_media_buys publishes: rejected is INV-7's terminal pass-through, draft and
-    # pending_approval are INV-8's pre-serving states. canceled is deliberately NOT
-    # here — it IS a committed status, so its confirmed_at is legitimately stamped, and
-    # seeding it would assert a premise production correctly refuses.
-    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
-    And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
-    And today is "2026-03-15"
-    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" confirmed_at should be null on the wire
-
-    Examples:
-      | persisted        |
-      | rejected         |
-      | draft            |
-      | pending_approval |
-
   @T-UC-019-inv-150-8 @invariant @BR-RULE-150 @schema-v3.1
   Scenario Outline: INV-8 holds - pre-serving persisted states map to their pending status
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
@@ -589,40 +561,56 @@ Feature: BR-UC-019 Query Media Buys
     Then the media buy "mb-001" should have status "<persisted>"
     # BR-RULE-150 INV-10: pending_creatives/pending_start pass through; no flight refinement
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # RETIRED SCENARIO (T-UC-019-inv-150-11): "unknown persisted status defaults to
+    # active then flight-refines". It graded the defensive default-to-active path, and
+    # that path is deleted.
+    #
+    # The default was not merely redundant, it was harmful. An unmapped persisted
+    # status was reported to the buyer as a SERVING buy, and — once the commitment
+    # vocabulary was made fail-closed — with no confirmed_at to go with it. The pinned
+    # item schema forbids exactly that pair (confirmed_at is [string, null] with an
+    # allOf/if guard that rejects null when status is "active"), so honouring INV-11
+    # meant publishing a document that fails its own schema. The scenario passed only
+    # because its Then checks the status field alone.
+    #
+    # Per the owner ruling in the remediation plan's ALTERATIONS section, a closed
+    # vocabulary is enforced where values ENTER: MediaBuyRepository now refuses a status
+    # outside PersistedMediaBuyStatus at all four write doors (update_status,
+    # update_fields, create_from_request, create), so an unmapped value cannot be
+    # persisted and the reader no longer has to invent a meaning for one.
+    #
+    # The obligation this scenario was reaching for — an unmapped status never yields a
+    # nonsense buyer-visible state — is graded against a real write in
+    # tests/integration/test_media_buy_revision_confirmation.py::
+    # test_an_unrecognised_status_is_refused_at_the_write_boundary, and every value the
+    # column CAN hold is swept through the projection by
+    # tests/unit/test_media_buy_status_consistency.py.
+    #
+    # BR-RULE-150 INV-11 needs reconciling upstream in adcp-req so --merge does not
+    # re-add it: the invariant as written mandates a defensive default that the pinned
+    # response schema cannot represent.
 
     Examples:
       | persisted         |
       | pending_creatives |
       | pending_start     |
 
-  # RETIRED SCENARIO (T-UC-019-inv-150-11): "unknown persisted status defaults to
-  # active then flight-refines". It graded the defensive default-to-active path, and
-  # that path is deleted.
-  #
-  # The default was not merely redundant, it was harmful. An unmapped persisted
-  # status was reported to the buyer as a SERVING buy, and — once the commitment
-  # vocabulary was made fail-closed — with no confirmed_at to go with it. The pinned
-  # item schema forbids exactly that pair (confirmed_at is [string, null] with an
-  # allOf/if guard that rejects null when status is "active"), so honouring INV-11
-  # meant publishing a document that fails its own schema. The scenario passed only
-  # because its Then checks the status field alone.
-  #
-  # Per the owner ruling in the remediation plan's ALTERATIONS section, a closed
-  # vocabulary is enforced where values ENTER: MediaBuyRepository now refuses a status
-  # outside PersistedMediaBuyStatus at all four write doors (update_status,
-  # update_fields, create_from_request, create), so an unmapped value cannot be
-  # persisted and the reader no longer has to invent a meaning for one.
-  #
-  # The obligation this scenario was reaching for — an unmapped status never yields a
-  # nonsense buyer-visible state — is graded against a real write in
-  # tests/integration/test_media_buy_revision_confirmation.py::
-  # test_an_unrecognised_status_is_refused_at_the_write_boundary, and every value the
-  # column CAN hold is swept through the projection by
-  # tests/unit/test_media_buy_status_consistency.py.
-  #
-  # BR-RULE-150 INV-11 needs reconciling upstream in adcp-req so --merge does not
-  # re-add it: the invariant as written mandates a defensive default that the pinned
-  # response schema cannot represent.
+  @T-UC-019-inv-150-11 @invariant @BR-RULE-150 @schema-v3.1
+  Scenario: INV-11 holds - an unknown persisted status is refused, never defaulted
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "legacy_state" and is_paused false
+    And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
+    And today is "2026-03-15"
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
+    Then the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR"
+    # BR-RULE-150 INV-11: a persisted status outside the closed vocabulary is a defect in
+    # the seller's own store. It is refused at the write boundary, and if one reaches a
+    # read it is surfaced as CONFIGURATION_ERROR / recovery terminal — never interpreted.
+    #
+    # This previously mandated the opposite: default the unknown value to "active" and
+    # flight-refine it. That is not defensible against the pinned item schema — "active"
+    # with a null confirmed_at fails the allOf/if guard — and it publishes a lifecycle
+    # claim about a state nobody defined. A defensive default here is how an undefined
+    # status reaches the buyer as a serving buy.
 
   @T-UC-019-inv-151-5 @invariant @BR-RULE-151 @schema-v3.1
   Scenario: INV-5 holds - status_filter omitted AND media_buy_ids supplied applies no implicit filter
@@ -800,47 +788,45 @@ Feature: BR-UC-019 Query Media Buys
     # That non-publication is what the two defective rows grade, deliberately WITHOUT
     # naming an error code: see the note under this outline.
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # WHY THE TWO DEFECTIVE ROWS NAME NO ERROR CODE (T-UC-019-boundary-revision)
+    # The obligation graded is the one the pin states outright and that holds however
+    # the seller refuses: a media buy whose persisted revision is below the pinned
+    # minimum is NEVER published to the buyer. Whether the seller refuses by erroring
+    # or by withholding the entry from a 200 document, the buyer must not receive it.
+    #
+    # An error CODE is deliberately not asserted, because the code production emits
+    # today is itself in question. Production rejects the defective value at the
+    # response-model boundary (GetMediaBuysMediaBuy, src/core/tools/media_buy_list.py)
+    # and the boundary translates the Pydantic failure to VALIDATION_ERROR with
+    # recovery "correctable" (src/core/tool_error_logging.py). By the pin's own
+    # enumMetadata (enums/error-code.json) that tells the BUYER to "review error
+    # details and fix field values" for a defect in the SELLER's store — data the
+    # buyer does not own and cannot fix — and invites an unbounded retry;
+    # CONFIGURATION_ERROR / "terminal" is the code whose metadata matches a
+    # seller-side deployment defect. Pinning the current code here would freeze that
+    # into the graders, so these rows grade the non-publication invariant only. The
+    # earlier text demanded code "SCHEMA_VIOLATION", which is not in the pinned
+    # error-code enum at all — it is conformance-runner vocabulary, never a wire code.
+    # RETIRED ROW (T-UC-019-boundary-revision): "revision absent" — a persisted store
+    # missing revision (defective seller). Unreachable at BOTH layers, so wiring it
+    # would have graded a state no seller running this code can produce:
+    #   - persistence: MediaBuy.revision is Integer, nullable=False, default=1,
+    #     server_default='1' (src/core/database/models.py:975) with no CHECK constraint —
+    #     a row with no revision cannot be written or migrated in.
+    #   - wire: GetMediaBuysMediaBuy.revision is a bare `int` (src/core/tools/
+    #     media_buy_list.py:47), never None, so the key cannot be omitted from the
+    #     response either.
+    # The two REACHABLE defective values (0 and -1) stay above and DO grade the
+    # schema minimum — retiring this row deletes no coverage. Contrast the
+    # confirmed_at outline below, where "missing" IS reachable (nullable column) and
+    # is therefore rewritten rather than retired. Retired at the source, so the merge
+    # does not re-add it.
 
     Examples: Boundary values
       | boundary_point                   | revision_state                                  | expected_outcome                                                              |
       | revision = 1 (minimum inclusive) | persisted revision 1                            | the media buy "mb-001" revision should be 1                                   |
-      | revision = 0                     | persisted revision 0 (defective seller)         | the media buy "mb-001" should not be published, and no returned media buy should carry a revision below the pinned minimum |
-      | revision = -1                    | persisted revision -1 (defective seller)        | the media buy "mb-001" should not be published, and no returned media buy should carry a revision below the pinned minimum |
-
-  # WHY THE TWO DEFECTIVE ROWS NAME NO ERROR CODE (T-UC-019-boundary-revision)
-  # The obligation graded is the one the pin states outright and that holds however
-  # the seller refuses: a media buy whose persisted revision is below the pinned
-  # minimum is NEVER published to the buyer. Whether the seller refuses by erroring
-  # or by withholding the entry from a 200 document, the buyer must not receive it.
-  #
-  # An error CODE is deliberately not asserted, because the code production emits
-  # today is itself in question. Production rejects the defective value at the
-  # response-model boundary (GetMediaBuysMediaBuy, src/core/tools/media_buy_list.py)
-  # and the boundary translates the Pydantic failure to VALIDATION_ERROR with
-  # recovery "correctable" (src/core/tool_error_logging.py). By the pin's own
-  # enumMetadata (enums/error-code.json) that tells the BUYER to "review error
-  # details and fix field values" for a defect in the SELLER's store — data the
-  # buyer does not own and cannot fix — and invites an unbounded retry;
-  # CONFIGURATION_ERROR / "terminal" is the code whose metadata matches a
-  # seller-side deployment defect. Pinning the current code here would freeze that
-  # into the graders, so these rows grade the non-publication invariant only. The
-  # earlier text demanded code "SCHEMA_VIOLATION", which is not in the pinned
-  # error-code enum at all — it is conformance-runner vocabulary, never a wire code.
-
-  # RETIRED ROW (T-UC-019-boundary-revision): "revision absent" — a persisted store
-  # missing revision (defective seller). Unreachable at BOTH layers, so wiring it
-  # would have graded a state no seller running this code can produce:
-  #   - persistence: MediaBuy.revision is Integer, nullable=False, default=1,
-  #     server_default='1' (src/core/database/models.py:975) with no CHECK constraint —
-  #     a row with no revision cannot be written or migrated in.
-  #   - wire: GetMediaBuysMediaBuy.revision is a bare `int` (src/core/tools/
-  #     media_buy_list.py:47), never None, so the key cannot be omitted from the
-  #     response either.
-  # The two REACHABLE defective values (0 and -1) stay above and DO grade the
-  # schema minimum — retiring this row deletes no coverage. Contrast the
-  # confirmed_at outline below, where "missing" IS reachable (nullable column) and
-  # is therefore rewritten rather than retired. Reconcile upstream in adcp-req so
-  # --merge does not re-add it.
+      | revision = 0                     | persisted revision 0 (defective seller)         | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
+      | revision = -1                    | persisted revision -1 (defective seller)        | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
 
   @T-UC-019-inv-291-1 @invariant @BR-RULE-291 @schema-v3.1
   Scenario: INV-1 holds - every returned media buy has revision integer >= 1
@@ -896,46 +882,49 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then <expected_outcome>
     # POST-S6 / INT-006: confirmed_at presence and ISO 8601 shape
+    # RETIRED ROW (T-UC-019-partition-confirmed-at): "confirmed_at_missing_on_buy",
+    # briefly rewritten as "confirmed_at_null_column_on_active_buy". Both spellings are
+    # gone, and the second one is why this note is long: it was a correct rewrite of a
+    # backwards row, retired one lane later because the state it graded stopped
+    # existing.
+    #
+    # The original demanded SCHEMA_VIOLATION for an active buy with a null
+    # confirmed_at. That graded a BUG's presence: the pinned item schema
+    # (media-buy/get-media-buys-response.json) types confirmed_at [string, null] and
+    # requires the key, with an allOf/if guard forbidding null only when status is
+    # "active" — so the row passed only if a schema-invalid document shipped. It was
+    # rewritten to assert the opposite: a schema-valid document carrying a real
+    # timestamp, which is what the read-time resolver owed the buyer.
+    #
+    # That resolver is now DELETED. Per the owner ruling recorded in the remediation
+    # plan's ALTERATIONS section, legacy data is corrected by migration rather than by
+    # a compatibility path in code: existing rows were backfilled, the repository
+    # stamps at every write, and the test factory stamps for confirmed statuses. So an
+    # active buy with a null confirmed_at is no longer producible — by production or by
+    # a fixture — and the row joins "revision absent" as premise-impossible.
+    #
+    # The OBLIGATION it carried is not retired and is not weakened. That an active buy
+    # reaches the buyer with a non-null confirmed_at is graded by the envelope-status
+    # scenario above, which validates the whole document against the same pinned schema
+    # and so fires the same allOf/if guard, and by the repository's own stamp tests.
+    # What is gone is only the premise. Retired at the source, so the merge does not
+    # re-add it.
+    #
+    # RETIRED ROW: "confirmed_at_not_iso8601" (persisted confirmed_at
+    # "2026-05-01 12:00:00", no T, no TZ). Unreachable: the column is
+    # DateTime(timezone=True) (models.py:981) and the wire value is a Pydantic
+    # datetime, so a non-ISO string can neither be persisted nor round-trip to the
+    # response — no seller running this code can emit it. Reconcile both upstream in
+    # adcp-req so --merge does not re-add them.
 
     Examples: Valid partitions
       | partition                       | buy_state                                                  | expected_outcome                                                                                  |
       | confirmed_buy_carries_timestamp | a successful create stamping confirmed_at "2026-05-01T12:00:00Z" | the media buy "mb-001" confirmed_at should equal "2026-05-01T12:00:00Z"                          |
       | confirmed_at_includes_timezone  | confirmed_at "2026-05-01T12:00:00+00:00"                   | the media buy "mb-001" confirmed_at should be an ISO 8601 string with a timezone designator       |
 
-  # RETIRED ROW (T-UC-019-partition-confirmed-at): "confirmed_at_missing_on_buy",
-  # briefly rewritten as "confirmed_at_null_column_on_active_buy". Both spellings are
-  # gone, and the second one is why this note is long: it was a correct rewrite of a
-  # backwards row, retired one lane later because the state it graded stopped
-  # existing.
-  #
-  # The original demanded SCHEMA_VIOLATION for an active buy with a null
-  # confirmed_at. That graded a BUG's presence: the pinned item schema
-  # (media-buy/get-media-buys-response.json) types confirmed_at [string, null] and
-  # requires the key, with an allOf/if guard forbidding null only when status is
-  # "active" — so the row passed only if a schema-invalid document shipped. It was
-  # rewritten to assert the opposite: a schema-valid document carrying a real
-  # timestamp, which is what the read-time resolver owed the buyer.
-  #
-  # That resolver is now DELETED. Per the owner ruling recorded in the remediation
-  # plan's ALTERATIONS section, legacy data is corrected by migration rather than by
-  # a compatibility path in code: existing rows were backfilled, the repository
-  # stamps at every write, and the test factory stamps for confirmed statuses. So an
-  # active buy with a null confirmed_at is no longer producible — by production or by
-  # a fixture — and the row joins "revision absent" as premise-impossible.
-  #
-  # The OBLIGATION it carried is not retired and is not weakened. That an active buy
-  # reaches the buyer with a non-null confirmed_at is graded by the envelope-status
-  # scenario above, which validates the whole document against the same pinned schema
-  # and so fires the same allOf/if guard, and by the repository's own stamp tests.
-  # What is gone is only the premise. Reconcile upstream in adcp-req so --merge does
-  # not re-add it.
-  #
-  # RETIRED ROW: "confirmed_at_not_iso8601" (persisted confirmed_at
-  # "2026-05-01 12:00:00", no T, no TZ). Unreachable: the column is
-  # DateTime(timezone=True) (models.py:981) and the wire value is a Pydantic
-  # datetime, so a non-ISO string can neither be persisted nor round-trip to the
-  # response — no seller running this code can emit it. Reconcile both upstream in
-  # adcp-req so --merge does not re-add them.
+    Examples: Invalid partitions
+      | partition                       | buy_state                                                  | expected_outcome                                                                                  |
+      | confirmed_at_missing_on_buy     | persisted store missing confirmed_at (defective seller)    | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
 
   @T-UC-019-partition-package-creative-deadline @partition @creative_deadline @schema-v3.1
   Scenario Outline: package creative_deadline - <partition>
@@ -1060,10 +1049,10 @@ Feature: BR-UC-019 Query Media Buys
     And the error should include a "suggestion" field
     And the suggestion should contain "omit" or "without the `account` filter"
     # BR-RULE-293 INV-5: validation fails -> no DB query; no partial result leak
+    # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
+    # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
+    # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
 
-  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
   @T-UC-019-partition-targeting-rehydration @partition @targeting_overlay @schema-v3.1
   Scenario Outline: targeting_overlay rehydration - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
@@ -1072,18 +1061,18 @@ Feature: BR-UC-019 Query Media Buys
     Then <expected_outcome>
     # BR-RULE-294: per-package fail-soft; TypeError caught narrowly; ValidationError NOT caught
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
+    # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
+    # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
+    # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
 
     Examples: Valid partitions
       | partition                            | persisted_state                                       | expected_outcome                                                                                                                                                |
       | no_targeting_persisted               | no targeting_overlay and no legacy targeting          | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                            |
       | targeting_rehydrates_cleanly         | targeting_overlay {geo:['US']}                        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
       | legacy_targeting_key                 | no targeting_overlay but legacy targeting {geo:['US']} | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
-      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" |
+      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" |
 
-  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
-  # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
   @T-UC-019-inv-294-3 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal SERVICE_UNAVAILABLE + null overlay
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
@@ -1332,6 +1321,9 @@ Feature: BR-UC-019 Query Media Buys
     Then the response should contain "media_buys" array
     And the response <sandbox_assertion>
     # BR-RULE-209 BVA: canonical sandbox echo placements from sandbox_response_semantics.yaml
+    # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
+    # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
+    # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
 
     Examples: Boundary values
       | boundary_point                                          | account_kind                            | sandbox_assertion                          |
@@ -1339,9 +1331,6 @@ Feature: BR-UC-019 Query Media Buys
       | sandbox absent in response (production account)         | targets a production account            | should not include a sandbox field         |
       | sandbox: false in response (explicit production)        | targets an explicit production account  | should include sandbox equals false        |
 
-  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
   @T-UC-019-boundary-targeting-overlay @boundary @targeting_overlay @br-rule-294 @schema-v3.1
   Scenario Outline: targeting_overlay rehydration boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
@@ -1355,10 +1344,10 @@ Feature: BR-UC-019 Query Media Buys
       | targeting_overlay key absent, targeting key absent                             | no targeting_overlay and no legacy targeting                  | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                                                                                                    |
       | targeting_overlay key present and parseable                                    | targeting_overlay {geo:['US']}                                | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
       | targeting_overlay key absent, targeting key present                            | no targeting_overlay but legacy targeting {geo:['US']}        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
-      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
-      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
-      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two SERVICE_UNAVAILABLE entries (one per package) each with a "suggestion" field referencing "package_config"                              |
-      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one SERVICE_UNAVAILABLE entry with a "suggestion" field referencing "package_config"             |
+      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
+      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
+      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two INTERNAL_ERROR entries (one per package) each with a "suggestion" field referencing "package_config"                              |
+      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one INTERNAL_ERROR entry with a "suggestion" field referencing "package_config"             |
 
   @T-UC-019-storyboard-post-create-status-poll @storyboard-v3.1 @v3-1 @post-create-poll
   Scenario: get_media_buys called immediately after create_media_buy resolves the freshly-created buy by media_buy_id
@@ -1374,3 +1363,36 @@ Feature: BR-UC-019 Query Media Buys
     # media_buy_id immediately on the same account; sellers that have eventual
     # consistency without a documented retry contract fail.
     # check_buy_status: post-create get_media_buys must resolve the freshly-created buy synchronously
+
+  @T-UC-019-confirmed-at-null-survives-exclude-none @hand-edited @BR-RULE-150 @schema-v3.1
+  Scenario Outline: A buy that was never confirmed still carries confirmed_at as null
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
+    And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
+    And today is "2026-03-15"
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
+    Then the media buy "mb-001" confirmed_at should be null on the wire
+    # HAND-EDITED (#1900): authored locally, not rendered from adcp-req. The marker is
+    # load-bearing — compile_bdd's merge classifies a LEGACY-only scenario without one
+    # as LEGACY-DELETE, and an Examples row added to an UPSTREAM scenario is replaced
+    # wholesale by the EXAMPLES-ONLY bucket. So this obligation can only be graded
+    # locally as its own marked scenario.
+    #
+    # Why it exists: confirmed_at is required-and-nullable on the pinned item schema,
+    # and the library base serializes with exclude_none=True. Every other confirmed_at
+    # scenario seeds a NON-null value, so the key survives there on its own merit and
+    # the retention path is never exercised. These buys reach the buyer with the column
+    # still NULL, which is exactly where a dropped key produces an item that fails
+    # item-level validation.
+    #
+    # The seeds are the statuses OUTSIDE _SELLER_COMMITTED_STATUSES (models.py) that
+    # get_media_buys publishes: rejected is INV-7's terminal pass-through, draft and
+    # pending_approval are INV-8's pre-serving states. canceled is deliberately NOT
+    # here — it IS a committed status, so its confirmed_at is legitimately stamped, and
+    # seeding it would assert a premise production correctly refuses.
+
+    Examples:
+      | persisted        |
+      | rejected         |
+      | draft            |
+      | pending_approval |
+
