@@ -2350,50 +2350,47 @@ class TestWorkflowStepCreation:
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
         )
 
-        with (
-            patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr_getter,
-            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
-        ):
-            mock_ctx_mgr = MagicMock()
-            mock_persistent_ctx = MagicMock()
-            mock_persistent_ctx.context_id = "ctx_1"
-            mock_ctx_mgr.get_or_create_context.return_value = mock_persistent_ctx
+        # prkv.16: the step is written through the caller's unit of work, so
+        # the step creation is observed at uow.workflows.create_step rather
+        # than at the removed ContextManager collaborator.
+        mock_uow = MagicMock()
+        mock_persistent_ctx = MagicMock()
+        mock_persistent_ctx.context_id = "ctx_1"
+        mock_uow.workflows.create_context.return_value = mock_persistent_ctx
+        mock_step = MagicMock()
+        mock_step.step_id = "step_1"
+        mock_uow.workflows.create_step.return_value = mock_step
 
-            mock_step = MagicMock()
-            mock_step.step_id = "step_1"
-            mock_ctx_mgr.create_workflow_step.return_value = mock_step
-            mock_ctx_mgr_getter.return_value = mock_ctx_mgr
+        _create_sync_workflow_steps(
+            creatives_needing_approval=[
+                {"creative_id": "c1", "format": "display", "name": "Test", "status": "pending_review"}
+            ],
+            principal_id="p1",
+            tenant={"tenant_id": "t1"},
+            approval_mode="require-human",
+            push_notification_config=None,
+            context=None,
+            identity=identity,
+            uow=mock_uow,
+        )
 
-            mock_uow = MagicMock()
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
+        # Verify workflow step created with correct type
+        create_call = mock_uow.workflows.create_step.call_args
+        assert create_call is not None
+        assert create_call[1]["step_type"] == "creative_approval"
+        assert create_call[1]["owner"] == "publisher"
+        assert create_call[1]["status"] == "requires_approval"
+        # The Context INSTANCE is passed, never a bare id — that is what makes
+        # a cross-tenant step attachment impossible (prkv.16).
+        assert create_call[1]["context"] is mock_persistent_ctx
 
-            _create_sync_workflow_steps(
-                creatives_needing_approval=[
-                    {"creative_id": "c1", "format": "display", "name": "Test", "status": "pending_review"}
-                ],
-                principal_id="p1",
-                tenant={"tenant_id": "t1"},
-                approval_mode="require-human",
-                push_notification_config=None,
-                context=None,
-                identity=identity,
-            )
-
-            # Verify workflow step created with correct type
-            create_call = mock_ctx_mgr.create_workflow_step.call_args
-            assert create_call is not None
-            assert create_call[1]["step_type"] == "creative_approval"
-            assert create_call[1]["owner"] == "publisher"
-            assert create_call[1]["status"] == "requires_approval"
-
-            # Verify ObjectWorkflowMapping created via repository
-            mock_uow.workflows.add_mapping.assert_called_once_with(
-                step_id="step_1",
-                object_type="creative",
-                object_id="c1",
-                action="approval_required",
-            )
+        # Verify ObjectWorkflowMapping created via repository
+        mock_uow.workflows.add_mapping.assert_called_once_with(
+            step_id="step_1",
+            object_type="creative",
+            object_id="c1",
+            action="approval_required",
+        )
 
     def test_workflow_context_failure_recovery_is_transient(self):
         """Failed workflow context creation should be transient — adapter failures are retryable.
@@ -2402,21 +2399,23 @@ class TestWorkflowStepCreation:
         """
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        with patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr_getter:
-            mock_ctx_mgr = MagicMock()
-            mock_ctx_mgr.get_or_create_context.return_value = None
-            mock_ctx_mgr_getter.return_value = mock_ctx_mgr
+        # prkv.16: the context now comes from the caller's unit of work, so
+        # the failure is injected at that seam. The obligation is unchanged —
+        # a context the request could not create is a TRANSIENT adapter error.
+        mock_uow = MagicMock()
+        mock_uow.workflows.create_context.return_value = None
 
-            with pytest.raises(AdCPAdapterError) as exc_info:
-                _create_sync_workflow_steps(
-                    creatives_needing_approval=[{"creative_id": "c1", "format": "display", "name": "Test"}],
-                    principal_id="p1",
-                    tenant={"tenant_id": "t1"},
-                    approval_mode="require-human",
-                    push_notification_config=None,
-                    context=None,
-                )
-            assert exc_info.value.recovery == "transient"
+        with pytest.raises(AdCPAdapterError) as exc_info:
+            _create_sync_workflow_steps(
+                creatives_needing_approval=[{"creative_id": "c1", "format": "display", "name": "Test"}],
+                principal_id="p1",
+                tenant={"tenant_id": "t1"},
+                approval_mode="require-human",
+                push_notification_config=None,
+                context=None,
+                uow=mock_uow,
+            )
+        assert exc_info.value.recovery == "transient"
 
 
 # ============================================================================

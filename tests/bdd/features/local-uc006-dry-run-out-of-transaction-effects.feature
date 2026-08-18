@@ -85,3 +85,53 @@ Feature: UC-006 sync_creatives — a dry_run preview fires no effect the transac
       | new_static new creative, preview_creative       | new            | static      | created         |
       | existing_generative update arm, build_creative  | existing       | generative  | updated         |
       | existing_static update arm, preview_creative    | existing       | static      | updated         |
+
+  # --- the workflow-step WRITE PATH (GH #2002) ---
+  #
+  # A second escaping seam in the same file, and the one the AI-review pair
+  # above cannot reach: `if creatives_needing_approval and not dry_run` in
+  # _sync.py gates _create_sync_workflow_steps, which opens its OWN WorkflowUoW
+  # and so commits independently of the creatives transaction. The gate is why a
+  # preview never executes that write AT ALL — and a write a preview never
+  # executes is a write whose defects (FK ordering, the Pydantic/JSON boundary
+  # on `format`, tenant scoping, schema drift) are invisible until a live run.
+  #
+  # dry_run's mandate is "preview changes without applying them. Returns what
+  # would be created/updated/deleted"
+  # (creative/sync-creatives-request.json#/properties/dry_run @ v3.1.1). "Without
+  # applying them" is a claim about what SURVIVES the request, not about which
+  # code runs: the correct shape is one transaction that executes the write on
+  # both arms and discards it on the preview arm.
+  #
+  # Why the pair, again: the live scenario is the non-vacuity control, and the
+  # two differ in exactly one input (dry_run). The preview arm's "zero rows"
+  # assertion is worth nothing on its own — it also holds for a preview that
+  # skipped the write, which is precisely today's behaviour — so the live arm
+  # must first prove that THIS payload, on THIS tenant, does produce steps,
+  # mappings and a context. The response-level Thens are bound by both arms on
+  # the same field, so a preview that stopped reporting the creative reddens
+  # here rather than passing "zero rows" for the wrong reason.
+
+  @T-UC-006-local-dryrun-workflow-step-write-live @dry-run @creative-approval @invariant
+  Scenario: a live sync on a require-human tenant commits the workflow-step write path (control)
+    Given the Buyer is authenticated with a valid principal_id
+    And the tenant has approval_mode "require-human"
+    And the tenant has a slack_webhook_url configured
+    And a creative with a known format_id
+    When the Buyer Agent syncs the creative
+    Then the response is the success variant carrying a creatives array
+    And every creative result has action "created"
+    And the committed workflow rows name exactly the synced creatives
+
+  @T-UC-006-local-dryrun-workflow-step-write-preview @dry-run @creative-approval @invariant
+  Scenario: a dry_run preview leaves no workflow step, mapping or context behind
+    Given the Buyer is authenticated with a valid principal_id
+    And the tenant has approval_mode "require-human"
+    And the tenant has a slack_webhook_url configured
+    And a creative with a known format_id
+    When the Buyer Agent previews the creative with dry_run true
+    Then the response is the success variant carrying a creatives array
+    And every creative result has action "created"
+    And no workflow step, mapping or context row is committed for the tenant
+    And no Slack notification should be sent
+    And no creative is persisted for the tenant

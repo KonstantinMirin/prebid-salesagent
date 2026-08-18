@@ -186,6 +186,36 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "configure_agent_served_creative",
             "the out-of-transaction effects this configures are observed as CALLS on in-process mocks (registry.build_creative / preview_creative, and the _ai_review_executor submit). Over real HTTP those objects live in the server process, so the assertions have nothing to read and the real creative agent answers for itself -- the scenario would grade the agent, not the gates. Observing them e2e needs effect capture at the server (a request sink + a review-verdict read-back), which is its own build",
         ),
+        # Added by prkv.16 (salesagent-aqqfx.6), noted against this pin's own
+        # shrink-only direction of travel like the #1721 and prkv.18 precedents
+        # above. The workflow-step write path (GH #2002) is graded by comparing
+        # what an INDEPENDENT database connection can see at two instants; both
+        # halves of that observation are bound to THIS process (a second pooled
+        # connection to the engine under test, and an in-process mock of
+        # _send_creative_notifications), and neither has a live-server
+        # equivalent without building a server-side effect/read-back surface.
+        # The obligation grades fully on the three in-process transports.
+        (
+            "tests/harness/creative_sync.py",
+            "observe_effects_at_notification",
+            "the notification observer is a side_effect installed on an in-process mock of "
+            "_send_creative_notifications. Under e2e_rest the sync runs in the Docker server "
+            "process, where that mock does not exist and the real notifier answers -- nothing "
+            "would ever be recorded and the ordering assertions would read None. Observing it "
+            "e2e needs effect capture at the server (a notification sink the test can poll), "
+            "which is its own build",
+        ),
+        (
+            "tests/harness/creative_sync.py",
+            "committed_sync_effects",
+            "every field of this snapshot is read over a second pooled connection to the engine "
+            "THIS process is bound to. Under e2e_rest the request runs in the Docker server "
+            "process against its own database, so the read answers about the wrong database -- it "
+            "would report zero rows on every arm and grade nothing, which is strictly worse than "
+            "not grading. Observing it e2e needs a server-side read-back surface (a tenant-scoped "
+            "admin endpoint over workflow_steps / object_workflow_mapping / creative_assignments), "
+            "which is its own build",
+        ),
         (
             "tests/harness/_mixins.py",
             "set_adapter_error",

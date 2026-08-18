@@ -379,12 +379,44 @@ def _sync_creatives_impl(
                         )
                     )
 
+        # Approval workflow steps join THIS transaction (salesagent-prkv.16).
+        # No dry_run condition: the identical write path runs on both arms and
+        # a preview's rollback discards the steps with the creatives, so a
+        # preview now exercises the step/mapping write instead of skipping it.
+        # Ordering: BaseUoW.__exit__ commits and only THEN drains after_commit,
+        # so the notification below cannot name a step the commit has not yet
+        # released — it holds by construction, not by careful sequencing.
+        if creatives_needing_approval:
+            _create_sync_workflow_steps(
+                creatives_needing_approval=creatives_needing_approval,
+                principal_id=principal_id,
+                tenant=tenant,
+                approval_mode=approval_mode,
+                push_notification_config=push_notification_config,
+                context=context,
+                identity=identity,
+                uow=uow,
+            )
+
+            def _notify() -> None:
+                _send_creative_notifications(
+                    creatives_needing_approval=creatives_needing_approval,
+                    tenant=tenant,
+                    approval_mode=approval_mode,
+                    principal_id=principal_id,
+                )
+
+            creative_repo.after_commit(_notify, label="creative_approval_slack")
+
         # LIVE: close (and so commit) the creatives transaction here, exactly as
         # the implicit block exit did before — the assignment stage then opens
         # its own, and reads these creatives as committed rows.
         # DRY: leave it open. The assignment stage joins THIS transaction and
         # reads the same creatives as flushed rows, so it grades the post-sync
         # state without a shadow carrier, and the whole thing rolls back together.
+        # NOTE: this conditional is the transaction seam itself (the commit-vs-
+        # rollback decision), not a hand-placed effect gate — it is deliberately
+        # retained, so this file is not literally dry_run-free after prkv.16.
         if not dry_run:
             stack.close()
 
@@ -400,39 +432,6 @@ def _sync_creatives_impl(
             validation_mode=validation_mode,
             principal_id=principal_id,
             uow=uow if dry_run else None,
-        )
-
-    # Create workflow steps and send notifications for creatives requiring approval.
-    #
-    # The last surviving dry_run gate in this file, and it is load-bearing rather
-    # than left over: both calls run OUTSIDE the transaction above.
-    # _create_sync_workflow_steps opens its own WorkflowUoW, so its rows would
-    # commit independently and the creatives rollback would not reach them —
-    # a preview would leave orphan workflow steps behind. The notification is a
-    # Slack call, which no rollback undoes either, and it must not overtake the
-    # steps it refers to, so it cannot simply move to after_commit (drain runs at
-    # stack.close() above, BEFORE the steps exist).
-    #
-    # The real fix is for the workflow-step write to JOIN this unit of work
-    # (a workflow repository on CreativeUoW), which retires the gate for the same
-    # reason the other eight went away. Tracked as GH #2002 —
-    # until then a preview does not exercise this path, so an error it would raise
-    # (AdCPAuthRequiredError, AdCPAdapterError) surfaces only on the live run.
-    if creatives_needing_approval and not dry_run:
-        _create_sync_workflow_steps(
-            creatives_needing_approval=creatives_needing_approval,
-            principal_id=principal_id,
-            tenant=tenant,
-            approval_mode=approval_mode,
-            push_notification_config=push_notification_config,
-            context=context,
-            identity=identity,
-        )
-        _send_creative_notifications(
-            creatives_needing_approval=creatives_needing_approval,
-            tenant=tenant,
-            approval_mode=approval_mode,
-            principal_id=principal_id,
         )
 
     # Audit logging

@@ -16,6 +16,7 @@ beads: salesagent-4d4
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 from typing import cast as type_cast
@@ -27,6 +28,111 @@ from sqlalchemy.orm import Session
 from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
+
+
+def build_context(
+    session: Session,
+    *,
+    tenant_id: str,
+    principal_id: str,
+    initial_conversation: list[dict[str, Any]] | None = None,
+) -> DBContext:
+    """Construct a :class:`Context` row and add it to ``session``.
+
+    The single construction site for a context row. Does NOT commit — the
+    caller (a repository delegate, or ``ContextManager`` which keeps its own
+    commit/refresh/expunge behaviour) owns the transaction boundary.
+
+    beads: salesagent-prkv.16
+    """
+    context = DBContext(
+        context_id=f"ctx_{uuid.uuid4().hex[:12]}",
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        conversation_history=initial_conversation or [],
+        last_activity_at=datetime.now(UTC),
+    )
+    session.add(context)
+    return context
+
+
+def build_workflow_step(
+    session: Session,
+    *,
+    context_id: str,
+    step_type: str,
+    owner: str,
+    status: str = "pending",
+    tool_name: str | None = None,
+    request_data: dict[str, Any] | Any | None = None,
+    response_data: dict[str, Any] | None = None,
+    assigned_to: str | None = None,
+    error_message: str | None = None,
+    transaction_details: dict[str, Any] | None = None,
+    object_mappings: list[dict[str, str]] | None = None,
+    initial_comment: str | None = None,
+    request_metadata: dict[str, Any] | None = None,
+) -> WorkflowStep:
+    """Construct a :class:`WorkflowStep` (+ any mappings) and add to ``session``.
+
+    The single construction site for a workflow step row: the Pydantic
+    boundary serialization, the ``request_metadata`` merge, the comments
+    seeding and the ``completed_at`` rule all live here so that
+    ``ContextManager`` and the repository cannot drift apart.
+
+    ``step_id`` is generated here and returned on the instance, so a caller
+    can pass it to :meth:`WorkflowRepository.add_mapping` with no read-back
+    (a read-back would force a flush the caller may not want yet).
+
+    Does NOT commit.
+
+    beads: salesagent-prkv.16
+    """
+    # Serialize Pydantic models at the DB boundary.
+    from pydantic import BaseModel
+
+    if isinstance(request_data, BaseModel):
+        request_data = request_data.model_dump(mode="json")
+    if request_metadata and request_data is not None:
+        request_data.update(request_metadata)
+
+    comments: list[dict[str, Any]] = []
+    if initial_comment:
+        comments.append({"user": "system", "timestamp": datetime.now(UTC).isoformat(), "text": initial_comment})
+
+    step = WorkflowStep(
+        step_id=f"step_{uuid.uuid4().hex[:12]}",
+        context_id=context_id,
+        step_type=step_type,
+        owner=owner,
+        status=status,
+        tool_name=tool_name,
+        request_data=request_data if request_data is not None else {},
+        response_data=response_data if response_data is not None else {},
+        assigned_to=assigned_to,
+        error_message=error_message,
+        transaction_details=transaction_details if transaction_details is not None else {},
+        comments=comments,
+        created_at=datetime.now(UTC),
+    )
+    if status == "completed":
+        step.completed_at = datetime.now(UTC)
+
+    session.add(step)
+
+    if object_mappings:
+        for mapping in object_mappings:
+            session.add(
+                ObjectWorkflowMapping(
+                    object_type=mapping["object_type"],
+                    object_id=mapping["object_id"],
+                    step_id=step.step_id,
+                    action=mapping.get("action", step_type),
+                    created_at=datetime.now(UTC),
+                )
+            )
+
+    return step
 
 
 def append_step_comment(
@@ -281,6 +387,69 @@ class WorkflowRepository:
         if limit:
             stmt = stmt.limit(limit)
         return list(self._session.scalars(stmt).all())
+
+    # ------------------------------------------------------------------
+    # Context / WorkflowStep writes (no-commit; the UoW owns the boundary)
+    # ------------------------------------------------------------------
+
+    def create_context(
+        self,
+        *,
+        principal_id: str,
+        initial_conversation: list[dict[str, Any]] | None = None,
+    ) -> DBContext:
+        """Create a Context row inside the caller's transaction.
+
+        Takes NO ``tenant_id``: it uses ``self._tenant_id``, so a caller
+        cannot name another tenant's context. Does NOT commit.
+
+        beads: salesagent-prkv.16
+        """
+        return build_context(
+            self._session,
+            tenant_id=self._tenant_id,
+            principal_id=principal_id,
+            initial_conversation=initial_conversation,
+        )
+
+    def create_step(
+        self,
+        *,
+        context: DBContext,
+        **fields: Any,
+    ) -> WorkflowStep:
+        """Create a WorkflowStep row inside the caller's transaction.
+
+        ``fields`` are forwarded verbatim to :func:`build_workflow_step`,
+        which owns their names, defaults and types. This delegate deliberately
+        does NOT re-enumerate them: doing so duplicated the twelve-parameter
+        forwarding list that ``ContextManager.create_workflow_step`` already
+        has, which the DRY ratchet (pylint R0801) correctly rejects.
+
+        Takes the Context INSTANCE, never a bare ``context_id`` string. That
+        is a correctness requirement, not a convenience: this method is the
+        shared construction seam for call sites where the context id is
+        BUYER-SUPPLIED (salesagent-n4vxk, salesagent-ft58z), and
+        ``ContextManager.get_context`` resolves a context by id with NO tenant
+        predicate. ``test_architecture_workflow_tenant_isolation.py`` matches
+        only ``select()``/``session.get()`` and so cannot catch a
+        construct-and-add write. Requiring the instance forces a caller
+        holding a raw id to resolve it through a tenant-scoped read first.
+
+        Raises ValueError if the context belongs to another tenant — it does
+        not log-and-continue, because a cross-tenant write is not a
+        degraded-service case.
+
+        Does NOT commit.
+
+        beads: salesagent-prkv.16
+        """
+        if context.tenant_id != self._tenant_id:
+            raise ValueError(
+                f"Context {context.context_id} belongs to tenant {context.tenant_id}, "
+                f"not {self._tenant_id} — refusing to attach a workflow step across tenants"
+            )
+        return build_workflow_step(self._session, context_id=context.context_id, **fields)
 
     # ------------------------------------------------------------------
     # ObjectWorkflowMapping writes

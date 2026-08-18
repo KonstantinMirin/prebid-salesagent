@@ -355,11 +355,30 @@ class TestSyncMixedMessageSuffix:
 # ===========================================================================
 
 
+def _uow_stub(context_id: str = "ctx_1", step_id: str = "step_1"):
+    """A stand-in for the caller's open CreativeUoW.
+
+    prkv.16 moved the workflow-step write onto the caller's unit of work, so
+    these tests observe ``uow.workflows.create_step`` instead of the removed
+    ``ContextManager`` / ``WorkflowUoW`` collaborators. The behaviour graded
+    (comment wording per status, request_data contents, mapping creation) is
+    unchanged — only the seam it is observed at moved.
+    """
+    uow = MagicMock()
+    ctx = MagicMock()
+    ctx.context_id = context_id
+    uow.workflows.create_context.return_value = ctx
+    step = MagicMock()
+    step.step_id = step_id
+    uow.workflows.create_step.return_value = step
+    return uow
+
+
 class TestWorkflowStatusBranches:
-    """Lines 40, 49, 56, 65, 85, 89, 155, 206 in _workflow.py."""
+    """Status-dependent branches in _workflow.py._create_sync_workflow_steps."""
 
     def test_principal_none_raises_auth_error(self):
-        """Line 40: principal_id=None raises AdCPAuthenticationError."""
+        """principal_id=None raises AdCPAuthenticationError."""
         from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
@@ -371,20 +390,23 @@ class TestWorkflowStatusBranches:
                 approval_mode="require-human",
                 push_notification_config=None,
                 context=None,
+                uow=_uow_stub(),
             )
 
     def test_context_none_raises_adapter_error(self):
-        """Line 49: persistent_ctx is None raises AdCPAdapterError."""
+        """A context the unit of work could not create raises AdCPAdapterError.
+
+        prkv.16: the context is created through ``uow.workflows.create_context``
+        now, so the failure is injected at that seam rather than at the removed
+        ``get_context_manager``.
+        """
         from src.core.exceptions import AdCPAdapterError
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        mock_ctx_manager = MagicMock()
-        mock_ctx_manager.get_or_create_context.return_value = None
+        uow = _uow_stub()
+        uow.workflows.create_context.return_value = None
 
-        with (
-            patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            pytest.raises(AdCPAdapterError, match="Failed to create workflow context"),
-        ):
+        with pytest.raises(AdCPAdapterError, match="Failed to create workflow context"):
             _create_sync_workflow_steps(
                 creatives_needing_approval=[{"creative_id": "c1", "name": "Test", "format": "f1"}],
                 principal_id="p1",
@@ -392,120 +414,62 @@ class TestWorkflowStatusBranches:
                 approval_mode="require-human",
                 push_notification_config=None,
                 context=None,
+                uow=uow,
             )
 
     def test_rejected_status_comment(self):
-        """Line 56: rejected status produces 'rejected by AI review' comment."""
+        """Rejected status produces a 'rejected by AI review' comment."""
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        mock_ctx_manager = MagicMock()
-        mock_persistent_ctx = MagicMock()
-        mock_persistent_ctx.context_id = "ctx_1"
-        mock_ctx_manager.get_or_create_context.return_value = mock_persistent_ctx
-
-        with (
-            patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
-        ):
-            mock_uow = MagicMock()
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
-
-            _create_sync_workflow_steps(
-                creatives_needing_approval=[
-                    {
-                        "creative_id": "c1",
-                        "name": "Banner",
-                        "format": "f1",
-                        "status": "rejected",
-                    }
-                ],
-                principal_id="p1",
-                tenant=TENANT,
-                approval_mode="ai-powered",
-                push_notification_config=None,
-                context=None,
-            )
-
-        # Verify create_workflow_step was called with rejected comment
-        call_args = mock_ctx_manager.create_workflow_step.call_args
-        assert "rejected by AI review" in call_args.kwargs.get(
-            "initial_comment", call_args[1].get("initial_comment", "")
+        uow = _uow_stub()
+        _create_sync_workflow_steps(
+            creatives_needing_approval=[{"creative_id": "c1", "name": "Banner", "format": "f1", "status": "rejected"}],
+            principal_id="p1",
+            tenant=TENANT,
+            approval_mode="ai-powered",
+            push_notification_config=None,
+            context=None,
+            uow=uow,
         )
 
+        assert "rejected by AI review" in uow.workflows.create_step.call_args.kwargs["initial_comment"]
+
     def test_other_status_comment(self):
-        """Line 65: status other than rejected/pending_review produces 'requires review' comment."""
+        """A status other than rejected/pending_review produces 'requires review'."""
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        mock_ctx_manager = MagicMock()
-        mock_persistent_ctx = MagicMock()
-        mock_persistent_ctx.context_id = "ctx_1"
-        mock_ctx_manager.get_or_create_context.return_value = mock_persistent_ctx
+        uow = _uow_stub()
+        _create_sync_workflow_steps(
+            creatives_needing_approval=[{"creative_id": "c1", "name": "Banner", "format": "f1", "status": "approved"}],
+            principal_id="p1",
+            tenant=TENANT,
+            approval_mode="require-human",
+            push_notification_config=None,
+            context=None,
+            uow=uow,
+        )
 
-        with (
-            patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
-        ):
-            mock_uow = MagicMock()
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
-
-            _create_sync_workflow_steps(
-                creatives_needing_approval=[
-                    {
-                        "creative_id": "c1",
-                        "name": "Banner",
-                        "format": "f1",
-                        "status": "approved",  # neither rejected nor pending_review
-                    }
-                ],
-                principal_id="p1",
-                tenant=TENANT,
-                approval_mode="require-human",
-                push_notification_config=None,
-                context=None,
-            )
-
-        call_args = mock_ctx_manager.create_workflow_step.call_args
-        assert "requires review" in call_args.kwargs.get("initial_comment", call_args[1].get("initial_comment", ""))
+        assert "requires review" in uow.workflows.create_step.call_args.kwargs["initial_comment"]
 
     def test_push_config_and_context_stored(self):
-        """Lines 85, 89: push_notification_config and context stored in request_data."""
+        """push_notification_config and context are stored in request_data."""
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        mock_ctx_manager = MagicMock()
-        mock_persistent_ctx = MagicMock()
-        mock_persistent_ctx.context_id = "ctx_1"
-        mock_ctx_manager.get_or_create_context.return_value = mock_persistent_ctx
-
+        uow = _uow_stub()
         push_config = {"url": "https://hook.test"}
         context = {"key": "value"}
 
-        with (
-            patch("src.core.context_manager.get_context_manager", return_value=mock_ctx_manager),
-            patch("src.core.tools.creatives._workflow.WorkflowUoW") as mock_uow_cls,
-        ):
-            mock_uow = MagicMock()
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=None)
+        _create_sync_workflow_steps(
+            creatives_needing_approval=[{"creative_id": "c1", "name": "Banner", "format": "f1"}],
+            principal_id="p1",
+            tenant=TENANT,
+            approval_mode="require-human",
+            push_notification_config=push_config,
+            context=context,
+            uow=uow,
+        )
 
-            _create_sync_workflow_steps(
-                creatives_needing_approval=[
-                    {
-                        "creative_id": "c1",
-                        "name": "Banner",
-                        "format": "f1",
-                    }
-                ],
-                principal_id="p1",
-                tenant=TENANT,
-                approval_mode="require-human",
-                push_notification_config=push_config,
-                context=context,
-            )
-
-        call_args = mock_ctx_manager.create_workflow_step.call_args
-        request_data = call_args.kwargs.get("request_data", call_args[1].get("request_data", {}))
+        request_data = uow.workflows.create_step.call_args.kwargs["request_data"]
         assert request_data["push_notification_config"] == push_config
         assert request_data["context"] == context
 

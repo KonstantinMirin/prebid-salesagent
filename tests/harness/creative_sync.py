@@ -49,12 +49,53 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
+
+
+@dataclass(frozen=True)
+class CommittedSyncEffects:
+    """What a SEPARATE database connection can see for one tenant right now.
+
+    Every field is read over a connection the sync's transaction does not own,
+    which is the only way to tell "written and committed" apart from "written
+    and about to be rolled back" -- the question a dry_run preview asks, and the
+    question an escaping effect (Slack) asks about the rows it names.
+    """
+
+    #: workflow_steps rows, tenant-scoped through their Context. Sorted.
+    workflow_step_ids: list[str]
+    #: object_workflow_mapping.object_id for those steps. Sorted.
+    workflow_object_ids: list[str]
+    #: contexts rows for the tenant. Sorted.
+    context_ids: list[str]
+    #: creative_assignments rows for the tenant.
+    assignment_count: int
+    #: creatives sitting at ``pending_review`` for the tenant+principal. Sorted.
+    creatives_awaiting_approval: list[str]
+
+
+@dataclass(frozen=True)
+class CommittedAIReview:
+    """The AI-review VERDICT a SEPARATE connection can see for one creative.
+
+    The sibling oracle to :class:`CommittedSyncEffects`, for the one effect the
+    sync itself never writes: the background reviewer opens its own unit of
+    work, commits a decision onto the creative, and only then fires Slack and
+    the push webhook. Grading that a verdict was SUBMITTED says nothing about
+    whether one was ever REACHED, so this reads the row the reviewer is
+    supposed to have written -- ``verdict is None`` means it never did.
+    """
+
+    #: ``creatives.status`` for the row, or None when there is no row at all.
+    status: str | None
+    #: ``creatives.data["ai_review"]``, or None when no verdict was committed.
+    verdict: dict[str, Any] | None
 
 
 def creative_fingerprint(creative: Any) -> tuple[str, str]:
@@ -108,6 +149,18 @@ class CreativeSyncEnv(IntegrationEnv):
     #: job would read -- and ``None`` means it would find no row at all.
     ai_review_commit_observations: dict[str, tuple[str, str] | None]
 
+    #: ``(step_ids, mapped object_ids)`` an INDEPENDENT connection can see at the
+    #: instant the sync fired its Slack notification, or ``None`` while no
+    #: observer is installed. Slack is an escaping effect: it names workflow
+    #: steps a human is expected to open, so what a SEPARATE connection can see
+    #: at that instant is exactly what the person following the link will find.
+    workflow_rows_at_notification: tuple[list[str], list[str]] | None
+
+    #: ``creative_assignments`` rows committed for the tenant at that same
+    #: instant. Ordering between the notification and the assignment stage is
+    #: only observable as a count taken AT the notification, never after it.
+    assignment_count_at_notification: int | None
+
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
         # Registry: return a mock that supports list_all_formats() + get_format()
@@ -125,8 +178,14 @@ class CreativeSyncEnv(IntegrationEnv):
         # run_async: execute the coroutine synchronously (return empty list)
         self.mock["run_async"].side_effect = lambda coro: []
 
-        # Notifications: no-op
+        # Notifications: no-op. The ordering observer is NOT installed here --
+        # it is a side_effect, and installing it by default would make every
+        # existing "was Slack called" scenario pay for two extra pooled-connection
+        # reads. observe_effects_at_notification() opts a scenario in, and returns
+        # None so those "was it called" assertions keep reading the same value.
         self.mock["send_notifications"].return_value = None
+        self.workflow_rows_at_notification = None
+        self.assignment_count_at_notification = None
 
         # Audit log: no-op
         self.mock["audit_log"].return_value = None
@@ -180,6 +239,232 @@ class CreativeSyncEnv(IntegrationEnv):
         with SQLAlchemySession(bind=get_engine()) as independent_session:
             row = CreativeRepository(independent_session, tenant_id).get_by_id(creative_id, principal_id)
             return None if row is None else creative_fingerprint(row)
+
+    # --- the workflow-step / assignment oracle (GH #2002) ---
+    #
+    # Same independent-connection SHAPE as _committed_creative_fingerprint above,
+    # over the rows _create_sync_workflow_steps writes. It exists because nothing
+    # in this env could observe those rows: get_workflow_steps() reads the SCOPED
+    # session, which inside a request IS the transaction under test -- it sees the
+    # request's own un-committed writes, so it cannot tell "written and committed"
+    # from "written and about to be rolled back", which is the entire question a
+    # preview asks.
+
+    @staticmethod
+    def _independent_session() -> Any:
+        """A Session on its OWN pooled connection -- never the scoped one."""
+        from sqlalchemy.orm import Session as SQLAlchemySession
+
+        from src.core.database.database_session import get_engine
+
+        return SQLAlchemySession(bind=get_engine())
+
+    @staticmethod
+    def _committed_workflow_rows(*, tenant_id: str) -> tuple[list[str], list[str]]:
+        """``(step_ids, mapped object_ids)`` COMMITTED for *tenant_id*, both sorted.
+
+        WorkflowStep carries no tenant_id column, so tenant scoping goes through
+        its Context relationship -- the same join BaseTestEnv.get_workflow_steps
+        uses, moved onto an independent connection.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
+
+        with CreativeSyncEnv._independent_session() as session:
+            step_ids = sorted(
+                session.scalars(
+                    select(WorkflowStep.step_id).join(WorkflowStep.context).where(Context.tenant_id == tenant_id)
+                ).all()
+            )
+            object_ids = (
+                sorted(
+                    session.scalars(
+                        select(ObjectWorkflowMapping.object_id).where(ObjectWorkflowMapping.step_id.in_(step_ids))
+                    ).all()
+                )
+                if step_ids
+                else []
+            )
+            return step_ids, object_ids
+
+    @staticmethod
+    def _committed_context_ids(*, tenant_id: str) -> list[str]:
+        """Context rows COMMITTED for *tenant_id*, sorted.
+
+        The third row the write path creates. Graded separately from the steps
+        because a rollback that reached the steps but left the context behind
+        would still be a preview that persisted something.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Context
+
+        with CreativeSyncEnv._independent_session() as session:
+            return sorted(session.scalars(select(Context.context_id).where(Context.tenant_id == tenant_id)).all())
+
+    @staticmethod
+    def _committed_assignment_count(*, tenant_id: str) -> int:
+        """creative_assignments rows COMMITTED for *tenant_id*."""
+        from sqlalchemy import func, select
+
+        from src.core.database.models import CreativeAssignment
+
+        with CreativeSyncEnv._independent_session() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(CreativeAssignment)
+                    .where(CreativeAssignment.tenant_id == tenant_id)
+                )
+                or 0
+            )
+
+    @staticmethod
+    def _committed_creatives_awaiting_approval(*, tenant_id: str, principal_id: str) -> list[str]:
+        """creative_ids COMMITTED at ``pending_review`` for *tenant_id*, sorted."""
+        from sqlalchemy import select
+
+        from src.core.database.models import Creative
+
+        with CreativeSyncEnv._independent_session() as session:
+            return sorted(
+                session.scalars(
+                    select(Creative.creative_id).where(
+                        Creative.tenant_id == tenant_id,
+                        Creative.principal_id == principal_id,
+                        Creative.status == "pending_review",
+                    )
+                ).all()
+            )
+
+    # --- the AI-review EFFECT oracle (GH #1972) ---
+    #
+    # Everything above observes what the SYNC committed. The three members below
+    # observe what the background REVIEWER committed, which is a different
+    # question and the one no scenario has ever asked: with the executor mocked
+    # (EXTERNAL_PATCHES, above) the only observable is "submit() was called",
+    # which is true whether or not the submitted job ever ran a line of its body.
+
+    def run_ai_review_for_real(self) -> None:
+        """Drop the ``_ai_review_executor`` mock so the submitted job really RUNS.
+
+        The mock is what makes "no AI-review side effect" observable for every
+        other scenario, and it is exactly what makes the review's own effects
+        UNobservable: nothing behind ``submit`` executes. Stopping the patch puts
+        the production executor back in the path, so the job is dispatched the way
+        production dispatches it — the precondition for grading a verdict instead
+        of a submit. Pair with :meth:`await_ai_review`, which is what makes the
+        background completion a wait rather than a race.
+        """
+        for patcher in list(self._patchers):
+            if getattr(patcher, "attribute", None) == "_ai_review_executor":
+                patcher.stop()
+                self._patchers.remove(patcher)
+                self.mock.pop("ai_review_executor", None)
+                return
+        raise AssertionError("_ai_review_executor is not patched — nothing to restore")
+
+    @staticmethod
+    def await_ai_review(creative_id: str, timeout: float = 30.0) -> None:
+        """Block until every AI-review job submitted for *creative_id* finished.
+
+        ``_defer_ai_review`` registers each job's Future in the module-level
+        ``_ai_review_tasks``; joining on those Futures is what turns a background
+        effect into something an assertion can read without sleeping on a timer.
+        Returning does NOT imply the job did anything — a worker that finished
+        without running the body finishes just as fast, which is the distinction
+        :meth:`committed_ai_review` exists to make.
+        """
+        from concurrent.futures import wait
+
+        from src.admin.blueprints.creatives import _ai_review_lock, _ai_review_tasks
+
+        with _ai_review_lock:
+            futures = [task["future"] for task in _ai_review_tasks.values() if task["creative_id"] == creative_id]
+        assert futures, f"no AI review job was ever submitted for {creative_id}"
+        done, pending = wait(futures, timeout=timeout)
+        assert not pending, f"AI review job for {creative_id} did not finish within {timeout}s"
+        for future in done:
+            future.result()  # re-raise anything the worker thread swallowed
+
+    def committed_ai_review(self, creative_id: str) -> CommittedAIReview:
+        """The verdict an INDEPENDENT connection can see for *creative_id*.
+
+        Same isolation as :meth:`_committed_creative_fingerprint` and for the same
+        reason: the reviewer writes through its OWN unit of work, so only a
+        connection this test's session does not own can tell a committed verdict
+        from one that was never written.
+        """
+        from src.core.database.repositories.creative import CreativeRepository
+
+        with self._independent_session() as session:
+            row = CreativeRepository(session, self._tenant_id).get_by_id(creative_id, self._principal_id)
+            if row is None:
+                return CommittedAIReview(status=None, verdict=None)
+            data = row.data if isinstance(row.data, dict) else {}
+            return CommittedAIReview(status=row.status, verdict=data.get("ai_review"))
+
+    @realize_e2e(
+        e2e_unsupported(
+            "the notification observer is a side_effect installed on an in-process mock of "
+            "_send_creative_notifications. Under e2e_rest the sync runs in the Docker server "
+            "process, where that mock does not exist and the real notifier answers -- nothing "
+            "would ever be recorded and the ordering assertions would read None. Observing it "
+            "e2e needs effect capture at the server (a notification sink the test can poll), "
+            "which is its own build"
+        )
+    )
+    def observe_effects_at_notification(self) -> None:
+        """Install the Slack-notification observer for this scenario.
+
+        Ordering between an escaping effect and the writes it refers to is only
+        observable AT the effect: after the request both are done and every
+        ordering looks alike. The observer records what a separate connection
+        could see the moment ``_send_creative_notifications`` was entered.
+        """
+        self.mock["send_notifications"].side_effect = self._observe_at_notification
+
+    def _observe_at_notification(self, *args: Any, **kwargs: Any) -> None:
+        """Stand in for ``_send_creative_notifications`` and record DB visibility.
+
+        Falls off the end -> returns None, which is exactly what the plain
+        ``return_value = None`` mock gave every existing caller, so scenarios
+        that only assert the notification WAS sent read the same value.
+        """
+        self.workflow_rows_at_notification = self._committed_workflow_rows(tenant_id=self._tenant_id)
+        self.assignment_count_at_notification = self._committed_assignment_count(tenant_id=self._tenant_id)
+
+    @realize_e2e(
+        e2e_unsupported(
+            "every field of this snapshot is read over a second pooled connection to the engine "
+            "THIS process is bound to. Under e2e_rest the request runs in the Docker server "
+            "process against its own database, so the read answers about the wrong database -- it "
+            "would report zero rows on every arm and grade nothing, which is strictly worse than "
+            "not grading. Observing it e2e needs a server-side read-back surface (a tenant-scoped "
+            "admin endpoint over workflow_steps / object_workflow_mapping / creative_assignments), "
+            "which is its own build"
+        )
+    )
+    def committed_sync_effects(self) -> CommittedSyncEffects:
+        """Everything this tenant has COMMITTED right now, in ONE snapshot.
+
+        One accessor rather than four: the scenarios compare these fields
+        against each other (mappings against persisted creatives, the
+        notification-time read against the final one), and four independently
+        timed reads could not be compared -- besides multiplying the
+        e2e-unrealizability declaration by four for one reason.
+        """
+        step_ids, object_ids = self._committed_workflow_rows(tenant_id=self._tenant_id)
+        return CommittedSyncEffects(
+            workflow_step_ids=step_ids,
+            workflow_object_ids=object_ids,
+            context_ids=self._committed_context_ids(tenant_id=self._tenant_id),
+            assignment_count=self._committed_assignment_count(tenant_id=self._tenant_id),
+            creatives_awaiting_approval=self._committed_creatives_awaiting_approval(
+                tenant_id=self._tenant_id, principal_id=self._principal_id
+            ),
+        )
 
     @realize_e2e(
         e2e_unsupported(

@@ -4253,6 +4253,30 @@ mappings:
       upstream_refs: ["BR-RULE-037"]
       business_rules: ["BR-RULE-037"]
       status: new
+    - adcp_scenario_id: "T-UC-006-local-dryrun-workflow-step-write-live"
+      adcp_feature: "local-uc006-dry-run-out-of-transaction-effects.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-dryrun-workflow-step-write-preview"
+      adcp_feature: "local-uc006-dry-run-out-of-transaction-effects.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-post-commit-workflow-step-ordering"
+      adcp_feature: "local-uc006-post-commit-effect-ordering.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-post-commit-no-orphan-pending-creative"
+      adcp_feature: "local-uc006-post-commit-effect-ordering.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-037"]
+      business_rules: ["BR-RULE-037"]
+      status: new
     - adcp_scenario_id: "T-UC-006-rule-037-inv5"
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null

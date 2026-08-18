@@ -310,15 +310,23 @@ class CreativeUoW(BaseUoW):
 
     creatives: CreativeRepository | None
     assignments: CreativeAssignmentRepository | None
+    workflows: WorkflowRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
+        # Approval workflow steps are written by the same request that writes
+        # the creatives they approve, so they must join the same transaction:
+        # a preview's rollback has to discard them too, and the approval
+        # notification (an after_commit effect) must not be able to name a
+        # step the commit has not yet released (salesagent-prkv.16).
+        self.workflows = WorkflowRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.creatives = None
         self.assignments = None
+        self.workflows = None
 
 
 class AdminCreativeUoW(BaseUoW):

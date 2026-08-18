@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -23,7 +22,7 @@ from src.core.database.database_session import DatabaseManager
 from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.database.repositories.workflow import append_step_comment
+from src.core.database.repositories.workflow import append_step_comment, build_context, build_workflow_step
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
 from src.core.webhook_validator import (
     validate_webhook_task_type,
@@ -81,18 +80,19 @@ class ContextManager(DatabaseManager):
         Returns:
             The created Context object
         """
-        context_id = f"ctx_{uuid.uuid4().hex[:12]}"
-
-        context = Context(
-            context_id=context_id,
+        # Row construction lives in the repository layer so this manager and
+        # WorkflowRepository cannot drift apart (salesagent-prkv.16). The
+        # commit/refresh/expunge behaviour below is unchanged for the callers
+        # that still hold a ContextManager.
+        context = build_context(
+            self.session,
             tenant_id=tenant_id,
             principal_id=principal_id,
-            conversation_history=initial_conversation or [],
-            last_activity_at=datetime.now(UTC),
+            initial_conversation=initial_conversation,
         )
+        context_id = context.context_id
 
         try:
-            self.session.add(context)
             self.session.commit()
             console.print(f"[green]Created context {context_id} for principal {principal_id}[/green]")
             # Refresh to get any database-generated values
@@ -206,54 +206,31 @@ class ContextManager(DatabaseManager):
         Returns:
             The created WorkflowStep object
         """
-        # Serialize Pydantic models at the DB boundary
-        from pydantic import BaseModel
-
-        if isinstance(request_data, BaseModel):
-            request_data = request_data.model_dump(mode="json")
-        if request_metadata and request_data is not None:
-            request_data.update(request_metadata)
-        step_id = f"step_{uuid.uuid4().hex[:12]}"
-
-        # Initialize comments array with initial comment if provided
-        comments = []
-        if initial_comment:
-            comments.append({"user": "system", "timestamp": datetime.now(UTC).isoformat(), "text": initial_comment})
-
-        step = WorkflowStep(
-            step_id=step_id,
-            context_id=context_id,
-            step_type=step_type,
-            owner=owner,
-            status=status,
-            tool_name=tool_name,
-            request_data=request_data if request_data is not None else {},
-            response_data=response_data if response_data is not None else {},
-            assigned_to=assigned_to,
-            error_message=error_message,
-            transaction_details=transaction_details if transaction_details is not None else {},
-            comments=comments,
-            created_at=datetime.now(UTC),
-        )
-
-        if status == "completed":
-            step.completed_at = datetime.now(UTC)
-
+        # Row construction (Pydantic boundary serialization, request_metadata
+        # merge, comments seeding, completed_at rule, object mappings) lives in
+        # the repository layer so this manager and WorkflowRepository cannot
+        # drift apart (salesagent-prkv.16). The commit/refresh/expunge/close
+        # behaviour below is unchanged for the callers that still hold a
+        # ContextManager.
         session = self.session
         try:
-            session.add(step)
-
-            # Create object mappings if provided
-            if object_mappings:
-                for mapping in object_mappings:
-                    obj_mapping = ObjectWorkflowMapping(
-                        object_type=mapping["object_type"],
-                        object_id=mapping["object_id"],
-                        step_id=step_id,
-                        action=mapping.get("action", step_type),
-                        created_at=datetime.now(UTC),
-                    )
-                    session.add(obj_mapping)
+            step = build_workflow_step(
+                session,
+                context_id=context_id,
+                step_type=step_type,
+                owner=owner,
+                status=status,
+                tool_name=tool_name,
+                request_data=request_data,
+                response_data=response_data,
+                assigned_to=assigned_to,
+                error_message=error_message,
+                transaction_details=transaction_details,
+                object_mappings=object_mappings,
+                initial_comment=initial_comment,
+                request_metadata=request_metadata,
+            )
+            step_id = step.step_id
 
             session.commit()
             session.refresh(step)

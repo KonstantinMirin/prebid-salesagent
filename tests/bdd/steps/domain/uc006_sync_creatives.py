@@ -7330,3 +7330,193 @@ def then_no_operation_level_errors(ctx: dict) -> None:
     assert operation_errors is None, (
         f"success variant must not carry operation-level errors[]; got {operation_errors!r}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# The workflow-step write path and its escaping notification (GH #2002)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Three rows make up that write -- one Context, one WorkflowStep per creative
+# awaiting approval, one ObjectWorkflowMapping per step -- and today
+# _create_sync_workflow_steps writes them through its OWN WorkflowUoW, outside
+# the transaction that owns the creatives. Every assertion below therefore reads
+# them over an INDEPENDENT connection (CreativeSyncEnv.committed_* ), never
+# through env.get_workflow_steps(): that accessor reads the SCOPED session,
+# which inside a request IS the transaction under test, so it cannot tell a row
+# that is committed from a row that is about to be rolled back -- the only
+# question a preview asks.
+
+
+def _synced_creative_ids(ctx: dict) -> list[str]:
+    """The creative_ids this scenario's request carried, sorted."""
+    return sorted(c["creative_id"] for c in ctx["creatives"])
+
+
+@given("the effects escaping the sync transaction are observed as they fire")
+def given_observe_escaping_effects(ctx: dict) -> None:
+    """Record committed DB state at the instant the Slack notification fires.
+
+    Ordering is only observable AT the effect: once the request has returned,
+    the steps are committed and the assignments are committed under either
+    order, and nothing distinguishes them.
+    """
+    ctx["env"].observe_effects_at_notification()
+
+
+@then("the committed workflow rows name exactly the synced creatives")
+def then_committed_workflow_rows_name_synced_creatives(ctx: dict) -> None:
+    """The live control: one Context, one step and one mapping per creative.
+
+    Counts AND identities. A count alone would pass against a mapping that
+    pointed at some other object, and an identity check alone would pass against
+    a second, duplicate step -- the two together are what the preview arm's
+    "zero rows" assertion is measured against.
+    """
+    _assert_success_response(ctx)
+    expected_ids = _synced_creative_ids(ctx)
+    effects = ctx["env"].committed_sync_effects()
+
+    assert effects.workflow_object_ids == expected_ids, (
+        f"expected one committed workflow mapping per synced creative {expected_ids}, got {effects.workflow_object_ids}"
+    )
+    assert len(effects.workflow_step_ids) == len(expected_ids), (
+        f"expected {len(expected_ids)} committed workflow step(s) for {expected_ids}, got {effects.workflow_step_ids}"
+    )
+    assert len(effects.context_ids) == 1, (
+        f"expected exactly one committed Context row for the tenant, got {effects.context_ids}"
+    )
+    # Each mapping must name a row that is actually on file: a mapping pointing
+    # at a creative the request did not persist is a dangling approval queue
+    # entry, which is the failure the whole write path exists to avoid.
+    persisted = sorted(_persisted_creative_fingerprints(ctx))
+    assert effects.workflow_object_ids == sorted(set(effects.workflow_object_ids) & set(persisted)), (
+        f"committed workflow mappings name creatives that are not persisted: "
+        f"mapped {effects.workflow_object_ids}, persisted {persisted}"
+    )
+
+
+@then("no workflow step, mapping or context row is committed for the tenant")
+def then_no_committed_workflow_rows(ctx: dict) -> None:
+    """The preview arm: the write path ran, and the rollback took all of it.
+
+    Measured against the live control above, which proves this exact payload on
+    this exact tenant does produce all three rows.
+    """
+    _assert_success_response(ctx)
+    effects = ctx["env"].committed_sync_effects()
+    observed = (effects.workflow_step_ids, effects.workflow_object_ids, effects.context_ids)
+    assert observed == ([], [], []), (
+        f"dry_run committed workflow state — steps {effects.workflow_step_ids}, "
+        f"mappings {effects.workflow_object_ids}, contexts {effects.context_ids}; these rows are "
+        "written outside the creatives transaction, so the preview's rollback never reached them"
+    )
+
+
+def _notification_observation(ctx: dict) -> tuple[tuple[list[str], list[str]], int]:
+    """What an independent connection saw at Slack-notification time.
+
+    Fails loudly rather than returning a default when nothing was observed: a
+    scenario that forgot the observer Given, or a request that never notified,
+    must redden here rather than silently grading None.
+    """
+    env = ctx["env"]
+    rows = env.workflow_rows_at_notification
+    count = env.assignment_count_at_notification
+    assert rows is not None and count is not None, (
+        "no Slack notification was observed — the scenario must bind 'the effects escaping the "
+        "sync transaction are observed as they fire' before the When step, and the request must "
+        "actually notify"
+    )
+    return rows, count
+
+
+@then("the workflow steps the request committed were already visible when Slack was notified")
+def then_workflow_steps_visible_at_notification(ctx: dict) -> None:
+    """The notification must not overtake the steps it tells a human to open.
+
+    Compares two reads of the same rows: what an INDEPENDENT connection could
+    see at the instant _send_creative_notifications was entered, and what the
+    finished request left committed. Equality is the whole invariant -- the
+    person following the Slack link opens exactly the state that connection
+    could see, so any difference is a step the message names and nobody can
+    find. A flush without a commit yields an empty read here, so the assertion
+    cannot hold vacuously.
+    """
+    _assert_success_response(ctx)
+    rows, _count = _notification_observation(ctx)
+    effects = ctx["env"].committed_sync_effects()
+    expected_ids = _synced_creative_ids(ctx)
+    assert effects.workflow_object_ids == expected_ids, (
+        f"the request committed no workflow mapping for {expected_ids} "
+        f"(got {effects.workflow_object_ids}), so comparing the notification-time read against it "
+        "would prove nothing"
+    )
+    assert rows == (effects.workflow_step_ids, effects.workflow_object_ids), (
+        f"Slack was notified about workflow state that was not committed yet: at notification time "
+        f"an independent connection saw {rows}, the request finally committed "
+        f"{(effects.workflow_step_ids, effects.workflow_object_ids)}"
+    )
+
+
+@then("no creative assignment was committed when Slack was notified")
+def then_no_assignment_committed_at_notification(ctx: dict) -> None:
+    """The approval notification precedes the assignment stage.
+
+    Once the workflow-step write joins the creatives transaction, the
+    notification is an after_commit effect draining at ``stack.close()`` — which
+    is BEFORE _process_assignments runs. Today it fires at the end of the impl,
+    after that stage has committed its rows, so this reads a non-zero count.
+    Graded together with the step visibility above: one observation, taken at
+    one instant, that reddens if either ordering regresses.
+    """
+    _assert_success_response(ctx)
+    _rows, count = _notification_observation(ctx)
+    assert count == 0, (
+        f"{count} creative assignment(s) were already committed when Slack was notified — the "
+        "approval notification is an effect of the creatives commit and must drain before the "
+        "assignment stage runs"
+    )
+
+
+@then("the assignment the request made is committed")
+def then_assignment_is_committed(ctx: dict) -> None:
+    """Non-vacuity control for the ordering assertion above.
+
+    Without it, "no assignment at notification time" also holds for a request
+    that never created one — i.e. it would grade nothing.
+    """
+    _assert_success_response(ctx)
+    committed = ctx["env"].committed_sync_effects().assignment_count
+    assert committed == 1, (
+        f"expected the request to leave exactly 1 committed creative assignment, got {committed}; "
+        "without one the notification-time count of 0 proves nothing"
+    )
+
+
+@then("every committed creative awaiting approval has a committed workflow step")
+def then_no_orphan_creative_awaiting_approval(ctx: dict) -> None:
+    """GH #1987 / salesagent-prkv.15: no creative left in the queue unqueued.
+
+    A creative committed at ``pending_review`` is a promise that a human will be
+    asked to review it, and the workflow step is the only thing that asks. When
+    _process_assignments raises in strict mode the creatives are already
+    committed (``if not dry_run: stack.close()``) while the workflow-step call
+    sits after the raise — so the promise is committed and the queue entry never
+    written. Once the steps join the creatives' transaction they commit in the
+    same ``stack.close()``, before the raise, and the two cannot diverge.
+    """
+    effects = ctx["env"].committed_sync_effects()
+    awaiting = effects.creatives_awaiting_approval
+    expected_ids = _synced_creative_ids(ctx)
+    # Non-vacuity: the require-human tenant must actually have committed the
+    # creative before the raise. If it did not, there is no orphan to look for
+    # and the mapping comparison below would hold over two empty sets.
+    assert awaiting == expected_ids, (
+        f"expected the strict-mode failure to leave {expected_ids} committed at pending_review, "
+        f"got {awaiting}; without a committed creative there is no orphan to grade"
+    )
+    assert sorted(set(effects.workflow_object_ids) & set(awaiting)) == awaiting, (
+        f"creatives {sorted(set(awaiting) - set(effects.workflow_object_ids))} were committed "
+        "awaiting approval with no workflow step naming them — the assignment failure aborted "
+        "before the steps were written, but after the creatives were committed (GH #1987)"
+    )
