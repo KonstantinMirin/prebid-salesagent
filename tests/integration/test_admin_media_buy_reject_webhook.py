@@ -387,9 +387,9 @@ class TestAdminMediaBuyRejectWebhook:
         approve_media_buy's reject arm assigns media_buy.status = "rejected" directly, so the
         buy changes state while ``revision`` — the buyer's optimistic-concurrency token, which
         must strictly increase on every mutation — stays where it was. Routing the write through
-        MediaBuyRepository.update_status is what moves it. "rejected" is in
-        MEDIA_BUY_UNCONFIRMED_STATUSES, so this transition must NOT stamp confirmed_at: a
-        rejection is the seller declining to commit.
+        MediaBuyRepository.update_status is what moves it. "rejected" is NOT in
+        models._SELLER_COMMITTED_STATUSES, so this transition must NOT stamp confirmed_at:
+        a rejection is the seller declining to commit.
         """
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
@@ -422,10 +422,14 @@ class TestAdminMediaBuyRejectWebhook:
         The full approve path (no adapter mock — the mock adapter really runs) moves the buy
         pending_approval -> scheduled in approve_media_buy's four-branch if/elif, and then
         execute_approved_media_buy moves it scheduled -> active through
-        MediaBuyUoW.media_buys.update_status. Only the SECOND write goes through the
-        repository today, so the buy ends at revision+1 having made two transitions: the
-        first move is invisible to a buyer polling on ``revision``. Both moves are real, so
-        both must bump.
+        MediaBuyUoW.media_buys.update_status. BOTH writes go through the repository, so the
+        buy ends at revision+2 and neither transition is invisible to a buyer polling on
+        ``revision``.
+
+        (This paragraph used to describe the defect instead of the contract — that only
+        the second write was routed, so the buy ended at revision+1 — while the assertion
+        below already demanded +2 and passed. A docstring arguing against its own passing
+        assertion is worse than none: the next reader believes the prose.)
         """
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
@@ -437,15 +441,18 @@ class TestAdminMediaBuyRejectWebhook:
         _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
 
         after = _media_buy_state(tenant_id, media_buy_id)
-        assert after.status == "active", (
-            f"the approve path ends in the adapter-execution write to 'active', got {after.status!r}"
-        )
         assert after.approved_by == "test@example.com"
-        assert after.revision == before_revision + 2, (
-            f"admin approval moved the buy pending_approval -> scheduled -> active but revision "
-            f"went {before_revision} -> {after.revision}; each status move bumps it by exactly 1"
+        # bumps=2: two real status moves, each owing exactly one bump. The shared oracle
+        # takes an exact delta, so a path that routed only one of the two writes fails
+        # here rather than looking like a smaller-but-positive increase.
+        assert_status_move_carried_bookkeeping(
+            MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=None),
+            after,
+            expected_status="active",
+            bumps=2,
+            confirms=True,
+            subject="admin approval (pending_approval -> scheduled -> active)",
         )
-        assert after.confirmed_at is not None, "an admin-approved buy must carry the instant the seller committed"
 
     def test_a2a_reject_webhook_carries_policy_violation_task(
         self, authenticated_admin_session, make_pending_media_buy, webhook_capture

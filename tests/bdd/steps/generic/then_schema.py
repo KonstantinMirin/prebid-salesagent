@@ -17,8 +17,7 @@ difference is the whole point: ``status`` is a model field with a default, so a
 re-serialized payload carries it whether or not the envelope ever reached the
 wire — an instrument that reports success precisely where it could not observe
 what it was asked to grade. This module is registered globally, and that fallback
-fired on ``then_envelope_status_completed``, the step grading the obligation
-GH #1900 owns.
+fired on ``then_envelope_status``, the step grading the obligation GH #1900 owns.
 
 No ``exclude_none``: stripping literal nulls would mask exactly the regression
 class a wire reader exists to catch, and ``confirmed_at`` reaches the wire as an

@@ -54,8 +54,11 @@ exists to remove.
 
 Neither check has an allowlist, by design.
 
-beads: salesagent-g4cm (the original name-identity guard)
-GH #1941 — the match-overlap check added below
+GH #1941 — the name-identity check, and the match-overlap check added below.
+
+(The provenance line here used to carry a beads id. Beads ids do not resolve for
+anyone outside this workspace, which is the repo's own rule for FIXME references;
+the GitHub number is the citable form.)
 """
 
 from __future__ import annotations

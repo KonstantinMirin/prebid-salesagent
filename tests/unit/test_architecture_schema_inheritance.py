@@ -277,9 +277,19 @@ class TestSchemaInheritance:
             ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
-            # Pattern #4: the get_media_buys item chain. Both narrowings are load-bearing
-            # — our Targeting adds ~30 fields the library's TargetingOverlay lacks, and
-            # serializing through the library annotation would drop them.
+            # Pattern #4: the get_media_buys item chain. ALL THREE narrowings below are
+            # load-bearing, and for three different reasons — the comment used to say
+            # "both" while listing three, which leaves a reader to guess which one was
+            # unaccounted for:
+            #   targeting_overlay — our Targeting adds ~30 fields the library's
+            #     TargetingOverlay lacks; serializing through the library annotation
+            #     would drop every one of them.
+            #   packages — the local GetMediaBuysPackage carries the narrowed
+            #     targeting_overlay above, so the item must declare the local element
+            #     type or the narrowing never reaches the wire.
+            #   media_buys — same one step up: the response must declare the local item
+            #     type, or GetMediaBuysMediaBuy's own model_dump (and the
+            #     required-nullable retention on it) is never invoked.
             #
             # Note what is NOT here, and why, because the two reasons are different:
             #   snapshot, creative_approvals — local SUBCLASSES that add no fields, so

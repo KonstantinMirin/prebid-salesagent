@@ -3,7 +3,9 @@
 AdCP 3.1.1 `confirmed_at` — the moment the seller committed to running the buy,
 written once and stable across later transitions. Nullable because the spec
 permits null for the arms where the seller has not committed yet
-(pending_approval, rejected, failed); see MEDIA_BUY_UNCONFIRMED_STATUSES.
+(draft, pending, pending_approval, rejected, failed) — i.e. every status OUTSIDE
+`models._SELLER_COMMITTED_STATUSES`, which is the list that is written out and the
+one `is_media_buy_seller_confirmed` consults.
 
 Historical rows are left NULL rather than backfilled here: a large data rewrite
 does not belong in a single Alembic transaction, and NULL is the honest value —

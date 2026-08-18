@@ -321,7 +321,7 @@ class TestWorkflowApprovalMovesMediaBuy:
             expected_status="pending_creatives",
             subject="approve with an unapproved creative",
         )
-        # pending_creatives is NOT in MEDIA_BUY_UNCONFIRMED_STATUSES, so the seller has
+        # pending_creatives IS in models._SELLER_COMMITTED_STATUSES, so the seller has
         # committed by the time the buy is merely waiting on creatives.
         assert after.confirmed_at is not None, (
             "admin approval moved the buy to the seller-confirmed status 'pending_creatives' "

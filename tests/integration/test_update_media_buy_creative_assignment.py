@@ -782,8 +782,8 @@ def test_creative_assignments_replaces_all(integration_db):
 #   - creative_assignments -> src/core/tools/media_buy_update.py:1185
 # Each writes through MediaBuyRepository.update_status rather than assigning
 # media_buy_obj.status directly, and that routing is the behaviour graded here:
-# update_status stamps confirmed_at (pending_creatives is a seller-confirmed
-# status — it is not in MEDIA_BUY_UNCONFIRMED_STATUSES) and bumps revision (the
+# update_status stamps confirmed_at (pending_creatives is a seller-committed
+# status — it IS in models._SELLER_COMMITTED_STATUSES) and bumps revision (the
 # buyer's optimistic-concurrency token). A direct attribute assignment moves the
 # buy with neither, which is invisible if the test only checks the status string.
 # =============================================================================

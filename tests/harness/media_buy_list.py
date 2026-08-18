@@ -69,20 +69,6 @@ class MediaBuyListDispatchMixin:
         """
         return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
 
-    def _build_list_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to GetMediaBuysBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        for key in ("media_buy_ids", "status_filter", "account_id", "context"):
-            if key in kwargs and kwargs[key] is not None:
-                body[key] = kwargs[key]
-        if kwargs.get("include_snapshot"):
-            body["include_snapshot"] = True
-        return body
-
-    def _parse_list_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
-        """Parse REST response JSON."""
-        return GetMediaBuysResponse(**data)
-
 
 class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
     """Integration test environment for _get_media_buys_impl.
@@ -91,7 +77,13 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
     """
 
     EXTERNAL_PATCHES: dict[str, str] = {}
-    REST_ENDPOINT = "/api/v1/media-buys/query"
+    # No REST_ENDPOINT, deliberately: get_media_buys has NO REST route. One was
+    # declared here for a path that does not exist anywhere in src/, with a body
+    # builder and a response parser hanging off it — so the machinery read as though
+    # the transport were available, and a REST parametrization would have failed as
+    # if production were broken rather than as if the route were absent. The sibling
+    # env states the same fact as a loud refusal
+    # (`media_buy_create_list.py::build_rest_body`), which covers callers that ask.
 
     def _configure_mocks(self) -> None:
         """No mocks needed for read-only list operation."""
@@ -104,9 +96,3 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
 
     def call_mcp(self, **kwargs: Any) -> Any:
         return self._call_list_mcp(**kwargs)
-
-    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        return self._build_list_rest_body(**kwargs)
-
-    def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
-        return self._parse_list_rest_response(data)

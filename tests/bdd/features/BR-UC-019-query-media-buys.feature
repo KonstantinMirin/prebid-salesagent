@@ -1,4 +1,4 @@
-# Generated from adcp-req @ 086fef81bc8681ca88dfebd1e518b74060df64dc on 2026-08-18T16:07:01Z (merge mode)
+# Generated from adcp-req @ 5967bbda117667537ac193ba00aced716e4e0b7c on 2026-08-18T19:09:26Z (merge mode)
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-019 Query Media Buys
@@ -21,6 +21,7 @@ Feature: BR-UC-019 Query Media Buys
     Given a Seller Agent is operational and accepting requests
     And an authenticated Buyer with principal_id "buyer-001"
     And the principal "buyer-001" exists in the tenant database
+
 
 
 
@@ -1353,7 +1354,7 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: get_media_buys called immediately after create_media_buy resolves the freshly-created buy by media_buy_id
     Given the buyer captured a media_buy_id from a successful create_media_buy response
     When the Buyer Agent calls get_media_buys with that media_buy_id under the same account
-    Then the response should be schema-valid against get-media-buys-response.json
+    Then the response should be schema-valid against media-buy/get-media-buys-response.json
     And the media_buys array should include the freshly-created buy
     And the included entry should expose the same media_buy_id and status "pending_creatives"
     # media-buy/index.yaml create_buy / check_buy_status step: after the buyer
