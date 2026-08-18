@@ -18,14 +18,23 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import Creative, CreativeAssignment, MediaBuy, PersistedMediaBuyStatus
 from src.core.database.repositories import MediaBuyRepository
-from src.core.utils import utc_flight_end, utc_flight_start
+from src.core.tools._media_buy_transitions import resolve_flight_window_status
 
 logger = logging.getLogger(__name__)
 
 # Configurable via env var - default 60 seconds
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
+
+
+_ACTIVATABLE_STATUSES = frozenset(
+    {
+        PersistedMediaBuyStatus.PENDING_START,
+        PersistedMediaBuyStatus.PENDING_ACTIVATION,
+        PersistedMediaBuyStatus.SCHEDULED,
+    }
+)
 
 
 class MediaBuyStatusScheduler:
@@ -122,58 +131,35 @@ class MediaBuyStatusScheduler:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
 
     def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> str | None:
-        """Compute the new status for a media buy based on flight dates.
+        """The status this sweep should write, or ``None`` to leave the row alone.
 
-        Returns:
-            New status string if change needed, None otherwise.
+        The flight-window rule itself lives in
+        ``src.core.tools._media_buy_transitions.resolve_flight_window_status`` — one
+        domain owner shared with the two admin approval paths. What stays here is the
+        part that is genuinely the SCHEDULER's: this runs unattended over every buy,
+        so it moves only buys that are waiting to start, and never writes a status the
+        row already has.
         """
-        # Get start and end times (prefer start_time/end_time over start_date/end_date)
-        start_time: datetime | None = None
-        if media_buy.start_time:
-            raw_start: datetime = media_buy.start_time
-            if raw_start.tzinfo is None:
-                start_time = raw_start.replace(tzinfo=UTC)
-            else:
-                start_time = raw_start
-        elif media_buy.start_date:
-            start_time = utc_flight_start(media_buy.start_date)  # type: ignore[arg-type]
+        target = resolve_flight_window_status(
+            media_buy,
+            now=now,
+            creatives_approved=self._are_creatives_approved(media_buy, session),
+        )
+        if target is None:
+            return None  # No flight window — this sweep has no opinion.
 
-        if start_time is None:
-            return None  # No start time defined
-
-        end_time: datetime | None = None
-        if media_buy.end_time:
-            raw_end: datetime = media_buy.end_time
-            if raw_end.tzinfo is None:
-                end_time = raw_end.replace(tzinfo=UTC)
-            else:
-                end_time = raw_end
-        elif media_buy.end_date:
-            end_time = utc_flight_end(media_buy.end_date)  # type: ignore[arg-type]
-
-        if end_time is None:
-            return None  # No end time defined
-
-        current_status = media_buy.status
-
-        # Check if campaign has ended
-        if now > end_time:
-            if current_status != "completed":
-                return "completed"
+        current = media_buy.status
+        if target == current:
             return None
 
-        # Check if campaign should be active
-        if now >= start_time:
-            if current_status in ["pending_start", "pending_activation", "scheduled"]:
-                # Before activating, verify creatives are approved (for pending_start/pending_activation)
-                if current_status in ["pending_start", "pending_activation"]:
-                    if self._are_creatives_approved(media_buy, session):
-                        return "active"
-                    # Creatives not approved yet - stay pending
-                    return None
-                else:
-                    # scheduled -> active (no creative check needed, already validated)
-                    return "active"
+        if target == PersistedMediaBuyStatus.COMPLETED:
+            return target
+
+        # Activation only, and only out of a pre-serving state. An unattended sweep
+        # must not resurrect a buy a seller deliberately paused, rejected or canceled,
+        # and it must not push a buy BACK to scheduled once it is serving.
+        if target == PersistedMediaBuyStatus.ACTIVE and current in _ACTIVATABLE_STATUSES:
+            return target
 
         return None
 

@@ -224,12 +224,17 @@ def _create_creative_for_retro_push(session, tenant_id: str, status: str = "pend
     return creative.creative_id
 
 
-def _create_active_media_buy(session, tenant_id: str, status: str = "active") -> tuple[str, str]:
-    """Create a media buy + package with a platform_order_id (requires factory_session)."""
+def _create_active_media_buy(session, tenant_id: str, status: str = "active", **columns) -> tuple[str, str]:
+    """Create a media buy + package with a platform_order_id (requires factory_session).
+
+    ``**columns`` forwards persisted column values (e.g. the flight window) to the
+    factory, so a test that needs the buy placed relative to "now" says so instead of
+    reaching past the factory.
+    """
     from tests.factories import MediaBuyFactory, MediaPackageFactory
 
     tenant, principal = _lookup_tenant_principal(session, tenant_id)
-    mb = MediaBuyFactory(tenant=tenant, principal=principal, status=status)
+    mb = MediaBuyFactory(tenant=tenant, principal=principal, status=status, **columns)
     pkg = MediaPackageFactory(
         media_buy=mb,
         package_config={"platform_order_id": "gam_order_test", "platform_line_item_id": "gam_li_test"},
@@ -468,7 +473,7 @@ class TestCreativeApprovalUnblocksMediaBuy:
         factory_session.expire_all()
         after = repo.get_by_id(media_buy_id)
         # The factory buy's flight window (2025-01-01 .. 2027-12-31) is open now, so
-        # _compute_media_buy_status_from_flight_dates picks "active".
+        # the shared flight-window rule picks "active".
         assert after.status == "active", f"unblocked buy must go live, got {after.status!r}"
         assert after.approved_by == "system"
         assert after.revision == before_revision + 1, (
@@ -479,6 +484,54 @@ class TestCreativeApprovalUnblocksMediaBuy:
             f"the move to 'active' rewrote the commitment instant "
             f"{before_confirmed_at} -> {after.confirmed_at}; confirmed_at is write-once and records "
             f"the FIRST commitment, not the most recent transition"
+        )
+
+    def test_approval_after_the_flight_end_completes_the_buy(self, client, test_tenant, factory_session):
+        """A buy whose creatives are approved AFTER its flight window closed is completed.
+
+        This is the case the route-local copy got wrong. It asked only "is now inside
+        the window", and answered ``scheduled`` when it was not — so a campaign that had
+        already finished was stamped as one that has not started yet, in the column the
+        wire projection reads. A buyer polling get_media_buys would be told their
+        finished campaign was waiting to start.
+
+        The shared rule checks the END of the window first, because a buy past its end
+        is completed whatever else is true of it. Driven through the real approval route
+        rather than by calling the rule, so it grades the route's adoption of it.
+        """
+        from datetime import date
+
+        from src.core.database.repositories import MediaBuyRepository
+
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
+        media_buy_id, package_id = _create_active_media_buy(
+            factory_session,
+            test_tenant,
+            status="pending_creatives",
+            start_date=date(2025, 1, 1),
+            end_date=date(2025, 6, 30),
+            start_time=datetime(2025, 1, 1, tzinfo=UTC),
+            end_time=datetime(2025, 6, 30, 23, 59, 59, tzinfo=UTC),
+        )
+        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+
+        with (
+            patch(_SIDE_EFFECTS_PATCH),
+            patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)),
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={"approved_by": "test@example.com"},
+            )
+
+        assert response.status_code == 200
+        factory_session.expire_all()
+        after = MediaBuyRepository(factory_session, test_tenant).get_by_id(media_buy_id)
+        assert after.status == "completed", (
+            f"a buy approved after its flight window closed must be 'completed', got {after.status!r} "
+            f"— 'scheduled' here would report a finished campaign as one that has not started"
         )
 
 

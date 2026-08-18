@@ -13,10 +13,11 @@ from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.utils import echo_context, require_auth, require_tenant_access
-from src.core.database.models import PushNotificationConfig
+from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
+from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -418,38 +419,19 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # No creatives assigned yet
                         all_creatives_approved = False
 
-                    # Update status based on creative approval state
-                    if all_creatives_approved:
-                        if media_buy.start_time and media_buy.end_time:
-                            # Compute flight window
-                            if media_buy.start_time:
-                                start_time = (
-                                    media_buy.start_time.astimezone(UTC)
-                                    if media_buy.start_time.tzinfo
-                                    else media_buy.start_time.replace(tzinfo=UTC)
-                                )
-
-                            if media_buy.end_time:
-                                end_time = (
-                                    media_buy.end_time.astimezone(UTC)
-                                    if media_buy.end_time.tzinfo
-                                    else media_buy.end_time.replace(tzinfo=UTC)
-                                )
-
-                            now = datetime.now(UTC)
-                            if now < start_time:
-                                approved_status = "scheduled"
-                            elif now > end_time:
-                                approved_status = "completed"
-                            else:
-                                approved_status = "active"
-                        else:
-                            # No start or end time - set to active
-                            approved_status = "active"
-                    else:
-                        # Keep it in a state that shows it needs creative approval
-                        # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
-                        approved_status = "draft"
+                    # The flight-window rule is the shared domain owner, not a
+                    # route-local copy: this branch used to compute scheduled /
+                    # completed / active inline, a third spelling of the same rule.
+                    # `or ACTIVE` covers the buy with no flight window at all, which
+                    # this route has always treated as immediately serving.
+                    approved_status = (
+                        resolve_flight_window_status(
+                            media_buy,
+                            now=datetime.now(UTC),
+                            creatives_approved=all_creatives_approved,
+                        )
+                        or PersistedMediaBuyStatus.ACTIVE
+                    )
 
                     # One repository write for the whole branch: the status and the
                     # approval stamps move together, and the repository owns the

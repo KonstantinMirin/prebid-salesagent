@@ -17,11 +17,13 @@ from adcp.types import (
 )
 from adcp.webhooks import GeneratedTaskStatus
 
+from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
+from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -77,31 +79,6 @@ def _cleanup_completed_tasks():
         for task_id in completed_tasks:
             del _ai_review_tasks[task_id]
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
-
-
-def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
-    """Compute status based on flight dates: 'active' if within window, else 'scheduled'."""
-    now = datetime.now(UTC)
-
-    start_time = None
-    if media_buy.start_time:
-        raw_start = media_buy.start_time
-        start_time = raw_start.replace(tzinfo=UTC) if raw_start.tzinfo is None else raw_start.astimezone(UTC)
-    elif media_buy.start_date:
-        start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(tzinfo=UTC)
-
-    end_time = None
-    if media_buy.end_time:
-        raw_end = media_buy.end_time
-        end_time = raw_end.replace(tzinfo=UTC) if raw_end.tzinfo is None else raw_end.astimezone(UTC)
-    elif media_buy.end_date:
-        end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(tzinfo=UTC)
-
-    # If start time passed and end time not passed, set to active
-    if start_time and end_time and now >= start_time and now <= end_time:
-        return "active"
-
-    return "scheduled"
 
 
 async def _call_webhook_for_creative_status(
@@ -650,7 +627,14 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     assert uow2.media_buys is not None
                     mb = uow2.media_buys.get_by_id(action["media_buy_id"])
                     if mb:
-                        new_status = _compute_media_buy_status_from_flight_dates(mb)
+                        # Creatives just approved on this path, hence
+                        # creatives_approved=True. The shared rule is what makes a buy
+                        # approved PAST its flight end come out `completed`; the
+                        # route-local copy this replaced answered `scheduled` for it.
+                        new_status = (
+                            resolve_flight_window_status(mb, now=datetime.now(UTC), creatives_approved=True)
+                            or PersistedMediaBuyStatus.ACTIVE
+                        )
                         uow2.media_buys.update_status(
                             action["media_buy_id"],
                             new_status,
