@@ -145,10 +145,23 @@ dc build postgres adcp-server proxy tests
 # governed by the DIRECTORY's write bit (which we own), not the file's own
 # owner, so `rm -f` succeeds even on a ci-owned file; the fresh file this
 # process then creates is ours. Verified live: ci:ci 0644 -> sacirunner:ci 0664.
-mkdir -p logs && chmod 2775 logs
+#
+# The mode must be 0666/2777, NOT 0664/2775. 0664 grants write to owner+group
+# only, which silently assumes adcp-server's gid equals this directory's group.
+# It does not have to: the launcher recreates these files as ITS uid/gid, while
+# adcp-server runs as uid=1001(app) gid=1001(app). Whenever the two differ, only
+# the "other" bits apply to the server -- 0664 leaves it r--, and audit_logger.py
+# blows up at IMPORT time with PermissionError: '/app/logs/audit.log', which
+# uvicorn surfaces as "cannot load src.app:app". The stack then never becomes
+# healthy and every server-dependent suite errors en masse. Observed live on
+# noetis-b-vm: logs/ was 1003:1003 while the server was 1001:1001 -> 2,121
+# phantom "test failures" across bdd_e2e/e2e/ui from one unwritable file.
+# These are ephemeral CI log sinks in a throwaway bind mount; world-writable is
+# the correct trade for not depending on uid/gid alignment we do not control.
+mkdir -p logs && chmod 2777 logs
 for f in audit.log error.log structured.jsonl security.jsonl; do
     rm -f "logs/$f" 2>/dev/null || true
-    : > "logs/$f" && chmod 664 "logs/$f"
+    : > "logs/$f" && chmod 666 "logs/$f"
 done
 
 dc up -d postgres adcp-server proxy creative-pg creative-agent
@@ -163,6 +176,20 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 3
 done
 [ "$pg" = true ] || { echo "Postgres never became ready"; dc logs postgres; exit 1; }
+# $srv gets the SAME fail-fast treatment as $pg. It used to be computed, printed
+# on success, and then never checked -- so a server that never became healthy
+# within the 360s deadline let the run continue into every server-dependent
+# suite. That is not a smaller failure than a dead Postgres, it is a louder one:
+# bdd_e2e/e2e/ui then emit thousands of "Server not ready" / ":8000/health
+# failed" / Playwright-timeout errors that read as product breakage. Measured on
+# one such run: 2,121 errors, single root cause, zero of them a real defect.
+# Infrastructure death must present as ONE infrastructure failure.
+[ "$srv" = true ] || {
+    echo "ERROR: adcp-server never became healthy within the deadline — aborting" >&2
+    echo "       (every server-dependent suite would otherwise error en masse)" >&2
+    dc logs --tail 80 adcp-server >&2
+    exit 1
+}
 
 # The suites use the adcp_test database (matches scripts/test-stack.sh).
 dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" >/dev/null 2>&1 || true
@@ -196,14 +223,36 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
             -e DATABASE_URL="$_admin/adcp_gw$i?sslmode=disable" adcp-server >/dev/null
     done
     echo "  waiting for $N per-worker servers to become healthy..."
+    # Same fail-fast reasoning as the template-migration check above: a worker
+    # whose server never came up cannot run a single e2e_rest scenario, so
+    # "(continuing)" only converts one infrastructure fault into a flood of
+    # scenario errors attributed to the wrong layer. Collect all of them first
+    # (one pass, so the operator sees every unhealthy worker rather than just
+    # the first) and then abort with the count.
+    _unhealthy=""
     for i in $(seq 0 $((N - 1))); do
         wd=$(( $(date +%s) + 120 )); ok=false
         while [ "$(date +%s)" -lt "$wd" ]; do
             docker exec "${COMPOSE_PROJECT_NAME}-server-gw$i" curl -sf http://localhost:8080/health >/dev/null 2>&1 && ok=true && break
             sleep 2
         done
-        [ "$ok" = true ] && echo "    server-gw$i ready" || echo "    server-gw$i NOT ready (continuing)"
+        if [ "$ok" = true ]; then
+            echo "    server-gw$i ready"
+        else
+            echo "    server-gw$i NOT ready"
+            _unhealthy="$_unhealthy gw$i"
+        fi
     done
+    if [ -n "$_unhealthy" ]; then
+        echo "ERROR: per-worker e2e server(s) never became healthy:$_unhealthy" >&2
+        echo "       aborting — these workers' scenarios would error en masse and" >&2
+        echo "       be misread as test failures rather than a stack failure." >&2
+        for i in $_unhealthy; do
+            echo "--- logs: ${COMPOSE_PROJECT_NAME}-server-$i ---" >&2
+            docker logs --tail 40 "${COMPOSE_PROJECT_NAME}-server-$i" >&2 2>&1 || true
+        done
+        exit 1
+    fi
     # COMPOSE_PROJECT_NAME must reach pytest so conftest e2e_stack builds the FULL
     # server name "<project>-server-gwN" (short "server-gwN" doesn't resolve).
     E2E_ENV_ARGS="-e E2E_PER_WORKER=1 -e BDD_E2E_XDIST_N=$N -e COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME"

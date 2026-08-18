@@ -44,7 +44,35 @@ services:
 
   adcp-server:
     build: .
+    # Run as the SAME uid:gid as the `tests` service below (and as the host user
+    # that owns the checkout), not the image's baked uid 1001.
+    #
+    # Both services bind-mount the same /app. When they run as different uids,
+    # whichever one creates a path first owns it and the other cannot write it.
+    # That is not hypothetical: the launcher creates logs/audit.log as its own
+    # uid, adcp-server (1001) then cannot open it, and because
+    # src/core/audit_logger.py:33 builds that FileHandler at MODULE IMPORT time,
+    # the server dies before serving a single request -- surfacing as thousands
+    # of "Server not ready" errors across bdd_e2e/e2e/ui rather than one
+    # permission error. Making both sides one uid removes the class of bug
+    # instead of chmod-ing each new file that trips it.
+    #
+    # Safe here specifically because this is the TEST stack: SKIP_NGINX and
+    # SKIP_CRON below mean /var/log/nginx and the cron paths (the other things
+    # Dockerfile:119 chowns to app:app) are never written, and /opt/venv only
+    # needs read+execute at runtime. Production uses docker-compose.yml, which
+    # has no such override and keeps the baked non-root uid 1001.
+    #
+    # Derived, never hardcoded -- a literal uid here previously turned GitHub
+    # Actions red, because the Actions checkout is owned by a different uid than
+    # the CI box's. run_all_tests.sh exports TEST_UID/TEST_GID from `id -u`/`id -g`;
+    # the :-0 default only applies to a bare `docker compose up` and reproduces
+    # the old root behaviour rather than guessing.
+    user: "${TEST_UID:-0}:${TEST_GID:-0}"
     environment:
+      # A raw numeric uid has no /etc/passwd entry, so HOME would default to "/"
+      # (unwritable). Same reason the `tests` service sets this.
+      HOME: /tmp
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
       # Pin strict schema validation (extra="forbid") for the e2e_rest boundary so
       # the live server rejects spec-invalid input the same way the dev/test
@@ -153,6 +181,16 @@ services:
       # throwaway per-run cache, no reason to fight over its ownership too).
       HOME: /tmp
       UV_CACHE_DIR: /tmp/uv-cache
+      # Unbuffered stdout so the CI supervisor sees output as it is produced.
+      # This service is started by `docker compose run tests` — a SEPARATE
+      # container from the supervisor's own process — so setting
+      # PYTHONUNBUFFERED on the supervisor's env does not reach tox here, and
+      # this block is curated (no blanket host-env passthrough). Without it the
+      # supervisor's liveness heuristic sees no output on a genuinely busy run
+      # and reports a false stall: quiet_for climbed monotonically 0m34s -> 12m+
+      # past the 5-minute false-red threshold on a run at 1082% CPU that exited
+      # 0. Matches the ${VAR:-default} pattern used by BDD_E2E_ENABLED below.
+      PYTHONUNBUFFERED: "${PYTHONUNBUFFERED:-1}"
       # Fixed in-network DB address — never a host port, never collides. This is
       # the SUITE database used by unit(skip)/integration/bdd/admin.
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
