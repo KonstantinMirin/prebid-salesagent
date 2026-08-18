@@ -14,6 +14,11 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, Principal, Tenant, WorkflowStep
+from tests.helpers.media_buy_write_seam import (
+    MediaBuyState,
+    assert_status_move_carried_bookkeeping,
+    read_media_buy_state,
+)
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 app = create_app()
@@ -266,16 +271,6 @@ def _create_step_mapped_to_media_buy(session, tenant_id: str, media_buy_id: str)
     return context.context_id, step.step_id
 
 
-def _reload_media_buy(session, tenant_id: str, media_buy_id: str):
-    """Re-read the media buy the route just committed, through the repository."""
-    from src.core.database.repositories import MediaBuyRepository
-
-    session.expire_all()
-    media_buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
-    assert media_buy is not None, f"media buy {media_buy_id} vanished"
-    return media_buy
-
-
 class TestWorkflowApprovalMovesMediaBuy:
     """Approving a media-buy workflow step moves the buy — with its mutation bookkeeping.
 
@@ -293,9 +288,15 @@ class TestWorkflowApprovalMovesMediaBuy:
         media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
         context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
 
+        # The ROW here, not the write-seam state tuple: this site needs the buy's
+        # relationships to build the creative, which is a different question from
+        # "what did the status move carry".
+        from src.core.database.repositories import MediaBuyRepository
         from tests.factories import CreativeAssignmentFactory, CreativeFactory
 
-        media_buy = _reload_media_buy(factory_session, test_tenant, media_buy_id)
+        factory_session.expire_all()
+        media_buy = MediaBuyRepository(factory_session, test_tenant).get_by_id(media_buy_id)
+        assert media_buy is not None, f"media buy {media_buy_id} vanished"
         before_revision = media_buy.revision
         assert media_buy.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
@@ -313,13 +314,12 @@ class TestWorkflowApprovalMovesMediaBuy:
         )
         assert response.status_code == 200
 
-        after = _reload_media_buy(factory_session, test_tenant, media_buy_id)
-        assert after.status == "pending_creatives", (
-            f"approve with an unapproved creative must park the buy in pending_creatives, got {after.status!r}"
-        )
-        assert after.revision == before_revision + 1, (
-            f"the buy moved pending_approval -> pending_creatives but revision went "
-            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
+        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
+        assert_status_move_carried_bookkeeping(
+            MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=after.confirmed_at),
+            after,
+            expected_status="pending_creatives",
+            subject="approve with an unapproved creative",
         )
         # pending_creatives is NOT in MEDIA_BUY_UNCONFIRMED_STATUSES, so the seller has
         # committed by the time the buy is merely waiting on creatives.
@@ -334,7 +334,7 @@ class TestWorkflowApprovalMovesMediaBuy:
         media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
         context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
 
-        before = _reload_media_buy(factory_session, test_tenant, media_buy_id)
+        before = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
         before_revision = before.revision
         assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
@@ -348,13 +348,16 @@ class TestWorkflowApprovalMovesMediaBuy:
             )
         assert response.status_code == 200
 
-        after = _reload_media_buy(factory_session, test_tenant, media_buy_id)
+        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
         assert after.status == "scheduled"
         assert after.approved_by == "test@example.com"
         assert after.approved_at is not None
-        assert after.revision == before_revision + 1, (
-            f"the buy moved pending_approval -> scheduled but revision went "
-            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
+        assert_status_move_carried_bookkeeping(
+            MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=None),
+            after,
+            expected_status="scheduled",
+            confirms=True,
+            subject="approving the media-buy workflow step",
         )
         # This is the manual-approval path: before this write the buy had no confirmation
         # instant at all, and 'scheduled' is a seller-confirmed status.

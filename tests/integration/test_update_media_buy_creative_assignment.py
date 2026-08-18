@@ -1,7 +1,6 @@
 """Integration tests for update_media_buy creative assignment functionality."""
 
 from datetime import UTC, datetime
-from typing import NamedTuple
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +12,10 @@ from src.core.exceptions import AdCPCreativeRejectedError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.helpers.media_buy_write_seam import (
+    assert_status_move_carried_bookkeeping,
+    read_media_buy_state,
+)
 
 
 @pytest.mark.requires_db
@@ -786,28 +789,6 @@ def test_creative_assignments_replaces_all(integration_db):
 # =============================================================================
 
 
-class _BuyState(NamedTuple):
-    """The persisted columns a status move is responsible for carrying."""
-
-    status: str
-    revision: int
-    confirmed_at: datetime | None
-
-
-def _read_buy_state(env, media_buy_id: str) -> _BuyState:
-    """Read a media buy's persisted state through the env-bound session.
-
-    ``expire_all`` first: ``_update_media_buy_impl`` commits in its own session,
-    so the env session's identity map still holds the pre-call row.
-    """
-    from src.core.database.models import MediaBuy
-
-    env.get_session().expire_all()
-    buy = env.get_one(MediaBuy, media_buy_id=media_buy_id, tenant_id=env.identity.tenant_id)
-    assert buy is not None, f"media buy {media_buy_id} is missing from tenant {env.identity.tenant_id}"
-    return _BuyState(status=buy.status, revision=buy.revision, confirmed_at=buy.confirmed_at)
-
-
 def _seed_approved_draft_buy(env, *, media_buy_id: str, package_id: str, creative_id: str) -> None:
     """Seed the narrow precondition both transitions guard on.
 
@@ -868,7 +849,7 @@ def test_approved_draft_transitions_to_pending_creatives(integration_db, creativ
     with MediaBuyDualEnv() as env:
         _seed_approved_draft_buy(env, media_buy_id=media_buy_id, package_id=package_id, creative_id="cr_draft")
 
-        before = _read_buy_state(env, media_buy_id)
+        before = read_media_buy_state(env.identity.tenant_id, media_buy_id, session=env.get_session())
         assert before.status == "draft", "fixture must start in the approved-but-creative-less draft state"
         assert before.confirmed_at is None, "draft is not a seller-confirmed status, so it starts unstamped"
 
@@ -881,17 +862,13 @@ def test_approved_draft_transitions_to_pending_creatives(integration_db, creativ
 
         assert isinstance(result, UpdateMediaBuyResult), f"update failed: {result!r}"
 
-        after = _read_buy_state(env, media_buy_id)
-        assert after.status == "pending_creatives", (
-            f"attaching {creative_field} to an approved draft must move it to pending_creatives, got {after.status!r}"
-        )
-        # The transition is a mutation of the buy, so it must carry the buy's
-        # mutation bookkeeping — which only MediaBuyRepository.update_status does.
-        assert after.revision == before.revision + 1, (
-            f"{creative_field} transition moved {media_buy_id} draft -> pending_creatives but revision went "
-            f"{before.revision} -> {after.revision}; a status move must bump revision by exactly 1"
-        )
-        assert after.confirmed_at is not None, (
-            f"{creative_field} transition moved {media_buy_id} to the seller-confirmed status "
-            "'pending_creatives' without stamping confirmed_at"
+        after = read_media_buy_state(env.identity.tenant_id, media_buy_id, session=env.get_session())
+        # The transition is a mutation of the buy, so it must carry the buy's mutation
+        # bookkeeping — which only MediaBuyRepository.update_status does.
+        assert_status_move_carried_bookkeeping(
+            before,
+            after,
+            expected_status="pending_creatives",
+            confirms=True,
+            subject=f"attaching {creative_field} to approved draft {media_buy_id}",
         )

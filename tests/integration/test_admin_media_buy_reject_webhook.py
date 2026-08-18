@@ -19,6 +19,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.context_manager import ContextManager
+from tests.helpers.media_buy_write_seam import (
+    MediaBuyState,
+    assert_status_move_carried_bookkeeping,
+    read_media_buy_state,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -208,27 +213,17 @@ def _parse_instant(value: str):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _media_buy_state(tenant_id: str, media_buy_id: str):
-    """Read the persisted media buy through the repository, in a fresh session.
+def _media_buy_state(tenant_id: str, media_buy_id: str) -> MediaBuyState:
+    """This module's reader — the shared write-seam reader, which owns the session choice.
 
-    The admin route commits in its own session, so the fixture's session would serve a
-    stale identity-mapped copy. Returns the detached row (its columns are loaded before
-    the session closes).
+    The admin route commits in its own session, so a reader on the fixture's session
+    would serve a stale identity-mapped copy; the shared reader opens a fresh one. This
+    also replaces a raw ``SASession(bind=get_engine())`` in a test body, which
+    tests/CLAUDE.md forbids.
     """
-    from sqlalchemy.orm import Session as SASession
-
-    from src.core.database.database_session import get_engine
-    from src.core.database.repositories import MediaBuyRepository
-
-    session = SASession(bind=get_engine())
-    try:
-        media_buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
-        assert media_buy is not None, f"media buy {media_buy_id} vanished"
-        # Touch the columns while the session is open so the detached row can serve them.
-        _ = (media_buy.status, media_buy.revision, media_buy.confirmed_at, media_buy.approved_by)
-        return media_buy
-    finally:
-        session.close()
+    state = read_media_buy_state(tenant_id, media_buy_id)
+    assert state.status is not None, f"media buy {media_buy_id} vanished"
+    return state
 
 
 def _webhook_body(captured: dict) -> dict:
@@ -409,13 +404,14 @@ class TestAdminMediaBuyRejectWebhook:
         )
 
         after = _media_buy_state(tenant_id, media_buy_id)
-        assert after.status == "rejected"
-        assert after.revision == before_revision + 1, (
-            f"the buy moved pending_approval -> rejected but revision went "
-            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
-        )
-        assert after.confirmed_at is None, (
-            f"a rejected buy must never carry a seller-commitment instant, got {after.confirmed_at!r}"
+        # confirms=False: "rejected" is NOT a committed status, so this move must not
+        # mint a commitment instant the seller never made.
+        assert_status_move_carried_bookkeeping(
+            MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=None),
+            after,
+            expected_status="rejected",
+            confirms=False,
+            subject="rejecting the media buy",
         )
 
     def test_approve_bumps_revision_for_every_status_move(

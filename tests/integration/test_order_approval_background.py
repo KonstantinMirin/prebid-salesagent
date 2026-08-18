@@ -23,7 +23,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session as SASession
 
-from src.core.database.database_session import get_engine
 from src.core.database.models import SyncJob
 from src.services.order_approval_service import (
     get_approval_status,
@@ -58,7 +57,7 @@ class _ApprovalEnv:
 
 
 @pytest.fixture
-def approval_env(integration_db):
+def approval_env(bound_factory_session):
     """A committed tenant carrying no AdapterConfig row, plus the session that wrote it.
 
     Committed, not just flushed: the approval worker runs on its own connection and
@@ -66,19 +65,18 @@ def approval_env(integration_db):
     it can read the persisted row back without opening a raw ``get_db_session()``
     (CLAUDE.md Pattern #8 / the repository-pattern guard) — SyncJob has no repository
     of its own to go through.
-    """
-    from tests.factories import ALL_FACTORIES, TenantFactory
 
-    session = SASession(bind=get_engine())
-    try:
-        for factory in ALL_FACTORIES:
-            factory._meta.sqlalchemy_session = session
-        tenant = TenantFactory(tenant_id="approval_tenant")
-        yield _ApprovalEnv(tenant_id=tenant.tenant_id, session=session)
-    finally:
-        session.close()
-        for factory in ALL_FACTORIES:
-            factory._meta.sqlalchemy_session = None
+    The session and the factory binding both come from ``bound_factory_session``,
+    which SAVES and restores the previous binding. The bind-then-null loop this
+    replaces was only correct while this fixture happened to be outermost — and its
+    own replacement''s docstring said so. Depending on ``bound_factory_session``
+    rather than ``integration_db`` also keeps the ordering guarantee: that fixture
+    takes ``integration_db`` itself, so factories still bind after the engine swap.
+    """
+    from tests.factories import TenantFactory
+
+    tenant = TenantFactory(tenant_id="approval_tenant")
+    yield _ApprovalEnv(tenant_id=tenant.tenant_id, session=bound_factory_session)
 
 
 def _join_worker(approval_id: str, *, require_found: bool) -> None:

@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, Principal, Tenant
+from tests.helpers.media_buy_write_seam import MediaBuyState, assert_status_move_carried_bookkeeping
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 app = create_app()
@@ -471,19 +472,17 @@ class TestCreativeApprovalUnblocksMediaBuy:
         mock_execute.assert_called_once_with(media_buy_id, test_tenant)
 
         factory_session.expire_all()
-        after = repo.get_by_id(media_buy_id)
-        # The factory buy's flight window (2025-01-01 .. 2027-12-31) is open now, so
-        # the shared flight-window rule picks "active".
-        assert after.status == "active", f"unblocked buy must go live, got {after.status!r}"
+        after = MediaBuyState.of(repo.get_by_id(media_buy_id))
         assert after.approved_by == "system"
-        assert after.revision == before_revision + 1, (
-            f"the buy moved pending_creatives -> active but revision went "
-            f"{before_revision} -> {after.revision}; a status move must bump revision by exactly 1"
-        )
-        assert after.confirmed_at == before_confirmed_at, (
-            f"the move to 'active' rewrote the commitment instant "
-            f"{before_confirmed_at} -> {after.confirmed_at}; confirmed_at is write-once and records "
-            f"the FIRST commitment, not the most recent transition"
+        # The factory buy's flight window (2025-01-01 .. 2027-12-31) is open now, so the
+        # shared flight-window rule picks "active". confirms=None: the buy was ALREADY
+        # committed (pending_creatives is a committed status), so what this move owes is
+        # write-once stability of the stamp, not a new one.
+        assert_status_move_carried_bookkeeping(
+            MediaBuyState(status="pending_creatives", revision=before_revision, confirmed_at=before_confirmed_at),
+            after,
+            expected_status="active",
+            subject="approving the last pending creative",
         )
 
     def test_approval_after_the_flight_end_completes_the_buy(self, client, test_tenant, factory_session):

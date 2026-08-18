@@ -1,9 +1,11 @@
 """One session-binding discipline for factories used outside the harness.
 
-``tests/utils/database_helpers._bind_factories_to_session`` already has the right
-shape — a context manager that SAVES the previous binding and RESTORES it on exit —
-but it is private, so a test that needs factories outside an ``IntegrationEnv``
-hand-rolls a bind-then-None instead (``test_media_buy_revision_confirmation.py:65-78``).
+``tests/utils/database_helpers.bind_factories_to_session`` has the right shape — a
+context manager that SAVES the previous binding and RESTORES it on exit. It was
+private, so tests needing factories outside an ``IntegrationEnv`` hand-rolled a
+bind-then-None loop instead; both sites now take the public ``bound_factory_session``
+fixture (``test_media_buy_revision_confirmation.py`` and
+``test_order_approval_background.py``).
 Bind-then-None is not merely a duplicate: used outside any env it happens to be
 equivalent (the previous binding IS None), but used inside one it clobbers the env's
 session to None mid-env — a failure ``IntegrationEnv``'s entry assertion cannot catch,

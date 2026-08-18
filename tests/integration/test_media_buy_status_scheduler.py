@@ -12,7 +12,6 @@ Uses real PostgreSQL database via integration_db fixture.
 import logging
 import re
 from datetime import UTC, datetime, timedelta
-from typing import NamedTuple
 from unittest.mock import patch
 
 import pytest
@@ -29,6 +28,11 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import MediaBuyRepository
 from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+from tests.helpers.media_buy_write_seam import (
+    MediaBuyState,
+    assert_status_move_carried_bookkeeping,
+    read_media_buy_state,
+)
 
 
 def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
@@ -170,34 +174,9 @@ def _create_creative_assignment(
         session.commit()
 
 
-class _MediaBuyState(NamedTuple):
-    """The persisted columns a scheduler status move is responsible for."""
-
-    status: str | None
-    revision: int | None
-    confirmed_at: datetime | None
-
-
-def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> _MediaBuyState:
-    """Read a media buy's persisted state: status plus what a status move must carry with it.
-
-    The single reader for this module. ``revision`` (the buyer's optimistic-concurrency
-    token) and ``confirmed_at`` (the instant the seller committed) only move when the sweep
-    writes through MediaBuyRepository, so every assertion reads them from the same place —
-    and the same row — it reads status from.
-    """
-    with get_db_session() as session:
-        from sqlalchemy import select
-
-        stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-        media_buy = session.scalars(stmt).first()
-        if media_buy is None:
-            return _MediaBuyState(status=None, revision=None, confirmed_at=None)
-        return _MediaBuyState(
-            status=media_buy.status,
-            revision=media_buy.revision,
-            confirmed_at=media_buy.confirmed_at,
-        )
+def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> MediaBuyState:
+    """This module's reader — the shared write-seam reader, which owns the session choice."""
+    return read_media_buy_state(tenant_id, media_buy_id)
 
 
 # =============================================================================
@@ -243,14 +222,10 @@ async def test_scheduled_transitions_to_active_when_start_time_passed(integratio
     # buyer's optimistic-concurrency token, which MUST strictly increase on every
     # mutation) and stamps `confirmed_at` on the first committed status. A sweep
     # that writes media_buy.status directly moves the buy without either.
-    assert after.revision == before.revision + 1, (
-        f"scheduler moved {media_buy_id} scheduled -> active but revision went "
-        f"{before.revision} -> {after.revision}; a status move must bump revision by exactly 1"
-    )
-    # "active" is a seller-confirmed status (it is not in MEDIA_BUY_UNCONFIRMED_STATUSES),
-    # so the transition is the instant this buy reads as committed.
-    assert after.confirmed_at is not None, (
-        f"scheduler moved {media_buy_id} to the seller-confirmed status 'active' without stamping confirmed_at"
+    # "active" is a seller-confirmed status, so this transition is the instant the buy
+    # reads as committed — hence confirms=True.
+    assert_status_move_carried_bookkeeping(
+        before, after, expected_status="active", confirms=True, subject=f"scheduler sweep of {media_buy_id}"
     )
 
 
