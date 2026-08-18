@@ -1022,38 +1022,6 @@ _SELLER_COMMITTED_STATUSES: frozenset[PersistedMediaBuyStatus] = frozenset(
 )
 
 
-# Keyed by the vocabulary TYPE rather than by bare strings, so a member with no
-# projection row is a missing key here rather than a value nobody notices. The
-# keys are members and StrEnum members ARE their values, so every existing
-# ``.get(status_string)`` lookup keeps working unchanged.
-PERSISTED_STATUS_TO_CANONICAL: dict[PersistedMediaBuyStatus, str] = {
-    PersistedMediaBuyStatus.ACTIVE: "active",
-    PersistedMediaBuyStatus.APPROVED: "active",
-    PersistedMediaBuyStatus.READY: "active",
-    PersistedMediaBuyStatus.SCHEDULED: "active",
-    PersistedMediaBuyStatus.PENDING_ACTIVATION: "pending_start",
-    PersistedMediaBuyStatus.PAUSED: "paused",
-    PersistedMediaBuyStatus.COMPLETED: "completed",
-    PersistedMediaBuyStatus.REJECTED: "rejected",
-    PersistedMediaBuyStatus.CANCELED: "canceled",
-    PersistedMediaBuyStatus.FAILED: "failed",
-    PersistedMediaBuyStatus.DRAFT: "pending_creatives",
-    PersistedMediaBuyStatus.PENDING: "pending_start",
-    PersistedMediaBuyStatus.PENDING_APPROVAL: "pending_start",
-    PersistedMediaBuyStatus.PENDING_CREATIVES: "pending_creatives",
-    PersistedMediaBuyStatus.PENDING_START: "pending_start",
-}
-
-# The complete set of values ``resolve_canonical_status`` may return, derived
-# from the map so the two can never drift. Used by get_media_buy_delivery as its
-# valid internal-filter vocabulary. Its equivalence to the pinned SDK
-# ``MediaBuyStatus`` enum (plus the delivery-only ``failed``) is pinned by
-# ``tests/unit/test_media_buy_status_consistency.py`` so an SDK bump that widens
-# the lifecycle enum fails loudly instead of silently making a new status
-# unfilterable.
-CANONICAL_STATUSES: frozenset[str] = frozenset(PERSISTED_STATUS_TO_CANONICAL.values())
-
-
 def is_media_buy_seller_confirmed(status: str | None) -> bool:
     """True once the seller has committed to running the buy (confirmed_at is set).
 
