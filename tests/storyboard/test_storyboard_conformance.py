@@ -305,6 +305,17 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     return checks
 
 
+def _stale_ledger_entries(collected_ids: list[str]) -> list[str]:
+    """Ledger entries with no corresponding collected check, in ledger order.
+
+    The join the storyboard side never had. ``scripts.audit.ledger`` owns both
+    the file and the id grammar, so this compares like with like rather than
+    re-deriving either.
+    """
+    collected = set(collected_ids)
+    return [entry.format() for entry in ledger.load(ledger.LEDGER) if entry.format() not in collected]
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "storyboard_check" not in metafunc.fixturenames:
         return
@@ -324,6 +335,35 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # the old literal f-string did (the string "None"), so behavior here is
     # byte-for-byte unchanged.
     ids = [ledger.LedgerCheckId(c["protocol"], c["track"], c["storyboard_id"], c["step_id"]).format() for c in checks]
+
+    # LEDGER FITNESS, computed IN-SESSION (Lane E, E3). Every ledger entry must
+    # resolve to a check this session actually collected. A ledgered check that
+    # starts passing simply VANISHES from `ids` — it produces no test item at all,
+    # so without this join neither "graduation fails CI" nor "regression fails CI"
+    # was true, and a stale entry sat there grading nothing.
+    #
+    # It has to be computed here rather than ported verbatim into tests/unit/ (the
+    # shape the e2e_rest sibling uses): collection shells out to a live agent, so
+    # an offline port would see one id and declare every entry unresolved. That
+    # also means this only BITES in the in-network job — where `ids` is real.
+    stale = _stale_ledger_entries(ids)
+    if stale:
+        checks.append(
+            {
+                "status": "fail",
+                "protocol": "ledger",
+                "track": "fitness",
+                "storyboard_id": "ledger_fitness",
+                "step_id": "stale_entries",
+                "reason_kind": "ledger",
+                "reason": (
+                    "ledger entries resolve to no collected check — they graduated or were renamed, "
+                    f"and are now grading nothing: {', '.join(stale)}. Remove them (the ledger only shrinks)."
+                ),
+            }
+        )
+        ids.append("ledger::fitness::ledger_fitness::stale_entries")
+
     metafunc.parametrize("storyboard_check", checks, ids=ids)
 
 

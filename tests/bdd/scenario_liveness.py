@@ -118,6 +118,12 @@ class ScenarioLiveness:
     unbound_steps: list[str] = field(default_factory=list)
     harness_wired: bool | None = None
     ledgered: bool = False
+    #: Every tag the scenario carries, WITHOUT the leading ``@``. The provenance
+    #: tag (``storyboard-v3.1`` / ``schema-v3.1``) lives here as DATA. It used to
+    #: be a collection FILTER — an early return when the scenario lacked it —
+    #: which meant a retag could silently delete a scenario from the measurement.
+    #: Membership is now the ``@T-*`` identity tag, which a retag cannot move.
+    tags: list[str] = field(default_factory=list)
     #: The scenario's marker set, as the ROUTING CONTRACT derives it. Persisted
     #: because the audit join has no other marker source and now resolves the
     #: route with the same resolver the conftest uses — routing on the scenario
@@ -150,12 +156,20 @@ class ScenarioLiveness:
             "unbound_steps": self.unbound_steps,
             "harness_wired": self.harness_wired,
             "ledgered": self.ledgered,
+            "tags": self.tags,
             "marker_names": self.marker_names,
             "observations": [o.to_dict() for o in self.observations],
         }
 
 
 _RECORDS: dict[str, ScenarioLiveness] = {}
+
+#: Key under which a worker ships its records on ``config.workeroutput``.
+_WORKEROUTPUT_KEY = "bdd_scenario_liveness"
+
+#: Controller-side merge target: ``scenario_id -> record dict``, folded from every
+#: worker's shard plus the controller's own (empty under xdist) records.
+_SHARDS: dict[str, dict[str, Any]] = {}
 
 
 def _scenario_identifier(scenario: Scenario, feature: Feature) -> str | None:
@@ -207,8 +221,11 @@ def pytest_bdd_before_scenario(request: FixtureRequest, feature: Feature, scenar
     on the scenario that is about to run.
     """
     tags = scenario.tags | feature.tags
-    if _TAG not in tags:
-        return
+    # MEMBERSHIP IS IDENTITY, NOT PROVENANCE (Lane E, E2). This used to be
+    # `if _TAG not in tags: return` — so retagging a scenario @schema-v3.1
+    # deleted it from the artifact entirely, and the instrument reported on a
+    # population a tag edit could silently shrink. A scenario is measured if it
+    # has an identity tag at all; its provenance tags are recorded as data below.
     scenario_id = _scenario_identifier(scenario, feature)
     if scenario_id is None:
         return
@@ -218,6 +235,7 @@ def pytest_bdd_before_scenario(request: FixtureRequest, feature: Feature, scenar
     # SUBSET of what the conftest routes on (they omit auto-applied entity
     # markers), so recording them would hand the join a narrower input than the
     # conftest used and reproduce this lane's disease one layer out.
+    record.tags = sorted(t.lstrip("@") for t in tags)
     record.marker_names = sorted(derive_marker_names(request.node))
     unbound = [step.name for step in scenario.steps if get_step_function(request, step) is None]
     record.record_unbound(unbound)
@@ -280,8 +298,94 @@ def build_artifact() -> dict[str, Any]:
     return {"scenarios": [_RECORDS[k].to_dict() for k in sorted(_RECORDS)]}
 
 
+def _is_xdist_worker(config: pytest.Config) -> bool:
+    """True in an xdist WORKER process (the controller has no ``workeroutput``)."""
+    return hasattr(config, "workeroutput")
+
+
+def _merge_record(into: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    """Merge one scenario's shard into another. The rule is stated, not implied.
+
+    ``record_observation``'s precedence is NOT associative across shards, so each
+    field's combine is named explicitly (Lane E, E1 decision 3):
+
+    * ``observations``  — concatenated; every transport a shard saw is real.
+    * ``steps_bound``   — AND. One shard finding an unbound step is decisive.
+    * ``unbound_steps`` — union, order-stable.
+    * ``ledgered``      — OR. Ledgered anywhere is ledgered.
+    * ``harness_wired`` — tri-state with False DOMINANT: an observed
+      not-wired beats a live/ledgered observation elsewhere, and ``None``
+      (unknown) survives only if no shard ever resolved it.
+    * ``tags`` / ``marker_names`` — union; they are properties of the scenario,
+      identical on every shard that saw it.
+
+    Shards cross the process boundary as DICTS (decision 4): execnet ships basic
+    types only, so dataclasses cannot travel and must not be reconstructed here.
+    """
+    merged = dict(into)
+    merged["observations"] = list(into.get("observations", [])) + list(other.get("observations", []))
+    merged["steps_bound"] = bool(into.get("steps_bound", True)) and bool(other.get("steps_bound", True))
+    seen_steps = list(into.get("unbound_steps", []))
+    for step in other.get("unbound_steps", []):
+        if step not in seen_steps:
+            seen_steps.append(step)
+    merged["unbound_steps"] = seen_steps
+    merged["ledgered"] = bool(into.get("ledgered", False)) or bool(other.get("ledgered", False))
+    wired_values = [into.get("harness_wired"), other.get("harness_wired")]
+    if False in wired_values:
+        merged["harness_wired"] = False
+    elif True in wired_values:
+        merged["harness_wired"] = True
+    else:
+        merged["harness_wired"] = None
+    for key in ("tags", "marker_names"):
+        merged[key] = sorted(set(into.get(key, [])) | set(other.get(key, [])))
+    return merged
+
+
+def _merge_shard(shard: list[dict[str, Any]]) -> None:
+    """Fold one worker's records into the controller's ``_SHARDS``."""
+    for record in shard:
+        scenario_id = record["scenario_id"]
+        existing = _SHARDS.get(scenario_id)
+        _SHARDS[scenario_id] = record if existing is None else _merge_record(existing, record)
+
+
+def pytest_testnodedown(node: Any, error: Any) -> None:
+    """Collect a finished worker's records on the CONTROLLER.
+
+    xdist calls this for every node BEFORE the controller's ``runtestloop``
+    returns — i.e. before the controller's own ``pytest_sessionfinish`` — so the
+    merged artifact below is complete. This is the pattern pytest-cov uses.
+    """
+    workeroutput = getattr(node, "workeroutput", None)
+    if workeroutput and _WORKEROUTPUT_KEY in workeroutput:
+        _merge_shard(workeroutput[_WORKEROUTPUT_KEY])
+
+
 def pytest_sessionfinish(session: pytest.Session) -> None:
-    """Write the per-run liveness artifact. Always writes, even if empty — see module docstring."""
+    """Ship this worker's shard, or (on the controller) write the merged artifact.
+
+    Under xdist every process held its OWN ``_RECORDS`` module global and every
+    process wrote the same path, so the controller wrote LAST from an EMPTY dict
+    — the artifact was silently empty under ``-n auto``, which is how tox runs
+    bdd. Serial runs were fine, which is why it went unnoticed.
+
+    A worker therefore SHIPS rather than writes (decision 1: ``workeroutput``,
+    the in-process channel, with no temp-file lifecycle and no orphan shards from
+    a killed worker). ONLY THE CONTROLLER WRITES (decision 2) — letting a worker
+    write last would produce a NONEMPTY BUT PARTIAL artifact, which passes a
+    non-emptiness check while measuring one shard.
+    """
+    config = session.config
+    if _is_xdist_worker(config):
+        config.workeroutput[_WORKEROUTPUT_KEY] = [_RECORDS[k].to_dict() for k in sorted(_RECORDS)]
+        return
+
+    # Controller (or a serial run): merge this process's own records over any
+    # shards received, then write once.
+    _merge_shard([_RECORDS[k].to_dict() for k in sorted(_RECORDS)])
     path = artifact_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(build_artifact(), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    artifact = {"scenarios": [_SHARDS[k] for k in sorted(_SHARDS)]}
+    path.write_text(json.dumps(artifact, indent=2, sort_keys=False) + "\n", encoding="utf-8")

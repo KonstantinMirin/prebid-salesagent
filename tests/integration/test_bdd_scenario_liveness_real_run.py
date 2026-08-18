@@ -163,8 +163,22 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
     # The scenarios whose detailed ledgered/live behaviour this test pins — again
     # derived from the feature's own tags, not listed here.
     storyboard_tagged = {s.identifier for s in slice_scenarios if storyboard_spec.TAG in s.tags}
-    live_scenario_id = "T-UC-006-storyboard-format-id-roundtrip-on-sync"
-    assert live_scenario_id in storyboard_tagged
+    # An EXACT partition, not a relaxed "either live or ledgered" predicate: the
+    # latter would satisfy the letter of the assertion while destroying its
+    # regression-detecting power.
+    #
+    # TWO live members since Lane D split @T-UC-006-storyboard-multi-format-sync.
+    # Its ACTION obligations were dead code — the status gap's xfail aborted the
+    # scenario before they ran — so the split left them live here and moved the
+    # status obligations to their own ledgered scenario. A single live id was
+    # correct only while that scenario was wholly ledgered.
+    live_scenario_ids = {
+        "T-UC-006-storyboard-format-id-roundtrip-on-sync",
+        "T-UC-006-storyboard-multi-format-sync",
+    }
+    assert live_scenario_ids <= storyboard_tagged, (
+        f"expected live members missing from the slice: {sorted(live_scenario_ids - storyboard_tagged)}"
+    )
 
     for scenario_id in sorted(storyboard_tagged):
         record = scenarios[scenario_id]
@@ -172,7 +186,7 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
         # fully retired for this feature.
         assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
         assert record["unbound_steps"] == [], f"{scenario_id} unexpectedly reports unbound step text"
-        if scenario_id == live_scenario_id:
+        if scenario_id in live_scenario_ids:
             assert record["ledgered"] is False
             assert all(o["outcome"] == "passed" for o in record["observations"])
             assert all(o["reason_category"] == "live" for o in record["observations"])

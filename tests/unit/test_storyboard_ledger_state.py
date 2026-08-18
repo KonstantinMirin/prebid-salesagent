@@ -15,10 +15,10 @@ contents so it cannot silently drift -- the same triad as the e2e_rest precedent
 Per the Core Invariant, the ledger must be seeded from a MEASURED in-network CI run,
 never re-derived/inferred (the architect review's HIGH finding: SB-1d's host-side
 numbers do not carry over to the in-network receiver topology). Until SB-4b lands the
-runner module and its first in-network run, ``EXPECTED_LEDGER`` is pinned empty --
-nothing has been measured through this pipeline yet. This test currently fails because
-none of the triad exists yet (ledger file, loader, pytest module); that failure is the
-TDD-red signal for SB-4b's implementation atom.
+The triad now exists (ledger file, loader, pytest module) and has been measured
+through a real in-network run: 75 ledgered checks (43 mcp + 32 a2a), read through
+the ledger's own loader rather than counted by hand. The "pinned empty, nothing
+measured yet" state this paragraph used to describe is history.
 
 When the storyboard-conformance pytest module lands and its first in-network CI run
 seeds real entries, update the ledger file AND ``EXPECTED_LEDGER`` below in the same
@@ -36,14 +36,14 @@ from tests.helpers.ledger import load_ledger_nodeids
 
 # --- mcp half ---
 # RE-SEEDED from the in-network run test-results/innet_130826_0940, taken WITH the
-# version-envelope fix (GH #1512) live: 52 ledgered checks over 72 collected,
-# down from 81 over 95.
+# version-envelope fix (GH #1512) live. Current measured total, through
+# scripts.audit.ledger.load: 75 entries (43 mcp + 32 a2a).
 #
 # The docstring's note above about #1512 is now history: the capability probe is no
 # longer rejected, so the runner reads our capabilities and gates on them. That
 # GRADUATED all 40 signed_requests entries — the storyboard correctly SKIPS an agent
 # that does not advertise request_signing.supported, exactly as its own gating clause
-# says (salesagent-g6m2.3), plus 4 more, for 44 removed.
+# says (salesagent-g6m2.3), plus 4 more.
 #
 # 15 entries were ADDED, none of them a regression: all 15 were NOT-COLLECTED in the
 # pre-fix baseline (innet_130826_0906). They are checks the run only reaches now that
