@@ -70,6 +70,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
+    "tests.bdd.steps.domain.security_wire_safety",
 ]
 
 # ---------------------------------------------------------------------------
@@ -3644,6 +3645,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-002"
     if any(t.startswith("T-COMPAT") for t in marker_names):
         return "COMPAT"
+    if any(t.startswith("T-SECURITY-001") for t in marker_names):
+        return "SECURITY"
     return None
 
 
@@ -4138,7 +4141,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["env"] = env
             yield
 
-    elif uc == "COMPAT":
+    elif uc in ("COMPAT", "UC-GET-PRODUCTS", "SECURITY"):
         from tests.harness.product import ProductEnv
 
         with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
@@ -4194,12 +4197,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
-    elif uc == "UC-GET-PRODUCTS":
-        from tests.harness.product import ProductEnv
-
-        with _db_scope_for(request, e2e_config), ProductEnv(e2e_config=e2e_config) as env:
-            ctx["env"] = env
-            yield
     elif uc == "UC-019":
         # get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
         # its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure

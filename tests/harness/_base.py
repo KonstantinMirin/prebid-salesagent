@@ -26,6 +26,8 @@ import os
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.harness._realize import e2e_unsupported, realize_e2e
+
 # The MCP transport boots the real FastMCP app lifespan, which starts the
 # background schedulers. Those run a batch immediately on the *real* wall clock
 # and rewrite media-buy status rows — silently mutating data a test just seeded
@@ -379,6 +381,9 @@ class BaseTestEnv:
     ASYNC_PATCHES: set[str] = set()  # Names that need AsyncMock (for async functions)
     MODULE: str = ""  # Convenience for unit envs building patch paths
     REST_ENDPOINT: str = ""  # Override in subclass for REST dispatch
+    #: Dotted path to the skill's _impl function, for inject_untyped_exception().
+    #: Override in subclass (e.g. ProductEnv sets "src.core.tools.products._get_products_impl").
+    IMPL_TARGET: str = ""
     use_real_db: bool = False
 
     def __init__(
@@ -430,6 +435,46 @@ class BaseTestEnv:
         dispatch on this via :func:`tests.harness._realize.realize_e2e`.
         """
         return self.e2e_config is not None
+
+    @realize_e2e(
+        e2e_unsupported(
+            "no server fault-injection surface for a genuinely untyped exception on a live "
+            "remote process (same structural limitation prkv.8's own e2e-verify atom hit)"
+        )
+    )
+    def inject_untyped_exception(self, exception: Exception) -> None:
+        """Make the skill's business logic raise *exception* directly (prkv.18).
+
+        Patches ``self.IMPL_TARGET`` (the skill's ``_impl`` function, set by
+        the subclass — e.g. ``ProductEnv.IMPL_TARGET =
+        "src.core.tools.products._get_products_impl"``) to raise *exception*
+        instead of running. Reuses the same patcher-lifecycle mechanism
+        ``EXTERNAL_PATCHES`` uses (``self._patchers`` — torn down automatically
+        in ``__exit__``), so this needs no new cleanup path.
+
+        Skill-agnostic by design: any env that sets ``IMPL_TARGET`` gets this
+        capability for free, rather than each domain mixin hand-rolling its
+        own untyped-exception injector.
+
+        For a genuinely untyped exception, the REST boundary's catch-all
+        handler is reachable only through Starlette's ``ServerErrorMiddleware``
+        (see ``prkv.8``), which always re-raises after building its response —
+        the default ``TestClient(app)`` (``raise_server_exceptions=True``)
+        would surface that re-raise as a test error instead of the wire
+        response. Setting the INSTANCE attribute here (not a class-level
+        default on ``IntegrationEnv``) scopes the opt-out to exactly this
+        call, on this env instance — ``get_rest_client()`` is lazy, so a
+        Given-time set is honored at dispatch time.
+        """
+        if not self.IMPL_TARGET:
+            raise ValueError(
+                f"{type(self).__name__} has no IMPL_TARGET set — override it in the subclass "
+                "to the skill's _impl dotted path before calling inject_untyped_exception()"
+            )
+        patcher = patch(self.IMPL_TARGET, new_callable=AsyncMock, side_effect=exception)
+        self.mock["_untyped_exception"] = patcher.start()
+        self._patchers.append(patcher)
+        self.REST_RAISE_SERVER_EXCEPTIONS = False
 
     # -- Identity (one function, all transports) ----------------------------
 
@@ -1301,6 +1346,15 @@ class IntegrationEnv(BaseTestEnv):
     """
 
     use_real_db = True
+    #: TestClient(app, raise_server_exceptions=...) for get_rest_client(). True
+    #: preserves every existing REST test's behavior unchanged — provably a
+    #: no-op for every typed error path (AdCPError/ValueError/
+    #: RequestValidationError/PermissionError/ToolError each have their own
+    #: @app.exception_handler and never reach ServerErrorMiddleware, the only
+    #: place this flag matters). inject_untyped_exception() sets this to False
+    #: as an INSTANCE attribute (not by overriding this class default) so the
+    #: opt-out is scoped to exactly the scenario that calls it.
+    REST_RAISE_SERVER_EXCEPTIONS: bool = True
 
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Get-or-create default tenant + principal via factories.
@@ -1418,7 +1472,7 @@ class IntegrationEnv(BaseTestEnv):
             rest_identity = self.identity_for(Transport.REST)
             app.dependency_overrides[_require_auth_dep] = lambda: rest_identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: rest_identity
-            self._rest_client = TestClient(app)
+            self._rest_client = TestClient(app, raise_server_exceptions=self.REST_RAISE_SERVER_EXCEPTIONS)
 
         return self._rest_client
 

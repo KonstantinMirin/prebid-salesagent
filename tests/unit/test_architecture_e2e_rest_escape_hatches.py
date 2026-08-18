@@ -223,6 +223,22 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "(get_idempotency_posture() is a process-wide provider) — a "
             "module-function monkeypatch cannot cross a real HTTP process boundary",
         ),
+        # Added by prkv.18 (salesagent-kloo2), noted against this pin's own
+        # shrink-only direction of travel, same as the #1721 precedent entries
+        # above: BaseTestEnv.inject_untyped_exception patches a skill's _impl
+        # to raise a bare exception directly in-process. There is no live-server
+        # control that makes an already-running remote process's business logic
+        # raise on demand -- that would require its own fault-injection channel
+        # (e.g. an ADCP_TESTING header the production code branches on), which
+        # is a separate build, not a gap in this scenario's own test setup. The
+        # obligation still grades fully on the three in-process transports
+        # (a2a/mcp/rest).
+        (
+            "tests/harness/_base.py",
+            "inject_untyped_exception",
+            "no server fault-injection surface for a genuinely untyped exception on a live "
+            "remote process (same structural limitation prkv.8's own e2e-verify atom hit)",
+        ),
     }
 )
 

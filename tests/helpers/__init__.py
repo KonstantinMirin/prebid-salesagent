@@ -79,6 +79,7 @@ from tests.helpers.adcp_factories import (
 from tests.helpers.admin_session import admin_auth_session
 from tests.helpers.envelope_assertions import (
     assert_envelope_shape,
+    assert_no_marker_in_envelope,
     assert_no_raw_validation_leak,
     locate_envelope_error,
 )
@@ -99,6 +100,7 @@ __all__ = [
     "assert_envelope_shape",
     "locate_envelope_error",
     "assert_no_raw_validation_leak",
+    "assert_no_marker_in_envelope",
     # Concurrency harness
     "concurrent_commit_in_write_window",
     "operator_answer",

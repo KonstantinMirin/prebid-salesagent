@@ -74,6 +74,7 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     ASYNC_PATCHES = {"dynamic_variants", "resolve_property_list"}
 
     REST_ENDPOINT = "/api/v1/products"
+    IMPL_TARGET = "src.core.tools.products._get_products_impl"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

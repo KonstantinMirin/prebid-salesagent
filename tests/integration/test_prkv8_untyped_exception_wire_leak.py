@@ -14,8 +14,6 @@ covering exactly this: credentials, SQL, hostnames, stack traces, upstream
 responses must never reach the buyer.
 """
 
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
 from tests.factories import PrincipalFactory, TenantFactory
@@ -28,12 +26,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # anywhere in the wire envelope, the raw exception leaked.
 _SECRET_MARKER = "postgres://admin:s3cr3t-prkv8@10.0.0.5:5432/prod_shadow"
 
-# Patched at the module the skill actually calls through (A2A's get_products_raw,
-# MCP's get_products, and REST's api_v1 handler all call `_get_products_impl`
-# unqualified/via module reference from src.core.tools.products) so every
-# transport really dispatches a real skill whose business logic raises for real.
-_PATCH_TARGET = "src.core.tools.products._get_products_impl"
-
 
 def _assert_no_leak(envelope: dict, label: str) -> None:
     assert envelope is not None, f"no wire envelope captured on {label}"
@@ -41,54 +33,34 @@ def _assert_no_leak(envelope: dict, label: str) -> None:
     assert _SECRET_MARKER not in rendered, f"raw exception text leaked into the {label} wire envelope: {rendered!r}"
 
 
-@pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP], ids=lambda t: t.value)
-class TestUntypedExceptionDoesNotLeakOntoWireA2AAndMcp:
+@pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP, Transport.REST], ids=lambda t: t.value)
+class TestUntypedExceptionDoesNotLeakOntoWire:
     """An untyped exception inside a dispatched skill must not put its own
-    text on the buyer-facing wire, on A2A or MCP."""
+    text on the buyer-facing wire, on any transport.
+
+    Uses ``env.inject_untyped_exception()`` (added by prkv.18, the harness
+    capability this test originally motivated but hand-rolled around — see
+    prkv.18's codebase-scan disposition table). It patches the skill's
+    ``_impl`` directly (real dispatch through A2A skill routing / the MCP
+    tool pipeline / the REST route, only the innermost business-logic call is
+    mocked) and, for REST specifically, sets
+    ``env.REST_RAISE_SERVER_EXCEPTIONS = False`` as an INSTANCE attribute so
+    ``get_rest_client()`` observes the real
+    ``@app.exception_handler(Exception)`` catch-all response instead of
+    Starlette's ``ServerErrorMiddleware`` re-raising into the test (see
+    ``BaseTestEnv.inject_untyped_exception``'s docstring for why the default
+    ``TestClient(app)`` can't observe this path)."""
 
     def test_no_raw_exception_text_in_wire_envelope(self, integration_db, transport):
         with ProductEnv(tenant_id="prkv8-leak", principal_id="prkv8-principal") as env:
             tenant = TenantFactory(tenant_id="prkv8-leak", subdomain="prkv8-leak")
             PrincipalFactory(tenant=tenant, principal_id="prkv8-principal")
 
-            with patch(_PATCH_TARGET, new=AsyncMock(side_effect=RuntimeError(_SECRET_MARKER))):
-                result = env.call_via(transport, brief="video ads")
+            env.inject_untyped_exception(RuntimeError(_SECRET_MARKER))
+            result = env.call_via(transport, brief="video ads")
 
             assert result.is_error, f"expected an error result on {transport.value}, got {result.payload!r}"
             _assert_no_leak(result.wire_error_envelope, transport.value)
-
-
-class TestUntypedExceptionDoesNotLeakOntoWireRest:
-    """Same obligation on REST — exercised with a raw client because REST's
-    untyped-exception path is caught only by the ``@app.exception_handler(Exception)``
-    catch-all, which Starlette routes through ``ServerErrorMiddleware`` (the
-    outermost middleware layer, wrapping *everything* so unhandled exceptions
-    anywhere in the stack still get a response). Real deployments see the
-    handler's response over the wire same as any other error; a plain
-    ``TestClient(app)`` additionally re-raises the exception into the test
-    afterward by design ("allows test clients to optionally raise the error
-    within the test case" — starlette.middleware.errors.ServerErrorMiddleware),
-    which would make this specific path untestable through the shared harness's
-    default client. ``raise_server_exceptions=False`` observes the real response
-    instead, same as an actual buyer would receive."""
-
-    def test_no_raw_exception_text_in_wire_envelope(self, integration_db):
-        from starlette.testclient import TestClient
-
-        with ProductEnv(tenant_id="prkv8-leak-rest", principal_id="prkv8-principal-rest") as env:
-            tenant = TenantFactory(tenant_id="prkv8-leak-rest", subdomain="prkv8-leak-rest")
-            PrincipalFactory(tenant=tenant, principal_id="prkv8-principal-rest")
-
-            rest_identity = env.identity_for(Transport.REST)
-            base_client = env.get_rest_client()  # installs the auth dep overrides on the shared app
-            env._configure_rest_auth(rest_identity)
-
-            with patch(_PATCH_TARGET, new=AsyncMock(side_effect=RuntimeError(_SECRET_MARKER))):
-                with TestClient(base_client.app, raise_server_exceptions=False) as raw_client:
-                    response = raw_client.post(env.REST_ENDPOINT, json={"brief": "video ads"})
-
-            assert response.status_code >= 400, f"expected an error response, got {response.status_code}"
-            _assert_no_leak(response.json(), "rest")
 
 
 class TestInternalErrorForDoesNotLeakOntoWire:

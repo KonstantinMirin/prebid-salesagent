@@ -1,0 +1,17 @@
+# Hand-authored feature — not compiled from adcp-req
+# Cross-cutting wire-safety obligation for salesagent-prkv.8 (salesagent-prkv.18)
+
+@security
+Feature: Wire error safety for untyped exceptions
+  As a buyer agent,
+  I want an untyped exception raised inside a dispatched skill to never leak
+  its raw exception text onto the wire,
+  so that internal details (DSNs, stack fragments, upstream responses) never
+  reach me, per AdCP 3.1.1 transport-errors.mdx Security Considerations.
+
+  @T-SECURITY-001-untyped-exception
+  Scenario: Untyped exception inside a dispatched skill yields a safe wire envelope
+    Given a tenant is configured for product discovery
+    And an untyped exception is raised inside the dispatched skill's business logic
+    When the Buyer Agent requests products
+    Then the response is an error with code "SERVICE_UNAVAILABLE" and no raw exception text

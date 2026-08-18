@@ -52,6 +52,23 @@ def assert_no_raw_validation_leak(message: str) -> None:
     assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
 
 
+def assert_no_marker_in_envelope(envelope: Mapping[str, Any] | None, marker: str) -> None:
+    """Assert ``marker`` is absent from the FULL wire error envelope.
+
+    Sibling to :func:`assert_no_raw_validation_leak`, for the untyped-exception
+    wire-safety obligation (salesagent-prkv.8/prkv.18): unlike
+    ``assert_envelope_shape``'s ``message_substr`` (a positive match scoped to
+    ``errors[0].message`` only), this scans ``str(envelope)`` so a leak buried
+    anywhere in the envelope (``adcp_error.message``, ``errors[0].details``,
+    ``suggestion``, ``context``) fails the check — mirroring the exemplar
+    ``tests/integration/test_prkv8_untyped_exception_wire_leak.py::_assert_no_leak``,
+    which scans the WHOLE envelope rather than a single field.
+    """
+    assert envelope is not None, f"no wire envelope captured to check for marker {marker!r}"
+    rendered = str(envelope)
+    assert marker not in rendered, f"marker {marker!r} leaked into wire envelope: {rendered!r}"
+
+
 def assert_envelope_shape(
     target: Any,
     code: str,
