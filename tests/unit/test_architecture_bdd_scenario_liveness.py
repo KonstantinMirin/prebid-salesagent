@@ -147,6 +147,10 @@ def test_scenario_liveness_to_dict_shape() -> None:
         "unbound_steps": ["a step"],
         "harness_wired": None,
         "ledgered": False,
+        # The routing contract's marker set, persisted so the audit join can
+        # resolve the SAME route the conftest did (Lane F). Empty here because
+        # this record was built directly, not through pytest_bdd_before_scenario.
+        "marker_names": [],
         "observations": [
             {
                 "transport": "mcp",

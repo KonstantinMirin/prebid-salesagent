@@ -25,6 +25,7 @@ by construction (salesagent-pw71).
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import sys
 from dataclasses import dataclass, field
@@ -50,16 +51,11 @@ class Binding:
     bucket: str = "A"  # A ok · B wrong path · C wrong tag · D under-asserts · E prod-blocked
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "feature": self.feature,
-            "line": self.line,
-            "identifier": self.identifier,
-            "title": self.title,
-            "tags": self.tags,
-            "sources": self.sources,
-            "findings": self.findings,
-            "bucket": self.bucket,
-        }
+        """Serialize for the JSON report.
+
+        Every field, mechanically — a hand-written mirror drifts the moment a field is added.
+        """
+        return dataclasses.asdict(self)
 
 
 def audit(repo: Path, adcp: Path) -> dict[str, Any]:

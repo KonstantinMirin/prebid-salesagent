@@ -117,8 +117,14 @@ def test_parse_returns_none_on_a_non_matching_line(line):
     assert ledger.LedgerCheckId.parse(line) is None
 
 
-def test_load_skips_comments_blanks_and_invalid_lines(tmp_path):
-    """load() returns only the successfully-parsed lines, silently skipping the rest."""
+def test_load_skips_comments_and_blanks_but_raises_on_an_unparsable_line(tmp_path):
+    """Comments and blanks are skipped; a line the grammar rejects RAISES.
+
+    The silent-skip behaviour this used to assert is gone (Lane F): a typo'd
+    entry that is quietly dropped stops grading its check with nothing to
+    notice, so an unparsable ledger line is now a loud ValueError naming the
+    file and line number.
+    """
     fixture = tmp_path / "known_failures.txt"
     fixture.write_text(
         "\n".join(
@@ -126,7 +132,6 @@ def test_load_skips_comments_blanks_and_invalid_lines(tmp_path):
                 "# a comment line, must be skipped",
                 "",  # blank line, must be skipped
                 "   ",  # whitespace-only line, must be skipped
-                "not a ledger line, must be silently skipped",
                 REAL_LEDGER_LINE,
                 "tests/storyboard/test_storyboard_conformance.py::"
                 "test_storyboard_check[a2a::security::security_baseline::probe_unauth]",
@@ -144,6 +149,11 @@ def test_load_skips_comments_blanks_and_invalid_lines(tmp_path):
     assert len(loaded) == 2
     assert loaded[0].format() == REAL_LEDGER_BRACKET_CONTENT
     assert loaded[1].format() == "a2a::security::security_baseline::probe_unauth"
+
+    # And the loud half: one unparsable line fails the whole load, naming it.
+    fixture.write_text(f"{REAL_LEDGER_LINE}\nnot a ledger line\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a ledger line"):
+        ledger.load(fixture)
 
 
 def test_storyboard_key_normalizes_hyphens_while_storyboard_id_stays_raw():

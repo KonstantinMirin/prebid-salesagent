@@ -18,6 +18,7 @@ with a reason (e.g., "MCP wrapper does not accept disclosure_positions").
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 from collections.abc import Callable, Generator
@@ -28,7 +29,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from scripts.audit import storyboard_spec
 from tests.helpers.ledger import load_ledger_nodeids
+from tests.helpers.marker_names import derive_marker_names
 
 # Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
 # to the separate server, so in-process mock injection (set_registry_formats /
@@ -39,7 +42,11 @@ from tests.helpers.ledger import load_ledger_nodeids
 _E2E_REST_KNOWN_FAILURES: frozenset[str] = load_ledger_nodeids(Path(__file__).parent / "e2e_rest_known_failures.txt")
 
 if TYPE_CHECKING:
-    pass
+    # Real types for the EnvRoute callbacks (Lane F, F4). Under TYPE_CHECKING so
+    # the annotations stay honest without importing the harness at conftest
+    # import time.
+    from tests.harness._base import BaseTestEnv
+    from tests.harness.transport import E2EConfig
 
 # Register step definition modules as pytest plugins so that the fixtures
 # created by @given/@when/@then decorators are visible to pytest-bdd's
@@ -2875,11 +2882,6 @@ _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
 }
 
 
-def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
-    """True when a brand_shorthand scenario targets create_media_buy (UC-002 harness)."""
-    return "brand_shorthand" in marker_names and "create_media_buy" in marker_names
-
-
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -3129,9 +3131,6 @@ def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal:
     _register_package(ctx, "pkg_001", pkg)
 
 
-_UC_TAG_RE = re.compile(r"^T-UC-(\d{3})(?:-|$)")
-
-
 @dataclass(frozen=True)
 class EnvRoute:
     """One row of the declarative BDD env-routing registry.
@@ -3145,12 +3144,25 @@ class EnvRoute:
 
     The registry exists so authoring a new routing case is adding a row —
     there is no field for hand-rolling seeding or skipping DB scoping.
+
+    ``when``, when set, is the row's ROUTING PREDICATE over the scenario's
+    marker-name set. Rows carrying one are tried before the coarse ``uc``
+    buckets. These predicates used to live as a hardcoded ``elif`` chain inside
+    ``_harness_env``, invisible to ``scripts/audit``'s join — which knew only
+    about the buckets and therefore reported every predicate-routed scenario as
+    dormant. Moving them into rows is what lets ONE resolver answer for both
+    sides (Lane F, bd salesagent-qbac1.6).
+
+    ``uc`` is the coarse bucket this row serves, matched against
+    ``storyboard_spec.detect_uc``. A row sets ``when`` or ``uc``, not both.
     """
 
     tag: str
-    env_builder: Callable[[object | None], AbstractContextManager]
-    seed: Callable[[dict, object], None] | None = None
+    env_builder: Callable[[E2EConfig | None], AbstractContextManager[BaseTestEnv]]
+    seed: Callable[[dict, BaseTestEnv], None] | None = None
     xfail_reason: str | None = None
+    when: Callable[[frozenset[str]], bool] | None = None
+    uc: str | None = None
 
 
 def _seed_uc003_storyboard_generic_client(ctx: dict, env: object) -> None:
@@ -3242,137 +3254,89 @@ def _seed_uc019(ctx: dict, env: object) -> None:
     ctx["principal"] = principal
 
 
-ENV_ROUTES: dict[str, EnvRoute] = {
-    "T-UC-003-storyboard-media-buy-not-found": EnvRoute(
-        tag="T-UC-003-storyboard-media-buy-not-found",
-        env_builder=_build_uc003_storyboard_generic_client_env,
-        seed=_seed_uc003_storyboard_generic_client,
-    ),
-    # Same env + same seed as the row above: the re-cancel scenario also needs
-    # the Background's "mb_existing" buy plus a client that sends the buyer's
-    # literal payload (Lane A, salesagent-qbac1.1 — `canceled` must reach the
-    # seller rather than being dropped by a harness flattener).
-    "T-UC-003-storyboard-not-cancellable-on-recancel": EnvRoute(
-        tag="T-UC-003-storyboard-not-cancellable-on-recancel",
-        env_builder=_build_uc003_storyboard_generic_client_env,
-        seed=_seed_uc003_storyboard_generic_client,
-    ),
-    # The five rows below are keyed by the coarse `uc` bucket (from
-    # _detect_uc), not a per-scenario tag: every scenario in these UCs uses
-    # the exact same env + seed, with no marker_names-based sub-branching, so
-    # there is nothing finer to key on. UC-002/003(remainder)/004/006/011/018
-    # still have marker-set-based sub-branching that doesn't reduce to a
-    # single row and are intentionally left as prose branches in
-    # `_harness_env` (see salesagent-vuz9t.19 follow-up).
-    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
-    "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
-    "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
-    "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
-    "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_uc019),
-}
+# ── Seeds extracted from the former _harness_env elif chain (Lane F, F1c) ────
+# Each was an inline body inside a marker-keyed branch. As rows they are visible
+# to storyboard_spec.resolve_env_route, which is what lets scripts/audit resolve
+# the SAME route instead of re-implementing a coarser lookup.
 
 
-def _run_env_route(
-    request: pytest.FixtureRequest, ctx: dict, route: EnvRoute, e2e_config: object | None
-) -> Generator[None, None, None]:
-    """The one generic ``ENV_ROUTES`` consumer.
+def _seed_media_buy_chain(ctx: dict, env: object) -> None:
+    """Seed the full create dependency chain (tenant/principal/product/pricing)."""
+    tenant, principal, product, pricing_option = env.setup_media_buy_data()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["default_product"] = product
+    ctx["default_pricing_option"] = pricing_option
 
-    Enters ``_db_scope_for`` — the structural DB-scoping entry point — before
-    the row's ``env_builder`` runs, so on the e2e_rest parametrization
-    production's cached engine is pointed at the live server DB (not an empty
-    per-test DB) before any factory writes happen. Stashes the entered env on
-    ``ctx["env"]``, runs the row's ``seed`` callback if present, then yields
-    control to the scenario. A row with ``xfail_reason`` set never builds an
-    env at all.
+
+def _seed_media_buy_chain_create_dispatch(ctx: dict, env: object) -> None:
+    """The chain, plus the flag telling the shared When step to dispatch a create."""
+    _seed_media_buy_chain(ctx, env)
+    ctx["dispatch_mode"] = "create"
+
+
+def _seed_media_buy_chain_full_create(ctx: dict, env: object) -> None:
+    """The chain, plus the manual-approval full-create flag (PR #1567)."""
+    _seed_media_buy_chain(ctx, env)
+    ctx["uc002_full_create"] = True
+
+
+def _seed_update_with_existing_buy(ctx: dict, env: object) -> None:
+    """The chain plus an existing media buy + package for UC-003 update scenarios."""
+    _seed_media_buy_chain(ctx, env)
+    _setup_existing_media_buy(ctx, env, ctx["tenant"], ctx["principal"], ctx["default_product"])
+    env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
+
+
+def _seed_update_with_mb_existing(ctx: dict, env: object) -> None:
+    """The chain plus a standalone MediaBuy carrying the literal Background id."""
+    from tests.factories import MediaBuyFactory
+
+    _seed_media_buy_chain(ctx, env)
+    existing_media_buy = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id="mb_existing",
+        status="active",
+    )
+    env._commit_factory_data()
+    env._seeded_media_buy_id = "mb_existing"
+    ctx["existing_media_buy"] = existing_media_buy
+
+
+def _seed_default_data(ctx: dict, env: object) -> None:
+    """Envs whose setup is a bare ``setup_default_data()``."""
+    env.setup_default_data()
+
+
+def _seed_delivery_poll(ctx: dict, env: object) -> None:
+    """UC-004 polling: stash the tenant/principal under the keys its steps read."""
+    tenant, principal = env.setup_default_data()
+    ctx["db_tenant"] = tenant
+    ctx[f"db_principal_{env._principal_id}"] = principal
+
+
+def _env(factory_path: str, **kwargs: object) -> Callable[[object | None], AbstractContextManager]:
+    """Build an env_builder that imports its harness lazily, as the branches did."""
+
+    def _builder(e2e_config: object | None) -> AbstractContextManager:
+        import importlib
+
+        module_name, _, class_name = factory_path.rpartition(".")
+        env_cls = getattr(importlib.import_module(module_name), class_name)
+        return env_cls(e2e_config=e2e_config, **kwargs)
+
+    return _builder
+
+
+def _uc(uc_name: str, predicate: Callable[[frozenset[str]], bool]) -> Callable[[frozenset[str]], bool]:
+    """Scope a marker predicate to one UC bucket.
+
+    The former chain tested ``uc == "UC-00N"`` FIRST and only then the markers,
+    so a bare marker predicate would over-match across UCs (``account`` and
+    ``BR-RULE-034`` are both carried by more than one use case).
     """
-    from tests.harness.client import AdCPTestClient
-
-    if route.xfail_reason is not None:
-        pytest.xfail(route.xfail_reason)
-    with _db_scope_for(request, e2e_config), route.env_builder(e2e_config) as env:
-        ctx["env"] = env
-        # Build the client ONCE, here, for every row — it used to be constructed
-        # inside a single hand-wired seed callback, so only that one row could
-        # dispatch via the client and any new row wanting it had to remember to
-        # repeat the line (Lane B, change-set B8). Construction is cheap and
-        # side-effect-free; a row that never dispatches via the client simply
-        # does not read the key.
-        ctx["client"] = AdCPTestClient(env)
-        if route.seed is not None:
-            route.seed(ctx, env)
-        yield
-
-
-def _detect_uc(request: pytest.FixtureRequest) -> str | None:
-    """Detect which use case a BDD scenario belongs to via its tags.
-
-    The UC number derives from the tag itself (``T-UC-(\\d{3})``) -- a
-    scenario that carries its own ``T-UC-<n>`` tag needs no per-UC branch
-    here, wired or not. Only the genuinely non-derivable cases get an
-    explicit branch: ADMIN and COMPAT scenarios don't carry a ``T-UC-<n>``
-    tag at all, and UC-GET-PRODUCTS / the brand_shorthand-create_media_buy
-    override route on tags that aren't UC-numbered. A tag none of this
-    resolves falls through to ``None``, and ``_harness_env``'s catch-all
-    then reports it as "No harness wired for None" instead of naming the
-    actual UC -- masking the real gap. Widening the derivable set never
-    needs a code change here; only a genuinely new non-derivable case does.
-    """
-    marker_names = {m.name for m in request.node.iter_markers()}
-    if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
-        return "ADMIN"
-    if "inventory_profile" in marker_names or (
-        "brand_shorthand" in marker_names and not _is_brand_shorthand_media_buy(marker_names)
-    ):
-        return "UC-GET-PRODUCTS"
-    if _is_brand_shorthand_media_buy(marker_names):
-        return "UC-002"
-    if any(t.startswith("T-COMPAT") for t in marker_names):
-        return "COMPAT"
-    for tag in marker_names:
-        m = _UC_TAG_RE.match(tag)
-        if m:
-            return f"UC-{m.group(1)}"
-    return None
-
-
-def _detect_uc011_harness(marker_names: set[str]) -> str:
-    """Detect which UC-011 harness a scenario needs based on tags.
-
-    When both @sync and @list are present (cross-cutting scenarios like
-    sync-then-list), use sync harness — it's the superset and already has
-    a cross-cutting list path via _list_accounts_impl.
-    """
-    has_list = "list" in marker_names
-    has_sync = "sync" in marker_names
-    if has_sync and has_list:
-        return "sync"
-    if has_list:
-        return "list"
-    if has_sync:
-        return "sync"
-    if "context-echo" in marker_names or "sandbox" in marker_names:
-        return "sync"
-    return "unknown"
-
-
-def _detect_delivery_harness(request: pytest.FixtureRequest) -> str:
-    """Detect which delivery harness a UC-004 scenario needs."""
-    marker_names = {m.name for m in request.node.iter_markers()}
-    # Webhook-credential-length scenarios assert that a too-short reporting_webhook
-    # credential is rejected at the create_media_buy boundary (the SDK
-    # Authentication.credentials MinLen=32 fires on the wire). They need the
-    # create transport wrappers, not the delivery/circuit-breaker harness — route
-    # them to MediaBuyCreateEnv so production Pydantic does the rejecting.
-    if {"T-UC-004-webhook-creds-short", "T-UC-004-webhook-creds-valid"} & marker_names:
-        return "create"
-    if "webhook-reliability" in marker_names:
-        return "circuit-breaker"
-    if "webhook" in marker_names:
-        # Webhook scenarios (HMAC, bearer, sequence, notification_type) use
-        # WebhookDeliveryService which lives in CircuitBreakerEnv, not the
-        # older deliver_webhook_with_retry from WebhookEnv.
-        return "circuit-breaker"
-    return "poll"
+    return lambda markers: storyboard_spec.detect_uc(markers) == uc_name and predicate(markers)
 
 
 @contextmanager
@@ -3422,6 +3386,251 @@ def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> 
     return _production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
 
 
+def _run_env_route(
+    request: pytest.FixtureRequest, ctx: dict, route: EnvRoute, e2e_config: object | None
+) -> Generator[None, None, None]:
+    """The one generic ``ENV_ROUTES`` consumer.
+
+    Enters ``_db_scope_for`` — the structural DB-scoping entry point — before
+    the row's ``env_builder`` runs, so on the e2e_rest parametrization
+    production's cached engine is pointed at the live server DB (not an empty
+    per-test DB) before any factory writes happen. Stashes the entered env on
+    ``ctx["env"]``, runs the row's ``seed`` callback if present, then yields
+    control to the scenario. A row with ``xfail_reason`` set never builds an
+    env at all.
+    """
+    from tests.harness.client import AdCPTestClient
+
+    if route.xfail_reason is not None:
+        pytest.xfail(route.xfail_reason)
+    with _db_scope_for(request, e2e_config), route.env_builder(e2e_config) as env:
+        ctx["env"] = env
+        # Build the client ONCE, here, for every row — it used to be constructed
+        # inside a single hand-wired seed callback, so only that one row could
+        # dispatch via the client and any new row wanting it had to remember to
+        # repeat the line (Lane B, change-set B8). Construction is cheap and
+        # side-effect-free; a row that never dispatches via the client simply
+        # does not read the key.
+        ctx["client"] = AdCPTestClient(env)
+        if route.seed is not None:
+            route.seed(ctx, env)
+        yield
+
+
+_UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
+    "T-UC-003-storyboard-media-buy-not-found": EnvRoute(
+        tag="T-UC-003-storyboard-media-buy-not-found",
+        env_builder=_build_uc003_storyboard_generic_client_env,
+        seed=_seed_uc003_storyboard_generic_client,
+    ),
+    # Same env + same seed as the row above: the re-cancel scenario also needs
+    # the Background's "mb_existing" buy plus a client that sends the buyer's
+    # literal payload (Lane A, salesagent-qbac1.1 — `canceled` must reach the
+    # seller rather than being dropped by a harness flattener).
+    "T-UC-003-storyboard-not-cancellable-on-recancel": EnvRoute(
+        tag="T-UC-003-storyboard-not-cancellable-on-recancel",
+        env_builder=_build_uc003_storyboard_generic_client_env,
+        seed=_seed_uc003_storyboard_generic_client,
+    ),
+    # The five rows below are keyed by the coarse `uc` bucket (from
+    # _detect_uc), not a per-scenario tag: every scenario in these UCs uses
+    # the exact same env + seed, with no marker_names-based sub-branching, so
+    # there is nothing finer to key on. UC-002/003(remainder)/004/006/011/018
+    # still have marker-set-based sub-branching that doesn't reduce to a
+    # single row and are intentionally left as prose branches in
+    # `_harness_env` (see salesagent-vuz9t.19 follow-up).
+    "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
+    "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
+    "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
+    "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
+    "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_uc019),
+}
+
+# Tag sets the routing predicates below key on. They were inline `if` conditions
+# in the former _harness_env elif chain; as named sets they are readable from the
+# rows AND from scripts/audit, which now resolves through the same table.
+_UC002_MANUAL_APPROVAL_ROW_TAGS = _UC002_MANUAL_APPROVAL_WIRED
+_UC003_TARGETING_OVERLAY_TAGS = frozenset(
+    {"T-UC-003-partition-targeting-overlay", "T-UC-003-boundary-targeting-overlay"}
+)
+_UC003_MANUAL_APPROVAL_TAGS = frozenset(
+    {"T-UC-003-alt-manual", "T-UC-003-approval-tenant", "T-UC-003-approval-adapter"}
+)
+_UC003_STORYBOARD_CLIENT_TAGS = frozenset(
+    {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
+)
+
+ENV_ROUTES: list[EnvRoute] = [
+    # ── UC-002 ──────────────────────────────────────────────────────────────
+    EnvRoute(
+        tag="uc002-account",
+        when=_uc("UC-002", lambda m: "account" in m),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
+        tag="uc002-ext",
+        when=_uc(
+            "UC-002",
+            lambda m: (
+                any(t.startswith("T-UC-002-ext-") for t in m)
+                or "nfr-highvalue" in m
+                or "T-UC-002-nfr-001-enforcement" in m
+            ),
+        ),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
+    EnvRoute(
+        tag="uc002-manual-approval",
+        when=_uc("UC-002", lambda m: bool(m & _UC002_MANUAL_APPROVAL_ROW_TAGS)),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain_full_create,
+    ),
+    EnvRoute(
+        tag="uc002-idempotency",
+        when=_uc(
+            "UC-002",
+            lambda m: bool(m & _UC002_IDEMPOTENCY_WIRED) or storyboard_spec.is_brand_shorthand_media_buy(m),
+        ),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
+        tag="uc002-inv-015-6",
+        when=_uc("UC-002", lambda m: "T-UC-002-inv-015-6" in m),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        xfail_reason="T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652",
+    ),
+    EnvRoute(
+        tag="uc002-not-wired",
+        when=_uc("UC-002", lambda m: True),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        xfail_reason="UC-002 harness not yet wired for non-extension scenarios",
+    ),
+    # ── UC-003 ──────────────────────────────────────────────────────────────
+    EnvRoute(
+        tag="uc003-ext",
+        when=_uc(
+            "UC-003",
+            lambda m: any(t.startswith("T-UC-003-ext-") for t in m) or bool(m & _UC003_TARGETING_OVERLAY_TAGS),
+        ),
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_update_with_existing_buy,
+    ),
+    EnvRoute(
+        tag="uc003-manual-approval",
+        when=_uc("UC-003", lambda m: bool(m & _UC003_MANUAL_APPROVAL_TAGS)),
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_update_with_mb_existing,
+    ),
+    EnvRoute(
+        tag="uc003-storyboard-generic-client",
+        when=_uc("UC-003", lambda m: bool(m & _UC003_STORYBOARD_CLIENT_TAGS)),
+        env_builder=_build_uc003_storyboard_generic_client_env,
+        seed=_seed_uc003_storyboard_generic_client,
+    ),
+    EnvRoute(
+        tag="uc003-not-wired",
+        when=_uc("UC-003", lambda m: True),
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        xfail_reason=(
+            "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
+        ),
+    ),
+    # ── UC-006 ──────────────────────────────────────────────────────────────
+    EnvRoute(
+        tag="uc006-creative-sync",
+        when=_uc(
+            "UC-006",
+            lambda m: bool(
+                m
+                & {
+                    "account",
+                    "creative-invariant",
+                    "BR-RULE-034",
+                    "webhook-ssrf",
+                    "uc006-storyboard-routing",
+                    "uc006-idempotency",
+                }
+            ),
+        ),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+    ),
+    EnvRoute(
+        tag="uc006-not-wired",
+        when=_uc("UC-006", lambda m: True),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason="UC-006 harness not yet wired for non-account scenarios",
+    ),
+    # ── UC-018 ──────────────────────────────────────────────────────────────
+    EnvRoute(
+        tag="uc018-list",
+        when=_uc("UC-018", lambda m: bool(m & {"list-after-sync", "concept-id", "BR-RULE-034"})),
+        env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
+    ),
+    EnvRoute(
+        tag="uc018-ext-c",
+        when=_uc("UC-018", lambda m: "T-UC-018-ext-c" in m),
+        env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
+        xfail_reason="T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652",
+    ),
+    EnvRoute(
+        tag="uc018-not-wired",
+        when=_uc("UC-018", lambda m: True),
+        env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
+        xfail_reason=(
+            "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
+            "and @BR-RULE-034 isolation (#1503) scenarios"
+        ),
+    ),
+    # ── UC-011 ──────────────────────────────────────────────────────────────
+    EnvRoute(
+        tag="uc011-list",
+        when=_uc("UC-011", lambda m: storyboard_spec.uc011_harness(m) == "list"),
+        env_builder=_env("tests.harness.account_list.AccountListEnv"),
+    ),
+    EnvRoute(
+        tag="uc011-sync",
+        when=_uc("UC-011", lambda m: storyboard_spec.uc011_harness(m) == "sync"),
+        env_builder=_env("tests.harness.account_sync.AccountSyncEnv"),
+    ),
+    EnvRoute(
+        tag="uc011-not-wired",
+        when=_uc("UC-011", lambda m: True),
+        env_builder=_env("tests.harness.account_sync.AccountSyncEnv"),
+        xfail_reason="UC-011 harness not yet wired for these markers",
+    ),
+    # ── UC-004 ──────────────────────────────────────────────────────────────
+    EnvRoute(
+        tag="uc004-create",
+        when=_uc("UC-004", lambda m: storyboard_spec.uc004_harness(m) == "create"),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
+        tag="uc004-circuit-breaker",
+        when=_uc("UC-004", lambda m: storyboard_spec.uc004_harness(m) == "circuit-breaker"),
+        env_builder=_env("tests.harness.delivery_circuit_breaker.CircuitBreakerEnv"),
+        seed=_seed_default_data,
+    ),
+    EnvRoute(
+        tag="uc004-poll",
+        when=_uc("UC-004", lambda m: storyboard_spec.uc004_harness(m) == "poll"),
+        env_builder=_env("tests.harness.delivery_poll.DeliveryPollEnv", principal_id="buyer-001"),
+        seed=_seed_delivery_poll,
+    ),
+]
+
+# The coarse uc-bucket rows come last: a predicate row above always wins, which
+# preserves the former chain's order (it matched the bucket first only for UCs
+# that had NO predicate branches). Tag-keyed rows are already represented above
+# as predicate rows, so only the bucket keys are appended.
+ENV_ROUTES += [
+    dataclasses.replace(route, uc=key) for key, route in _UC_BUCKET_ROUTES.items() if not key.startswith("T-")
+]
+
+
 @pytest.fixture(autouse=True)
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
@@ -3432,14 +3641,19 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)
-    - A UC recognized by ``_detect_uc`` but not (yet) given a branch below
+    - A UC recognized by ``storyboard_spec.detect_uc`` but not (yet) claimed by a row
       xfails with a UC-specific reason via the catch-all at the bottom.
     - A tag ``_detect_uc`` does not recognize at all falls through to the
       same catch-all as ``uc=None`` -- an opaque "No harness wired for None".
       That is a bug, not intended behavior: widen ``_detect_uc`` instead of
       relying on this fixture to paper over it.
     """
-    uc = _detect_uc(request)
+    # ONE derivation, ONE routing call (Lane F). The marker set comes from the
+    # shared accessor so the conftest and the liveness plugin cannot narrow it
+    # differently, and the route comes from the shared resolver so scripts/audit
+    # answers the same question the same way.
+    marker_names = derive_marker_names(request.node)
+    uc = storyboard_spec.detect_uc(marker_names)
     e2e_config = ctx.get("e2e_config")
 
     # E2E shares one live DB across all scenarios; flush it to a clean baseline so
@@ -3448,345 +3662,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     if e2e_config is not None:
         _reset_e2e_db(e2e_config)
 
-    if uc in ENV_ROUTES:
-        # Every scenario in these UCs uses one env + one seed, with no
-        # marker_names-based sub-branching -- nothing finer to key on than
-        # the uc bucket itself. See ENV_ROUTES's comment for the UCs that
-        # still need marker-set-based prose branches below.
-        yield from _run_env_route(request, ctx, ENV_ROUTES[uc], e2e_config)
-
-    elif uc == "UC-002":
-        marker_names = {m.name for m in request.node.iter_markers()}
-        # Tags that need the full create_media_buy flow (MediaBuyCreateEnv)
-        # rather than account resolution only (MediaBuyAccountEnv).
-        if "account" in marker_names:
-            # Account-resolution scenarios run a full create_media_buy on the wire
-            # (#1417): production resolves the account at the transport
-            # boundary (enrich_identity_with_account → resolve_account) and emits
-            # ACCOUNT_NOT_FOUND/AMBIGUOUS/SETUP_REQUIRED/PAYMENT_REQUIRED/SUSPENDED
-            # — or succeeds — on the wire. MediaBuyCreateEnv gives the create
-            # transport wrappers + the full product/pricing dependency chain; the
-            # account Given steps seed the account rows on top.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
-        elif (
-            any(t.startswith("T-UC-002-ext-") for t in marker_names)
-            or "nfr-highvalue" in marker_names
-            or "T-UC-002-nfr-001-enforcement" in marker_names
-        ):
-            # Extension/error scenarios: budget validation, pricing errors, etc.
-            # Plus the nfr-highvalue >$10k Seller-alert scenario (#1417),
-            # and the nfr-001 no-auth rejection scenario (#1417), which
-            # needs the same full create dispatch so each transport's REAL auth
-            # gate (A2A on_message_send no-token gate, REST _require_auth_dep,
-            # MCP boundary) produces the wire rejection.
-            # which needs the same full create_media_buy flow to reach the
-            # pending-approval audit feed.
-            # Use MediaBuyCreateEnv which calls _create_media_buy_impl with real DB.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                ctx["dispatch_mode"] = "create"
-                yield
-        elif marker_names & (_UC002_IDEMPOTENCY_WIRED | _UC002_MANUAL_APPROVAL_WIRED) or _is_brand_shorthand_media_buy(
-            marker_names
-        ):
-            if marker_names & _UC002_MANUAL_APPROVAL_WIRED:
-                # Tells the shared When step to dispatch a FULL create through
-                # the parametrized transport (not account resolution). (PR #1567)
-                ctx["uc002_full_create"] = True
-            # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
-            # real create_media_buy through every transport (the replay scenario
-            # creates once, then sends the same key again to exercise the
-            # production replay path). Only the two wired tags go live here; the
-            # remaining @idempotency-key scenarios (in-flight, expired, conflict,
-            # pattern, canonical) stay blanket-xfailed below until their
-            # production gaps + steps are wired.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
-        elif "T-UC-002-inv-015-6" in marker_names:
-            pytest.xfail("T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652")
-        else:
-            # Restore the xfail guard every other use case keeps on its catch-all:
-            # non-account / non-extension UC-002 scenarios are NOT yet wired (no
-            # dispatch_mode -> they route to resolve_account_or_error and fail with
-            # "Account reference is required"). Mirror UC-003/004/006/011: xfail them
-            # until each is explicitly wired into a run branch above. Dropping this
-            # line is what flipped ~800 dormant scenarios from xfail to fail.
-            pytest.xfail("UC-002 harness not yet wired for non-extension scenarios")
-
-    elif uc == "UC-003":
-        marker_names = {m.name for m in request.node.iter_markers()}
-        # The targeting-overlay partition/boundary outlines (#1417) need the
-        # same full update flow as ext- scenarios to reach the overlay-validation raise
-        # at media_buy_update.py:444; wire them through MediaBuyDualEnv too.
-        _UC003_TARGETING_OVERLAY = {
-            "T-UC-003-partition-targeting-overlay",
-            "T-UC-003-boundary-targeting-overlay",
-        }
-        # The 3 manual-approval submitted-envelope scenarios (PR #1567) are graded
-        # too (they exercise UpdateMediaBuySubmitted cross-transport, adcp 6.6 /
-        # spec 3.1.1). Every other UC-003 scenario stays dormant; graduating the
-        # full UC-003 file is tracked separately. See the BOUNDED branch below.
-        _UC003_MANUAL_APPROVAL = {
-            "T-UC-003-alt-manual",
-            "T-UC-003-approval-tenant",
-            "T-UC-003-approval-adapter",
-        }
-        # The transport-generic-client demonstrator (SB-4a, salesagent-35to):
-        # wires ONE storyboard scenario through AdCPTestClient instead of
-        # MediaBuyDualEnv, additive-only — every other UC-003 scenario is
-        # untouched. Background still seeds "mb_existing" (BR-UC-003-update-
-        # media-buy.feature:24-28 runs for this scenario too), so the env
-        # setup mirrors _UC003_MANUAL_APPROVAL's shape; what the client
-        # actually replaces is the create-vs-update dispatch routing.
-        _UC003_STORYBOARD_GENERIC_CLIENT = {
-            "T-UC-003-storyboard-media-buy-not-found",
-            # Lane A (salesagent-qbac1.1) grades the request-normalization seam
-            # on the wire: `canceled: true` must be honored or refused, never
-            # accepted-and-dropped. The re-cancel scenario needs a dispatcher
-            # that sends the buyer's literal payload, which is why it routes
-            # here rather than through MediaBuyDualEnv — that env's
-            # _flatten_update_request drops `canceled`/`cancellation_reason`
-            # (tests/harness/media_buy_update.py _WRAPPER_UNSUPPORTED_FIELDS)
-            # before the wire, so the field would never reach production and
-            # the scenario would grade the harness instead of the seller.
-            "T-UC-003-storyboard-not-cancellable-on-recancel",
-        }
-        if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
-            # Extension/error scenarios: budget, currency, auth, creative,
-            # placement, keyword, and immutable-field validation on the update
-            # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module
-            # patches and dispatches UpdateMediaBuyRequest through the update
-            # transport wrappers (_update_media_buy_impl / update_media_buy_raw /
-            # MCP / REST), so update scenarios actually exercise the update flow
-            # against the real DB instead of falling through to _create_media_buy_impl.
-            from tests.harness.media_buy_dual import MediaBuyDualEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyDualEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                # Seed an existing media buy + package for update scenarios and
-                # tell the env which media_buy_id the REST update endpoint targets.
-                _setup_existing_media_buy(ctx, env, tenant, principal, product)
-                env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
-                yield
-        elif marker_names & _UC003_MANUAL_APPROVAL:
-            # BOUNDED (PR #1567): the 3 manual-approval submitted-envelope
-            # scenarios are graded here (they exercise UpdateMediaBuySubmitted
-            # cross-transport). Every other non-extension UC-003 scenario stays
-            # dormant via the else below — graduating the full UC-003 file is a
-            # tracked PR #1567 follow-up. This guard is what keeps un-dormanting
-            # UC-003 from turning the suite red.
-            #
-            # UpdateMediaBuy manual-approval scenarios. MediaBuyDualEnv (an IntegrationEnv)
-            # routes an UpdateMediaBuyRequest through IMPL/A2A/MCP/REST. Seed the full create
-            # dependency chain plus a standalone MediaBuy with the literal id the
-            # Background references ("mb_existing") so the update path has a target.
-            from tests.factories import MediaBuyFactory
-            from tests.harness.media_buy_dual import MediaBuyDualEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyDualEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                existing_media_buy = MediaBuyFactory(
-                    tenant=tenant,
-                    principal=principal,
-                    media_buy_id="mb_existing",
-                    status="active",
-                )
-                env._commit_factory_data()
-                env._seeded_media_buy_id = "mb_existing"
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                ctx["existing_media_buy"] = existing_media_buy
-                yield
-        elif marker_names & _UC003_STORYBOARD_GENERIC_CLIENT:
-            # SB-4a demonstrator: EnvRoute registry row (BareIntegrationEnv, no
-            # external patches, + AdCPTestClient, NOT MediaBuyDualEnv).
-            # dispatch goes through ctx["client"] via dispatch_via_client
-            # instead of ctx["env"].call_via via dispatch_request. Routed
-            # through the one generic ENV_ROUTES consumer, which enters
-            # _db_scope_for before building the env (fixes the wrong-DB
-            # defect: over e2e_rest, a direct integration_db fixture call
-            # here repointed production's cached engine at an empty per-test
-            # DB while this env's factory rows landed in the live server DB).
-            # The row is selected BY the scenario's own tag rather than a
-            # hardcoded key, so adding a scenario to the set above is a
-            # one-line change here instead of a second branch.
-            (scenario_tag,) = sorted(marker_names & _UC003_STORYBOARD_GENERIC_CLIENT)[:1]
-            yield from _run_env_route(request, ctx, ENV_ROUTES[scenario_tag], e2e_config)
-        else:
-            pytest.xfail(
-                "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
-            )
-
-    elif uc == "UC-006":
-        marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {
-            "account",
-            "creative-invariant",
-            "BR-RULE-034",
-            "webhook-ssrf",
-            "uc006-storyboard-routing",
-            "uc006-idempotency",
-        }:
-            # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
-            # @account scenarios drive account resolution (enrich_identity_with_account());
-            # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
-            # response invariants (e.g. all-failed still returns the success variant);
-            # @BR-RULE-034 scenarios drive cross-principal isolation (triple-key
-            # creative lookup) — dormant until the cross-principal existence-gate
-            # fix (PR #1430 review) made the surface safe to grade.
-            # @webhook-ssrf scenarios grade registration SSRF on push_notification_config.url.
-            # @uc006-storyboard-routing is a dedicated routing tag (not the grading-
-            # provenance tag) carried by all 8 UC-006 storyboard-conformance proposals
-            # (provenance required/disclosure/digital-source-type/corrected/contradicted,
-            # multi-format sync, format-id roundtrip, creative-reception). It must stay
-            # decoupled from @storyboard-v3.1 / @schema-v3.1: those are grading-provenance
-            # tags shared across every UC's storyboard scenarios (scripts/audit's
-            # storyboard_spec.TAG), and two of these eight already carry @schema-v3.1
-            # instead of @storyboard-v3.1 — keying routing on either grading tag would
-            # both misroute other UCs' storyboard scenarios into CreativeSyncEnv and
-            # leave those two never reaching the gate. Retagging a scenario for grading
-            # provenance must never change which env it resolves to.
-            # @uc006-idempotency scenarios grade the pinned schema's REQUIRED
-            # idempotency_key on sync_creatives (replay does not re-execute; key reuse
-            # with a divergent payload conflicts). CreativeSyncEnv is the right env:
-            # the key is delivered by the acceptance seam on every wire transport, so
-            # the scenarios grade HONORING rather than acceptance.
-            from tests.harness.creative_sync import CreativeSyncEnv
-
-            with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
-                ctx["env"] = env
-                yield
-        else:
-            pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
-
-    elif uc == "UC-018":
-        # list_creatives — the wired scenarios are @list-after-sync (#1405),
-        # @concept-id (#1407), and the @BR-RULE-034 cross-principal isolation
-        # invariants (#1503). The remaining UC-018 scenarios (main/partition/
-        # boundary/other filter siblings) have no step definitions yet, so xfail
-        # fast at the fixture (mirrors UC-002/006/011) rather than spinning up a
-        # DB per scenario only to auto-xfail at the first missing step.
-        #
-        # BR-RULE-034 is unambiguous here: this branch only runs for T-UC-018-*
-        # scenarios (see _detect_uc), so the tag never collides with the UC-006
-        # BR-RULE-034 scenarios routed elsewhere.
-        marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"list-after-sync", "concept-id", "BR-RULE-034"}:
-            # CreativeListEnv mocks only the audit logger; DB, repository, and
-            # query building are real. The Background auth step switches the env
-            # principal; the seed step owns the creatives under it.
-            from tests.harness.creative_list import CreativeListEnv
-
-            with _db_scope_for(request, e2e_config), CreativeListEnv(e2e_config=e2e_config) as env:
-                ctx["env"] = env
-                yield
-        elif "T-UC-018-ext-c" in marker_names:
-            pytest.xfail("T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652")
-        else:
-            pytest.xfail(
-                "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
-                "and @BR-RULE-034 isolation (#1503) scenarios"
-            )
-
-    elif uc == "UC-011":
-        marker_names = {m.name for m in request.node.iter_markers()}
-        harness_type = _detect_uc011_harness(marker_names)
-
-        if harness_type == "list":
-            from tests.harness.account_list import AccountListEnv
-
-            with _db_scope_for(request, e2e_config), AccountListEnv(e2e_config=e2e_config) as env:
-                ctx["env"] = env
-                yield
-        elif harness_type == "sync":
-            from tests.harness.account_sync import AccountSyncEnv
-
-            with _db_scope_for(request, e2e_config), AccountSyncEnv(e2e_config=e2e_config) as env:
-                ctx["env"] = env
-                yield
-        else:
-            pytest.xfail(f"UC-011 harness not yet wired for markers: {marker_names}")
-
-    elif uc == "UC-004":
-        harness_type = _detect_delivery_harness(request)
-
-        if harness_type == "poll":
-            from tests.harness.delivery_poll import DeliveryPollEnv
-
-            # Use "buyer-001" as principal — matches most UC-004 scenarios.
-            # _ensure_media_buy_in_db creates media buys owned by the
-            # scenario's "owner" (usually "buyer-001"), and _impl filters
-            # by the identity's principal. They must match.
-            with (
-                _db_scope_for(request, e2e_config),
-                DeliveryPollEnv(principal_id="buyer-001", e2e_config=e2e_config) as env,
-            ):
-                tenant, principal = env.setup_default_data()
-                ctx["env"] = env
-                ctx["db_tenant"] = tenant
-                ctx[f"db_principal_{env._principal_id}"] = principal
-                yield
-        elif harness_type == "webhook":
-            from tests.harness.delivery_webhook import WebhookEnv
-
-            with _db_scope_for(request, e2e_config), WebhookEnv(e2e_config=e2e_config) as env:
-                env.setup_default_data()
-                ctx["env"] = env
-                yield
-        elif harness_type == "circuit-breaker":
-            from tests.harness.delivery_circuit_breaker import CircuitBreakerEnv
-
-            with _db_scope_for(request, e2e_config), CircuitBreakerEnv(e2e_config=e2e_config) as env:
-                env.setup_default_data()
-                ctx["env"] = env
-                yield
-        elif harness_type == "create":
-            # Webhook-credential-length scenarios dispatch a real create_media_buy
-            # carrying a reporting_webhook so production's Pydantic boundary
-            # (Authentication.credentials MinLen=32) accepts/rejects on the wire.
-            from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                yield
-        else:
-            pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
-    else:
-        pytest.xfail(f"No harness wired for {uc}")
+    route = storyboard_spec.resolve_env_route(marker_names, ENV_ROUTES)
+    if route is None:
+        # NOT WIRED is a real answer, not an absence. Each branch UC keeps its own
+        # catch-all row (below) carrying the reason it used to xfail with inline;
+        # reaching here means no row claimed the scenario at all.
+        pytest.xfail(f"No harness wired for {uc} (markers: {sorted(marker_names)})")
+    yield from _run_env_route(request, ctx, route, e2e_config)

@@ -36,6 +36,7 @@ Read-only. ``--jsonl`` for the source of truth, ``--markdown`` for the report.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -120,35 +121,11 @@ class CheckRecord:
     issue_note: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "storyboard": self.storyboard,
-            "storyboard_id": self.storyboard_id,
-            "phase_id": self.phase_id,
-            "step_id": self.step_id,
-            "check_type": self.check_type,
-            "ordinal": self.ordinal,
-            "citation": self.citation,
-            "tier": self.tier,
-            "required_tools": self.required_tools,
-            "requires_controller": self.requires_controller,
-            "measured_failing_protocols": self.measured_failing_protocols,
-            "measured": self.measured,
-            "scenarios": self.scenarios,
-            "scenario_grain": self.scenario_grain,
-            "scenario_binding_buckets": self.scenario_binding_buckets,
-            "claimed_by_scenario": self.claimed_by_scenario,
-            "scenario_liveness": self.scenario_liveness,
-            "graded_by_live_scenario": self.graded_by_live_scenario,
-            "graduation_candidate": self.graduation_candidate,
-            "e2e_wireable": self.e2e_wireable,
-            "e2e_axes": self.e2e_axes,
-            "e2e_requires": self.e2e_requires,
-            "e2e_blocker": self.e2e_blocker,
-            "e2e_source": self.e2e_source,
-            "issues": self.issues,
-            "issue_coverage": self.issue_coverage,
-            "issue_note": self.issue_note,
-        }
+        """Serialize for the JSON report.
+
+        Every field, mechanically — see the sibling modules.
+        """
+        return dataclasses.asdict(self)
 
 
 def _ledger_steps(repo: Path) -> dict[tuple[str, str], list[str]]:

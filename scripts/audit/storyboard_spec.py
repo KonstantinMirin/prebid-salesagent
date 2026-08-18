@@ -398,7 +398,192 @@ def phase_is_graded(text: str, phase_id: str) -> str | None:
 
 # ── @source footers + tagged scenarios ──────────────────────────────────────
 
-TAG = "@storyboard-v3.1"
+# ── THE SHARED LIVENESS CONTRACT (PR #1858 Lane F, bd salesagent-qbac1.6) ───
+#
+# This module is the ONE owner of the constants and lookups that tests/bdd and
+# scripts/audit both need. It is stdlib-only and imports no pytest and no
+# conftest, so either side may import it at module scope. The direction matters:
+# ~20 test modules already import scripts.audit.* at module scope, while
+# scripts/audit has exactly one import of the test tree and it is deliberately
+# deferred inside a function body. An owner under tests/ would invert that.
+#
+# (Defining a CLI entry point here does not execute one — importing this module
+# runs no argparse.)
+
+#: The storyboard provenance tag, in ONE representation: WITHOUT the leading
+#: ``@``. The two former copies disagreed — scenario_liveness.py held
+#: "storyboard-v3.1" and this module held "@storyboard-v3.1" — so any consumer
+#: comparing them had to know which convention it was holding. Callers that need
+#: the Gherkin spelling use :func:`tag_literal`.
+STORYBOARD_TAG = "storyboard-v3.1"
+
+
+def tag_literal(tag: str = STORYBOARD_TAG) -> str:
+    """The Gherkin spelling of *tag* (with the leading ``@``)."""
+    return tag if tag.startswith("@") else f"@{tag}"
+
+
+#: Environment variable naming where the BDD liveness artifact is written, and
+#: the default filename when it is unset. Read by the pytest plugin that WRITES
+#: the artifact and by the audit join that READS it — hence shared.
+ARTIFACT_ENV_VAR = "BDD_LIVENESS_ARTIFACT"
+DEFAULT_ARTIFACT_PATH = "bdd_scenario_liveness.json"
+
+#: Identity tag -> use-case number. Byte-identical copies previously sat in
+#: tests/bdd/conftest.py and scripts/audit/scenario_liveness_join.py, each with
+#: a comment stating it mirrored the other.
+UC_TAG_RE = re.compile(r"^T-UC-(\d{3})(?:-|$)")
+
+TAG = tag_literal()
+
+
+ADMIN_TAG_PREFIX = "T-ADMIN-"
+
+
+def is_brand_shorthand_media_buy(marker_names: frozenset[str]) -> bool:
+    """True when a brand_shorthand scenario targets create_media_buy (the UC-002 harness)."""
+    return "brand_shorthand" in marker_names and "create_media_buy" in marker_names
+
+
+def detect_uc(marker_names: frozenset[str]) -> str | None:
+    """The use-case bucket a scenario belongs to, from its marker names alone.
+
+    The UC number derives from the identity tag itself, so a scenario carrying
+    ``T-UC-<n>`` needs no per-UC branch. Only genuinely non-derivable cases are
+    named: ADMIN and COMPAT carry no ``T-UC-<n>`` tag, and UC-GET-PRODUCTS /
+    brand_shorthand-create_media_buy route on tags that are not UC-numbered.
+
+    Absorbed from tests/bdd/conftest.py, which is why it lives here: the audit
+    join RE-IMPLEMENTED this lookup, and the two copies disagreeing is the
+    mechanism behind the dormant-claim false positive the join exists to remove.
+    """
+    if any(t.startswith(ADMIN_TAG_PREFIX) for t in marker_names):
+        return "ADMIN"
+    if "inventory_profile" in marker_names or (
+        "brand_shorthand" in marker_names and not is_brand_shorthand_media_buy(marker_names)
+    ):
+        return "UC-GET-PRODUCTS"
+    if is_brand_shorthand_media_buy(marker_names):
+        return "UC-002"
+    if any(t.startswith("T-COMPAT") for t in marker_names):
+        return "COMPAT"
+    for tag in sorted(marker_names):
+        match = UC_TAG_RE.match(tag)
+        if match:
+            return f"UC-{match.group(1)}"
+    return None
+
+
+def uc011_harness(marker_names: frozenset[str]) -> str:
+    """Which UC-011 account harness a scenario's markers call for.
+
+    A ROUTING PREDICATE, so it lives with the resolver rather than beside the
+    conftest that used to own it: the audit join has to reach the same verdict,
+    and a predicate one call-frame outside the shared resolver is invisible to it.
+
+    ``sync`` wins when both @sync and @list are present — it is the superset and
+    already has a cross-cutting list path.
+    """
+    has_list, has_sync = "list" in marker_names, "sync" in marker_names
+    if has_sync and has_list:
+        return "sync"
+    if has_list:
+        return "list"
+    if has_sync:
+        return "sync"
+    if "context-echo" in marker_names or "sandbox" in marker_names:
+        return "sync"
+    return "unknown"
+
+
+def uc004_harness(marker_names: frozenset[str]) -> str:
+    """Which UC-004 delivery harness a scenario's markers call for.
+
+    TOTAL: every marker set maps to "create", "circuit-breaker" or the "poll"
+    fallback, which is why UC-004 needs no not-wired row — and why a change that
+    made it partial would silently start reporting UC-004 scenarios unwired.
+    """
+    if {"T-UC-004-webhook-creds-short", "T-UC-004-webhook-creds-valid"} & marker_names:
+        return "create"
+    if "webhook-reliability" in marker_names or "webhook" in marker_names:
+        return "circuit-breaker"
+    return "poll"
+
+
+def resolve_env_route(marker_names: Any, env_routes: Any) -> Any:
+    """The ONE routing decision: which harness env a scenario resolves to, or None.
+
+    *env_routes* is an ORDERED sequence of route rows, INJECTED by the caller so
+    this stdlib-only module keeps no import-time coupling to the pytest conftest
+    that owns the registry (the same injection precedent as
+    ``scenario_liveness_join.build_index``). A row is opaque here except for two
+    attributes:
+
+    * ``when``  — optional predicate over the marker-name set. Rows carrying one
+      are tried first, in declaration order.
+    * ``uc``    — optional use-case bucket, matched against :func:`detect_uc`.
+
+    Returning ``None`` means NOT WIRED. That is a real answer, not an absence:
+    each branch UC keeps a catch-all that xfails its unwired scenarios, so a
+    resolver that reported everything wired would convert today's false-DORMANT
+    into a false-LIVE — at the ~800-scenario scale the conftest documents.
+
+    Both sides call THIS function. Previously the conftest matched a UC bucket
+    and then fell through a hardcoded ``elif`` chain of marker predicates, while
+    the audit join knew only about the buckets — so every scenario routed by a
+    predicate was invisible to the join and reported dormant.
+    """
+    markers = frozenset(marker_names)
+    for route in env_routes:
+        predicate = getattr(route, "when", None)
+        if predicate is not None and predicate(markers):
+            return route
+    uc = detect_uc(markers)
+    if uc is None:
+        return None
+    for route in env_routes:
+        if getattr(route, "when", None) is None and getattr(route, "uc", None) == uc:
+            return route
+    return None
+
+
+def parse_ledger_lines(path: Path, *, grammar: Callable[[str], Any]) -> list[Any]:
+    """Parse a line-based known-failures ledger, applying *grammar* to each entry.
+
+    ONE line scan for every ledger in the repo. Blank lines and ``#`` comments
+    are dropped; every surviving line is handed to the caller's *grammar*.
+
+    The two ledgers are genuinely different — tests/bdd/e2e_rest_known_failures.txt
+    holds plain pytest nodeids, tests/storyboard/known_failures.txt holds the
+    bracket grammar ``protocol::track::storyboard::step`` — so this is one
+    function with two callers, NOT one function with two implementations. The
+    thing they must share is the SCAN and the failure policy, not the grammar.
+
+    LOUD, never silent: a line the grammar rejects (by returning ``None`` or
+    raising) is a ``ValueError`` naming the file and line number. The previous
+    bracket parser dropped unparsable lines silently AND its docstring ratified
+    the drop as intended, so a typo'd ledger entry simply stopped grading its
+    scenario with nothing to notice. A ledger that cannot be parsed is a broken
+    ledger.
+    """
+    parsed: list[Any] = []
+    for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        try:
+            entry = grammar(stripped)
+        except Exception as exc:  # noqa: BLE001 - re-raised with position below
+            raise ValueError(f"{path}:{lineno}: unparsable ledger line {stripped!r}: {exc}") from exc
+        if entry is None:
+            raise ValueError(
+                f"{path}:{lineno}: unparsable ledger line {stripped!r} — "
+                "fix the entry or remove it; a ledger line that cannot be parsed grades nothing"
+            )
+        parsed.append(entry)
+    return parsed
+
+
 _TAGLINE_RE = re.compile(r"^\s*@[\w.\-]+(?:\s+@[\w.\-]+)*\s*$")
 _SCENARIO_RE = re.compile(r"^\s*Scenario(?: Outline)?:\s*(?P<title>.+?)\s*$")
 _IDENT_TAG_RE = re.compile(r"@(T-[A-Za-z0-9_\-]+)")

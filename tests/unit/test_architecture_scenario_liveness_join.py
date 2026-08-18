@@ -16,14 +16,21 @@ from pathlib import Path
 from scripts.audit import scenario_liveness_join as slj
 
 
-def _route(xfail_reason: str | None = None) -> object:
-    """A minimal stand-in for tests.bdd.conftest.EnvRoute -- only xfail_reason is read."""
+def _route(xfail_reason: str | None = None, *, uc: str | None = None, when=None) -> object:
+    """A minimal stand-in for tests.bdd.conftest.EnvRoute.
+
+    Since Lane F the join resolves through ``storyboard_spec.resolve_env_route``,
+    which reads ``when`` and ``uc`` off a row (and the caller reads
+    ``xfail_reason``), so a stand-in carries all three.
+    """
 
     class _Route:
         pass
 
     r = _Route()
     r.xfail_reason = xfail_reason
+    r.uc = uc
+    r.when = when
     return r
 
 
@@ -31,28 +38,29 @@ def _route(xfail_reason: str | None = None) -> object:
 
 
 def test_registry_wired_exact_scenario_tag_match() -> None:
-    routes = {"T-UC-003-storyboard-media-buy-not-found": _route()}
-    assert slj.registry_wired("T-UC-003-storyboard-media-buy-not-found", routes) is True
+    tag = "T-UC-003-storyboard-media-buy-not-found"
+    routes = [_route(when=lambda m, t=tag: t in m)]
+    assert slj.registry_wired(frozenset({tag}), routes) is True
 
 
 def test_registry_wired_uc_bucket_match() -> None:
-    routes = {"UC-005": _route()}
-    assert slj.registry_wired("T-UC-005-storyboard-baseline-format-id-object-shape", routes) is True
+    routes = [_route(uc="UC-005")]
+    assert slj.registry_wired(frozenset({"T-UC-005-storyboard-baseline-format-id-object-shape"}), routes) is True
 
 
 def test_registry_wired_placeholder_row_is_not_wired() -> None:
     """An EnvRoute with xfail_reason set is a registered placeholder, not a real wire."""
-    routes = {"UC-999": _route(xfail_reason="not built yet")}
-    assert slj.registry_wired("T-UC-999-storyboard-something", routes) is False
+    routes = [_route(xfail_reason="not built yet", uc="UC-999")]
+    assert slj.registry_wired(frozenset({"T-UC-999-storyboard-something"}), routes) is False
 
 
 def test_registry_wired_no_match_at_all() -> None:
-    routes = {"UC-005": _route()}
-    assert slj.registry_wired("T-UC-006-storyboard-multi-format-sync", routes) is False
+    routes = [_route(uc="UC-005")]
+    assert slj.registry_wired(frozenset({"T-UC-006-storyboard-multi-format-sync"}), routes) is False
 
 
 def test_registry_wired_non_uc_tag_with_no_row_is_not_wired() -> None:
-    assert slj.registry_wired("T-ADMIN-something", {}) is False
+    assert slj.registry_wired(frozenset({"T-ADMIN-something"}), []) is False
 
 
 # --- load_artifact: conservative on absence ---
@@ -120,11 +128,15 @@ def test_graded_true_when_all_three_hold() -> None:
 
 def test_build_index_scenario_absent_from_artifact_is_conservative() -> None:
     """A scenario the artifact never observed is unmeasured, not silently live."""
-    index = slj.build_index({"T-UC-005-x"}, artifact_path=Path("/nonexistent.json"), env_routes={"UC-005": _route()})
+    index = slj.build_index({"T-UC-005-x"}, artifact_path=Path("/nonexistent.json"), env_routes=[_route(uc="UC-005")])
     fact = index["T-UC-005-x"]
     assert fact.measured_this_run is False
     assert fact.steps_bound is False
-    assert fact.registry_wired is True  # registry lookup doesn't need the artifact
+    # NOT wired. Routing keys on the MARKER SET since Lane F, and an unmeasured
+    # scenario has no record to carry one — so there is nothing to route on and
+    # reporting it wired would be a guess. Consistent either way, because
+    # graded_by_live_scenario already ANDs measured_this_run.
+    assert fact.registry_wired is False
     assert fact.graded_by_live_scenario is False
 
 
@@ -134,8 +146,21 @@ def test_build_index_joins_artifact_and_registry(tmp_path: Path) -> None:
         json.dumps(
             {
                 "scenarios": [
-                    {"scenario_id": "T-UC-005-x", "steps_bound": True, "ledgered": False},
-                    {"scenario_id": "T-UC-006-y", "steps_bound": True, "ledgered": True},
+                    {
+                        "scenario_id": "T-UC-005-x",
+                        "steps_bound": True,
+                        "ledgered": False,
+                        # The record carries the marker set: since Lane F the join
+                        # routes on markers (the conftest's predicates key on them),
+                        # and the artifact is its only marker source.
+                        "marker_names": ["T-UC-005-x"],
+                    },
+                    {
+                        "scenario_id": "T-UC-006-y",
+                        "steps_bound": True,
+                        "ledgered": True,
+                        "marker_names": ["T-UC-006-y"],
+                    },
                 ]
             }
         ),
@@ -144,7 +169,7 @@ def test_build_index_joins_artifact_and_registry(tmp_path: Path) -> None:
     index = slj.build_index(
         {"T-UC-005-x", "T-UC-006-y"},
         artifact_path=path,
-        env_routes={"UC-005": _route()},  # UC-006 deliberately absent from the registry
+        env_routes=[_route(uc="UC-005")],  # UC-006 deliberately absent from the registry
     )
     assert index["T-UC-005-x"].graded_by_live_scenario is True
     # UC-006 has steps bound and is even ledgered, but its UC bucket isn't a

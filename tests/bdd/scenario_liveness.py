@@ -62,22 +62,28 @@ import pytest
 from pytest_bdd.exceptions import StepDefinitionNotFoundError
 from pytest_bdd.scenario import get_step_function
 
+from scripts.audit import storyboard_spec
 from tests.helpers.ledger import load_ledger_nodeids
+from tests.helpers.marker_names import derive_marker_names
 
 if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest
     from pytest_bdd.parser import Feature, Scenario
 
-# The same tag ``storyboard_spec.tagged_scenarios`` filters on — kept as a
-# literal here (not imported from scripts/audit) so this pytest plugin has no
-# import-time dependency on the audit CLI toolchain; both spellings are
-# checked against ``docs/development/*`` by hand when either changes.
-_TAG = "storyboard-v3.1"
+# IMPORTED, not re-declared (Lane F). The previous comment here forbade this
+# import "so this pytest plugin has no import-time dependency on the audit CLI
+# toolchain" — but importing a module that DEFINES an entry point does not
+# EXECUTE one: storyboard_spec's module-level imports are stdlib-only and it
+# imports no conftest, so no CLI runtime and no cycle comes with it. The cost of
+# the literal was real: this file held "storyboard-v3.1" while storyboard_spec
+# held "@storyboard-v3.1", so any consumer comparing them had to know which
+# spelling it was holding.
+_TAG = storyboard_spec.STORYBOARD_TAG
 
 _E2E_REST_LEDGER = Path(__file__).parent / "e2e_rest_known_failures.txt"
 _LEDGERED_NODEIDS: frozenset[str] = load_ledger_nodeids(_E2E_REST_LEDGER)
 
-_DEFAULT_ARTIFACT_PATH = Path("test-results") / "bdd_scenario_liveness.json"
+_DEFAULT_ARTIFACT_PATH = Path("test-results") / storyboard_spec.DEFAULT_ARTIFACT_PATH
 
 _SCENARIO_ID_KEY = pytest.StashKey[str]()
 
@@ -112,6 +118,11 @@ class ScenarioLiveness:
     unbound_steps: list[str] = field(default_factory=list)
     harness_wired: bool | None = None
     ledgered: bool = False
+    #: The scenario's marker set, as the ROUTING CONTRACT derives it. Persisted
+    #: because the audit join has no other marker source and now resolves the
+    #: route with the same resolver the conftest uses — routing on the scenario
+    #: id alone was blind to every marker-predicate branch (Lane F).
+    marker_names: list[str] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
 
     def record_unbound(self, step_texts: list[str]) -> None:
@@ -139,6 +150,7 @@ class ScenarioLiveness:
             "unbound_steps": self.unbound_steps,
             "harness_wired": self.harness_wired,
             "ledgered": self.ledgered,
+            "marker_names": self.marker_names,
             "observations": [o.to_dict() for o in self.observations],
         }
 
@@ -202,6 +214,11 @@ def pytest_bdd_before_scenario(request: FixtureRequest, feature: Feature, scenar
         return
 
     record = _RECORDS.setdefault(scenario_id, ScenarioLiveness(scenario_id=scenario_id, feature=feature.rel_filename))
+    # The SHARED derivation, not scenario.tags | feature.tags. Those are a STRICT
+    # SUBSET of what the conftest routes on (they omit auto-applied entity
+    # markers), so recording them would hand the join a narrower input than the
+    # conftest used and reproduce this lane's disease one layer out.
+    record.marker_names = sorted(derive_marker_names(request.node))
     unbound = [step.name for step in scenario.steps if get_step_function(request, step) is None]
     record.record_unbound(unbound)
     request.node.stash[_SCENARIO_ID_KEY] = scenario_id
@@ -255,7 +272,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
 
 
 def artifact_path() -> Path:
-    override = os.environ.get("BDD_LIVENESS_ARTIFACT")
+    override = os.environ.get(storyboard_spec.ARTIFACT_ENV_VAR)
     return Path(override) if override else _DEFAULT_ARTIFACT_PATH
 
 

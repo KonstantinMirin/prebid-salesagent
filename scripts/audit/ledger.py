@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from scripts.audit import storyboard_spec
+
 # Ledger ids are `protocol::track::storyboard::step` (the protocol segment arrived
 # with A2A grading). Storyboard is the THIRD segment; a three-group pattern silently
 # read the track as the storyboard and joined nothing -- caught by callers' zero-join
@@ -44,7 +46,10 @@ class LedgerCheckId:
     """
 
     protocol: str
-    track: str
+    # ``str | None``, not ``str``: one call site constructs this with no track,
+    # and the narrow annotation let that None render as the literal string
+    # "None" in a ledger id (Lane F, F4).
+    track: str | None
     storyboard_id: str
     step_id: str
 
@@ -97,22 +102,17 @@ LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
 def load(path: Path) -> list[LedgerCheckId]:
     """Parse every line of a ledger file into ``LedgerCheckId``.
 
-    Blank lines and ``#``-prefixed comments are skipped; a line that does not
-    match the grammar is silently skipped too (same behavior as the two
-    call sites this replaces — a malformed line is a ledger authoring bug,
-    not this loader's failure to surface).
+    The line scan lives in :func:`storyboard_spec.parse_ledger_lines` — one scan
+    for every ledger in the repo — and this supplies the bracket grammar.
+
+    A line the grammar rejects RAISES. Dropping it instead would let a typo'd
+    entry quietly stop grading its check with nothing to notice, so the drop
+    branch is gone — and so is the paragraph that used to justify it, because
+    leaving the justification in place is how the branch comes back.
     """
     if not path.is_file():
         return []
-    ids: list[LedgerCheckId] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        parsed = LedgerCheckId.parse(stripped)
-        if parsed is not None:
-            ids.append(parsed)
-    return ids
+    return storyboard_spec.parse_ledger_lines(path, grammar=LedgerCheckId.parse)
 
 
 ISSUE_MAP = Path("docs") / "test-obligations" / "storyboard-issue-map.yaml"

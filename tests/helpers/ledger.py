@@ -11,9 +11,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scripts.audit import storyboard_spec
+
 
 def load_ledger_nodeids(path: Path) -> frozenset[str]:
-    """Parse a line-based known-failures ledger file into a frozenset of ids."""
-    return frozenset(
-        line.strip() for line in path.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")
-    )
+    """Parse a line-based known-failures ledger file into a frozenset of ids.
+
+    The line scan lives in :func:`storyboard_spec.parse_ledger_lines` — the ONE
+    scan shared with the bracket-grammar ledger loader. This supplies the
+    identity grammar: a nodeid ledger line IS its identifier, so the only thing
+    that can reject one is emptiness, which the shared scan already drops.
+    """
+    return frozenset(storyboard_spec.parse_ledger_lines(path, grammar=lambda line: line))

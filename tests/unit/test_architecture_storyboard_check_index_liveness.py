@@ -46,8 +46,13 @@ requires_clone = pytest.mark.skipif(
 
 
 class _Route:
-    def __init__(self, xfail_reason: str | None = None) -> None:
+    """A stand-in EnvRoute row. Since Lane F the join resolves through
+    ``storyboard_spec.resolve_env_route``, which reads ``when``/``uc`` off a row."""
+
+    def __init__(self, xfail_reason: str | None = None, *, uc: str | None = None, when=None) -> None:
         self.xfail_reason = xfail_reason
+        self.uc = uc
+        self.when = when
 
 
 @requires_clone
@@ -69,13 +74,26 @@ def test_registry_wired_scenario_grades_its_claimed_checks(monkeypatch, tmp_path
     scenario_id = "T-UC-019-storyboard-post-create-status-poll"
     artifact = tmp_path / "liveness.json"
     artifact.write_text(
-        json.dumps({"scenarios": [{"scenario_id": scenario_id, "steps_bound": True, "ledgered": False}]}),
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": scenario_id,
+                        "steps_bound": True,
+                        "ledgered": False,
+                        # Lane F: routing keys on the MARKER SET, and the artifact
+                        # record is the join's only source for it.
+                        "marker_names": [scenario_id],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(
         scenario_liveness_join, "load_artifact", lambda _path, _fixed=artifact: _real_load_artifact(_fixed)
     )
-    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: {"UC-019": _Route()})
+    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: [_Route(uc="UC-019")])
 
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
     claiming = [r for r in result["records"] if scenario_id in r["scenarios"]]
@@ -92,13 +110,26 @@ def test_steps_bound_without_registry_row_does_not_grade(monkeypatch, tmp_path: 
     scenario_id = "T-UC-006-storyboard-multi-format-sync"
     artifact = tmp_path / "liveness.json"
     artifact.write_text(
-        json.dumps({"scenarios": [{"scenario_id": scenario_id, "steps_bound": True, "ledgered": False}]}),
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": scenario_id,
+                        "steps_bound": True,
+                        "ledgered": False,
+                        # Lane F: routing keys on the MARKER SET, and the artifact
+                        # record is the join's only source for it.
+                        "marker_names": [scenario_id],
+                    }
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(
         scenario_liveness_join, "load_artifact", lambda _path, _fixed=artifact: _real_load_artifact(_fixed)
     )
-    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: {"UC-019": _Route()})  # UC-006 absent
+    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: [_Route(uc="UC-019")])  # UC-006 absent
 
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
     claiming = [r for r in result["records"] if scenario_id in r["scenarios"]]
@@ -120,7 +151,7 @@ def test_ledgered_scenario_marks_graduation_candidate_when_not_measured_failing(
     monkeypatch.setattr(
         scenario_liveness_join, "load_artifact", lambda _path, _fixed=artifact: _real_load_artifact(_fixed)
     )
-    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: {})  # not registry-wired at all
+    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: [])  # not registry-wired at all
 
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
     candidates = [r for r in result["records"] if scenario_id in r["scenarios"] and r["measured"] == "no ledger entry"]
@@ -148,7 +179,7 @@ def test_ungradable_checks_are_never_graduation_candidates(monkeypatch, tmp_path
     monkeypatch.setattr(
         scenario_liveness_join, "load_artifact", lambda _path, _fixed=artifact: _real_load_artifact(_fixed)
     )
-    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: {})
+    monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: [])
 
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
     ungradable = [r for r in result["records"] if scenario_id in r["scenarios"] and r["requires_controller"]]

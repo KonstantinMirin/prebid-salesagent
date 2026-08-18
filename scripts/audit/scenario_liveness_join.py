@@ -40,20 +40,27 @@ never as a false "it's live" positive.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_ARTIFACT_DEFAULT = Path("test-results") / "bdd_scenario_liveness.json"
+from scripts.audit import storyboard_spec
 
-# Mirrors tests/bdd/conftest.py's own _UC_TAG_RE exactly (the UC bucket a
-# T-UC-<n>... tag derives). Kept as a literal so this module has no import-time
-# dependency on conftest — only a deferred one, in load_env_routes(), for the
-# ENV_ROUTES data itself.
-_UC_TAG_RE = re.compile(r"^T-UC-(\d{3})(?:-|$)")
+#: The artifact field carrying the scenario's marker set — the join's only
+#: marker source, and why the plugin persists it.
+_RECORD_MARKER_FIELD = "marker_names"
+
+_ARTIFACT_DEFAULT = Path("test-results") / storyboard_spec.DEFAULT_ARTIFACT_PATH
+
+# The UC bucket derivation is no longer re-implemented here — it lives with the
+# rest of the shared contract. This module and tests/bdd/conftest.py used to hold
+# byte-identical copies, each with a comment saying it mirrored the other, and
+# they DIVERGED in what they did next: the conftest matched a bucket and then
+# fell through a chain of marker predicates this module knew nothing about, so
+# every predicate-routed scenario looked dormant from here.
 
 
 @dataclass(frozen=True)
@@ -67,12 +74,11 @@ class ScenarioLiveness:
     measured_this_run: bool
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "steps_bound": self.steps_bound,
-            "registry_wired": self.registry_wired,
-            "ledgered": self.ledgered,
-            "measured_this_run": self.measured_this_run,
-        }
+        """Serialize for the JSON report.
+
+        Every field, mechanically. The hand-written version omitted ``scenario_id``; asdict includes it, which makes each record self-describing rather than meaningful only under its parent key.
+        """
+        return dataclasses.asdict(self)
 
     @property
     def graded_by_live_scenario(self) -> bool:
@@ -87,8 +93,8 @@ class ScenarioLiveness:
         return self.measured_this_run and self.steps_bound and self.registry_wired
 
 
-def load_env_routes() -> dict[str, Any]:
-    """The declarative env-routing registry — pure data.
+def load_env_routes() -> list[Any]:
+    """The declarative env-routing registry — pure data, in resolution order.
 
     Deferred import: this module has no import-time coupling to the pytest-bdd
     conftest it reads ``ENV_ROUTES`` from, and importing that module standalone
@@ -101,24 +107,26 @@ def load_env_routes() -> dict[str, Any]:
     return ENV_ROUTES
 
 
-def registry_wired(scenario_id: str, env_routes: dict[str, Any]) -> bool:
-    """Data lookup against ``ENV_ROUTES`` — no prose/reason-text parsing.
+def registry_wired(marker_names: Any, env_routes: Any) -> bool:
+    """Is this scenario routed to a real harness env?
 
-    Checks the scenario's own tag first (the SB-4a per-scenario demonstrator
-    row), then the ``UC-<n>`` bucket a ``T-UC-<n>...`` tag derives. A row with
-    ``xfail_reason`` set is a registered placeholder, not a real wire.
+    Delegates to ``storyboard_spec.resolve_env_route`` — the SAME function the
+    BDD conftest routes on. It used to re-implement a narrower lookup here (the
+    scenario's own tag, then its ``UC-<n>`` bucket), which knew nothing about the
+    conftest's marker-predicate branches; every scenario routed by one of those
+    was therefore reported DORMANT even though it ran. That false positive is
+    exactly what this join exists to eliminate, so the lookup is no longer
+    written twice.
+
+    A row with ``xfail_reason`` set is a registered placeholder, not a real wire.
     """
-    route = env_routes.get(scenario_id)
-    if route is None:
-        match = _UC_TAG_RE.match(scenario_id)
-        if match:
-            route = env_routes.get(f"UC-{match.group(1)}")
+    route = storyboard_spec.resolve_env_route(marker_names, env_routes)
     return route is not None and route.xfail_reason is None
 
 
 def default_artifact_path() -> Path:
-    """Mirrors ``tests/bdd/scenario_liveness.py``'s own default/override contract."""
-    override = os.environ.get("BDD_LIVENESS_ARTIFACT")
+    """The artifact path, from the ONE owner of the env var and default name."""
+    override = os.environ.get(storyboard_spec.ARTIFACT_ENV_VAR)
     return Path(override) if override else _ARTIFACT_DEFAULT
 
 
@@ -146,10 +154,17 @@ def build_index(
     index: dict[str, ScenarioLiveness] = {}
     for scenario_id in scenario_ids:
         record = artifact.get(scenario_id)
+        # The MARKER SET comes from the record — the join has no other source for
+        # it, and routing now keys on markers rather than on the scenario id
+        # alone (4a). An UNMEASURED scenario therefore resolves NOT-WIRED: with
+        # no marker set there is nothing to route on, and reporting it wired
+        # would be a guess. That is consistent, because graded_by_live_scenario
+        # already ANDs measured_this_run.
+        marker_names = frozenset(record.get(_RECORD_MARKER_FIELD) or ()) if record is not None else None
         index[scenario_id] = ScenarioLiveness(
             scenario_id=scenario_id,
             steps_bound=bool(record["steps_bound"]) if record is not None else False,
-            registry_wired=registry_wired(scenario_id, routes),
+            registry_wired=registry_wired(marker_names, routes) if marker_names is not None else False,
             ledgered=bool(record["ledgered"]) if record is not None else False,
             measured_this_run=record is not None,
         )
