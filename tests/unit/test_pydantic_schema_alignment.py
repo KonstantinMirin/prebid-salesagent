@@ -834,8 +834,10 @@ class _RegistryRow:
     enforced automatically. ``sample_override`` supplies valid kwargs only where
     a complex required field (e.g. packages, reporting_period, pagination) cannot
     be synthesized generically — it never weakens or skips a required field.
-    ``declared_fields_override`` narrows the F4 declared-field check when the full
-    property set would be noise (e.g. forward-compat optional fields).
+    ``declared_fields_override`` ADDS to the F4 declared-field check — the pinned
+    required set is always included — so a row can also pin specific OPTIONAL fields
+    production emits (e.g. CreateMediaBuySuccess valid_actions/context) without
+    quietly dropping the required ones.
     """
 
     schema_ref: str
@@ -1043,22 +1045,95 @@ def _merge_composed(node: dict[str, Any], schema: dict[str, Any]) -> dict[str, A
     return {**node, "required": sorted(merged_required), "properties": merged_properties}
 
 
-def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
-    """Return the success (sub-)schema: the oneOf arm whose required[] names
-    neither ``errors`` nor ``task_id`` (error / submitted arms), or the schema
-    itself — with ``required`` merged from its top-level ``allOf`` arms and any
-    ``if``/``then``/``else`` standard branch — when it is a flat single-shape
-    response (no oneOf)."""
-    if "oneOf" not in schema:
-        return _merge_composed(schema, schema)
-    for arm in schema["oneOf"]:
-        required = set(arm.get("required", []))
-        if "errors" not in required and "task_id" not in required:
-            return arm
-    raise AssertionError(f"No success arm found in oneOf (all arms look like error/submitted): {schema.get('$id')}")
+def _success_shape(
+    schema: dict[str, Any],
+    *,
+    selector: str | None = None,
+    item_key: str | None = None,
+) -> dict[str, Any]:
+    """The pinned success (sub-)schema a response model maps to.
+
+    ONE resolver, because there were two and they disagreed on the step that
+    matters. Both picked a success arm out of a ``oneOf``; only one then merged the
+    composition at the schema ROOT — the shared Protocol/Version Envelope arms and
+    the standard branch of any top-level ``if``/``then``/``else`` — into it. The
+    other returned the arm raw.
+
+    That difference is not cosmetic: AdCP 3.1.1 composes ``status`` onto responses
+    through a top-level ``allOf``, so for a ``oneOf`` response the un-merged
+    resolver produced an arm with no ``status`` in ``properties`` at all. Every
+    check keyed off "the fields this schema declares" — declared_fields, the
+    sample, and the model_dump-survival check written for exactly the
+    ``confirmed_at`` bug class — then skipped ``status`` silently, on the two models
+    where it was most worth grading.
+
+    Arm selection has two modes, and they are the reason the resolvers were
+    separate:
+    * ``selector`` — pick the arm exposing that property (the registry knows which
+      field identifies its success arm);
+    * no selector — pick the first arm whose ``required`` names neither ``errors``
+      nor ``task_id``, i.e. is neither the error nor the submitted arm.
+    Both then merge the root composition, which is the part that must not differ.
+
+    ``item_key`` descends into an array's item schema (following a ``$ref`` to a
+    standalone schema when the item is not inlined) and merges composition there.
+    """
+    if "oneOf" in schema:
+        if selector is not None:
+            variant = next(v for v in schema["oneOf"] if selector in v.get("properties", {}))
+        else:
+            variant = next(
+                (arm for arm in schema["oneOf"] if not ({"errors", "task_id"} & set(arm.get("required", [])))),
+                None,
+            )
+            if variant is None:
+                raise AssertionError(
+                    f"No success arm found in oneOf (all arms look like error/submitted): {schema.get('$id')}"
+                )
+    else:
+        variant = schema
+
+    if item_key:
+        item_schema = variant["properties"][item_key]["items"]
+        # Some item schemas are inlined (SyncResponseAccount); others are a $ref to a
+        # standalone schema (get-products-response.json's products[] ->
+        # core/product.json). load_canonicalized already rewrote the ref to the
+        # root-relative form pinned_schema.load() expects, so a raw unresolved $ref
+        # dict would silently short-circuit every field/required check below.
+        if "$ref" in item_schema:
+            item_schema = pinned_schema.load(item_schema["$ref"])
+        return _merge_composed(item_schema, item_schema)
+
+    return _merge_composed(variant, schema)
 
 
-def _synthesize_sample(arm: dict[str, Any], schema_ref: str) -> dict[str, Any]:
+def _model_literal_value(model: type | None, fname: str) -> Any:
+    """The single value *model* narrows ``fname`` to, or ``None``.
+
+    A response type that only ever represents one outcome may narrow a spec enum to
+    one member — ``CompletedTaskStatusMixin`` pins ``status`` to ``"completed"``
+    because the model is the synchronous-success arm. The schema still lists the whole
+    enum, so a sample synthesized from the schema alone can pick a DIFFERENT member
+    and then fail to construct the model.
+
+    That failure would be reported as a conformance defect while being an artefact of
+    the instrument — the exact false-failure class this module refuses to tolerate
+    elsewhere. The narrowing itself is not waved through: the caller asserts the
+    narrowed value is a member of the schema's enum, so a model that narrows to
+    something the spec does not allow still fails, and fails AT that field.
+    """
+    from typing import Literal, get_args, get_origin
+
+    if model is None:
+        return None
+    field = model.model_fields.get(fname)
+    if field is None or get_origin(field.annotation) is not Literal:
+        return None
+    args = get_args(field.annotation)
+    return args[0] if len(args) == 1 else None
+
+
+def _synthesize_sample(arm: dict[str, Any], schema_ref: str, model: type | None = None) -> dict[str, Any]:
     """Build valid kwargs covering every required field from the pinned arm.
 
     Array required fields → empty list (valid + minimal). Enums and ``$ref``\\ s to
@@ -1077,6 +1152,15 @@ def _synthesize_sample(arm: dict[str, Any], schema_ref: str) -> dict[str, Any]:
     props = arm.get("properties", {})
     for fname in set(arm.get("required", [])) - _VERSION_FIELDS:
         spec = props.get(fname, {})
+        narrowed = _model_literal_value(model, fname)
+        if narrowed is not None:
+            allowed = spec.get("enum")
+            assert allowed is None or narrowed in allowed, (
+                f"{model.__name__}.{fname} narrows to {narrowed!r}, which the pinned "
+                f"{schema_ref} does not allow (enum: {allowed})"
+            )
+            sample[fname] = narrowed
+            continue
         if spec.get("type") == "array":
             sample[fname] = []
             continue
@@ -1101,17 +1185,24 @@ def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[Response
     registered model is enforced without hand-editing this list (#1399 Plan-B)."""
     alignments: list[ResponseAlignment] = []
     for row in registry:
-        arm = _success_arm(load_json_schema(row.schema_ref))
-        declared = row.declared_fields_override
-        if declared is None:
-            # Default to the REQUIRED fields (not all properties): the bug class is a
-            # spec-REQUIRED field silently dropped (F4/F5/Chris-#2). Demanding every
-            # OPTIONAL forward-compat property be explicitly declared would over-reach
-            # (response models intentionally carry optional fields via extra='allow').
-            # A row may set declared_fields_override to also pin specific optional
-            # fields production emits (e.g. CreateMediaBuySuccess valid_actions/context).
-            declared = frozenset(arm.get("required", [])) - _VERSION_FIELDS
-        sample = row.sample_override if row.sample_override is not None else _synthesize_sample(arm, row.schema_ref)
+        arm = _success_shape(load_json_schema(row.schema_ref))
+        # The REQUIRED fields (not all properties): the bug class is a spec-REQUIRED
+        # field silently dropped (F4/F5/Chris-#2). Demanding every OPTIONAL
+        # forward-compat property be declared would over-reach — response models
+        # intentionally carry optional fields via extra='allow'.
+        declared = frozenset(arm.get("required", [])) - _VERSION_FIELDS
+        if row.declared_fields_override is not None:
+            # ADDITIVE, which is what the field has always claimed to be ("also pin
+            # specific optional fields production emits"). It used to REPLACE, and the
+            # one row that sets it thereby dropped every spec-required field —
+            # media_buy_id, packages, confirmed_at, revision and status — out of the
+            # declared-field check while reading as if it had only added two.
+            declared |= row.declared_fields_override
+        sample = (
+            row.sample_override
+            if row.sample_override is not None
+            else _synthesize_sample(arm, row.schema_ref, row.model)
+        )
         alignments.append(
             ResponseAlignment(
                 schema_ref=row.schema_ref,
@@ -1182,36 +1273,12 @@ RESPONSE_ALIGNMENTS = _build_alignments_from_pinned(_RESPONSE_MODEL_REGISTRY) + 
 
 
 def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any]:
-    """Resolve the pinned (sub-)schema a response model maps to.
-
-    Handles flat single-shape responses (no oneOf → the schema is the success
-    shape) and oneOf responses (pick the arm exposing ``selector``). Merges in
-    both the required fields AND the property definitions composed at the
-    schema root — from its own top-level ``allOf`` arms (the shared
-    Protocol/Version Envelope) and, for requiredness, from the standard branch
-    of any top-level ``if``/``then``/``else`` chain. Those apply regardless of
-    which oneOf variant matched, and 3.1.1 moved some formerly-flat
-    requirements (e.g. ``status``, ``products``/``cache_scope``) into one of
-    those two composition forms for schemas with no oneOf of their own.
-    """
-    schema = load_json_schema(alignment.schema_ref)
-    if "oneOf" in schema:
-        variant = next(v for v in schema["oneOf"] if alignment.selector in v.get("properties", {}))
-    else:
-        variant = schema
-    if alignment.item_key:
-        item_schema = variant["properties"][alignment.item_key]["items"]
-        # Some item schemas are inlined (SyncResponseAccount); others are a
-        # $ref to a standalone schema (get-products-response.json's
-        # products[] -> core/product.json) — load_canonicalized already
-        # rewrote the ref to the root-relative form pinned_schema.load()
-        # expects, so a raw, unresolved $ref dict would otherwise silently
-        # short-circuit every field/required check below to nothing.
-        if "$ref" in item_schema:
-            item_schema = pinned_schema.load(item_schema["$ref"])
-        return _merge_composed(item_schema, item_schema)
-
-    return _merge_composed(variant, schema)
+    """The pinned (sub-)schema for a registry row — :func:`_success_shape` by row."""
+    return _success_shape(
+        load_json_schema(alignment.schema_ref),
+        selector=alignment.selector,
+        item_key=alignment.item_key,
+    )
 
 
 # The no-rule exits of generate_example_value that strict synthesis must refuse
@@ -1477,7 +1544,7 @@ class TestSampleSynthesisFailsLoud:
         spec-valid and this test is the thing that says so.
         """
         for row in _RESPONSE_MODEL_REGISTRY:
-            arm = _success_arm(load_json_schema(row.schema_ref))
+            arm = _success_shape(load_json_schema(row.schema_ref))
             props = arm.get("properties", {})
             for fname in sorted(set(arm.get("required", [])) - _VERSION_FIELDS):
                 if props.get(fname, {}).get("type") != "array":
@@ -1487,11 +1554,49 @@ class TestSampleSynthesisFailsLoud:
                     f"longer a spec-valid derived instance and _synthesize_sample must stop using it"
                 )
                 if row.sample_override is None:
-                    assert _synthesize_sample(arm, row.schema_ref)[fname] == []
+                    assert _synthesize_sample(arm, row.schema_ref, row.model)[fname] == []
 
 
 class TestResponseModelAlignment:
     """Local success models conform to the pinned AdCP response schemas."""
+
+    @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
+    def test_envelope_status_is_graded_for_every_registered_response(self, alignment: ResponseAlignment):
+        """``status`` enters declared_fields for EVERY registry row that the pin requires it on.
+
+        This is GH #1900's fifth acceptance bullet expressed as a MECHANISM rather than
+        as an outcome. Two models satisfied that bullet by accident: ``status`` is
+        composed onto the response through a top-level ``allOf``, and the resolver used
+        to derive declared_fields returned the raw ``oneOf`` arm without merging root
+        composition — so ``status`` never entered the derived set, and every check keyed
+        off it (the sample, and the model_dump-survival check written for exactly the
+        ``confirmed_at`` bug class) skipped the field silently on the two models where
+        it mattered most.
+
+        Asserting it here, once, for every row means a future resolver change that
+        re-hides ``status`` fails on this test by name instead of quietly reducing what
+        the other tests measure. A row whose pinned schema does NOT require status is
+        skipped rather than forced — the assertion is "graded wherever required", not
+        "present everywhere".
+        """
+        if alignment.item_key is not None:
+            # Item-level rows describe an ELEMENT of an array (accounts[], media_buys[]),
+            # where `status` is the domain status of that object — a different namespace
+            # from the protocol envelope's task status. #1900 is about the envelope, so
+            # grading item rows here would assert the wrong thing under the right name.
+            pytest.skip(f"{alignment.model.__name__}: item-level row; envelope status is graded on the envelope row")
+        item = _resolve_response_item_schema(alignment)
+        if "status" not in set(item.get("required", [])):
+            pytest.skip(f"{alignment.model.__name__}: the pinned schema does not require status on this shape")
+        assert "status" in alignment.declared_fields, (
+            f"{alignment.model.__name__}: the pinned schema REQUIRES status on this response, but it is "
+            f"absent from declared_fields ({sorted(alignment.declared_fields)}), so no alignment check "
+            f"grades it. This is what an unmerged oneOf arm produces — see _success_shape."
+        )
+        assert "status" in alignment.model.model_fields, (
+            f"{alignment.model.__name__} does not declare status as a field; the pinned schema requires it "
+            f"and inheriting it via extra='allow' would let it vanish with a parent config change"
+        )
 
     @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
     def test_declared_fields_present_in_schema_and_model(self, alignment: ResponseAlignment):
