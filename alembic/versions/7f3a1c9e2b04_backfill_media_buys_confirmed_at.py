@@ -18,9 +18,19 @@ seller-confirmed row has a NULL `confirmed_at`, and the read path can simply emi
 the column.
 
 The status partition is written out literally rather than imported from
-`models.MEDIA_BUY_UNCONFIRMED_STATUSES`: a migration records what was true when
-it ran, and must not change meaning later because application code moved a status
+`models._SELLER_COMMITTED_STATUSES`: a migration records what was true when it
+ran, and must not change meaning later because application code moved a status
 from one side of the partition to the other.
+
+The COMMITTED side is the one written out, and the predicate matches on it
+POSITIVELY. Selecting by the complement (`NOT IN (<unconfirmed>)`) looks
+equivalent and is not: it makes "committed" the DEFAULT for any value in neither
+list, so a legacy row carrying a status this vocabulary never had — the only kind
+of row a backfill exists to meet — would be stamped with a seller-commitment
+instant nobody ever observed. That is the outcome `models.py` forbids where it
+argues the same partition fail-closed. A status in neither list is left NULL,
+which is also what the status-normalising migration beside this one then
+resolves.
 
 Not backfilled, deliberately: rows in an unconfirmed status (`draft`, `pending`,
 `pending_approval`, `rejected`, `failed`) have no commitment instant to record, so
@@ -38,8 +48,20 @@ down_revision = "2c4e6a7b8d9e"
 branch_labels = None
 depends_on = None
 
-# Frozen at authoring time — see the module docstring.
-_UNCONFIRMED_STATUSES = ("draft", "pending", "pending_approval", "rejected", "failed")
+# Frozen at authoring time — see the module docstring. The COMMITTED side is
+# listed, so a value in neither partition is NOT backfilled.
+_COMMITTED_STATUSES = (
+    "active",
+    "approved",
+    "ready",
+    "scheduled",
+    "pending_activation",
+    "pending_creatives",
+    "pending_start",
+    "paused",
+    "completed",
+    "canceled",
+)
 
 
 def upgrade() -> None:
@@ -50,10 +72,10 @@ def upgrade() -> None:
             UPDATE media_buys
                SET confirmed_at = COALESCE(approved_at, created_at)
              WHERE confirmed_at IS NULL
-               AND lower(status) NOT IN :unconfirmed
+               AND lower(status) IN :committed
                AND COALESCE(approved_at, created_at) IS NOT NULL
             """
-        ).bindparams(sa.bindparam("unconfirmed", value=_UNCONFIRMED_STATUSES, expanding=True))
+        ).bindparams(sa.bindparam("committed", value=_COMMITTED_STATUSES, expanding=True))
     )
 
 
@@ -73,7 +95,7 @@ def downgrade() -> None:
                SET confirmed_at = NULL
              WHERE confirmed_at IS NOT NULL
                AND confirmed_at = COALESCE(approved_at, created_at)
-               AND lower(status) NOT IN :unconfirmed
+               AND lower(status) IN :committed
             """
-        ).bindparams(sa.bindparam("unconfirmed", value=_UNCONFIRMED_STATUSES, expanding=True))
+        ).bindparams(sa.bindparam("committed", value=_COMMITTED_STATUSES, expanding=True))
     )

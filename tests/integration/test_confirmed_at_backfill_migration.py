@@ -48,10 +48,27 @@ BACKFILL_REV = "7f3a1c9e2b04"
 PRE_BACKFILL_REV = "2c4e6a7b8d9e"
 
 # Restated here on purpose rather than imported from the migration or from
-# models.MEDIA_BUY_UNCONFIRMED_STATUSES: a grader that reads its expectation out
-# of the thing it grades cannot fail. This is the partition the migration is
+# models._SELLER_COMMITTED_STATUSES: a grader that reads its expectation out of
+# the thing it grades cannot fail. This is the partition the migration is
 # required to honour.
-UNCONFIRMED_STATUSES = ("draft", "pending", "pending_approval", "rejected", "failed")
+#
+# The COMMITTED side is restated, not its complement. Selecting the defective rows
+# as "NOT IN (<unconfirmed>)" is the same inversion the migration itself carried:
+# it makes committed the DEFAULT for any status in NEITHER list, so a legacy value
+# the vocabulary never had would be counted as a row the backfill OWES a stamp —
+# and the oracle would then demand exactly the wrong outcome.
+COMMITTED_STATUSES = (
+    "active",
+    "approved",
+    "ready",
+    "scheduled",
+    "pending_activation",
+    "pending_creatives",
+    "pending_start",
+    "paused",
+    "completed",
+    "canceled",
+)
 
 TENANT_ID = "t_backfill"
 PRINCIPAL_ID = "p_backfill"
@@ -78,6 +95,11 @@ SEED_ROWS = [
     # Already stamped, and stamped at an instant equal to neither approved_at nor
     # created_at, so "untouched" is distinguishable from "rewritten".
     ("mb_already_stamped", "active", T_APPROVED, T_STAMPED),
+    # THE POLARITY ROW: a legacy status in NEITHER partition, carrying an
+    # approved_at so the naive predicate would have something to copy. Under the
+    # inverted "NOT IN (<unconfirmed>)" predicate this row was backfilled AS
+    # COMMITTED — a seller-commitment instant minted for a state nobody defined.
+    ("mb_legacy_unknown_status", "legacy_state", T_APPROVED, None),
 ]
 
 # The rows the backfill is required to correct, and what it must write.
@@ -90,6 +112,7 @@ EXPECTED_STILL_NULL = [
     "mb_pending_approval",
     "mb_failed_after_approval",
     "mb_pending_upper",
+    "mb_legacy_unknown_status",
 ]
 
 
@@ -153,8 +176,8 @@ def _confirmed_at(engine, media_buy_id: str):
 def _defective_ids(engine) -> set[str]:
     """Rows in the defective state: seller-confirmed AND confirmed_at IS NULL."""
     stmt = sa.text(
-        "SELECT media_buy_id FROM media_buys WHERE confirmed_at IS NULL AND lower(status) NOT IN :unconfirmed"
-    ).bindparams(sa.bindparam("unconfirmed", value=UNCONFIRMED_STATUSES, expanding=True))
+        "SELECT media_buy_id FROM media_buys WHERE confirmed_at IS NULL AND lower(status) IN :committed"
+    ).bindparams(sa.bindparam("committed", value=COMMITTED_STATUSES, expanding=True))
     with engine.connect() as conn:
         return {r[0] for r in conn.execute(stmt).fetchall()}
 
@@ -226,6 +249,34 @@ class TestConfirmedAtBackfillUpgrade:
         engine, db_url = migration_db
         _prepare_and_upgrade(engine, db_url)
         assert _confirmed_at(engine, "mb_already_stamped") == T_STAMPED
+
+    def test_a_status_in_neither_partition_is_not_backfilled_as_committed(self, migration_db):
+        """The polarity oracle: an unknown legacy status gets no commitment instant.
+
+        This is the case that separates the two predicates. For every status the
+        vocabulary DOES define, "IN (committed)" and "NOT IN (unconfirmed)" select
+        identically — which is why the inversion survived review. They diverge only
+        for a value in NEITHER list, and that is exactly the population a backfill
+        exists to meet: rows written before the vocabulary was closed.
+
+        Under the complement predicate such a row was stamped with
+        COALESCE(approved_at, created_at) — a seller-commitment instant for a state
+        nobody defined, published to the buyer as fact. `models.py` argues the same
+        fail-closed rule for the in-memory partition ("reading an unknown state as
+        committed would mint a seller-commitment instant that reaches the buyer's
+        wire"); this asserts the migration obeys it too.
+
+        The row carries an `approved_at` deliberately: without one the naive
+        predicate would find nothing to copy and the test would pass under both
+        polarities.
+        """
+        engine, db_url = migration_db
+        _prepare_and_upgrade(engine, db_url)
+
+        assert _confirmed_at(engine, "mb_legacy_unknown_status") is None, (
+            "a status in neither partition was backfilled as seller-committed; the predicate "
+            "is selecting by the complement of the unconfirmed list instead of the committed list"
+        )
 
     def test_zero_defective_rows_remain(self, migration_db):
         """The bar is zero seller-confirmed rows with a NULL confirmed_at."""

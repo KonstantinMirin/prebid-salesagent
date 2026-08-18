@@ -43,6 +43,7 @@ import pytest
 
 from src.core.database.models import MediaBuy, is_media_buy_seller_confirmed
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.exceptions import AdCPPersistedStateError
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL
 
@@ -388,14 +389,28 @@ class TestConfirmedAtStamp:
         forbids. Refusing the write is what makes that document unrepresentable
         rather than merely unlikely.
 
+        The refusal is TYPED, and the type carries the wire contract: an unmapped
+        persisted value is a defect in the seller's own store, so it surfaces as
+        ``CONFIGURATION_ERROR`` / ``terminal`` (pinned 3.1.1 ``enums/error-code.json``
+        metadata: "surface to a human at the seller ... MUST NOT auto-retry"). The
+        bare ``ValueError`` it replaced reached the buyer as
+        ``VALIDATION_ERROR`` / ``correctable`` — telling the buyer to "fix field
+        values" it neither sent nor owns, and inviting a retry that fails identically.
+        The code and recovery are asserted here, not just the exception type, because
+        the type without them is the half that was already right.
+
         Both halves are asserted because each catches what the other cannot: that the
         write is refused, and that the row is untouched by the attempt.
         """
         repo, media_buy = repo_env
         before = _reread(repo, media_buy.media_buy_id)
 
-        with pytest.raises(ValueError, match="not a persisted media-buy status"):
+        with pytest.raises(AdCPPersistedStateError) as refusal:
             repo.update_status(media_buy.media_buy_id, _UNRECOGNISED_STATUS)
+
+        assert refusal.value.error_code == "CONFIGURATION_ERROR"
+        assert refusal.value.recovery == "terminal"
+        assert _UNRECOGNISED_STATUS in str(refusal.value)
 
         after = _reread(repo, media_buy.media_buy_id)
         assert after.status == before.status, f"the refused write still moved the status to {after.status!r}"
@@ -417,10 +432,15 @@ class TestConfirmedAtStamp:
         an unguarded door is one the wire projection cannot describe, so the buyer would
         receive either an invented serving state or a 500 — the reader's problem either
         way, created by a write nobody checked.
+
+        Every door must raise the SAME typed refusal, not merely "some error": the doors
+        share one coercion (``PersistedMediaBuyStatus.parse``) precisely so a caller
+        cannot get a terminal CONFIGURATION_ERROR from one path and a correctable
+        VALIDATION_ERROR from another for the identical defect.
         """
         repo, media_buy = repo_env
 
-        with pytest.raises(ValueError, match="not a persisted media-buy status"):
+        with pytest.raises(AdCPPersistedStateError, match="not a member of the media_buys.status vocabulary"):
             if door == "update_fields":
                 repo.update_fields(media_buy.media_buy_id, status=_UNRECOGNISED_STATUS)
             elif door == "create_from_request":

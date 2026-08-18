@@ -33,7 +33,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.database.json_type import JSONType
-from src.core.exceptions import AdCPConfigurationError
+from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
 from src.core.json_validators import JSONValidatorMixin
 
 logger = logging.getLogger(__name__)
@@ -945,6 +945,47 @@ class PersistedMediaBuyStatus(StrEnum):
     READY = "ready"
     FAILED = "failed"
 
+    @classmethod
+    def parse(cls, raw: str | None, *, media_buy_id: str | None = None) -> "PersistedMediaBuyStatus":
+        """The member *raw* spells, or ``AdCPPersistedStateError``.
+
+        The ONE coercion between the ``String`` column and the vocabulary. Casing is
+        spelling, not meaning, so it is normalized here rather than tolerated by each
+        reader; anything with no member is a seller-side store defect and is refused
+        at the door it arrives at, never interpreted, defaulted, or passed through.
+
+        Refusing is the whole point. A defaulted unknown state reaches the buyer as a
+        lifecycle claim nobody defined, and the pinned item schema forbids the
+        document it produces (``status: "active"`` with a null ``confirmed_at`` fails
+        the ``allOf``/``if`` guard). Owner ruling A3: unknown values are refused at
+        the write boundary, never defaulted at read.
+        """
+        member = cls.parse_or_none(raw)
+        if member is None:
+            subject = f"media buy {media_buy_id!r} " if media_buy_id else ""
+            raise AdCPPersistedStateError(
+                f"{subject}carries persisted status {raw!r}, which is not a member of "
+                f"the media_buys.status vocabulary; expected one of "
+                f"{sorted(m.value for m in cls)}",
+                field="status",
+            )
+        return member
+
+    @classmethod
+    def parse_or_none(cls, raw: str | None) -> "PersistedMediaBuyStatus | None":
+        """The member *raw* spells, or ``None`` — the non-raising half of :meth:`parse`.
+
+        Exists for the one caller that must NOT raise: the seller-commitment
+        predicate reads an unknown state as "not committed", because raising there
+        would abort a legitimate status write over a value its caller did not choose,
+        while defaulting to committed would mint a commitment instant for a state
+        nobody defined. Both doors that can refuse do; the predicate is not a door.
+        """
+        try:
+            return cls((raw or "").lower())
+        except ValueError:
+            return None
+
     @property
     def seller_confirmed(self) -> bool:
         """Whether reaching this status means the seller committed to running the buy.
@@ -1026,11 +1067,14 @@ def is_media_buy_seller_confirmed(status: str | None) -> bool:
     Case-insensitive, and an empty/missing status reads as not-confirmed — we never
     claim commitment from an unknown state.
 
-    A plain membership test: ``StrEnum`` members hash and compare equal to their
-    values, so a raw column string tests against the member set directly, and a
-    value with no member is simply absent from it.
+    The string-boundary adapter for :attr:`PersistedMediaBuyStatus.seller_confirmed`,
+    which is the single implementation of the predicate. Parsing first (rather than
+    testing a raw string against the member set) is what keeps the two from drifting:
+    there is one place that decides what a column string MEANS, and one place that
+    decides what a member IMPLIES.
     """
-    return (status or "").lower() in _SELLER_COMMITTED_STATUSES
+    member = PersistedMediaBuyStatus.parse_or_none(status)
+    return member is not None and member.seller_confirmed
 
 
 class MediaBuy(Base):

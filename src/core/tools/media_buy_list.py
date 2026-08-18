@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
-from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL, resolve_canonical_status
+from src.core.tools._media_buy_status import resolve_canonical_status
 
 logger = logging.getLogger(__name__)
 
@@ -481,47 +481,6 @@ def _resolve_status_filter(
         ) from e
 
 
-# Persisted MediaBuy.status -> AdCP MediaBuyStatus wire enum, DERIVED from the
-# authoritative ``PERSISTED_STATUS_TO_CANONICAL`` (#1417 round-8 review nit: the
-# former hand-written literal drifted from the canonical map on ``draft``/
-# ``scheduled`` and omitted ``ready``/``pending_activation`` entirely). This is
-# the LIFECYCLE-surface projection consumed by the #1417 dual-emit of
-# ``media_buy_status`` on the update responses, used only by
-# ``normalize_persisted_media_buy_status`` on the no-DB-row fallback path — a
-# pure column coercion with NO flight-window refinement. Two sanctioned
-# adaptations of the canonical values (pinned row-by-row by
-# ``tests/unit/test_media_buy_status_consistency.py``):
-#   - "failed" -> "rejected": the lifecycle enum has no ``failed``; the same
-#     collapse ``_compute_status`` applies below.
-#   - "ready"/"scheduled" -> "pending_start": canonically the date-gated generic
-#     serving state, but this path has no DB row (hence no dates) to refine
-#     against, so pre-flight is the truthful unrefined reading.
-_UNREFINED_PRE_FLIGHT_OVERRIDES = {"ready": "pending_start", "scheduled": "pending_start"}
-_PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
-    persisted: MediaBuyStatus(
-        "rejected" if canonical == "failed" else _UNREFINED_PRE_FLIGHT_OVERRIDES.get(persisted, canonical)
-    )
-    for persisted, canonical in PERSISTED_STATUS_TO_CANONICAL.items()
-}
-
-
-def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
-    """Map a persisted ``MediaBuy.status`` string to its AdCP ``MediaBuyStatus``.
-
-    DB-status → AdCP-status coercion via ``_PERSISTED_STATUS_TO_ADCP`` (derived
-    from ``PERSISTED_STATUS_TO_CANONICAL`` — the single authoritative
-    persisted-status map — with the two sanctioned adaptations documented above),
-    so the create/update dual-emit of ``media_buy_status`` cannot inject a non-enum DB
-    value (e.g. legacy ``pending_approval``) into the typed response field (#1417). This is a
-    pure column coercion with NO flight-window refinement — the update-response status pair
-    reflects the persisted lifecycle decision, not a date-derived state. Returns ``None`` for
-    an empty/unknown status so callers omit the field rather than emit a non-spec value.
-    """
-    if not status:
-        return None
-    return _PERSISTED_STATUS_TO_ADCP.get(status.lower())
-
-
 def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
     """Resolve a media buy's AdCP status for the get_media_buys read path.
 
@@ -533,10 +492,6 @@ def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatu
     "failed" has no AdCP lifecycle equivalent, so it collapses to the closest
     terminal state, "rejected" (enums/media-buy-status.json).
 
-    Note: the update-response dual-emit takes a DIFFERENT path —
-    ``normalize_persisted_media_buy_status`` above — which is a pure column
-    coercion with no date refinement, so the two surfaces read the same column
-    but only the read path refines against the flight window (#1417 / #1545).
     """
     canonical = resolve_canonical_status(buy, today)
     if canonical == "failed":

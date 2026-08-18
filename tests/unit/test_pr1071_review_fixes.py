@@ -63,6 +63,10 @@ class TestDeliveryLoopErrorHandling:
         # This will raise when accessed in the loop (e.g., start_date raises)
         type(bad_buy).start_date = property(lambda self: (_ for _ in ()).throw(ValueError("DB corruption")))
         bad_buy.raw_request = None
+        # A REAL status, so the buy fails on the corruption this test is about.
+        # Left as a bare MagicMock it failed earlier and elsewhere — on the status
+        # coercion — which made the test pass for a reason it does not describe.
+        bad_buy.status = "active"
 
         target_buys = [("mb_good", good_buy), ("mb_bad", bad_buy)]
 

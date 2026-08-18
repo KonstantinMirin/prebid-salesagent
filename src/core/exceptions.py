@@ -645,6 +645,24 @@ class AdCPConfigurationError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
+class AdCPPersistedStateError(AdCPConfigurationError):
+    """A persisted value is outside the vocabulary its column may hold (500).
+
+    Raised at the two doors of ``media_buys.status``: the write door refuses a value
+    that would enter the column, and the read door refuses a value already in it.
+    Both are SELLER-side store defects — the buyer neither supplied the value nor can
+    correct it — so this inherits ``CONFIGURATION_ERROR`` / ``terminal`` from
+    ``AdCPConfigurationError`` rather than restating them. That is also what the
+    pinned 3.1.1 ``enums/error-code.json`` metadata selects: ``VALIDATION_ERROR`` is
+    ``correctable`` and advises "review error details and fix field values", advice
+    the buyer cannot act on for data it does not own, and an invitation to retry a
+    call that will fail identically.
+
+    The message names the buy, the column and the legal member set, because the
+    person who can act on it is an operator reading a log, not the caller.
+    """
+
+
 class AdCPServiceUnavailableError(AdCPError):
     """Service or product temporarily unavailable (503).
 

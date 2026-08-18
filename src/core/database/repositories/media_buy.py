@@ -30,11 +30,6 @@ if TYPE_CHECKING:
     from adcp.types import ContextObject
 
 
-# The values the status column may hold. Frozen once at import from the vocabulary
-# so the check is a set membership, not a per-call enum construction.
-_PERSISTED_STATUS_VALUES: frozenset[str] = frozenset(PersistedMediaBuyStatus)
-
-
 class MediaBuyRepository:
     """Tenant-scoped data access for MediaBuy and MediaPackage.
 
@@ -61,22 +56,21 @@ class MediaBuyRepository:
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
 
     @staticmethod
-    def _validated_status(status: str) -> str:
-        """The canonical spelling of ``status``, or ``ValueError``.
+    def _validated_status(status: str | PersistedMediaBuyStatus) -> PersistedMediaBuyStatus:
+        """The member ``status`` spells, or ``AdCPPersistedStateError``.
 
         Every door that writes the column goes through here. The vocabulary is
         closed, so a value with no member is refused where it would ENTER rather
         than interpreted by each reader: the wire projection maps persisted statuses
         to protocol ones, and a value it has no row for cannot be described at all.
-        Casing is normalized rather than tolerated downstream — it is spelling, not
-        meaning.
+
+        The normalization itself is not implemented here — it is
+        ``PersistedMediaBuyStatus.parse``, the single coercion this seam and the read
+        seam share, so a casing or membership rule cannot hold at one door and not
+        the other. What was a bare ``ValueError`` is now a typed terminal error:
+        the value is the seller's own store, not something the buyer can correct.
         """
-        normalized = (status or "").lower()
-        if normalized not in _PERSISTED_STATUS_VALUES:
-            raise ValueError(
-                f"{status!r} is not a persisted media-buy status; expected one of {sorted(_PERSISTED_STATUS_VALUES)}"
-            )
-        return normalized
+        return PersistedMediaBuyStatus.parse(status)
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -368,7 +362,7 @@ class MediaBuyRepository:
         currency: str,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-        status: str = "draft",
+        status: str | PersistedMediaBuyStatus = PersistedMediaBuyStatus.DRAFT,
         order_name: str | None = None,
         campaign_objective: str | None = None,
         kpi_goal: str | None = None,
@@ -511,7 +505,7 @@ class MediaBuyRepository:
     def update_status(
         self,
         media_buy_id: str,
-        status: str,
+        status: str | PersistedMediaBuyStatus,
         *,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
