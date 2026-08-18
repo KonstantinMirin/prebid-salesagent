@@ -13,13 +13,15 @@ the way the rest of the suite does, is what makes the marker unnecessary.
 
 from __future__ import annotations
 
+import importlib
 import os
+from unittest.mock import patch
 
 import pytest
 
 from tests.harness._base import BareIntegrationEnv
 from tests.harness.client import AdCPTestClient
-from tests.harness.transport import E2EConfig, Transport
+from tests.harness.transport import NO_IDENTITY_OVERRIDE, E2EConfig, Transport
 
 
 def _assert_success_equivalent(via, client_result) -> None:
@@ -43,6 +45,84 @@ def _assert_error_equivalent(via, client_result, code: str) -> None:
     via.assert_wire_error(code)
     client_result.assert_wire_error(code)
     assert via.wire_error_envelope == client_result.wire_error_envelope
+
+
+def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool: str, **kwargs):
+    """``env.call_via(transport, **kwargs)``, pinning that it went through the
+    ONE dispatch core — Lane B's Core Invariant made runtime-observable.
+
+    ``AdCPTestClient`` must be the implementation ``call_via``/``call_mcp``/
+    ``call_a2a`` delegate to, not a peer beside them (beads
+    salesagent-qbac1.2). Structurally that is graded by
+    ``tests/unit/test_architecture_harness_single_dispatch.py``; behaviorally
+    it means a dispatch entering through the legacy ``env.call_via`` door and
+    a dispatch entering through ``AdCPTestClient(env).call`` reach the server
+    through the SAME function — ``tests.harness.client._dispatch_core`` —
+    with the same tool identity, rather than through two independently
+    maintained code paths that merely happen to agree today.
+
+    Spying on the module attribute (rather than on the env) is what makes this
+    deletion-sensitive: every consumer imports ``_dispatch_core`` lazily from
+    ``tests.harness.client`` at call time (``dispatchers.py``'s E2E
+    dispatchers do so today, and the base ``deliver_mcp``/``deliver_a2a`` must
+    do the same), so an env that re-grows its own hand-rolled MCP/A2A path
+    records zero calls here.
+
+    Applies to CONVERTED envs only — an env that keeps a justified
+    ``deliver_*`` override with bespoke routing (e.g. ``MediaBuyDualEnv``,
+    which picks tool and parser from request content) is out of scope for this
+    helper and is graded by the structural guard's shrink-only allowlist
+    instead.
+    """
+    import tests.harness.client as client_module
+
+    real_dispatch_core = client_module._dispatch_core
+    seen: list[tuple[Transport, str]] = []
+
+    def _spy(env_, transport_, tool_, payload_, identity_=NO_IDENTITY_OVERRIDE):
+        seen.append((transport_, tool_))
+        return real_dispatch_core(env_, transport_, tool_, payload_, identity_)
+
+    with patch.object(client_module, "_dispatch_core", _spy):
+        via = env.call_via(transport, **kwargs)
+
+    assert seen == [(transport, tool)], (
+        f"{type(env).__name__}.call_via({transport}) must dispatch through the one "
+        f"tests.harness.client._dispatch_core with tool {tool!r} — recorded {seen!r} instead. "
+        f"Two live dispatch mechanisms in the harness is exactly what Lane B "
+        f"(salesagent-qbac1.2) removes: BaseTestEnv.deliver_mcp/deliver_a2a delegate to the client's "
+        f"core, and call_mcp/call_a2a are `deliver_*(...).payload` on the base only."
+    )
+    return via
+
+
+# ``(module, class, tool, payload, transports)`` for the envs Lane B converts
+# from a hand-written call_mcp/call_a2a pair to base-class delegation. Each
+# one's current override is a bare ``return self._run_mcp_client(<tool>, <Model>,
+# **kwargs)`` / ``_run_a2a_handler(...)`` — no request-content routing, no
+# bespoke parser — and each one's tool resolves a pinned SDK response model via
+# ``spec_response_model``, so the base's default ``response_parser`` covers it.
+#
+# Deliberately NOT here, each for a reason that is about the tool, not the
+# conversion (both verified by running the equivalence half in isolation
+# against a real database while authoring this):
+#
+# * ``CapabilitiesEnv``/``get_adcp_capabilities`` — its response carries a
+#   ``last_updated`` timestamp minted per call, so a byte-exact wire comparison
+#   between two dispatches is non-deterministic by construction. Pinning
+#   equivalence for it needs a clock freeze, not a looser assertion.
+# * ``TaskManagementEnv``/``list_tasks`` — covered separately below for the
+#   dispatch MECHANISM only; see that test for why the wire half is excluded.
+_NEWLY_DELEGATING_ENVS: list[tuple[str, str, str, dict, tuple[Transport, ...]]] = [
+    ("tests.harness.account_list", "AccountListEnv", "list_accounts", {}, (Transport.MCP, Transport.A2A)),
+    ("tests.harness.creative_list", "CreativeListEnv", "list_creatives", {}, (Transport.MCP, Transport.A2A)),
+]
+
+_DELEGATION_CASES = [
+    pytest.param(module, cls, tool, payload, transport, id=f"{cls}-{transport.value}")
+    for module, cls, tool, payload, transports in _NEWLY_DELEGATING_ENVS
+    for transport in transports
+]
 
 
 def _live_e2e_config() -> E2EConfig | None:
@@ -265,6 +345,81 @@ class TestEnvVsClientEquivalence:
             client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.REST, identity=None)
 
         _assert_error_equivalent(via, client_result, "AUTH_REQUIRED")
+
+
+@pytest.mark.integration
+@pytest.mark.requires_db
+class TestNewlyDelegatingEnvEquivalence:
+    """``TestEnvVsClientEquivalence`` extended to the envs Lane B converts
+    (beads salesagent-qbac1.2 change-set §5: "EXTEND its coverage to the
+    newly-delegating envs").
+
+    ``TestEnvVsClientEquivalence`` above proves the two entry points agree for
+    ONE env (``ProductEnv``/``AccountListEnv``) per transport family. That is
+    the precondition for migrating envs onto the client; this class is the
+    grader for the migration itself, and it asserts one thing more than
+    equivalence: that the two entry points are no longer two paths at all.
+
+    Both halves matter and neither is redundant:
+
+    * ``_dispatch_via_env_pinning_one_dispatch_core`` pins the MECHANISM —
+      ``env.call_via`` must reach the server through
+      ``tests.harness.client._dispatch_core``. Today it does not: the
+      in-process ``McpDispatcher``/``A2ADispatcher``
+      (``tests/harness/dispatchers.py``) call ``env.call_mcp``/``env.call_a2a``,
+      each env's own hand-written copy, so this assertion is RED until the
+      base-class delegation lands.
+    * ``_assert_success_equivalent`` pins the RESULT — success, transport tag,
+      and the exact wire-visible body must still match after the conversion,
+      so a conversion that quietly changes what a buyer sees fails here rather
+      than in whatever downstream scenario happens to notice first.
+    """
+
+    @pytest.mark.parametrize("module,cls_name,tool,payload,transport", _DELEGATION_CASES)
+    def test_converted_env_dispatch_is_the_client_dispatch(
+        self, integration_db, module, cls_name, tool, payload, transport
+    ):
+        env_cls = getattr(importlib.import_module(module), cls_name)
+        # Tenant ids are per-case so two parametrized rows never share a row set
+        # (``setup_default_data`` is get-or-create, keyed on tenant_id).
+        tenant_id = f"nd-{tool.replace('_', '-')}-{transport.value}"
+
+        with env_cls(tenant_id=tenant_id, principal_id="p1") as env:
+            env.setup_default_data()
+
+            via = _dispatch_via_env_pinning_one_dispatch_core(env, transport, tool, **payload)
+            client_result = AdCPTestClient(env).call(tool, dict(payload), transport)
+
+        _assert_success_equivalent(via, client_result)
+
+    def test_task_management_env_stops_hand_rolling_mcp_dispatch(self, integration_db):
+        """Change-set B7: the 34th quartet env routes through the client.
+
+        ``TaskManagementEnv`` (``tests/harness/task_management.py``) is new in
+        the PR under remediation and was written on the old pattern — its
+        ``call_mcp`` is a hand-written ``self._run_mcp_client("list_tasks",
+        dict, **kwargs)``. B7 deletes it; ``list_tasks`` is MCP-only (no A2A
+        skill, no REST route — see that module's docstring), so MCP is the
+        whole surface.
+
+        MECHANISM only, no wire-equivalence half, and the reason is a real
+        finding rather than a convenience: ``AdCPTestClient``'s UNWRAP parses
+        the wire into ``spec_response_model("list_tasks")`` — the pinned
+        ``ListTasksResponse`` — and production's ``list_tasks`` wire body has
+        neither the required ``query_summary`` nor ``pagination`` field, so
+        that parse raises ``ValidationError``. The env's own ``call_mcp``
+        never noticed because it passes ``dict`` as the response class and
+        validates nothing. That is a ``list_tasks``-vs-pinned-schema
+        conformance gap, NOT a Lane B dispatch defect, so it is graded
+        elsewhere and not smuggled into this lane's gate — but it does mean
+        B7's "route its scenarios through the client" needs that gap resolved
+        (or an explicit env ``response_parser`` override) to land.
+        """
+        from tests.harness.task_management import TaskManagementEnv
+
+        with TaskManagementEnv(tenant_id="nd-list-tasks-mcp", principal_id="p1") as env:
+            env.setup_default_data()
+            _dispatch_via_env_pinning_one_dispatch_core(env, Transport.MCP, "list_tasks")
 
 
 @pytest.mark.integration

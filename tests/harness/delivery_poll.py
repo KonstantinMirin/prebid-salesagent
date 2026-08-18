@@ -45,6 +45,11 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         call_impl(...)             -- call _get_media_buy_delivery_impl with real DB
     """
 
+    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    MCP_TOOL = "get_media_buy_delivery"
+    A2A_SKILL = "get_media_buy_delivery"
+    RESPONSE_MODEL = GetMediaBuyDeliveryResponse
+
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_delivery.get_adapter",
     }
@@ -56,14 +61,6 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         self._configure_adapter_mock()
-
-    def call_a2a(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
-        """Call get_media_buy_delivery via real AdCPRequestHandler — full A2A pipeline."""
-        return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
-
-    def call_mcp(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
-        """Call get_media_buy_delivery via Client(mcp) — full pipeline dispatch."""
-        return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""

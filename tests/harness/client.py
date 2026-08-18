@@ -58,15 +58,17 @@ import copy
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from src.core.version_compat import spec_response_model
 from tests.harness.address_table import ADDRESS_TABLE, ToolAddress
+from tests.harness.spec_models import spec_response_model
 from tests.harness.transport import (
     NO_IDENTITY_OVERRIDE,
+    DeliverResult,
     Transport,
     TransportResult,
     _envelope_from_adcp_error,
     _envelope_from_mcp_error,
     _wire_envelope_from_exception,
+    strip_a2a_protocol_fields,
 )
 
 if TYPE_CHECKING:
@@ -177,7 +179,7 @@ WRAP: dict[Transport, Callable[[ToolAddress, dict[str, Any]], Any]] = {
 # / middleware plumbing; DELIVER only adds the tool-name-generic call shape.
 
 
-def _deliver_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+def _deliver_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> DeliverResult:
     kwargs = _with_identity(wrapped, identity)
     # response_cls=dict: _run_mcp_client ends with `response_cls(**structured_content)`;
     # `dict(**d)` is `d`, so this yields the raw structured_content dict instead of a
@@ -185,7 +187,7 @@ def _deliver_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any]
     return env._run_mcp_client(address.name, dict, **kwargs)
 
 
-def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> DeliverResult:
     kwargs = _with_identity(wrapped, identity)
     return env._run_a2a_handler(address.name, dict, **kwargs)
 
@@ -295,8 +297,8 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     ``/mcp``), see beads salesagent-wu78 (SB-3b).
 
     Same call shape as ``_run_mcp_client`` (``tests/harness/_base.py:754``) —
-    ``call_tool`` -> ``structured_content`` -> stash on
-    ``env._last_wire_response`` -> unwrap ``ToolError`` via the SAME
+    ``call_tool`` -> ``structured_content`` -> returned on the ``DeliverResult``
+    -> unwrap ``ToolError`` via the SAME
     ``_unwrap_mcp_tool_error`` helper ``_run_mcp_client`` and
     ``McpDispatcher.dispatch`` use — only the transport under the FastMCP
     ``Client`` changes: a real ``StreamableHttpTransport`` against
@@ -326,12 +328,11 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     headers = e2e_identity_headers(resolved_identity)
     url = f"{env.e2e_config.base_url}/mcp/"
 
-    async def _call() -> dict[str, Any]:
+    async def _call() -> DeliverResult:
         mcp_transport = StreamableHttpTransport(url=url, headers=headers)
         async with Client(transport=mcp_transport) as mcp_client:
             result = await mcp_client.call_tool(address.name, wrapped)
-            env._last_wire_response = result.structured_content
-            return result.structured_content
+            return DeliverResult(payload=result.structured_content, wire_response=result.structured_content)
 
     try:
         return asyncio.run(_call())
@@ -436,8 +437,19 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as http_client:
         response = http_client.post("/a2a", json=rpc_body, headers=headers)
-    response.raise_for_status()
-    body = response.json()
+
+    # PARSE BEFORE raise_for_status (Lane B, change-set B4), matching the REST
+    # sibling's >=400 handling. raise_for_status() first threw away the response
+    # BODY on any 4xx/5xx — and that body is where the AdCP two-layer error
+    # envelope lives, so every error-path Then that asserts on
+    # wire_error_envelope saw None and could only fall back to the lossy
+    # reconstructed exception. A transport-level failure with no JSON body still
+    # raises, but only after the body has had its chance to speak.
+    try:
+        body = response.json()
+    except ValueError:
+        response.raise_for_status()
+        raise
 
     if "error" in body:
         rpc_error = body["error"]
@@ -465,19 +477,16 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 
     if state == "TASK_STATE_SUBMITTED":
         submitted_wire = {"status": "submitted", "task_id": task.get("id")}
-        env._last_wire_response = dict(submitted_wire)
-        return submitted_wire
+        return DeliverResult(payload=submitted_wire, wire_response=dict(submitted_wire))
 
     artifacts = task.get("artifacts") or []
     if not artifacts:
         raise ValueError(f"Task has no artifacts. Status: {task.get('status')}")
     artifact_data = _artifact_data_from_json(artifacts[0])
     # Real A2A wire, unstripped — captured BEFORE stripping (mirrors
-    # _run_a2a_handler's own capture order, tests/harness/_base.py:743-746).
-    env._last_wire_response = dict(artifact_data)
-    artifact_data.pop("message", None)
-    artifact_data.pop("success", None)
-    return artifact_data
+    # _run_a2a_handler's own capture order).
+    wire_response = dict(artifact_data)
+    return DeliverResult(payload=strip_a2a_protocol_fields(artifact_data), wire_response=wire_response)
 
 
 DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = {
@@ -521,22 +530,24 @@ def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
     return model(**raw)
 
 
-def _unwrap_mcp_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport, tool_name: str) -> TransportResult:
-    # tag: transport.value, never a literal — Transport.MCP -> "mcp",
-    # Transport.E2E_MCP -> "e2e_mcp" (this function serves both, see
-    # UNWRAP_SUCCESS below), so an E2E dispatch is never mislabeled in-process.
-    return TransportResult(
-        payload=_parse_pinned_response(tool_name, raw),
-        envelope={"transport": transport.value},
-        wire_response=env._last_wire_response,
-    )
+def _unwrap_tool_success(
+    env: BaseTestEnv, delivered: DeliverResult, transport: Transport, tool_name: str
+) -> TransportResult:
+    """Success-path unwrap for every tool-style transport (MCP and A2A, in-process
+    and E2E).
 
+    One function, not two: the MCP and A2A versions were byte-identical (Lane B,
+    change-set B3). The wire comes off the DELIVERED VALUE rather than
+    ``env._last_wire_response`` — one delivery, one channel (B2).
 
-def _unwrap_a2a_success(env: BaseTestEnv, raw: dict[str, Any], transport: Transport, tool_name: str) -> TransportResult:
+    tag: transport.value, never a literal — Transport.MCP -> "mcp",
+    Transport.E2E_MCP -> "e2e_mcp" — so an E2E dispatch is never mislabeled
+    in-process.
+    """
     return TransportResult(
-        payload=_parse_pinned_response(tool_name, raw),
+        payload=_parse_pinned_response(tool_name, delivered.payload),
         envelope={"transport": transport.value},
-        wire_response=env._last_wire_response,
+        wire_response=delivered.wire_response,
     )
 
 
@@ -751,10 +762,10 @@ def _rest_error_to_result(exc: Exception) -> TransportResult:
 
 
 UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport, str], TransportResult]] = {
-    Transport.MCP: _unwrap_mcp_success,
-    Transport.E2E_MCP: _unwrap_mcp_success,
-    Transport.A2A: _unwrap_a2a_success,
-    Transport.E2E_A2A: _unwrap_a2a_success,
+    Transport.MCP: _unwrap_tool_success,
+    Transport.E2E_MCP: _unwrap_tool_success,
+    Transport.A2A: _unwrap_tool_success,
+    Transport.E2E_A2A: _unwrap_tool_success,
     Transport.REST: _unwrap_rest,
     Transport.E2E_REST: _unwrap_rest,
 }

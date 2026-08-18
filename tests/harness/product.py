@@ -64,6 +64,11 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         call_impl(brief, **kw)           -- call _get_products_impl
     """
 
+    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    MCP_TOOL = "get_products"
+    A2A_SKILL = "get_products"
+    RESPONSE_MODEL = GetProductsResponse
+
     EXTERNAL_PATCHES = {
         "policy_service": "src.core.tools.products.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
@@ -97,14 +102,6 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         except RuntimeError:
             # No running loop — safe to block with asyncio.run
             return asyncio.run(coro)
-
-    def call_a2a(self, **kwargs: Any) -> GetProductsResponse:
-        """Call get_products via real AdCPRequestHandler — full A2A pipeline."""
-        return self._run_a2a_handler("get_products", GetProductsResponse, **kwargs)
-
-    def call_mcp(self, **kwargs: Any) -> GetProductsResponse:
-        """Call get_products via Client(mcp) — full pipeline dispatch."""
-        return self._run_mcp_client("get_products", GetProductsResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetProductsBody shape for REST POST.

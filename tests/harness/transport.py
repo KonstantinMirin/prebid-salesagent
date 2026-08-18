@@ -197,6 +197,50 @@ class E2EConfig:
     postgres_url: str
 
 
+# Fields `_serialize_for_a2a` adds to an A2A artifact DataPart. They are
+# populated by the PROTOCOL layer (the pin's Protocol Envelope arm) and are not
+# declared on any Pydantic response model, so they must come off before a body
+# is validated — under extra="forbid" they are a hard ValidationError. The
+# captured `wire_response` keeps them: siblings assert on the full envelope.
+A2A_PROTOCOL_ENVELOPE_FIELDS = ("message", "success")
+
+
+def strip_a2a_protocol_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """A copy of *data* without the A2A protocol-envelope fields.
+
+    One definition, three call sites (``_run_a2a_handler``, the client's
+    ``_deliver_a2a``, and ``BaseTestEnv._deliver_via_client``). Each used to
+    spell the same two ``pop`` calls itself, so adding a third protocol field
+    would have needed finding all of them.
+    """
+    return {k: v for k, v in data.items() if k not in A2A_PROTOCOL_ENVELOPE_FIELDS}
+
+
+@dataclass(frozen=True)
+class DeliverResult:
+    """What one transport delivery produced: the parsed payload AND its wire bytes.
+
+    The harness used to carry these on two different channels — the payload came
+    back as the return value of ``env.call_mcp``/``call_a2a``, while the wire was
+    stashed on ``env._last_wire_response`` and read back ACROSS the object
+    boundary by the dispatchers. Two channels for one delivery is what let a
+    second writer appear (six sites on BaseTestEnv, three more in client.py) and
+    what let the wire silently go stale, since nothing tied a stash to the call
+    that produced it.
+
+    One return value closes that structurally: there is no attribute for a second
+    writer to write. ``wire_response`` is None where no wire exists (IMPL) or
+    where the dispatch path does not observe one (the legacy
+    ``_run_mcp_wrapper``).
+
+    Lane B of the PR #1858 round-2 remediation (change-set B2, binding input R3);
+    pinned by ``test_architecture_harness_single_dispatch``.
+    """
+
+    payload: Any
+    wire_response: dict[str, Any] | None = None
+
+
 @dataclass(frozen=True)
 class TransportResult:
     """Normalized result from any transport dispatch.

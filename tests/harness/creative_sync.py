@@ -53,6 +53,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness.transport import DeliverResult
 
 
 class CreativeSyncEnv(IntegrationEnv):
@@ -189,7 +190,7 @@ class CreativeSyncEnv(IntegrationEnv):
 
         return _sync_creatives_impl(**kwargs)
 
-    def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
+    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
         """Call sync_creatives_raw (A2A wrapper) with real DB.
 
         Note: uses _raw() path instead of _run_a2a_handler because the real
@@ -202,9 +203,12 @@ class CreativeSyncEnv(IntegrationEnv):
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
-        return sync_creatives_raw(**kwargs)
+        # wire_response=None: the raw wrapper is called directly, so no A2A
+        # artifact is produced to observe. LANE C replaces this bypass; B only
+        # conforms the return type (binding input R1).
+        return DeliverResult(payload=sync_creatives_raw(**kwargs), wire_response=None)
 
-    def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
+    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Call sync_creatives via Client(mcp) — full pipeline dispatch.
 
         No enum coercion needed — FastMCP's TypeAdapter handles it automatically.

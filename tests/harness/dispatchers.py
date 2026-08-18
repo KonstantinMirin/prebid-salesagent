@@ -76,19 +76,20 @@ class A2ADispatcher:
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
-            payload = env.call_a2a(**kwargs)
+            delivered = env.deliver_a2a(**kwargs)
         except Exception as exc:
             return TransportResult(
                 error=exc,
                 wire_error_envelope=_wire_envelope_from_exception(exc),
             )
-        # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
-        # (declared on BaseTestEnv, reset per call_via — read directly so a
-        # missed capture surfaces as None against a known attribute, not getattr).
+        # Real A2A wire: the artifact DataPart dict, carried back on the SAME
+        # return value as the payload. It used to be read off env._last_wire_response
+        # — one object reaching into another's private attribute, which is what
+        # allowed a second writer and a stale wire (Lane B, change-set B2).
         return TransportResult(
-            payload=payload,
+            payload=delivered.payload,
             envelope={"transport": "a2a"},
-            wire_response=env._last_wire_response,
+            wire_response=delivered.wire_response,
         )
 
 
@@ -126,7 +127,7 @@ class McpDispatcher:
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
-            payload = env.call_mcp(**kwargs)
+            delivered = env.deliver_mcp(**kwargs)
         except Exception as exc:
             # REAL wire only: the raw MCP ToolError JSON when present, else
             # the envelope the harness reconstruction stashed on the AdCPError
@@ -155,12 +156,12 @@ class McpDispatcher:
                 # ImplDispatcher caveat; never a substitute for the wire field.
                 synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
-        # Real MCP wire: the structured_content dict stashed by _run_mcp_client
-        # (declared on BaseTestEnv, reset per call_via — read directly).
+        # Real MCP wire: the structured_content dict, carried back on the SAME
+        # return value as the payload — see the A2A sibling above.
         return TransportResult(
-            payload=payload,
+            payload=delivered.payload,
             envelope={"transport": "mcp"},
-            wire_response=env._last_wire_response,
+            wire_response=delivered.wire_response,
         )
 
 

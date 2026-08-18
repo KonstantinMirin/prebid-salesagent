@@ -3099,7 +3099,7 @@ class EnvRoute:
 
 
 def _seed_uc003_storyboard_generic_client(ctx: dict, env: object) -> None:
-    """Seed ctx for the UC-003 storyboard-media-buy-not-found scenario.
+    """Seed ctx for the UC-003 storyboard scenarios that dispatch via AdCPTestClient.
 
     SB-4a demonstrator (salesagent-35to): dispatches through the transport-
     generic ``AdCPTestClient`` (``tests/harness/client.py``) instead of
@@ -3116,11 +3116,10 @@ def _seed_uc003_storyboard_generic_client(ctx: dict, env: object) -> None:
     ``_setup_existing_media_buy``'s package_config.product_id.
     """
     from tests.factories import ProductFactory
-    from tests.harness.client import AdCPTestClient
 
     tenant, principal = env.setup_default_data()
     product = ProductFactory(tenant=tenant)
-    ctx["client"] = AdCPTestClient(env)
+    # ctx["client"] is built once by _run_env_route for every row (B8).
     ctx["tenant"] = tenant
     ctx["principal"] = principal
     _setup_existing_media_buy(ctx, env, tenant, principal, product)
@@ -3194,6 +3193,15 @@ ENV_ROUTES: dict[str, EnvRoute] = {
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
+    # Same env + same seed as the row above: the re-cancel scenario also needs
+    # the Background's "mb_existing" buy plus a client that sends the buyer's
+    # literal payload (Lane A, salesagent-qbac1.1 — `canceled` must reach the
+    # seller rather than being dropped by a harness flattener).
+    "T-UC-003-storyboard-not-cancellable-on-recancel": EnvRoute(
+        tag="T-UC-003-storyboard-not-cancellable-on-recancel",
+        env_builder=_build_uc003_storyboard_generic_client_env,
+        seed=_seed_uc003_storyboard_generic_client,
+    ),
     # The five rows below are keyed by the coarse `uc` bucket (from
     # _detect_uc), not a per-scenario tag: every scenario in these UCs uses
     # the exact same env + seed, with no marker_names-based sub-branching, so
@@ -3222,10 +3230,19 @@ def _run_env_route(
     control to the scenario. A row with ``xfail_reason`` set never builds an
     env at all.
     """
+    from tests.harness.client import AdCPTestClient
+
     if route.xfail_reason is not None:
         pytest.xfail(route.xfail_reason)
     with _db_scope_for(request, e2e_config), route.env_builder(e2e_config) as env:
         ctx["env"] = env
+        # Build the client ONCE, here, for every row — it used to be constructed
+        # inside a single hand-wired seed callback, so only that one row could
+        # dispatch via the client and any new row wanting it had to remember to
+        # repeat the line (Lane B, change-set B8). Construction is cheap and
+        # side-effect-free; a row that never dispatches via the client simply
+        # does not read the key.
+        ctx["client"] = AdCPTestClient(env)
         if route.seed is not None:
             route.seed(ctx, env)
         yield
@@ -3492,6 +3509,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # actually replaces is the create-vs-update dispatch routing.
         _UC003_STORYBOARD_GENERIC_CLIENT = {
             "T-UC-003-storyboard-media-buy-not-found",
+            # Lane A (salesagent-qbac1.1) grades the request-normalization seam
+            # on the wire: `canceled: true` must be honored or refused, never
+            # accepted-and-dropped. The re-cancel scenario needs a dispatcher
+            # that sends the buyer's literal payload, which is why it routes
+            # here rather than through MediaBuyDualEnv — that env's
+            # _flatten_update_request drops `canceled`/`cancellation_reason`
+            # (tests/harness/media_buy_update.py _WRAPPER_UNSUPPORTED_FIELDS)
+            # before the wire, so the field would never reach production and
+            # the scenario would grade the harness instead of the seller.
+            "T-UC-003-storyboard-not-cancellable-on-recancel",
         }
         if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
             # Extension/error scenarios: budget, currency, auth, creative,
@@ -3557,7 +3584,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # defect: over e2e_rest, a direct integration_db fixture call
             # here repointed production's cached engine at an empty per-test
             # DB while this env's factory rows landed in the live server DB).
-            yield from _run_env_route(request, ctx, ENV_ROUTES["T-UC-003-storyboard-media-buy-not-found"], e2e_config)
+            # The row is selected BY the scenario's own tag rather than a
+            # hardcoded key, so adding a scenario to the set above is a
+            # one-line change here instead of a second branch.
+            (scenario_tag,) = sorted(marker_names & _UC003_STORYBOARD_GENERIC_CLIENT)[:1]
+            yield from _run_env_route(request, ctx, ENV_ROUTES[scenario_tag], e2e_config)
         else:
             pytest.xfail(
                 "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
@@ -3565,7 +3596,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf", "uc006-storyboard-routing"}:
+        if marker_names & {
+            "account",
+            "creative-invariant",
+            "BR-RULE-034",
+            "webhook-ssrf",
+            "uc006-storyboard-routing",
+            "uc006-idempotency",
+        }:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
@@ -3585,6 +3623,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # both misroute other UCs' storyboard scenarios into CreativeSyncEnv and
             # leave those two never reaching the gate. Retagging a scenario for grading
             # provenance must never change which env it resolves to.
+            # @uc006-idempotency scenarios grade the pinned schema's REQUIRED
+            # idempotency_key on sync_creatives (replay does not re-execute; key reuse
+            # with a divergent payload conflicts). CreativeSyncEnv is the right env:
+            # the key is delivered by the acceptance seam on every wire transport, so
+            # the scenarios grade HONORING rather than acceptance.
             from tests.harness.creative_sync import CreativeSyncEnv
 
             with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:

@@ -14,6 +14,7 @@ from typing import Any
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness.transport import DeliverResult
 
 
 class MediaBuyListEnv(IntegrationEnv):
@@ -21,6 +22,10 @@ class MediaBuyListEnv(IntegrationEnv):
 
     No patches — list is read-only, no external service calls.
     """
+
+    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    A2A_SKILL = "get_media_buys"
+    RESPONSE_MODEL = GetMediaBuysResponse
 
     EXTERNAL_PATCHES: dict[str, str] = {}
     REST_ENDPOINT = "/api/v1/media-buys/query"
@@ -42,22 +47,19 @@ class MediaBuyListEnv(IntegrationEnv):
 
         return _get_media_buys_impl(req=req, identity=identity, include_snapshot=include_snapshot)
 
-    def call_a2a(self, **kwargs: Any) -> Any:
-        """Dispatch get_media_buys through the REAL A2A pipeline (on_message_send).
+    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
+        """Call get_media_buys through the legacy MCP wrapper.
 
-        The production A2A path is ``_handle_get_media_buys_skill`` —
-        ``get_media_buys_raw`` has ZERO production callers, so dispatching to it
-        here gave false confidence (#1417): a boundary fix on the raw
-        wrapper made 'A2A' tests green while the real skill handler still
-        leaked bare ValidationErrors.
+        JUSTIFIED OVERRIDE: uses ``_run_mcp_wrapper`` (mock Context -> async
+        wrapper), a different mechanism from ``_run_mcp_client``, which observes
+        no structured_content — hence wire_response=None.
         """
-        return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
-
-    def call_mcp(self, **kwargs: Any) -> Any:
-        """Call get_media_buys MCP wrapper."""
         from src.core.tools.media_buy_list import get_media_buys
 
-        return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
+        return DeliverResult(
+            payload=self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs),
+            wire_response=None,
+        )
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""

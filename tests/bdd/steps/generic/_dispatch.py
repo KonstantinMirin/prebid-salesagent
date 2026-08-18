@@ -8,10 +8,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from tests.harness.transport import NO_IDENTITY_OVERRIDE
+
 if TYPE_CHECKING:
     from tests.harness.transport import TransportResult
 
-_SENTINEL = object()
+# NOTE: NO_IDENTITY_OVERRIDE is IMPORTED, never re-declared. A local
+# `_SENTINEL = object()` renamed into this name would be a SECOND distinct
+# object wearing the canonical name, and `identity is not NO_IDENTITY_OVERRIDE`
+# would then compare against the local one — so a caller passing the harness's
+# real sentinel (meaning "no override") would be misread as HAVING overridden
+# identity. One object, one name (Lane B, change-set B6).
 
 
 def _populate_ctx_from_result(ctx: dict, result: TransportResult) -> None:
@@ -49,7 +56,7 @@ def _populate_ctx_from_result(ctx: dict, result: TransportResult) -> None:
         ctx["wire_response"] = result.wire_response
 
 
-def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> None:
+def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwargs: Any) -> None:
     """Dispatch a request through ctx['transport'] via call_via, or direct call_impl.
 
     Stores result in ctx["response"] on success, ctx["error"] on failure.
@@ -62,7 +69,7 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
     (which uses kwargs.setdefault, so an explicit identity won't be clobbered).
     Use ``identity=None`` for no-auth scenarios.
     """
-    if identity is not _SENTINEL:
+    if identity is not NO_IDENTITY_OVERRIDE:
         kwargs["identity"] = identity
 
     transport = ctx.get("transport")
@@ -99,7 +106,7 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         ctx["error"] = exc
 
 
-def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identity: Any = _SENTINEL) -> None:
+def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identity: Any = NO_IDENTITY_OVERRIDE) -> None:
     """Dispatch through ``AdCPTestClient.call`` instead of ``env.call_via``.
 
     Additive alternative to ``dispatch_request`` for scenarios wired onto the
@@ -120,7 +127,7 @@ def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identi
     (client.py's own anti-vacuity comment on ``call()``).
     """
     client = ctx["client"]
-    if identity is not _SENTINEL:
+    if identity is not NO_IDENTITY_OVERRIDE:
         result = client.call(tool, payload, ctx["transport"], identity=identity)
     else:
         result = client.call(tool, payload, ctx["transport"])

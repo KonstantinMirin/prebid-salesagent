@@ -22,6 +22,14 @@ class TaskManagementEnv(IntegrationEnv):
     No patches -- list_tasks reads real WorkflowStep rows via WorkflowUoW.
     """
 
+    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1), and
+    # this env now JOINS the client core — production's list_tasks emits the
+    # pinned-required query_summary + pagination, so the core's pinned parse
+    # succeeds. list_tasks is MCP-only (no A2A skill, no REST route).
+    MCP_TOOL = "list_tasks"
+    RESPONSE_MODEL = dict
+
     EXTERNAL_PATCHES: dict[str, str] = {}
 
     def _configure_mocks(self) -> None:
@@ -36,12 +44,3 @@ class TaskManagementEnv(IntegrationEnv):
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
         return asyncio.run(list_tasks(identity=identity, **kwargs))
-
-    def call_mcp(self, **kwargs: Any) -> Any:
-        """Call list_tasks via Client(mcp) -- full pipeline dispatch, including
-        the ``accepts_spec_request_fields`` widening at the registration
-        chokepoint (main.py:346-351). This is the only dispatch path that
-        reproduces the field-silently-stripped defect this env was added to
-        regression-test.
-        """
-        return self._run_mcp_client("list_tasks", dict, **kwargs)

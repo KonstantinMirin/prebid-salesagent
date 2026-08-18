@@ -676,7 +676,6 @@ class TestClientE2eA2aDelivery:
         # attribute access, not subscripting (salesagent-vuz9t.8.3).
         assert result.payload.products == []
         assert result.wire_response == artifact_data  # unstripped — captured before pop
-        assert env._last_wire_response == artifact_data
 
         # POST went to the real A2A JSON-RPC endpoint with a well-formed envelope.
         call_args = mock_post.call_args
@@ -821,6 +820,89 @@ class TestClientE2eA2aDelivery:
         assert result.error is None, result.error
         assert result.payload is None
         assert result.wire_response == {"status": "submitted", "task_id": "task_submitted_1"}
+
+    def test_http_error_status_still_surfaces_the_wire_error_envelope(self):
+        """An A2A response with an HTTP error status must NOT discard its body.
+
+        Lane B change-set B4 (beads salesagent-qbac1.2): ``_deliver_e2e_a2a``
+        calls ``response.raise_for_status()`` BEFORE ``response.json()``, so on
+        any >=400 the JSON-RPC error body — the only place the AdCP two-layer
+        envelope exists on this leg — is thrown away and the caller gets a bare
+        ``httpx.HTTPStatusError``. ``_a2a_error_to_result``
+        (``tests/harness/client.py``) then has nothing to read, so
+        ``wire_error_envelope`` is ``None`` and every error-path Then step that
+        asserts on the wire (``tests/CLAUDE.md`` § Error Verification Policy —
+        the wire envelope is the primary authority, reconstructed exceptions
+        are lossy) fails for a reason unrelated to the behavior under test.
+
+        The REST sibling already gets this right: ``unwrap_rest_response``
+        parses the body on ``status_code >= 400`` and hands it out as
+        ``wire_error_envelope``. B4 makes A2A match — parse the body first,
+        then let the existing ``"error" in body`` branch reconstruct through
+        ``_envelope_to_adcp_error``, which stashes the real envelope on the
+        exception for ``_wire_envelope_from_exception`` to pick up.
+
+        Lives here beside the other ``_deliver_e2e_a2a`` graders (same mocked
+        -httpx convention, same ``TestClientE2eA2aDelivery`` fixtures) because
+        the HTTP-error branch of this DELIVER function is not reachable from a
+        BDD scenario without a live Docker stack; the live-stack sibling
+        obligation is graded by
+        ``tests/integration/test_harness_client_transport_parity.py``
+        ``TestEnvVsClientEquivalenceE2E::test_e2e_a2a_success_and_error_equivalence``.
+        """
+        from unittest.mock import MagicMock, patch
+
+        import httpx
+
+        from tests.harness.transport import E2EConfig
+        from tests.helpers import assert_envelope_shape
+
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        envelope = {
+            "adcp_error": {
+                "code": "AUTH_REQUIRED",
+                "message": "authentication required",
+                "recovery": "correctable",
+            },
+            "errors": [
+                {
+                    "code": "AUTH_REQUIRED",
+                    "message": "authentication required",
+                    "recovery": "correctable",
+                }
+            ],
+        }
+        rpc_error_body = {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "error": {"code": -32600, "message": "authentication required", "data": envelope},
+        }
+
+        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
+            client = AdCPTestClient(env)
+            with patch("httpx.Client") as mock_client_cls:
+                mock_response = MagicMock()
+                mock_response.status_code = 401
+                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_error_body))
+                mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+                    "Client error '401 Unauthorized'",
+                    request=httpx.Request("POST", "http://e2e-stack:8080/a2a"),
+                    response=httpx.Response(401),
+                )
+                mock_post = mock_client_cls.return_value.__enter__.return_value.post
+                mock_post.return_value = mock_response
+
+                result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, identity=None)
+
+        assert result.is_error, f"a 401 must be an error result, got payload {result.payload!r}"
+        assert_envelope_shape(
+            result.wire_error_envelope,
+            "AUTH_REQUIRED",
+            recovery="correctable",
+            message_substr="authentication required",
+        )
 
     def test_missing_e2e_config_raises(self):
         class _UnitEnv(BaseTestEnv):
