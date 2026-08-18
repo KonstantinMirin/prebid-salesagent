@@ -1396,4 +1396,3 @@ Feature: BR-UC-019 Query Media Buys
       | rejected         |
       | draft            |
       | pending_approval |
-
