@@ -123,12 +123,31 @@ async def list_tasks(
 
             formatted_tasks.append(formatted_task)
 
+        has_more = offset + limit < total if total is not None else False
         return {
             "tasks": formatted_tasks,
             "total": total,
             "offset": offset,
             "limit": limit,
-            "has_more": offset + limit < total if total is not None else False,
+            "has_more": has_more,
+            # `query_summary` and `pagination` are REQUIRED by the pinned response
+            # schema: AdCP 3.1.1 schemas/bundled/protocol/list-tasks-response.json
+            # lists required: ["query_summary", "tasks", "pagination"]. Both were
+            # omitted, so every list_tasks response was schema-invalid and could
+            # not be parsed by a buyer validating against the pin.
+            #
+            # GRADED BY compliance/3.1.1/.../pagination-integrity.yaml:182-188 —
+            # `query_summary.total_matching` is asserted unconditionally, and
+            # `query_summary.returned` MUST equal the size of THIS page's slice
+            # (hence len(formatted_tasks), never the unpaged total).
+            "query_summary": {
+                "total_matching": total,
+                "returned": len(formatted_tasks),
+            },
+            "pagination": {
+                "has_more": has_more,
+                "total_count": total,
+            },
             # Echoed verbatim per the AdCP 3.1.1 normative echo contract -- never
             # fabricated when the caller omitted it (rule 4, "No synthesis").
             "context": context.model_dump(mode="json") if context is not None else None,

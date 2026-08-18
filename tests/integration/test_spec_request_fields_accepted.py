@@ -390,8 +390,17 @@ def test_canceled_true_on_a_live_buy_actually_cancels_it(live_media_buy_env):
         Transport.MCP,
     )
 
-    assert result.is_success, (
+    # NOT result.is_success: `update_media_buy` has no pinned response model, so
+    # AdCPTestClient leaves payload=None on a SUCCESSFUL dispatch and is_success
+    # is False by its documented contract ("a caller that needs the flat wire
+    # dict for one of them reads result.wire_response directly"). Grading the
+    # absence of an error and the presence of real wire is the same obligation
+    # without depending on a parse the client cannot perform for this tool.
+    assert result.error is None and result.wire_error_envelope is None, (
         f"update_media_buy(canceled=true) on an active buy failed: {result.wire_error_envelope or result.error}"
+    )
+    assert isinstance(result.wire_response, dict), (
+        f"expected a real update_media_buy wire body, got {result.wire_response!r}"
     )
     persisted = env.get_one(MediaBuy, media_buy_id=media_buy.media_buy_id)
     assert persisted.status == "canceled", (

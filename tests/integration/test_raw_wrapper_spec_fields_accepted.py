@@ -97,7 +97,7 @@ async def test_update_media_buy_raw_accepts_canceled(live_media_buy_env):
 
     env, media_buy = live_media_buy_env
 
-    await update_media_buy_raw(
+    update_media_buy_raw(
         media_buy_id=media_buy.media_buy_id,
         canceled=True,
         cancellation_reason="Campaign pulled by the brand.",
@@ -105,7 +105,7 @@ async def test_update_media_buy_raw_accepts_canceled(live_media_buy_env):
     )
 
 
-async def test_update_media_buy_raw_honors_canceled_on_a_live_buy(live_media_buy_env):
+def test_update_media_buy_raw_honors_canceled_on_a_live_buy(live_media_buy_env):
     """Binding is not honoring: the buy must actually end up canceled.
 
     Closes the refuse-everywhere loophole on the raw path, the same way
@@ -116,7 +116,7 @@ async def test_update_media_buy_raw_honors_canceled_on_a_live_buy(live_media_buy
 
     env, media_buy = live_media_buy_env
 
-    await update_media_buy_raw(
+    update_media_buy_raw(
         media_buy_id=media_buy.media_buy_id,
         canceled=True,
         cancellation_reason="Campaign pulled by the brand.",
