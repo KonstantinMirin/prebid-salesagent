@@ -16,7 +16,8 @@ from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
-from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
+from src.core.webhook_validator import webhook_url_for_log
+from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
@@ -107,15 +108,12 @@ def _sync_creatives_impl(
     # so no second address check belongs on this path.
     webhook_url = None
     if push_notification_config:
-        if isinstance(push_notification_config, dict):
-            webhook_url = push_notification_config.get("url")
-        else:
-            webhook_url = str(push_notification_config.url) if push_notification_config.url else None
-        reject_unsafe_webhook_registration_url(
-            webhook_url,
-            field="push_notification_config.url",
+        registration = accept_push_notification_config(
+            push_notification_config,
+            field_prefix="push_notification_config",
             context=context,
         )
+        webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
             # Log scheme+host+path only — never credentials / full auth blob.
             logger.info(

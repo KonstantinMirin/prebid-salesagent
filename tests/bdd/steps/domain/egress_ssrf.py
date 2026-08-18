@@ -30,6 +30,16 @@ which gate noticed it (the pinned enum calls VALIDATION_ERROR "invalid field
 values or violates business rules beyond schema validation", which is what a
 well-formed URL landing in a blocked range is).
 
+The CREDENTIAL half of a registration is graded by the second group of When
+steps below. A registration has two halves and both are refusable at ingest,
+but they differ in where they are REACHABLE: the URL half travels every
+transport (``url`` alone is a schema-valid config), while a config naming
+HMAC-SHA256 with no ``credentials`` is schema-INVALID against the pin, so MCP
+and REST refuse it above the ingest gate and only A2A carries it to ``_impl``.
+That is why those scenarios are tagged ``@a2a_untyped_ingest`` — the full
+rationale, and where the schema-typed transports' own refusal is graded, is in
+the feature file's header for that group.
+
 Steps store in ctx (on top of what ``dispatch_request`` stores):
     ctx["supplied_agent_url"] — the URL the buyer sent, so the non-disclosure
         Then can assert its absence structurally rather than by eyeball.
@@ -50,6 +60,25 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 # The list_id is irrelevant to a refusal — the seam refuses before a connection
 # is opened, so the path is never built. Fixed so the request is well-formed.
 _LIST_ID = "test_list"
+
+# A public URL that PASSES the registration SSRF gate running immediately before
+# the credential gate, so the only thing that can refuse a credential-half
+# scenario is the credential half. Same host the URL gate's own "allows public"
+# case uses, and the same constant the integration twin
+# (tests/integration/test_webhook_hmac_credentials_ingest_refusal.py) picks.
+_SAFE_WEBHOOK_URL = "https://buyer.example.com/hook"
+
+# The pinned AuthenticationScheme spelling for legacy shared-secret signing
+# (AdCP 3.1.1 enums/auth-scheme.json). Written exactly so a refusal cannot be
+# explained by the scheme being unrecognized rather than the secret being absent.
+_HMAC_SCHEME = "HMAC-SHA256"
+
+# The AdCP-shaped authentication block a buyer sends on a TOOL parameter:
+# ``schemes`` is an array (maxItems 1), ``credentials`` is simply absent — the
+# spelling the pinned schema calls invalid and the spelling a buyer produces by
+# forgetting the secret. The A2A protocol envelope uses the protobuf shape
+# instead (singular ``scheme``); see the message/send step below.
+_HMAC_WITHOUT_CREDENTIALS = {"schemes": [_HMAC_SCHEME]}
 
 # Anything that could spell an IP address. Deliberately over-broad: the tokens it
 # yields are then handed to ``ipaddress``, which is the actual decision. A regex
@@ -177,6 +206,112 @@ def when_create_media_buy_with_push_url(ctx: dict, webhook_url: str) -> None:
     dispatch_request(ctx, **kwargs)
 
 
+# ── When steps: the CREDENTIAL half of a registration ───────────────
+#
+# Four registration surfaces, one document: HMAC-SHA256 named, no secret
+# supplied. Each dispatches through ``dispatch_request`` so the refusal is
+# production's, on the wire, and none of them builds the request model in the
+# test — a test-side ``ValidationError`` would prove the harness validates, not
+# that the buyer is refused.
+
+
+@when("the buyer creates a media buy registering HMAC-SHA256 with no credentials")
+def when_create_media_buy_hmac_without_credentials(ctx: dict) -> None:
+    """Dispatch create_media_buy with a credential-less HMAC push_notification_config.
+
+    The surface that runs BOTH registration halves today. Everything except the
+    authentication block comes from the harness's minimal valid create, so a
+    package/pricing rejection can never stand in for the refusal under test.
+    """
+    from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
+
+    kwargs = harness_create_request_kwargs(ctx)
+    kwargs["push_notification_config"] = {
+        "url": _SAFE_WEBHOOK_URL,
+        "authentication": _HMAC_WITHOUT_CREDENTIALS,
+    }
+    dispatch_request(ctx, **kwargs)
+
+
+@when("the buyer updates the media buy registering HMAC-SHA256 with no credentials")
+def when_update_media_buy_hmac_without_credentials(ctx: dict) -> None:
+    """Dispatch update_media_buy with a credential-less HMAC push_notification_config.
+
+    The request model is built here WITHOUT the config and the raw config is
+    passed as a separate kwarg, which the update harness overlays onto the flat
+    skill parameters after expanding the model
+    (``MediaBuyDualEnv._flatten_update_request``). That is deliberate and it is
+    the only honest wiring: ``UpdateMediaBuyRequest`` types
+    ``push_notification_config`` against the pinned model, so constructing the
+    request WITH the invalid block would raise inside this step and grade the
+    test's own pydantic call instead of production's refusal.
+    """
+    from src.core.schemas import UpdateMediaBuyRequest
+
+    media_buy = _require(ctx, "existing_media_buy")
+    dispatch_request(
+        ctx,
+        req=UpdateMediaBuyRequest(media_buy_id=media_buy.media_buy_id),
+        push_notification_config={
+            "url": _SAFE_WEBHOOK_URL,
+            "authentication": _HMAC_WITHOUT_CREDENTIALS,
+        },
+    )
+
+
+@when("the buyer syncs a creative registering HMAC-SHA256 with no credentials")
+def when_sync_creatives_hmac_without_credentials(ctx: dict) -> None:
+    """Dispatch sync_creatives with a credential-less HMAC push_notification_config.
+
+    ``push_notification_config`` is request-level here (unlike
+    ``creatives[].format_id.agent_url`` above), so the whole request must be
+    refused — a per-item failure would tell the buyer to fix a creative when the
+    thing that is wrong is the registration. The creative comes from
+    ``CreativeAssetFactory`` so a missing required field cannot produce a
+    VALIDATION_ERROR that resembles this refusal for the wrong reason.
+    """
+    from tests.factories.creative_asset import CreativeAssetFactory
+
+    creative = CreativeAssetFactory(
+        creative_id="c_creds_refusal",
+        name="Credential Refusal Creative",
+    )
+    dispatch_request(
+        ctx,
+        creatives=[creative],
+        push_notification_config={
+            "url": _SAFE_WEBHOOK_URL,
+            "authentication": _HMAC_WITHOUT_CREDENTIALS,
+        },
+    )
+
+
+@when("the buyer sends a request registering HMAC-SHA256 with no credentials in the protocol envelope")
+def when_a2a_message_send_hmac_without_credentials(ctx: dict) -> None:
+    """Dispatch an A2A message/send whose PROTOCOL envelope registers the webhook.
+
+    Not a tool parameter: ``on_message_send`` reads
+    ``params.configuration.task_push_notification_config`` before any skill
+    routing, so this registration is made by a buyer who has invoked no tool at
+    all. The harness carries it through
+    ``_run_a2a_handler(a2a_push_notification_config=...)``; the skill it rides
+    on (get_products) is incidental and is never reached when the registration
+    is refused.
+
+    The protobuf ``AuthenticationInfo`` is a SINGULAR free-form ``scheme`` with
+    no enum behind it, so ``credentials`` is simply the empty proto3 default —
+    which is precisely the state no sender can serve.
+    """
+    dispatch_request(
+        ctx,
+        brief="credential refusal test",
+        a2a_push_notification_config={
+            "url": _SAFE_WEBHOOK_URL,
+            "authentication": {"scheme": _HMAC_SCHEME},
+        },
+    )
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 
@@ -274,3 +409,28 @@ def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
     assert code == "VALIDATION_ERROR", f"errors[0].code={code!r} — a buyer-supplied URL is buyer-correctable"
     assert recovery == "correctable", f"errors[0].recovery={recovery!r}"
     assert got_field == field, f"errors[0].field={got_field!r}, expected {field!r}"
+
+
+@then("the refusal names the missing shared secret and not the URL")
+def then_refusal_is_the_credential_contract(ctx: dict) -> None:
+    """Assert the ONE credential-refusal contract, from its single definition.
+
+    Delegates to ``tests.helpers.webhook_credential_refusal`` — the module that
+    already holds this contract for the integration graders on the create and
+    A2A-native surfaces — so BDD and those graders cannot drift on what a
+    credential refusal looks like. Re-asserting the code / recovery / field
+    triple the preceding Then already pinned is deliberate: it comes from the
+    same shared definition, so there is nothing for the two to disagree about.
+
+    The half this step adds, and the reason it is not decoration: the A2A
+    push-config surfaces funnel refusals through
+    ``_invalid_params_from_ssrf_error``, which manufactures
+    ``field="push_notification_config.url"`` plus the https/SSRF suggestion for
+    anything it does not recognize as an ``AdCPValidationError``. A credential
+    refusal that took that path would reach the buyer as "fix your URL" about a
+    URL that is fine. "It refused" is not enough; it has to refuse about the
+    right field, with the right advice.
+    """
+    from tests.helpers.webhook_credential_refusal import assert_credentials_refusal_envelope
+
+    assert_credentials_refusal_envelope(_wire_error_envelope(ctx), surface="push_notification_config registration")

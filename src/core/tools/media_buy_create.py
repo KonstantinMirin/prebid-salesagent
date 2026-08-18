@@ -163,10 +163,10 @@ from src.core.tools.financial_validation import (
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
 from src.core.webhook_validator import (
-    reject_invalid_webhook_registration,
     reject_unsafe_webhook_registration_url,
     webhook_url_for_log,
 )
+from src.core.webhooks.registration import accept_push_notification_config
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -2112,13 +2112,10 @@ async def _create_media_buy_impl(
             context=req.context,
         )
     if push_notification_config:
-        pnc_url = push_notification_config.get("url")
-        pnc_auth = push_notification_config.get("authentication") or {}
-        pnc_schemes = pnc_auth.get("schemes") or []
-        reject_invalid_webhook_registration(
-            url=str(pnc_url) if pnc_url is not None else None,
-            scheme=pnc_schemes[0] if pnc_schemes else None,
-            credentials=pnc_auth.get("credentials"),
+        # Bound, not yet consumed: lane 2 (registration-persistence) threads this
+        # value into upsert in place of the loose primitives below.
+        registration = accept_push_notification_config(
+            push_notification_config,
             field_prefix="push_notification_config",
             context=req.context,
         )

@@ -88,7 +88,12 @@ class HmacSecretMissing:
     """
 
 
-WebhookAuth = SignWithSecret | BearerToken | BasicCredentials | Unauthenticated | HmacSecretMissing
+# The auth outcomes a sender can actually APPLY. Named separately so a value
+# that has passed ingest (ValidatedWebhookRegistration.auth) can be typed as
+# "resolved and deliverable", making HmacSecretMissing unconstructible there
+# rather than merely unexpected.
+DeliverableWebhookAuth = SignWithSecret | BearerToken | BasicCredentials | Unauthenticated
+WebhookAuth = DeliverableWebhookAuth | HmacSecretMissing
 
 _HMAC_SCHEME = "hmac-sha256"
 _BEARER_SCHEME = "bearer"

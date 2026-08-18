@@ -12,8 +12,14 @@ This guard is the class-level half of that fix: a NEW tool under
 ``make quality`` here, instead of shipping the sixth unvalidated copy.
 
 ONE gate is accepted (owner ruling "Strategy C", reconciling gh-#1697 with
-gh-#1589): ``reject_unsafe_webhook_registration_url``
-(``src/core/webhook_validator.py``) — the REGISTRATION gate. It raises
+gh-#1589): ``accept_push_notification_config``
+(``src/core/webhooks/registration.py``) — the REGISTRATION gate, which runs
+BOTH halves (URL and credential) and returns the ValidatedWebhookRegistration
+value. It delegates the URL half to ``reject_unsafe_webhook_registration_url``
+(``src/core/webhook_validator.py``), which stays public for ``reporting_webhook.url``
+— a registration shape with no credential half — but is no longer an accepted
+gate for push configs, because URL-only is exactly the half-gating this closes.
+It raises
 ``AdCPValidationError`` → ``VALIDATION_ERROR`` / ``correctable`` with
 ``suggestion`` + ``field``. Decisively, it is DNS-FREE at registration: an
 unresolvable but public hostname is deliberately ACCEPTED at ingest and
@@ -64,7 +70,7 @@ ACCEPTED_GATES: dict[str, frozenset[str]] = {
     # Strategy C: the DNS-free registration gate, AdCPValidationError.
     # The former src.core.webhook_ingest entry was removed with that module —
     # it resolved DNS, which is wrong for registration (see module docstring).
-    "src.core.webhook_validator": frozenset({"reject_unsafe_webhook_registration_url"}),
+    "src.core.webhooks.registration": frozenset({"accept_push_notification_config"}),
 }
 
 ACCEPTED_GATE_SYMBOLS = frozenset(sym for symbols in ACCEPTED_GATES.values() for sym in symbols)
@@ -88,9 +94,10 @@ CORRECT_DESIGN_NO_GATE = frozenset(
 
 FIX_HINT = (
     "This module handles push_notification_config / reporting_webhook — buyer URLs that are "
-    "stored now and dialled later. Route them through reject_unsafe_webhook_registration_url "
-    "(src/core/webhook_validator.py — the DNS-free registration gate) at ingest, so an unsafe "
-    "URL is refused with a correctable error naming error.field while the buyer's request still "
+    "stored now and dialled later. Route them through accept_push_notification_config "
+    "(src/core/webhooks/registration.py — the DNS-free registration gate, both halves) at ingest, "
+    "so an unsafe URL or an undeliverable credential-less HMAC registration is refused with a "
+    "correctable error naming error.field while the buyer's request still "
     "exists to carry the refusal. Do NOT re-introduce a DNS-resolving ingest gate: the egress "
     "seam's validate_url is the SEND-time gate only (Strategy C, gh-#1697 / gh-#1589)."
 )
@@ -123,13 +130,13 @@ def imported_gate_symbols(tree: ast.Module) -> set[str]:
 
     Handles both binding shapes:
 
-    - ``from src.core.webhook_validator import reject_unsafe_webhook_registration_url``
+    - ``from src.core.webhooks.registration import accept_push_notification_config``
       — the symbol must be one of the module's accepted gate symbols, so
       importing only ``webhook_url_for_log`` yields nothing.
-    - ``import src.core.webhook_validator`` — a whole-module import binds no gate
+    - ``import src.core.webhooks.registration`` — a whole-module import binds no gate
       by itself, so it counts only when an accepted gate symbol is also used as
       an attribute somewhere in the module
-      (``…webhook_validator.reject_unsafe_webhook_registration_url(…)``).
+      (``…webhooks.registration.accept_push_notification_config(…)``).
     """
     found: set[str] = set()
     whole_module_imports: set[str] = set()
@@ -252,23 +259,23 @@ def test_registration_gate_satisfies_the_detector():
     the retired seam helper no longer does; an unrelated module is not in the
     population at all."""
     registration_gate = ast.parse(
-        "from src.core.webhook_validator import reject_unsafe_webhook_registration_url\n"
+        "from src.core.webhooks.registration import accept_push_notification_config\n"
         "def _impl(req, push_notification_config=None):\n"
-        '    reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")\n'
+        '    accept_push_notification_config(push_notification_config, field_prefix="push_notification_config")\n'
     )
     assert module_names_webhook_fields(registration_gate)
     assert imported_gate_symbols(registration_gate) == {
-        "src.core.webhook_validator.reject_unsafe_webhook_registration_url"
+        "src.core.webhooks.registration.accept_push_notification_config"
     }
 
     whole_module = ast.parse(
-        "import src.core.webhook_validator\n"
+        "import src.core.webhooks.registration\n"
         "def _impl(req, push_notification_config=None):\n"
-        "    src.core.webhook_validator.reject_unsafe_webhook_registration_url(\n"
-        '        req.reporting_webhook.url, field="reporting_webhook.url"\n'
+        "    src.core.webhooks.registration.accept_push_notification_config(\n"
+        '        req.push_notification_config, field_prefix="push_notification_config"\n'
         "    )\n"
     )
-    assert imported_gate_symbols(whole_module) == {"src.core.webhook_validator.reject_unsafe_webhook_registration_url"}
+    assert imported_gate_symbols(whole_module) == {"src.core.webhooks.registration.accept_push_notification_config"}
 
     # The gh-#1589 seam helper is retired: importing it validates nothing here.
     retired_seam_gate = ast.parse(
@@ -317,9 +324,9 @@ def test_scanner_reports_an_ungated_synthetic_module(tmp_path: Path):
         encoding="utf-8",
     )
     (tools_dir / "nested" / "registration_gated_tool.py").write_text(
-        "from src.core.webhook_validator import reject_unsafe_webhook_registration_url\n"
+        "from src.core.webhooks.registration import accept_push_notification_config\n"
         "def _do_it_impl(req, push_notification_config=None):\n"
-        '    reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")\n',
+        '    accept_push_notification_config(push_notification_config, field_prefix="push_notification_config")\n',
         encoding="utf-8",
     )
     (tools_dir / "nested" / "retired_seam_gated_tool.py").write_text(

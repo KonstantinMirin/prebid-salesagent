@@ -16133,3 +16133,36 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+  EGRESS-CREDS:
+    # The CREDENTIAL half of the same locally-added feature: a webhook
+    # registration naming HMAC-SHA256 with no shared secret. Also ungraded by
+    # dist/compliance/3.1.1/ — the `credentials` hits there are TRANSPORT auth
+    # (universal/security.yaml), not a webhook registration — so it follows the
+    # EGRESS-SSRF precedent above: grounded on the pinned schema
+    # (core/push-notification-config.json -> Authentication.required =
+    # [schemes, credentials], credentials minLength 32), obligation_id null /
+    # status new, because there is no obligation ID to point at yet.
+    - adcp_scenario_id: "T-EGRESS-CREDS-create-media-buy"
+      adcp_feature: "local-egress-ssrf-refusal.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-EGRESS-CREDS-update-media-buy"
+      adcp_feature: "local-egress-ssrf-refusal.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-EGRESS-CREDS-sync-creatives"
+      adcp_feature: "local-egress-ssrf-refusal.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-EGRESS-CREDS-a2a-message-send"
+      adcp_feature: "local-egress-ssrf-refusal.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new

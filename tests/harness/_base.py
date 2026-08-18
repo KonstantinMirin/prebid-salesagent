@@ -308,6 +308,36 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     return exc
 
 
+def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
+    """Build the A2A ``SendMessageConfiguration`` carrying a protocol-level push config.
+
+    ``message/send`` registers a webhook one level ABOVE the AdCP tool
+    parameters: ``params.configuration.task_push_notification_config``
+    (``src/a2a_server/adcp_a2a_server.py`` — ``on_message_send`` reads it before
+    any skill routing happens). It is therefore not reachable by putting a
+    ``push_notification_config`` in the skill parameters, and it exists on no
+    other transport — MCP and REST have no equivalent protocol envelope.
+
+    *spec* is the plain dict a step writes (``{"url": ..., "authentication":
+    {"scheme": ..., "credentials": ...}}``). Note the SINGULAR ``scheme``: the
+    A2A wire type is the protobuf ``AuthenticationInfo``, not the AdCP
+    ``Authentication`` object with its ``schemes`` array. Absent credentials are
+    sent as the protobuf default (empty string) rather than omitted, because
+    that is what a buyer's client actually puts on the wire for an unset
+    protobuf string — the field cannot be "missing" in proto3.
+    """
+    from a2a.types import AuthenticationInfo, SendMessageConfiguration, TaskPushNotificationConfig
+
+    fields: dict[str, Any] = {"url": spec["url"]}
+    authentication = spec.get("authentication")
+    if authentication is not None:
+        fields["authentication"] = AuthenticationInfo(
+            scheme=authentication.get("scheme") or "",
+            credentials=authentication.get("credentials") or "",
+        )
+    return SendMessageConfiguration(task_push_notification_config=TaskPushNotificationConfig(**fields))
+
+
 class _TestClock:
     """Minimal clock for BDD relative date-token resolution.
 
@@ -624,7 +654,10 @@ class BaseTestEnv:
             skill_name: A2A skill name (e.g., "get_products").
             response_cls: Pydantic model class to parse artifact data into.
             **kwargs: Skill parameters. ``identity`` is popped and used for
-                the identity mock; remaining kwargs become skill parameters.
+                the identity mock; ``a2a_push_notification_config`` is popped
+                and sent as the protocol-level ``SendMessageConfiguration``
+                (see :func:`_a2a_send_message_configuration`) rather than as a
+                skill parameter; remaining kwargs become skill parameters.
         """
         import asyncio
 
@@ -640,6 +673,10 @@ class BaseTestEnv:
         # Pop identity — used for the handler mock, not sent as a skill parameter.
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
+        # Pop the protocol-level push config — it belongs on SendMessageRequest.
+        # configuration, one level above the skill parameters (see
+        # _a2a_send_message_configuration).
+        protocol_push_config = kwargs.pop("a2a_push_notification_config", None)
         a2a_identity = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
 
         # The real A2A handler writes audit logs which require the tenant to exist
@@ -696,7 +733,13 @@ class BaseTestEnv:
             set_current_tenant(a2a_identity.tenant)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
-        params = SendMessageRequest(message=message)
+        if protocol_push_config is None:
+            params = SendMessageRequest(message=message)
+        else:
+            params = SendMessageRequest(
+                message=message,
+                configuration=_a2a_send_message_configuration(protocol_push_config),
+            )
 
         async def _call():
             return await handler.on_message_send(params, server_context)

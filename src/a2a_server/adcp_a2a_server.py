@@ -113,10 +113,12 @@ from src.core.validation_helpers import (
 )
 from src.core.version import get_version
 from src.core.webhook_validator import (
-    reject_invalid_webhook_registration,
-    reject_unsafe_webhook_registration_url,
     webhook_ssrf_suggestion,
     webhook_url_for_log,
+)
+from src.core.webhooks.registration import (
+    ValidatedWebhookRegistration,
+    accept_push_notification_primitives,
 )
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -139,38 +141,47 @@ def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
     )
 
 
-def _reject_unsafe_a2a_webhook_url(url: str) -> None:
-    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate.
+def _a2a_push_config_auth(config: Any) -> tuple[str | None, str | None]:
+    """Pull ``(scheme, credentials)`` out of an A2A push-config protobuf.
 
-    A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
-    translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
-    two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
-    + suggestion) — same pattern as the auth rejection on ``on_message_send``.
-    Delegates to ``reject_unsafe_webhook_registration_url`` so recovery/suggestion/field
-    cannot drift from the tool-path gate. AdCP tool wrappers raise ``AdCPValidationError``
-    directly for the same helper.
+    Both A2A surfaces that carry a push config -- ``setTaskPushNotificationConfig``
+    and the protocol-level ``message/send`` configuration -- hold the same flat
+    protobuf whose ``authentication`` is an optional submessage with a SINGULAR
+    free-form ``scheme`` string. Read in one place so the two surfaces cannot
+    disagree about which field the credential half lives in.
+    """
+    if not config.HasField("authentication"):
+        return None, None
+    return (config.authentication.scheme or None, config.authentication.credentials or None)
+
+
+def _accept_a2a_push_config(url: str, scheme: str | None, credentials: str | None) -> ValidatedWebhookRegistration:
+    """Accept an A2A push-config registration, or raise ``InvalidParamsError``.
+
+    The ONE A2A translation seam for push-config ingest, shared by BOTH surfaces
+    that carry one: ``setTaskPushNotificationConfig`` and the protocol-level
+    ``message/send`` configuration. Delegates to
+    :func:`~src.core.webhooks.registration.accept_push_notification_primitives`
+    (the A2A ``authentication`` carries a SINGULAR free-form ``scheme`` string,
+    not the tool path's ``schemes`` list) so this transport cannot drift from the
+    tool path on either precondition.
+
+    Why both surfaces must come through here rather than call the constructor
+    directly: ``on_message_send``'s body runs inside a ``try`` whose handlers are
+    ``except A2AError: raise`` / ``except Exception`` -> ``_internal_error_for``.
+    ``AdCPValidationError`` is not an ``A2AError``, so a raw constructor call
+    there would surface a buyer's correctable credential refusal as
+    ``INTERNAL_ERROR``. The translation below preserves the raised
+    ``AdCPValidationError`` verbatim (see
+    :func:`_invalid_params_from_ssrf_error`'s isinstance branch), which is what
+    keeps a credential refusal naming the credentials field instead of being
+    re-labelled as a URL problem.
     """
     try:
-        reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
-    except AdCPValidationError as e:
-        raise _invalid_params_from_ssrf_error(e) from e
-
-
-def _reject_invalid_a2a_push_config(url: str, scheme: str | None, credentials: str | None) -> None:
-    """Both push-config registration preconditions, as A2A ``InvalidParamsError``.
-
-    Delegates to the shared :func:`reject_invalid_webhook_registration` so this
-    transport cannot drift from the tool path on either precondition. The
-    translation below preserves the raised ``AdCPValidationError`` verbatim
-    (see :func:`_invalid_params_from_ssrf_error`'s isinstance branch), which is
-    what keeps a credential refusal naming the credentials field instead of
-    being re-labelled as a URL problem.
-    """
-    try:
-        reject_invalid_webhook_registration(
-            url=url,
-            scheme=scheme,
-            credentials=credentials,
+        return accept_push_notification_primitives(
+            url,
+            scheme,
+            credentials,
             field_prefix="push_notification_config",
         )
     except AdCPValidationError as e:
@@ -618,7 +629,12 @@ class AdCPRequestHandler(RequestHandler):
             # SSRF-reject unsafe push URLs after the auth-required gate so callers
             # that need credentials see AUTH_REQUIRED before scheme/blocked-host checks.
             if push_notification_config and push_notification_config.url:
-                _reject_unsafe_a2a_webhook_url(push_notification_config.url)
+                # Bound, not yet consumed: lane 2 (registration-persistence) replaces the
+                # raw-protobuf stash below with this validated value.
+                registration = _accept_a2a_push_config(
+                    push_notification_config.url,
+                    *_a2a_push_config_auth(push_notification_config),
+                )
                 logger.info(
                     "Protocol-level push notification config provided for task %s: %s",
                     task_id,
@@ -1208,11 +1224,7 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
-            auth_type = None
-            auth_token_value = None
-            if params.HasField("authentication"):
-                auth_type = params.authentication.scheme or None
-                auth_token_value = params.authentication.credentials or None
+            auth_type, auth_token_value = _a2a_push_config_auth(params)
 
             # Both registration preconditions, BEFORE the try. The except below
             # funnels every ValueError into _invalid_params_from_ssrf_error, which
@@ -1220,7 +1232,9 @@ class AdCPRequestHandler(RequestHandler):
             # wording for a non-AdCP error -- so a credential refusal raised from
             # inside the repository would reach the buyer as "fix your URL" about a
             # URL that is fine (salesagent-47n9.20).
-            _reject_invalid_a2a_push_config(url, auth_type, auth_token_value)
+            # Bound, not yet consumed: lane 2 (registration-persistence) threads this
+            # value into upsert in place of the loose primitives below.
+            registration = _accept_a2a_push_config(url, auth_type, auth_token_value)
 
             try:
                 with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
@@ -1236,7 +1250,7 @@ class AdCPRequestHandler(RequestHandler):
                     )
             except ValueError as e:
                 # Repository SSRF gate (defense in depth) — same enveloped path as
-                # _reject_unsafe_a2a_webhook_url above.
+                # _accept_a2a_push_config above.
                 raise _invalid_params_from_ssrf_error(e) from e
 
             logger.info(

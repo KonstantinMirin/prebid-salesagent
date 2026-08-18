@@ -32,7 +32,7 @@ from a2a.types import (
 )
 from adcp.types import ReportingWebhook
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _reject_unsafe_a2a_webhook_url
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _accept_a2a_push_config
 from src.core.database.models import PushNotificationConfig
 from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
@@ -383,10 +383,10 @@ def test_sync_creatives_rejects_unsafe_push_config_url() -> None:
     assert exc_info.value.field == "push_notification_config.url"
 
 
-def test_reject_unsafe_a2a_webhook_url_rejects_metadata() -> None:
+def test_accept_a2a_push_config_rejects_metadata_url() -> None:
     """A2A registration helper maps SSRF to InvalidParamsError + AdCP envelope in data."""
     with pytest.raises(InvalidParamsError, match="Invalid push_notification_config.url") as exc_info:
-        _reject_unsafe_a2a_webhook_url(_METADATA_URL)
+        _accept_a2a_push_config(_METADATA_URL, None, None)
     assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
     assert exc_info.value.data["errors"][0].get("suggestion")
 

@@ -2796,6 +2796,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # These scenarios must NOT be multiplied — they have explicit When steps.
 _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 
+# Scenarios whose graded production is reachable on ONE wire transport only.
+#
+# @a2a_untyped_ingest: the buyer's document is schema-INVALID against the pinned
+# push-notification-config model, so MCP (FastMCP TypeAdapter on the tool
+# parameter) and REST (``to_push_notification_config`` coercion in
+# src/routes/api_v1.py) both refuse it ABOVE the ingest gate, with a field path
+# relative to the sub-model they validated. A2A is the one transport that hands
+# the document to ``_impl`` untouched, which is the whole reason the gate exists
+# — and the A2A protocol-level ``message/send`` push config has no counterpart
+# on MCP/REST at all. The schema-typed transports' own refusal of the same
+# document is graded per transport in
+# tests/integration/test_webhook_hmac_credentials_ingest_refusal.py.
+#
+# PARAMETRIZED on that one transport rather than dropped from parametrization:
+# an excluded transport is exactly as ungraded as an xfail but invisible to both
+# escape-hatch detectors (GH #1892), whereas this keeps a real ``[a2a]`` test id
+# that ``--collect-only`` shows.
+_SINGLE_TRANSPORT_TAGS = {"a2a_untyped_ingest": "A2A"}
+
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
 # (UC-002 @account used to live here when it ran resolve_account() via IMPL on
 # MediaBuyAccountEnv; #1417 routed those scenarios through a full
@@ -2858,6 +2877,15 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     marker_names = {m.name for m in metafunc.definition.iter_markers()}
     if marker_names & _TRANSPORT_SPECIFIC_TAGS:
         # Transport-specific scenario — don't multiply
+        return
+
+    # Single-transport scenarios still get a real (one-element) parametrization,
+    # so the transport that grades them is visible at collection. See
+    # _SINGLE_TRANSPORT_TAGS.
+    single = marker_names & _SINGLE_TRANSPORT_TAGS.keys()
+    if single:
+        transport = Transport[_SINGLE_TRANSPORT_TAGS[next(iter(single))]]
+        metafunc.parametrize("ctx", [transport], ids=[transport.value], indirect=True)
         return
 
     # Admin scenarios use Flask test_client, not API transports
@@ -3146,11 +3174,16 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         return "ADMIN"
-    if "egress_sync" in marker_names:
+    if "egress_sync" in marker_names or "egress_sync_creds" in marker_names:
         # The sync_creatives leg of the local SSRF-refusal feature dispatches
         # sync_creatives, so it needs the creative-sync harness (UC-006's arm),
         # not the product env the other @egress scenarios share.
         return "UC-006"
+    if "egress_update" in marker_names:
+        # The update_media_buy leg of the local SSRF-refusal feature dispatches
+        # a real update, so it needs the update harness (UC-003's arm) and its
+        # seeded existing media buy.
+        return "UC-003"
     if "egress_create" in marker_names:
         # The ingest-time twin in the local SSRF-refusal feature dispatches
         # create_media_buy, so it needs the media-buy create harness (UC-004's
@@ -3381,7 +3414,15 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
         }
-        if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
+        if (
+            any(t.startswith("T-UC-003-ext-") for t in marker_names)
+            or (marker_names & _UC003_TARGETING_OVERLAY)
+            # @egress_update (local SSRF/credential-refusal feature) dispatches a
+            # real update_media_buy carrying a push_notification_config, so it
+            # needs exactly this arm: the update wrappers plus a seeded existing
+            # media buy for the update to target.
+            or "egress_update" in marker_names
+        ):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
             # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module
@@ -3443,7 +3484,18 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "webhook-ssrf", "egress_sync"}:
+        if marker_names & {
+            "account",
+            "creative-invariant",
+            "BR-RULE-034",
+            "webhook-ssrf",
+            "egress_sync",
+            # @egress_sync_creds grades the CREDENTIAL half of the registration,
+            # which is refused before the per-creative loop is reached — so it
+            # wants the ordinary (registry-mocked) env, not the real-registry
+            # variant @egress_sync needs for its buyer-supplied agent_url.
+            "egress_sync_creds",
+        }:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant

@@ -206,3 +206,116 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
       | webhook_url            | message                                                                    |
       | https://[fc00::1]/hook | Invalid push_notification_config.url: URL resolves to a restricted range. |
       | https://[ff02::1]/hook | Invalid push_notification_config.url: URL resolves to a restricted range. |
+
+  # ── The CREDENTIAL half of the same registration ─────────────────────
+  #
+  # Everything above grades the URL half of a webhook registration. A
+  # registration has a second half, and it is refusable for the same reason at
+  # the same moment.
+  #
+  # Spec grounding — AdCP 3.1.1 (the pin: adcp==6.6.0, docs/adcp-spec-version.md),
+  # `git -C <adcp-checkout> show
+  # v3.1.1:dist/schemas/3.1.1/core/push-notification-config.json`. `authentication`
+  # is OPTIONAL on the config (`required: ["url"]`), but when present it is
+  # `required: ["schemes", "credentials"]`, and `credentials` carries
+  # `minLength: 32` — "For HMAC-SHA256: shared secret used to generate
+  # signature." The same block's own description closes the only escape:
+  # "Precedence is a switch, not a fallback: presence of this block selects the
+  # legacy scheme; absence selects 9421. A seller MUST NOT sign the same webhook
+  # both ways." So a registration that names HMAC-SHA256 and supplies no secret
+  # is unservable — we cannot sign it, and we cannot quietly fall back to the
+  # RFC 9421 profile, because the block's PRESENCE already selected legacy.
+  #
+  # UNGRADED BY STORYBOARD: nothing in dist/compliance/3.1.1/ grades a seller
+  # refusing an unservable webhook registration (the `credentials` hits in
+  # universal/security.yaml are TRANSPORT auth — API keys, Basic, OAuth — not a
+  # webhook registration). Same standing as the SSRF gate above, so the refusal
+  # SHAPE is production-authoritative and is settled by the sibling gate one
+  # field over: VALIDATION_ERROR / correctable / field, the identical triple the
+  # URL half returns. `correctable` is from the pinned enum's own metadata
+  # (enums/error-code.json), never STANDARD_ERROR_CODES — the buyer is the only
+  # party who can supply the secret, and supplying it makes the identical
+  # request succeed.
+  #
+  # Why ingest, like the URL half: accepting the registration and discovering it
+  # later is a SILENT non-delivery. The senders fail closed inside a background
+  # worker, where no request is left to refuse into and the buyer's only signal
+  # is a log line nobody reads.
+  #
+  # Why ONE transport, and why it is A2A: this document is schema-INVALID, so
+  # every transport that types `push_notification_config` against the pinned
+  # model refuses it one layer ABOVE the ingest gate — MCP through FastMCP's
+  # TypeAdapter on the tool parameter, REST through `to_push_notification_config`
+  # in src/routes/api_v1.py — and reports a field path relative to the sub-model
+  # it validated rather than the absolute one the gate emits. Grading those two
+  # here would grade the request model, not the gate. A2A is the ONE transport
+  # that hands the buyer's document to `_impl` untouched, which is exactly the
+  # hole the gate exists to close; and the fourth scenario's surface (the A2A
+  # protocol-level message/send configuration) has no counterpart on MCP or REST
+  # at all. The schema-typed transports' own refusal of the same document is
+  # graded, per transport, at
+  # tests/integration/test_webhook_hmac_credentials_ingest_refusal.py. The
+  # @a2a_untyped_ingest tag PARAMETRIZES on a2a rather than dropping
+  # parametrization, so `--collect-only` still shows which transport grades these.
+  #
+  # Every URL below is public and passes the registration SSRF gate that runs
+  # immediately before this one, so the ONLY thing that can refuse these requests
+  # is the credential half — a green here cannot be the URL gate firing by luck.
+
+  # RUNS BOTH HALVES TODAY: media_buy_create.py calls the credential gate inline
+  # after the URL gate. Kept as the characterization guard the per-surface
+  # mutation check binds to at this surface — comment that call out and this
+  # scenario must redden.
+  @T-EGRESS-CREDS-create-media-buy @egress_create @a2a_untyped_ingest @invariant
+  Scenario: a credential-less HMAC-SHA256 registration is refused at create ingest
+    When the buyer creates a media buy registering HMAC-SHA256 with no credentials
+    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    And the refusal names the missing shared secret and not the URL
+
+  # GRADES THE REQUEST MODEL, NOT THE INGEST GATE — measured, not assumed.
+  # `UpdateMediaBuyRequest` inherits the library's TYPED
+  # `push_notification_config`, so this document is refused by the request model
+  # on every transport, absolute field path and all, before `_impl` runs. Deleting
+  # the entire push-config gate block from `_update_media_buy_impl` leaves this
+  # scenario GREEN (verified by mutation). Two consequences, both deliberate:
+  # (1) the per-surface mutation check cannot bind at this surface with this
+  # document — no document that survives the typed request model can reach the
+  # credential gate here, because `credentials` is required AND `minLength: 32`,
+  # so `webhook_auth_for` can never resolve a missing secret from it; the update
+  # surface's stake in the lane is structural (no URL-only path remains), not a
+  # new refusal. (2) the scenario is still worth its keep as an OUTCOME guard: it
+  # asserts the buyer is refused at this surface by SOME layer, and reddens exactly
+  # when no layer refuses any more. Measured (salesagent-iyiwh.7): relaxing the
+  # annotation to `dict` alone leaves it GREEN, because this lane's ingest gate then
+  # catches the document; removing the gate alone leaves it GREEN, because the typed
+  # model still refuses. It reddens only when BOTH stop refusing — which is the
+  # property worth pinning, and is stronger than guarding either layer alone.
+  @T-EGRESS-CREDS-update-media-buy @egress_update @a2a_untyped_ingest @invariant
+  Scenario: a credential-less HMAC-SHA256 registration is refused at update ingest
+    Given the Buyer owns an existing media buy
+    When the buyer updates the media buy registering HMAC-SHA256 with no credentials
+    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    And the refusal names the missing shared secret and not the URL
+
+  @T-EGRESS-CREDS-sync-creatives @egress_sync_creds @a2a_untyped_ingest @invariant
+  Scenario: a credential-less HMAC-SHA256 registration is refused at sync ingest
+    When the buyer syncs a creative registering HMAC-SHA256 with no credentials
+    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    And the refusal names the missing shared secret and not the URL
+
+  # The fourth registration surface, and the one that is not an AdCP tool
+  # parameter at all: A2A `message/send` carries the webhook in the PROTOCOL
+  # envelope (params.configuration.task_push_notification_config), read by
+  # on_message_send before any skill routing. The buyer registering it is doing
+  # the same thing as the three above — asking for signed callbacks — so it owes
+  # the same answer, and it is the surface a buyer reaches without invoking any
+  # tool. Its wire type is the protobuf AuthenticationInfo, whose `scheme` is
+  # SINGULAR and free-form (no enum guards the value here), which is why the
+  # scheme below is the exact pinned spelling and the refusal must still name the
+  # credential.
+  @T-EGRESS-CREDS-a2a-message-send @egress @a2a_untyped_ingest @invariant
+  Scenario: a credential-less HMAC-SHA256 registration is refused at A2A message/send
+    Given a tenant is configured for product discovery
+    When the buyer sends a request registering HMAC-SHA256 with no credentials in the protocol envelope
+    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    And the refusal names the missing shared secret and not the URL

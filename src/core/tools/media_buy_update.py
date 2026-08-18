@@ -52,6 +52,7 @@ from src.core.exceptions import (
 )
 from src.core.tool_context import ToolContext
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
+from src.core.webhooks.registration import accept_push_notification_config
 
 logger = logging.getLogger(__name__)
 
@@ -389,12 +390,12 @@ def _update_media_buy_impl(
     # Use str(url): library PushNotificationConfig/ReportingWebhook.url is pydantic
     # AnyUrl, not str.
     if req.push_notification_config:
-        pnc_url = getattr(req.push_notification_config, "url", None)
-        reject_unsafe_webhook_registration_url(
-            str(pnc_url) if pnc_url is not None else None,
-            field="push_notification_config.url",
+        registration = accept_push_notification_config(
+            req.push_notification_config,
+            field_prefix="push_notification_config",
             context=req.context,
         )
+        pnc_url = registration.url
         if pnc_url is not None and str(pnc_url).strip():
             # Log scheme+host+path only — never credentials / full auth blob.
             logger.info(
