@@ -181,52 +181,86 @@ class _FeatureLine(NamedTuple):
     text: str
 
 
-_STEP_KEYWORDS = {"given": "given", "when": "when", "then": "then"}
-_CONTINUATION_KEYWORDS = {"and", "but", "*"}
-_BLOCK_KEYWORDS = (
-    "feature:",
-    "rule:",
-    "background:",
-    "scenario:",
-    "scenario outline:",
-    "scenario template:",
-    "example:",
-    "examples:",
-)
-_STEP_RE = re.compile(r"^(Given|When|Then|And|But|\*)\s+(\S.*)$")
 # Scenario-outline placeholders are substituted per Examples row; the raw line is
 # not a sentence any parser is asked to match.
 _PLACEHOLDER_RE = re.compile(r"<[^<>]+>")
 
 
 def _feature_step_lines() -> list[_FeatureLine]:
-    """Every concrete step line in ``tests/bdd/features/``, typed as pytest-bdd types it."""
+    """Every concrete step line in ``tests/bdd/features/``, typed as pytest-bdd types it.
+
+    Read through ``pytest_bdd.feature.get_feature`` — the parse production actually
+    resolves against — rather than a lexer of our own (the repo convention, see
+    ``test_architecture_bdd_feature_parse.py``).
+
+    This guard's whole premise is that it resolves a step's TYPE exactly as pytest-bdd
+    does. A hand-rolled lexer had to re-implement that resolution: keyword table,
+    And/But/* continuation carrying the previous type, block keywords resetting it,
+    docstring toggling, comment/tag/table skipping. Every one of those is a place to
+    be subtly wrong, and being wrong the QUIET way — typing a step `given` when
+    pytest-bdd types it `then` — does not fail the guard, it silently narrows what the
+    guard can see.
+
+    ``get_feature`` hands back the resolved ``type`` (continuation already applied),
+    the ``name`` with keyword stripped, and the ``line_number``. Only the
+    outline-placeholder filter remains as guard-specific logic, because that is a
+    statement about what this guard grades, not about how Gherkin parses.
+    """
+    from pytest_bdd.feature import get_feature
+
     lines: list[_FeatureLine] = []
     for path in sorted(_FEATURES_DIR.rglob("*.feature")):
-        current_type: str | None = None
-        in_docstring = False
-        for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
-            stripped = raw.strip()
-            if stripped.startswith('"""') or stripped.startswith("'''"):
-                in_docstring = not in_docstring
-                continue
-            if in_docstring or not stripped or stripped.startswith(("#", "@", "|")):
-                continue
-            if stripped.lower().startswith(_BLOCK_KEYWORDS):
-                current_type = None
-                continue
-            match = _STEP_RE.match(stripped)
-            if match is None:
-                continue
-            keyword, text = match.group(1).lower(), match.group(2).strip()
-            if keyword in _STEP_KEYWORDS:
-                current_type = _STEP_KEYWORDS[keyword]
-            elif keyword not in _CONTINUATION_KEYWORDS or current_type is None:
-                continue
-            if _PLACEHOLDER_RE.search(text):
-                continue
-            lines.append(_FeatureLine(path=path, lineno=lineno, step_type=current_type, text=text))
+        feature = get_feature(str(path.parent), path.name)
+        seen: set[tuple[int, str]] = set()
+        for scenario in feature.scenarios.values():
+            for step in scenario.steps:
+                # Background steps are attached to EVERY scenario that inherits them,
+                # so they arrive once per scenario; the file has one of each.
+                key = (step.line_number, step.name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if _PLACEHOLDER_RE.search(step.name):
+                    continue
+                lines.append(
+                    _FeatureLine(path=path, lineno=step.line_number, step_type=step.type, text=step.name.strip())
+                )
     return lines
+
+
+def _assert_reader_sees_a_whole_feature() -> None:
+    """Pin the reader's step count against pytest-bdd's own, for one known feature.
+
+    The counts-are-nonzero asserts above cannot see a PARTIAL read: a reader that
+    silently stopped at the first docstring, or dropped every Background step, still
+    returns a large positive number and every check downstream still "passes" while
+    grading a subset. This compares what the reader produced for one file against what
+    pytest-bdd collects for that same file, so under-reading is a failure rather than
+    a quieter guard.
+
+    Placeholders are excluded on both sides, because excluding them is this guard's
+    own rule and not a property of the parse.
+    """
+    from pytest_bdd.feature import get_feature
+
+    name = "BR-UC-019-query-media-buys.feature"
+    path = _FEATURES_DIR / name
+    if not path.exists():  # pragma: no cover - the corpus is checked in
+        return
+
+    feature = get_feature(str(_FEATURES_DIR), name)
+    expected: set[tuple[int, str]] = set()
+    for scenario in feature.scenarios.values():
+        for step in scenario.steps:
+            if not _PLACEHOLDER_RE.search(step.name):
+                expected.add((step.line_number, step.name.strip()))
+
+    actual = {(line.lineno, line.text) for line in _feature_step_lines() if line.path == path}
+    missing = sorted(expected - actual)
+    assert not missing, (
+        f"the feature reader missed {len(missing)} step(s) pytest-bdd collects from {name} "
+        f"(e.g. {missing[:3]}) — a partial read makes this guard quieter without making it fail"
+    )
 
 
 class _MatchOverlapScan(NamedTuple):
@@ -317,6 +351,7 @@ class TestBddNoShadowedSteps:
             f"Ran {scan.line_count} feature step line(s) through {scan.parser_count} parser(s) "
             f"and NOTHING matched — parser resolution is broken, not clean."
         )
+        _assert_reader_sees_a_whole_feature()
 
         if not scan.overlaps:
             return
