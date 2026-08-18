@@ -191,22 +191,31 @@ class CreativeSyncEnv(IntegrationEnv):
         return _sync_creatives_impl(**kwargs)
 
     def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
-        """Call sync_creatives_raw (A2A wrapper) with real DB.
+        """Dispatch sync_creatives through the REAL A2A pipeline.
 
-        Note: uses _raw() path instead of _run_a2a_handler because the real
-        A2A handler's _handle_sync_creatives_skill constructs CreativeAsset
-        from raw dicts, which fails validation (assets field required).
-        That handler bug needs a separate fix.
+        This used to call ``sync_creatives_raw`` directly, routing AROUND
+        ``on_message_send``. The consequence (per tests/CLAUDE.md's own table:
+        A2A ``wire_response`` is populated ONLY when the env routes through
+        ``_run_a2a_handler``) was that the A2A leg produced no wire at all — so
+        every storyboard Then on this transport had nothing transport-observable
+        to assert and fell back to reading an in-memory object. That is the
+        defect Lane C exists to remove, so the bypass is replaced rather than
+        worked around.
+
+        kwargs are JSON-normalized through ``build_rest_body`` — the SAME
+        normalizer the REST leg uses, not a second hand-rolled one — because
+        they now travel via ``create_a2a_message_with_skill`` -> ``_dict_to_value``
+        (protobuf), which cannot carry Pydantic models or enums the raw wrapper
+        accepted as live Python objects (account, push_notification_config,
+        validation_mode).
         """
-        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
-
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
-        # wire_response=None: the raw wrapper is called directly, so no A2A
-        # artifact is produced to observe. LANE C replaces this bypass; B only
-        # conforms the return type (binding input R1).
-        return DeliverResult(payload=sync_creatives_raw(**kwargs), wire_response=None)
+        identity = kwargs.pop("identity")
+        return self._run_a2a_handler(
+            "sync_creatives", SyncCreativesResponse, identity=identity, **self.build_rest_body(**kwargs)
+        )
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Call sync_creatives via Client(mcp) — full pipeline dispatch.

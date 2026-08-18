@@ -216,6 +216,30 @@ def strip_a2a_protocol_fields(data: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in data.items() if k not in A2A_PROTOCOL_ENVELOPE_FIELDS}
 
 
+# The two values TransportResult.envelope["status"] may take. A DERIVED enum,
+# never a synthesized HTTP status_code: fabricating an integer for MCP/A2A would
+# turn today's silent no-op into a loud tautology — the harness asserting != 500
+# against a number the harness itself invented (Lane C, change-set C4).
+DERIVED_STATUS_ADCP_ERROR = "adcp_error"
+DERIVED_STATUS_TRANSPORT_FAULT = "transport_fault"
+
+
+def derive_error_status(wire_error_envelope: dict[str, Any] | None) -> str:
+    """Did the seller answer with a structured AdCP envelope, or fault?
+
+    Reads each transport's OWN authentic evidence, because that is exactly what
+    ``wire_error_envelope`` is built from — REST's real HTTP body, A2A's failed
+    Task artifact DataPart, MCP's ToolError JSON. Recovering an envelope from any
+    of them means the seller produced a structured AdCP rejection; recovering
+    none means the request died as a transport fault before any envelope existed.
+
+    This is the signal the storyboard Then actually means by "not a 500 or
+    non-AdCP error shape", expressed so it grades on all three transports instead
+    of only the one that happens to carry an HTTP status.
+    """
+    return DERIVED_STATUS_ADCP_ERROR if wire_error_envelope else DERIVED_STATUS_TRANSPORT_FAULT
+
+
 @dataclass(frozen=True)
 class DeliverResult:
     """What one transport delivery produced: the parsed payload AND its wire bytes.

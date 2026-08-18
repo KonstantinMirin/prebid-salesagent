@@ -32,6 +32,8 @@ would not reproduce the original bug at all.
 import pytest
 from adcp.types import ContextObject
 
+from tests.harness.transport import Transport
+
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
@@ -46,16 +48,22 @@ class TestGetAdcpCapabilitiesContextEcho:
             tenant = TenantFactory(tenant_id="ctx-echo-caps")
             PrincipalFactory(tenant=tenant, principal_id="ctx_principal")
 
-            response = env.call_mcp(context={"trace_id": "trace_caps_1", "channel": "unit-test"})
+            # call_via, not call_mcp: the echo contract is about what crosses the
+            # WIRE, and call_mcp returns only the typed payload (Lane C, C5).
+            result = env.call_via(Transport.MCP, context={"trace_id": "trace_caps_1", "channel": "unit-test"})
 
-        assert response.context is not None, (
-            "get_adcp_capabilities dropped the caller's context object -- AdCP 3.1.1's "
-            "normative echo contract requires it be echoed byte-for-byte in the response."
+        assert result.is_success, f"capabilities dispatch failed: {result.error}"
+        wire = result.wire_response
+        assert isinstance(wire, dict), "MCP carried no wire body to grade the echo against"
+        # EXACT comparison against the captured wire. Asserting through
+        # response.context.model_dump(exclude_none=True) applied the SAME
+        # normalization to both sides, so it could not detect the seller
+        # re-serializing, reordering or dropping-and-refilling the object —
+        # precisely what AdCP 3.1.1's byte-for-byte echo rule forbids.
+        assert wire.get("context") == {"trace_id": "trace_caps_1", "channel": "unit-test"}, (
+            "get_adcp_capabilities did not echo the caller's context verbatim on the wire; "
+            f"wire carried {wire.get('context')!r}"
         )
-        assert response.context.model_dump(exclude_none=True) == {
-            "trace_id": "trace_caps_1",
-            "channel": "unit-test",
-        }
 
     def test_context_echoed_through_a2a_wire(self, integration_db):
         """A2A parity: _handle_get_adcp_capabilities_skill must forward and
@@ -69,10 +77,15 @@ class TestGetAdcpCapabilitiesContextEcho:
             tenant = TenantFactory(tenant_id="ctx-echo-caps-a2a")
             PrincipalFactory(tenant=tenant, principal_id="ctx_principal_a2a")
 
-            response = env.call_a2a(context={"trace_id": "trace_caps_a2a_1"})
+            result = env.call_via(Transport.A2A, context={"trace_id": "trace_caps_a2a_1"})
 
-        assert response.context is not None, "A2A get_adcp_capabilities dropped the caller's context object."
-        assert response.context.model_dump(exclude_none=True) == {"trace_id": "trace_caps_a2a_1"}
+        assert result.is_success, f"A2A capabilities dispatch failed: {result.error}"
+        wire = result.wire_response
+        assert isinstance(wire, dict), "A2A carried no wire body to grade the echo against"
+        assert wire.get("context") == {"trace_id": "trace_caps_a2a_1"}, (
+            "A2A get_adcp_capabilities did not echo the caller's context verbatim on the wire; "
+            f"wire carried {wire.get('context')!r}"
+        )
 
     def test_no_context_supplied_means_none_in_response(self, integration_db):
         """Rule 4, 'No synthesis': absent request context must stay absent, never fabricated."""

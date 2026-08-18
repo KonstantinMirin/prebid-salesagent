@@ -24,7 +24,6 @@ class MediaBuyListEnv(IntegrationEnv):
     """
 
     # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
-    A2A_SKILL = "get_media_buys"
     RESPONSE_MODEL = GetMediaBuysResponse
 
     EXTERNAL_PATCHES: dict[str, str] = {}
@@ -46,6 +45,20 @@ class MediaBuyListEnv(IntegrationEnv):
             req = GetMediaBuysRequest(**kwargs)
 
         return _get_media_buys_impl(req=req, identity=identity, include_snapshot=include_snapshot)
+
+    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+        """Dispatch get_media_buys through the real A2A handler pipeline.
+
+        JUSTIFIED OVERRIDE — does NOT declare A2A_SKILL, so it does not take the
+        base's client-core delegation. The core's UNWRAP parses into the PINNED
+        GetMediaBuysResponse, whose media_buys items REQUIRE `confirmed_at` and
+        `revision` (get-media-buys-response.json); production emits neither, so
+        every response fails that parse. Parsing here with the LOCAL model keeps
+        this env working while the gap is tracked as GH #1928 — the gap
+        is a production schema defect, not a dispatch defect, and is deliberately
+        not hidden by loosening the core's parse.
+        """
+        return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Call get_media_buys through the legacy MCP wrapper.

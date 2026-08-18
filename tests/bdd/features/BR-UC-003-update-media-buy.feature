@@ -2080,7 +2080,15 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends update_media_buy with canceled true on the already-canceled buy
     Then the operation should fail
     And the error code should be "NOT_CANCELLABLE"
+    And the error recovery hint should indicate correctable
+    And the response should NOT be a 500 or non-AdCP error shape
     And the response should echo the context.correlation_id unchanged
+    # The recovery-hint and envelope-shape lines pin the two halves the bare code
+    # check leaves open: the pinned vocabulary classifies NOT_CANCELLABLE as
+    # recovery "correctable" (adcp v3.1.1 enums/error-code.json, recovery
+    # classification block), and the storyboard runner parses the two-layer AdCP
+    # envelope, so a 500 or a non-AdCP body is a distinct failure from a wrong
+    # code. Both bind to steps the sibling storyboard scenario already uses.
     # invalid_transitions Phase 4 (double_cancel): cancel a buy (success), then try to
     # cancel the same buy again. canceled is terminal per the AdCP spec; the second
     # cancel cannot succeed. Seller MUST return NOT_CANCELLABLE (the schema reserves

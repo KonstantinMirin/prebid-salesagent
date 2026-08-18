@@ -68,6 +68,7 @@ from tests.harness.transport import (
     _envelope_from_adcp_error,
     _envelope_from_mcp_error,
     _wire_envelope_from_exception,
+    derive_error_status,
     strip_a2a_protocol_fields,
 )
 
@@ -602,10 +603,21 @@ def unwrap_rest_response(
                 details={"status_code": raw_response.status_code, "raw_body": body_text},
             )
             non_json_error.status_code = raw_response.status_code
-            return TransportResult(envelope=envelope, error=non_json_error, raw_response=raw_response)
+            # No JSON body means no AdCP envelope was produced at all — the
+            # request died as a transport fault (Lane C, C4).
+            return TransportResult(
+                envelope={**envelope, "status": derive_error_status(None)},
+                error=non_json_error,
+                raw_response=raw_response,
+            )
         parsed_error = env.parse_rest_error(raw_response.status_code, body)
+        # REST's authentic evidence is its real HTTP body: a parseable AdCP
+        # envelope is a structured rejection, anything else is a fault (C4).
         return TransportResult(
-            error=parsed_error, envelope=envelope, raw_response=raw_response, wire_error_envelope=body
+            error=parsed_error,
+            envelope={**envelope, "status": derive_error_status(body)},
+            raw_response=raw_response,
+            wire_error_envelope=body,
         )
 
     try:

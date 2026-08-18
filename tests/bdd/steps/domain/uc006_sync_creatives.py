@@ -7078,15 +7078,21 @@ def then_no_changes_list(ctx: dict) -> None:
 
     ``changes`` is populated only when the sync actually re-wrote fields
     (sync-creatives-response.json: "Field names that were modified (only present
-    when action='updated')"), so a non-empty list on the retry is the seller
+    when action='updated')"), so a NON-EMPTY list on the retry is the seller
     admitting it re-executed the write.
+
+    Empty, not None, is the spec-valid "nothing was re-written" value here:
+    ``SyncCreativeResult`` pins ``changes`` to ``list[str]`` with
+    ``default_factory=list`` on purpose — spec 3.1.1 types it ``array``, and a
+    None default serializes to the spec-invalid ``null`` on MCP (see the comment
+    on that field). Asserting ``is None`` was unsatisfiable by construction.
     """
     response = ctx.get("response")
     assert response is not None, "expected a sync_creatives response payload"
     assert response.creatives, "expected at least one per-creative result"
     changes = [c.changes for c in response.creatives]
-    assert changes == [None] * len(changes), (
-        f"a replayed sync must carry no changes list; got {changes} — the retry re-wrote the creative"
+    assert not any(changes), (
+        f"a replayed sync must record no field changes; got {changes} — the retry re-wrote the creative"
     )
 
 

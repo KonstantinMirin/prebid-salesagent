@@ -91,6 +91,13 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # Uses the legacy _run_mcp_wrapper mechanism (mock Context -> async wrapper),
     # not _run_mcp_client, and observes no structured_content wire.
     ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_mcp"),
+    # get_media_buys' wire omits the pinned-required confirmed_at + revision on
+    # every media_buys item (GH #1928), so the core's pinned parse fails.
+    ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_a2a"),
+    # by_package entries omit the pinned-required pricing_model/rate/currency
+    # (GH #2012), so the core's pinned parse fails on every delivery response.
+    ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_mcp"),
+    ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_a2a"),
     # Their real wire does not satisfy the tool's PINNED response model, which
     # the client core parses into — so joining the core would turn a live
     # conformance gap into a dispatch error. Each is a schema gap graded

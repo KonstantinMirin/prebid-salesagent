@@ -33,7 +33,7 @@ import asyncio
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import is_e2e
+from tests.bdd.steps._outcome_helpers import is_e2e, wire_dict
 from tests.bdd.steps.domain.uc006_sync_creatives import (
     _E2E_AGENT_URL,
     _E2E_FORMAT_ID,
@@ -320,21 +320,24 @@ def _first_creative_result(ctx: dict, expectation: str) -> object:
 def then_response_envelope_schema_valid(ctx: dict) -> None:
     """Validate the serialized sync_creatives response against the pinned AdCP JSON schema.
 
-    Uses the typed response's own serializer (``model_dump(mode="json")``),
-    not the transport wire bytes: CreativeSyncEnv's A2A dispatch goes through
-    the ``_raw()`` wrapper (not ``_run_a2a_handler``, see
-    ``CreativeSyncEnv.call_a2a``'s docstring) and so never stashes
-    ``wire_response`` for A2A — asserting on ``wire_field``/``wire_dict``
-    would raise their loud "wire_response missing" guard on every A2A run,
-    a harness gap unrelated to what this Then step grades. This still
-    exercises the real AdCPSchemaValidator (jsonschema Draft7) against the
-    pinned sync-creatives-response.json schema — a genuine, non-vacuous
-    assertion on every in-process transport.
+    Asserts on the TRANSPORT WIRE via ``wire_dict``. This used to re-serialize
+    the in-memory response with ``model_dump(mode="json")`` because
+    CreativeSyncEnv's A2A dispatch bypassed ``_run_a2a_handler`` and so stashed
+    no A2A wire — meaning the step graded a fresh serialization of an in-process
+    object rather than anything the buyer received, and could not have caught a
+    transport that mangled the envelope. Lane C removed that bypass (the env now
+    routes through the real A2A pipeline), so the wire exists on every transport
+    and the fallback is deleted rather than kept as a quiet escape hatch.
+
+    ``wire_dict``'s guard is the point: a real-wire transport that stops stashing
+    now raises loudly here instead of silently degrading to a self-consistent
+    re-serialization. IMPL legitimately has no wire and serializes the typed
+    payload through the production serializer.
     """
     from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
-    resp = _response_or_xfail(ctx, "a sync-creatives response envelope")
-    payload = resp.model_dump(mode="json")
+    _response_or_xfail(ctx, "a sync-creatives response envelope")
+    payload = wire_dict(ctx)
 
     async def _validate() -> None:
         async with AdCPSchemaValidator() as validator:
@@ -509,20 +512,59 @@ def then_every_status_in_creative_status_enum(ctx: dict) -> None:
 
 @then("the seller's own format_id object should roundtrip through sync_creatives without modification")
 def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
-    """Assert the persisted creative's format matches the captured {agent_url, id} verbatim.
+    """Assert the creative's format_id roundtrips verbatim — ON THE WIRE first.
 
-    Reads the DB-persisted Creative through CreativeRepository (repository
-    pattern, not a raw session query) — the sync response itself does not
-    echo format_id per creative, so the only real way to verify "roundtrip
-    without modification" is to check what got stored against what was
-    captured and sent.
+    "Roundtrip without modification" is a claim about what the BUYER can read
+    back, so the PRIMARY assertion reads the creative back over the transport via
+    ``list_creatives`` and compares the wire's ``format_id`` to the captured
+    ``{agent_url, id}``. Grading only the DB row (as this step used to) cannot
+    detect a seller that persists the format_id correctly and then serializes it
+    wrong on the wire — which is exactly the roundtrip being graded.
+
+    ``CreativeSyncEnv`` exposes no ``list_creatives`` primitive (its MCP_TOOL /
+    REST_ENDPOINT are sync-only), but ``AdCPTestClient.call`` resolves any tool
+    off the address table on the SAME env, so no second env and no raw repository
+    read is introduced as the primary check.
+
+    The ``CreativeRepository`` read is KEPT, after the wire assertion, as a
+    redundant in-process check: if the two ever disagree, the wire is the
+    buyer-facing contract and the DB read localizes the fault.
     """
     from src.core.database.repositories.creative import CreativeRepository
+    from tests.harness.client import AdCPTestClient
 
     first = _first_creative_result(ctx, "a persisted creative whose format_id roundtrips verbatim")
     captured = ctx["captured_format_id"]
 
     env = ctx["env"]
+
+    # ── PRIMARY: read the creative back over the wire ──────────────────────
+    client = ctx.get("client") or AdCPTestClient(env)
+    listed = client.call("list_creatives", {}, ctx["transport"])
+    wire = listed.wire_response
+    assert isinstance(wire, dict), (
+        f"list_creatives returned no wire body to verify the roundtrip against "
+        f"(error={listed.error!r}); the roundtrip cannot be graded on this transport"
+    )
+    listed_ids = {c.get("creative_id") for c in (wire.get("creatives") or [])}
+    assert first.creative_id in listed_ids, (
+        f"creative {first.creative_id!r} did not come back on the list_creatives wire; "
+        f"wire listed {sorted(i for i in listed_ids if i)!r}"
+    )
+    entry = next(c for c in wire["creatives"] if c.get("creative_id") == first.creative_id)
+    wire_format = entry.get("format_id")
+    wire_id = wire_format.get("id") if isinstance(wire_format, dict) else wire_format
+    wire_agent_url = wire_format.get("agent_url") if isinstance(wire_format, dict) else None
+    assert wire_id == captured["id"], (
+        f"format_id.id did not roundtrip on the wire: expected {captured['id']!r}, wire carried {wire_id!r}"
+    )
+    if wire_agent_url is not None:
+        assert wire_agent_url == captured["agent_url"], (
+            f"format_id.agent_url did not roundtrip on the wire: "
+            f"expected {captured['agent_url']!r}, wire carried {wire_agent_url!r}"
+        )
+
+    # ── REDUNDANT in-process check (localizes a wire/DB disagreement) ──────
     session = env.get_session()
     repo = CreativeRepository(session, env._tenant_id)
     db_creative = repo.get_by_id(first.creative_id, env._principal_id)

@@ -25,6 +25,7 @@ from tests.harness.transport import (
     _envelope_from_adcp_error,
     _envelope_from_mcp_error,
     _wire_envelope_from_exception,
+    derive_error_status,
 )
 
 if TYPE_CHECKING:
@@ -78,9 +79,13 @@ class A2ADispatcher:
         try:
             delivered = env.deliver_a2a(**kwargs)
         except Exception as exc:
+            wire = _wire_envelope_from_exception(exc)
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_wire_envelope_from_exception(exc),
+                # Derived per-transport status (Lane C, C4): the A2A evidence is
+                # whether a failed Task carried an AdCP envelope in its artifact.
+                envelope={"transport": "a2a", "status": derive_error_status(wire)},
+                wire_error_envelope=wire,
             )
         # Real A2A wire: the artifact DataPart dict, carried back on the SAME
         # return value as the payload. It used to be read off env._last_wire_response
@@ -151,6 +156,10 @@ class McpDispatcher:
                 error = _unwrap_mcp_tool_error(exc)
             return TransportResult(
                 error=error,
+                # Derived per-transport status (Lane C, C4): the MCP evidence is
+                # whether a structured AdCP envelope was recoverable from the
+                # ToolError, rather than a fault with no envelope at all.
+                envelope={"transport": "mcp", "status": derive_error_status(wire)},
                 wire_error_envelope=wire,
                 # What production WOULD emit for the same exception — see the
                 # ImplDispatcher caveat; never a substitute for the wire field.

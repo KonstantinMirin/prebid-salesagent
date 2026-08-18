@@ -44,6 +44,37 @@ def when_update_media_buy_with_unknown_id(ctx: dict) -> None:
     dispatch_via_client(ctx, "update_media_buy", payload)
 
 
+@when("the Buyer Agent sends update_media_buy with canceled true on the already-canceled buy")
+def when_update_media_buy_recancel(ctx: dict) -> None:
+    """Dispatch the second cancel of an already-canceled buy, on the wire.
+
+    Sends the buyer's literal payload — ``canceled: true`` included — through
+    ``AdCPTestClient`` so the request-field normalization seam is what decides
+    whether ``canceled`` is honored or refused (Lane A, salesagent-qbac1.1).
+    Deliberately NOT ``dispatch_request`` on ``MediaBuyDualEnv``: that env's
+    ``_flatten_update_request`` pops ``canceled``/``cancellation_reason``
+    (``_WRAPPER_UNSUPPORTED_FIELDS``) before the wire, so the scenario would
+    grade the harness's own accommodation of the bug instead of the seller.
+
+    Stashes the correlation_id under the generic ``ctx["correlation_id"]`` key,
+    the same contract the sibling storyboard When step uses, so the shared
+    correlation-echo Then step below works unmodified.
+    """
+    correlation_id = str(uuid4())
+    ctx["correlation_id"] = correlation_id
+    media_buy = ctx["existing_media_buy"]
+    assert media_buy is not None, (
+        "No existing_media_buy in ctx — the re-cancel scenario needs the Background's "
+        "seeded buy, mutated to canceled status by the Given step"
+    )
+    payload = {
+        "media_buy_id": media_buy.media_buy_id,
+        "canceled": True,
+        "context": {"correlation_id": correlation_id},
+    }
+    dispatch_via_client(ctx, "update_media_buy", payload)
+
+
 @then("the error recovery hint should indicate correctable")
 def then_error_recovery_hint_correctable(ctx: dict) -> None:
     """Delegate to then_error_recovery's existing wire-first logic — DRY, no duplication."""
@@ -78,11 +109,18 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
     which still exercises the real checks ``assert_wire_error`` performs: the
     two-layer invariant (``adcp_error.code == errors[0].code``), that the code
     is canonical (pinned ``error-code.json``), and that recovery matches the
-    pinned classification. A real check on every transport, not a conditional
-    no-op. The status_code != 500 check is additionally gated to transports
-    whose envelope carries one (REST/e2e_rest) — MCP/A2A's error-to-result
-    builders never populate result.envelope with a status_code, so there is
-    nothing to compare there.
+    pinned classification.
+
+    The "not a 500 or non-AdCP shape" half is graded by the DERIVED status
+    (Lane C, change-set C4). It used to be gated on ``status_code``, which only
+    REST populates — so on MCP and A2A, two of the three transports this
+    scenario claims to cover, that half of the sentence was a silent no-op. The
+    fix is NOT to synthesize an HTTP status for them: inventing a number and
+    then asserting it is != 500 would be a loud tautology. Instead each
+    transport reports whether the seller produced a structured AdCP envelope
+    (``adcp_error``) or died as a fault (``transport_fault``), read from its own
+    evidence — REST's HTTP body, A2A's failed-Task artifact, MCP's ToolError.
+    The REST status_code check is kept where it genuinely exists.
     """
     result = ctx.get("result")
     envelope = wire_error_dict(ctx)
@@ -91,6 +129,13 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
     result.assert_wire_error(code)
 
     transport_envelope = getattr(result, "envelope", None) or {}
+    status = transport_envelope.get("status")
+    assert status != "transport_fault", (
+        "Expected a structured AdCP error envelope, but the transport reported a fault "
+        f"(status={status!r}, envelope={transport_envelope!r}) — this is the 'not a 500 or "
+        "non-AdCP error shape' obligation failing."
+    )
+
     status_code = transport_envelope.get("status_code")
     if status_code is not None:
         assert status_code != 500, f"Expected a non-500 status, got {status_code}"
