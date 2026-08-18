@@ -57,8 +57,10 @@ So today exactly **one** setup capability is genuinely unrealizable over e2e: ad
    a `realize_e2e`-UNSUPPORTED harness method · in-process state with **no** `realize_e2e`
    declaration at all (this last one is the dangerous case — it silently breaks e2e).
 4. Verdict: **E2E-WIREABLE** / **NOT-E2E-WIREABLE** / **E2E-EXEMPT (UC-019)**.
-5. If not wireable: name the exact breaking step, and give the remediation — add a realizer, or an
-   explicit `e2e_rest_known_failures.txt` entry. Never a silent new failure.
+5. If not wireable: name the exact breaking step, and give the remediation — add the realizer, or
+   re-express the Then so it grades an e2e-observable signal. A new `e2e_rest_known_failures.txt`
+   entry is NOT a remediation: the ledger is a ratchet that may only SHRINK, so adding a row to it
+   is how a gap becomes permanent. Never a silent new failure either.
 6. Flag every dead IMPL assumption, and any Then reading state REST would not expose.
 
 ## Rules
@@ -76,7 +78,7 @@ Write to the file named in your task prompt:
 2. **Per scenario** — classified step list with `file:line`, plus remediation detail
 3. **Dead IMPL assumptions** — each, with proposal and line
 4. **Steps with in-process state and no `realize_e2e` declaration** — the silent-breakage class
-5. **New ledger entries required** — exact nodeid-shaped entries, if any
+5. **Ledger entries to REMOVE** — exact nodeid-shaped entries, if any
 6. **Uncertainties**
 
 Final message: 12-line summary. The file is the deliverable.

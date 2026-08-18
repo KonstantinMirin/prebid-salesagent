@@ -995,6 +995,61 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Production uses generic error codes / plain-string errors where the spec
         # demands specific codes and structured AdCPError with suggestion fields.
         _UC006_SPECGAP_XFAIL_TAGS: dict[str, str] = {
+            # Split out of @T-UC-006-storyboard-multi-format-sync (Lane D, D2).
+            # While the status obligation shared a scenario with the action
+            # obligations, its xfail ABORTED the scenario and the sibling
+            # action-value assertion never ran on any transport. It now owns a
+            # scenario, so the action half runs LIVE and this half is ledgered.
+            # Production defect: SyncCreativeResult deliberately never populates
+            # the inherited spec `status` (src/core/schemas/creative.py) — it
+            # stays None on the wire rather than carrying a creative-status enum.
+            # e2e_rest decision (owed explicitly by the lane's design): NO
+            # e2e_rest_known_failures.txt entry is required. These tag markers are
+            # applied here in pytest_collection_modifyitems with no transport
+            # gate, so they cover the e2e_rest param identically to a2a/mcp/rest.
+            # Routing the gap through the tag ledger therefore registers it once
+            # and grows NO ratchet — which is the whole point of preferring it to
+            # a per-nodeid entry.
+            "T-UC-006-storyboard-multi-format-sync-status": (
+                "SPEC-PRODUCTION GAP: SyncCreativeResult.status is never populated by production; "
+                "every per-creative status is None on the wire, not a creative-status enum value"
+            ),
+            # ── Storyboard provenance scenarios (PR #1858 Lane D) ──────────────
+            # These carried per-assertion pytest.xfail() calls inside the step
+            # bodies, which turned ANY failure (a 401, a 500, a timeout) into a
+            # green "known gap". The gaps are real, so they are registered here
+            # the one sanctioned way — by scenario tag, strict=True — and the
+            # steps now assert unconditionally.
+            #
+            # Production defect: check_provenance_required
+            # (src/core/tools/creatives/_validation.py) only ever emits a soft
+            # WARNING on missing/incomplete provenance. It never produces a
+            # per-creative action="failed" nor the spec's PROVENANCE_REQUIRED /
+            # PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING / PROVENANCE_DISCLOSURE_MISSING
+            # error codes.
+            "T-UC-006-storyboard-provenance-required-rejection": (
+                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
+                "check_provenance_required emits a soft warning, never action='failed' with "
+                "PROVENANCE_REQUIRED"
+            ),
+            "T-UC-006-storyboard-provenance-digital-source-type-missing": (
+                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
+                "no action='failed' with PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING"
+            ),
+            "T-UC-006-storyboard-provenance-disclosure-missing": (
+                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
+                "no action='failed' with PROVENANCE_DISCLOSURE_MISSING"
+            ),
+            # Distinct defect, same family: the internal Creative.provenance model
+            # (src/core/schemas/creative.py) is structurally incompatible with the
+            # wire-level adcp.types Provenance it is converted from (disclosure: str
+            # vs a Disclosure object, human_oversight: bool vs an enum, verification:
+            # dict vs a list), so even a well-formed corrected resubmission is rejected.
+            "T-UC-006-storyboard-provenance-corrected-acceptance": (
+                "SPEC-PRODUCTION GAP: internal Creative.provenance is structurally incompatible "
+                "with the wire-level adcp.types Provenance shape, so a spec-compliant corrected "
+                "resubmission is not accepted"
+            ),
             # Error-path scenarios: production returns CREATIVE_VALIDATION_FAILED or
             # plain-string errors[] instead of spec-specific error codes / AdCPError.
             # See _processing.py error handling paths.

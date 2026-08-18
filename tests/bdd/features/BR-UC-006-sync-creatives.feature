@@ -1661,17 +1661,29 @@ Feature: BR-UC-006 Sync Creative Assets
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
 
   @T-UC-006-storyboard-multi-format-sync @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
-  Scenario: Bulk sync of three creatives in three different formats returns per-creative action and status
+  Scenario: Bulk sync of three creatives in three different formats returns per-creative action
     Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
     When the Buyer Agent sends sync_creatives
     Then the response envelope should be schema-valid against sync-creatives-response.json
     And the creatives array should carry one result per submitted creative
-    And every per-creative result should expose action and status fields
+    And every per-creative result should expose an action field
     And every action value should be "created", "updated", or "failed"
-    And every status value should be drawn from the creative-status enum
     # creative/index.yaml sync_multiple: a single sync_creatives call carries three
     # creatives (display 300x250, video 30s, native_content). The seller validates each
     # against its format spec independently and returns per-creative action plus status.
+    # This half grades the ACTION obligations; the per-creative STATUS obligations are
+    # graded by the sibling scenario below, split out because their known production gap
+    # aborted this scenario and left these assertions dead (PR #1858 Lane D).
+    # sync_multiple: bulk multi-format validation returns per-creative action+status
+    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
+
+  @T-UC-006-storyboard-multi-format-sync-status @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
+  Scenario: Bulk sync of three creatives in three different formats returns per-creative status
+    Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
+    When the Buyer Agent sends sync_creatives
+    Then every per-creative result should expose a status field
+    And every status value should be drawn from the creative-status enum
+    # The STATUS half of the same storyboard step as the sibling scenario above.
     # Per-creative status is from creative-status (approved, pending_review, rejected).
     # sync_multiple: bulk multi-format validation returns per-creative action+status
     # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives

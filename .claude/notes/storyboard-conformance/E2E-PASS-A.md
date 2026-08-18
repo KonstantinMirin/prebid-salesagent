@@ -348,7 +348,7 @@ is **not used by any scenario in this batch**. Its single caller remains
 
 ---
 
-## 5. New ledger entries required
+## 5. Ledger entries to REMOVE
 
 **None.**
 

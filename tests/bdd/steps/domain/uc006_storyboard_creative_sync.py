@@ -7,16 +7,23 @@ roundtrip). These scenarios previously auto-xfailed at
 ``StepDefinitionNotFoundError`` — every Given/When/Then below is new
 (salesagent-vuz9t.12.3).
 
-Two of the six exercise production behavior that genuinely does not exist
-yet: ``check_provenance_required`` (src/core/tools/creatives/_validation.py)
-only ever emits a soft warning on missing/incomplete provenance — it never
-produces a per-creative ``action="failed"`` result or the spec's
-``PROVENANCE_REQUIRED`` / ``PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING`` /
-``PROVENANCE_DISCLOSURE_MISSING`` error codes. Those Then steps reach a real
-assertion and honestly ``pytest.xfail("SPEC-PRODUCTION GAP: ...")`` when
-production diverges from the pinned spec, instead of silently passing or
-being masked by a missing step definition — the exact distinction Finding 5
-(salesagent-vuz9t.12) exists to make visible.
+Several exercise production behavior that genuinely does not exist yet:
+``check_provenance_required`` (src/core/tools/creatives/_validation.py) only
+ever emits a soft warning on missing/incomplete provenance — it never produces
+a per-creative ``action="failed"`` result or the spec's ``PROVENANCE_REQUIRED``
+/ ``PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING`` / ``PROVENANCE_DISCLOSURE_MISSING``
+error codes.
+
+Those gaps are registered the ONE sanctioned way — a scenario/Examples-row tag
+in the ratcheted ledger (``_UC006_SPECGAP_XFAIL_TAGS``, tests/bdd/conftest.py)
+— and NEVER as a per-assertion escape hatch inside a step body. Every Then in
+this module asserts unconditionally: a dispatch error or a wrong value FAILS.
+An earlier revision inlined per-assertion xfails here, which meant a 401
+regression, a 500 and a timeout all came out green and indistinguishable from a
+real spec gap; a scenario-level tag cannot make that mistake because it names
+WHICH scenario is known-broken rather than swallowing whatever happens to go
+wrong inside it. Enforced by
+``tests/unit/test_architecture_bdd_no_inline_xfail.py``.
 
 Reuses the private helpers already established in uc006_sync_creatives.py
 (``_ensure_tenant_principal``, ``_build_creative_payload``,
@@ -283,29 +290,35 @@ def when_sync_creative_with_captured_format_id(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _response_or_xfail(ctx: dict, expectation: str) -> object:
-    """Return ``ctx["response"]``, or xfail with a SPEC-PRODUCTION GAP reason if the dispatch errored.
+def _require_response(ctx: dict, expectation: str) -> object:
+    """Return ``ctx["response"]``, or FAIL — a dispatch error is never a "known gap".
 
-    The storyboard scenarios in this module assert a per-creative *result*
-    (success envelope with an ``action``/``errors`` per item) — an
-    operation-level exception instead of that envelope is itself evidence
-    production has not implemented the graded behavior, not a step-wiring
-    failure, so it is surfaced as an honest xfail rather than a bare
-    AssertionError.
+    This replaces a ``_response_or_xfail`` helper that turned ANY dispatch
+    failure into a green xfail. Its docstring argued that an operation-level
+    exception "is itself evidence production has not implemented the graded
+    behavior" — but an exception is evidence of SOMETHING, and the step cannot
+    tell which: a 401 auth regression, a 500, a timeout and a harness wiring gap
+    all arrived here and all came out green.
+
+    A genuine known gap is registered exactly ONE way in this repo — a
+    scenario/Examples-row tag in the ratcheted ledger — never as a per-assertion
+    escape hatch inside a step body. So this asserts, and a real gap is ledgered
+    by tag instead.
     """
     resp = ctx.get("response")
-    if resp is not None:
-        return resp
     err = ctx.get("error")
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: expected {expectation}, but the dispatch raised "
-        f"{type(err).__name__ if err else 'no response and no error'}: {err}"
+    assert resp is not None, (
+        f"Expected {expectation}, but the dispatch produced no response "
+        f"({type(err).__name__ if err else 'no response and no error'}: {err}). "
+        "If this is a genuine spec-production gap, ledger the scenario's tag; "
+        "do not swallow it here."
     )
+    return resp
 
 
 def _first_creative_result(ctx: dict, expectation: str) -> object:
     """Return the first per-creative result off ``ctx['response'].creatives``, or xfail."""
-    resp = _response_or_xfail(ctx, expectation)
+    resp = _require_response(ctx, expectation)
     results = resp.creatives
     assert results, f"Expected at least one per-creative result for {expectation}, got: {resp}"
     return results[0]
@@ -336,7 +349,7 @@ def then_response_envelope_schema_valid(ctx: dict) -> None:
     """
     from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
-    _response_or_xfail(ctx, "a sync-creatives response envelope")
+    _require_response(ctx, "a sync-creatives response envelope")
     payload = wire_dict(ctx)
 
     async def _validate() -> None:
@@ -366,12 +379,10 @@ def then_per_creative_result_reports_action(ctx: dict, action: str) -> None:
     """
     first = _first_creative_result(ctx, f'a per-creative result with action="{action}"')
     actual = _action_str(first.action)
-    if actual != action:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected per-creative action={action!r}, production returned "
-            f"{actual!r} (errors={first.errors!r}, warnings={first.warnings!r}) — production does "
-            "not implement the spec's structural provenance rejection for this condition."
-        )
+    assert actual == action, (
+        f"expected per-creative action={action!r}, production returned {actual!r} "
+        f"(errors={first.errors!r}, warnings={first.warnings!r})"
+    )
 
 
 @then('the per-creative result should report action "created" or "updated"')
@@ -386,7 +397,7 @@ def then_per_creative_result_created_or_updated(ctx: dict) -> None:
     first = _first_creative_result(ctx, 'a per-creative result with action="created" or "updated"')
     actual = _action_str(first.action)
     if actual not in ("created", "updated"):
-        pytest.xfail(
+        raise AssertionError(
             f"SPEC-PRODUCTION GAP: expected per-creative action 'created' or 'updated' for a "
             f"well-formed corrected resubmission, production returned {actual!r} "
             f"(errors={first.errors!r}) — production's internal Creative.provenance model "
@@ -421,18 +432,12 @@ def then_per_creative_errors_0_code(ctx: dict, code: str) -> None:
     """Assert the first per-creative error's code matches *code*, or xfail on a genuine production gap."""
     first = _first_creative_result(ctx, f'a per-creative errors[0].code == "{code}"')
     errors = first.errors or []
-    if not errors:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected per-creative errors[0].code={code!r}, but production "
-            f"returned no errors (action={_action_str(first.action)!r}, warnings={first.warnings!r}) "
-            "— structural provenance rejection is not implemented in production."
-        )
+    assert errors, (
+        f"expected per-creative errors[0].code={code!r}, but production returned no errors "
+        f"(action={_action_str(first.action)!r}, warnings={first.warnings!r})"
+    )
     actual_code = errors[0].code
-    if actual_code != code:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected per-creative errors[0].code={code!r}, got {actual_code!r} "
-            "— production does not emit the spec's structural provenance rejection codes."
-        )
+    assert actual_code == code, f"expected per-creative errors[0].code={code!r}, got {actual_code!r}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -443,41 +448,50 @@ def then_per_creative_errors_0_code(ctx: dict, code: str) -> None:
 @then("the creatives array should carry one result per submitted creative")
 def then_creatives_array_one_result_per_submitted(ctx: dict) -> None:
     """Assert response.creatives has exactly one entry per submitted creative."""
-    resp = _response_or_xfail(ctx, "one per-creative result per submitted creative")
+    resp = _require_response(ctx, "one per-creative result per submitted creative")
     submitted = ctx.get("creatives", [])
     assert len(resp.creatives) == len(submitted), (
         f"Expected {len(submitted)} per-creative results (one per submitted creative), got {len(resp.creatives)}"
     )
 
 
-@then("every per-creative result should expose action and status fields")
-def then_every_result_exposes_action_and_status(ctx: dict) -> None:
+@then("every per-creative result should expose an action field")
+def then_every_result_exposes_action(ctx: dict) -> None:
     """Assert every per-creative result carries a non-None action field.
 
-    ``status`` is a separately-tracked, KNOWN production gap: per
-    ``SyncCreativeResult``'s own docstring (src/core/schemas/creative.py),
-    the inherited spec ``status`` field is deliberately never populated
-    ("we inherit but do NOT populate the spec `status`: it stays None").
-    Asserting non-None status here would be a false, silently-wrong pass on
-    every transport — call that out explicitly via xfail instead of eliding
-    the check.
+    DECOMPOSED from a compound "action and status" step (Lane D, change-set D2).
+    While the two obligations shared one step, the status half — a known
+    production gap — aborted the scenario, which made the sibling
+    action-value assertion below DEAD CODE on all three transports. Splitting
+    them lets the action obligations run live while the status obligation is
+    ledgered on its own scenario.
     """
-    resp = _response_or_xfail(ctx, "per-creative results exposing action and status")
+    resp = _require_response(ctx, "per-creative results exposing an action")
     assert resp.creatives, "Expected at least one per-creative result"
     for result in resp.creatives:
         assert result.action is not None, f"per-creative result {result.creative_id!r} has no action"
-    if any(result.status is None for result in resp.creatives):
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: SyncCreativeResult.status is never populated by production "
-            "(see src/core/schemas/creative.py SyncCreativeResult docstring) — every per-creative "
-            "result's status is None on the wire, not a creative-status enum value."
-        )
+
+
+@then("every per-creative result should expose a status field")
+def then_every_result_exposes_status(ctx: dict) -> None:
+    """Assert every per-creative result carries a non-None status field.
+
+    The other half of the decomposition above, and a KNOWN production gap:
+    per ``SyncCreativeResult``'s own docstring (src/core/schemas/creative.py)
+    the inherited spec ``status`` field is deliberately never populated ("we
+    inherit but do NOT populate the spec `status`: it stays None"). Registered
+    as a ledger tag on its own scenario, so this asserts unconditionally.
+    """
+    resp = _require_response(ctx, "per-creative results exposing a status")
+    assert resp.creatives, "Expected at least one per-creative result"
+    missing = [r.creative_id for r in resp.creatives if r.status is None]
+    assert not missing, f"per-creative results {missing!r} carry no status"
 
 
 @then(parsers.parse('every action value should be "{a1}", "{a2}", or "{a3}"'))
 def then_every_action_value_in_set(ctx: dict, a1: str, a2: str, a3: str) -> None:
     """Assert every per-creative action is one of the three listed values."""
-    resp = _response_or_xfail(ctx, f'every action in ("{a1}", "{a2}", "{a3}")')
+    resp = _require_response(ctx, f'every action in ("{a1}", "{a2}", "{a3}")')
     allowed = {a1, a2, a3}
     actions = [_action_str(result.action) for result in resp.creatives]
     assert all(a in allowed for a in actions), f"Expected every action in {allowed}, got {actions}"
@@ -494,13 +508,11 @@ def then_every_status_in_creative_status_enum(ctx: dict) -> None:
     """
     from adcp.types.generated_poc.enums.creative_status import CreativeStatus
 
-    resp = _response_or_xfail(ctx, "every status drawn from the creative-status enum")
+    resp = _require_response(ctx, "every status drawn from the creative-status enum")
     statuses = [result.status for result in resp.creatives]
-    if all(s is None for s in statuses):
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: SyncCreativeResult.status is never populated by production — "
-            "cannot grade enum membership against an always-None field."
-        )
+    assert not all(s is None for s in statuses), (
+        "every per-creative status is None — cannot grade enum membership against an always-None field"
+    )
     valid = {member.value for member in CreativeStatus}
     assert all(s in valid for s in statuses if s is not None), f"Expected every status in {valid}, got {statuses}"
 

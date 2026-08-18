@@ -372,7 +372,7 @@ that reads as configuration.
 
 ---
 
-## 5. New ledger entries required
+## 5. Ledger entries to REMOVE
 
 **None.** Every not-wireable case in this batch resolves to a fix or an existing declared mechanism:
 

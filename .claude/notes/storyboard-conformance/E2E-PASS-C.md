@@ -344,7 +344,7 @@ Declared today, for reference: `set_adapter_response` → `_persist_simulation_c
 
 ---
 
-## 5. New ledger entries required
+## 5. Ledger entries to REMOVE
 
 Only one scenario in batch C touches the ledger, and it is a **removal + replacement**, not a new gap.
 
@@ -371,7 +371,9 @@ Capture the exact ids with
 `uv run pytest tests/bdd/test_uc018_list_creatives.py --collect-only -q` after the rewrite — do not
 hand-write them. If the in-network run shows them green (plausible: `_reset_e2e_db` TRUNCATEs per
 scenario and the seeding is a plain DB write), add **nothing** and the net effect is a ledger
-shrink of one. If red, each row needs its own entry with a stated reason, not a copied one.
+shrink of one. If red, fix the realizer or re-express the Then — a red row is NOT a licence to add
+a ledger entry. The ledger only shrinks; if a row genuinely cannot be fixed in this pass, that is an
+escalation with a stated reason, not a routine addition.
 
 No other batch-C scenario produces a ledger entry: UC-019 never generates an `[e2e_rest]` param;
 sb-uc018-listall's current nodeid is already absent from the ledger and its mechanism is unchanged;

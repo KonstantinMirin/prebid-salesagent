@@ -24,6 +24,25 @@ Shells out to two narrow, fast, real ``pytest tests/bdd`` slices (selected by th
 Needs a real Postgres reachable via ``DATABASE_URL`` (the harness these scenarios
 exercise creates tenants/principals/products for real) — skipped otherwise, same as
 every other ``requires_db`` test in this suite.
+
+Two further obligations are graded here (salesagent-qbac1.5, Lane E steps 1-2),
+because neither is observable from the pure-logic unit tests:
+
+* **The artifact must survive xdist.** ``tox.ini`` runs the bdd env under
+  ``-n auto``; ``_RECORDS`` is a per-PROCESS global, so a sharded run's
+  controller writes the artifact from an empty dict while every measurement
+  sits in the workers. ``test_liveness_artifact_is_identical_under_xdist_and_
+  serial`` compares a sharded run against a serial one by SET EQUALITY of
+  scenario ids plus per-scenario observation counts — never by non-emptiness,
+  which a "let the last worker write" non-fix would satisfy with one shard.
+* **Membership is keyed on the scenario's own ``@T-*`` IDENTITY tag**, with the
+  ``@storyboard-v3.1``/``@schema-v3.1`` provenance tags RECORDED as a field
+  rather than used as a collection filter. A provenance retag currently
+  removes a scenario from the measurement silently; an identity tag cannot
+  move under a retag. Every expected id here is DERIVED in-test from the
+  feature file's own tags (via the single owner, ``storyboard_spec.
+  tagged_scenarios``) — a re-frozen literal id list would be exactly the
+  frozen-literal artifact this lane's Core Invariant forbids.
 """
 
 from __future__ import annotations
@@ -32,16 +51,44 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from scripts.audit import storyboard_spec
+
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+FEATURES_DIR = REPO_ROOT / "tests" / "bdd" / "features"
+
+# The two in-process slices this module shells out to.
+UC006_FILE = "tests/bdd/test_uc006_sync_creatives.py"
+UC006_MARKER = "uc006-storyboard-routing"
+UC005_FILE = "tests/bdd/test_uc005_discover_creative_formats.py"
+
+# Every in-process transport the bdd suite parametrizes over with
+# ``BDD_E2E_ENABLED`` popped (see _run_bdd_slice's docstring).
+IN_PROCESS_TRANSPORTS = {"mcp", "a2a", "rest"}
 
 
-def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str) -> dict:
+def _slice_scenarios(feature: str, marker: str) -> list[storyboard_spec.TaggedScenario]:
+    """The scenarios a ``-m <marker>`` slice of ``feature`` runs, from the feature's own tags.
+
+    Read through ``storyboard_spec.tagged_scenarios`` — the single owner of the
+    tag-line/identity-tag grammar (``_IDENT_TAG_RE``) — so this grader never
+    grows a second copy of the regex, and so the expected set is regenerated
+    from the tree on every run instead of frozen into this file.
+    """
+    return [s for s in storyboard_spec.tagged_scenarios(FEATURES_DIR, tag=f"@{marker}") if s.feature == feature]
+
+
+def _identity_tags(scenarios: Sequence[storyboard_spec.TaggedScenario]) -> set[str]:
+    return {s.identifier for s in scenarios}
+
+
+def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_args: Sequence[str] = ()) -> dict:
     """Shell out to a real, narrow pytest slice with a deliberately isolated env.
 
     This test's assertions pin an exact 3-way in-process transport set
@@ -53,10 +100,20 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str) -> dict:
     assertions would fail for reasons unrelated to what they're testing.
     """
     artifact = tmp_path / "liveness.json"
+    tmp_path.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.pop("BDD_E2E_ENABLED", None)
     env["BDD_LIVENESS_ARTIFACT"] = str(artifact)
     env.setdefault("ADCP_TESTING", "true")
+    # Measure EVERY transport. The BDD conftest's single-transport optimization
+    # deselects mcp/rest for any scenario carrying a strict xfail, which is
+    # exactly what a ledgered scenario carries — so without this the artifact
+    # would record one observation for every ledgered scenario and the
+    # "not silently zero, not silently one" assertion below would be measuring
+    # the optimization rather than the scenario. Lane D moved these gaps from
+    # inline pytest.xfail() (invisible to that optimization) to ledger tags,
+    # which is what surfaced it.
+    env["BDD_ALL_TRANSPORTS"] = "1"
     result = subprocess.run(
         [
             sys.executable,
@@ -68,6 +125,7 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str) -> dict:
             "-p",
             "no:cacheprovider",
             "-q",
+            *extra_args,
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -83,29 +141,33 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str) -> dict:
 
 
 def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_path: Path) -> None:
-    """All six UC-006 storyboard-routing scenarios have real, bound step definitions
+    """The UC-006 storyboard-routing slice is measured in full, and its
+    ``@storyboard-v3.1``-tagged members have real, bound step definitions
     (salesagent-vuz9t.12.3) — none are dormant/steps-unbound. Five genuinely xfail
     with a real, ledgered production-gap reason (not StepDefinitionNotFoundError);
     the sixth, format-id-roundtrip-on-sync, genuinely passes. Proves the artifact
     tracks real state, not a frozen count, and distinguishes ledgered-xfail from
     live-pass even though both have steps_bound=True."""
-    data = _run_bdd_slice(tmp_path, "tests/bdd/test_uc006_sync_creatives.py", "uc006-storyboard-routing")
+    data = _run_bdd_slice(tmp_path, UC006_FILE, UC006_MARKER)
     scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
 
-    # Only the six scenarios still tagged @storyboard-v3.1 show up here — the two
-    # retagged @schema-v3.1 (provenance-claim-contradicted, creative-reception-
-    # stateful-render) are correctly excluded, mirroring storyboard_coverage_map's
-    # own tag filter (scripts/audit/storyboard_spec.TAG).
-    assert set(scenarios) == {
-        "T-UC-006-storyboard-provenance-required-rejection",
-        "T-UC-006-storyboard-provenance-digital-source-type-missing",
-        "T-UC-006-storyboard-provenance-disclosure-missing",
-        "T-UC-006-storyboard-provenance-corrected-acceptance",
-        "T-UC-006-storyboard-multi-format-sync",
-        "T-UC-006-storyboard-format-id-roundtrip-on-sync",
-    }
+    # DERIVED, not frozen: every scenario the slice runs carries a `@T-*` identity
+    # tag, and identity — not provenance — is what the artifact keys membership on.
+    # The two `@schema-v3.1`-retagged members (provenance-claim-contradicted,
+    # creative-reception-stateful-render) are part of this slice and must be
+    # measured; a provenance retag must not be able to delete a scenario from the
+    # measurement.
+    slice_scenarios = _slice_scenarios("BR-UC-006-sync-creatives.feature", UC006_MARKER)
+    assert set(scenarios) == _identity_tags(slice_scenarios)
+
+    # The scenarios whose detailed ledgered/live behaviour this test pins — again
+    # derived from the feature's own tags, not listed here.
+    storyboard_tagged = {s.identifier for s in slice_scenarios if storyboard_spec.TAG in s.tags}
     live_scenario_id = "T-UC-006-storyboard-format-id-roundtrip-on-sync"
-    for scenario_id, record in scenarios.items():
+    assert live_scenario_id in storyboard_tagged
+
+    for scenario_id in sorted(storyboard_tagged):
+        record = scenarios[scenario_id]
         # Every scenario has real steps bound now — the dormant/unbound axis is
         # fully retired for this feature.
         assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
@@ -128,18 +190,122 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
 def test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live(tmp_path: Path) -> None:
     """A scenario that is NOT dormant reports steps_bound=True/harness_wired=True — the
     guard proves both directions, not only the failure case."""
-    data = _run_bdd_slice(tmp_path, "tests/bdd/test_uc005_discover_creative_formats.py", "storyboard-v3.1")
+    data = _run_bdd_slice(tmp_path, UC005_FILE, "storyboard-v3.1")
     scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
 
-    assert set(scenarios) == {
-        "T-UC-005-storyboard-baseline-format-id-object-shape",
-        "T-UC-005-storyboard-format-id-roundtrip-from-products",
-        "T-UC-005-storyboard-format-id-third-party-agent-out-of-scope",
-    }
+    assert set(scenarios) == _identity_tags(
+        _slice_scenarios("BR-UC-005-discover-creative-formats.feature", "storyboard-v3.1")
+    )
     for scenario_id, record in scenarios.items():
         assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
         assert record["unbound_steps"] == []
         assert record["harness_wired"] is True
         assert record["ledgered"] is False
-        assert {o["transport"] for o in record["observations"]} == {"mcp", "a2a", "rest"}
+        assert {o["transport"] for o in record["observations"]} == IN_PROCESS_TRANSPORTS
         assert all(o["outcome"] == "passed" for o in record["observations"])
+
+
+def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Path) -> None:
+    """A ``@schema-v3.1`` retag must not delete a scenario from the measurement.
+
+    ``scenario_liveness._TAG`` is used at ``pytest_bdd_before_scenario`` as an
+    early-``return`` COLLECTION FILTER, so the two UC-006 scenarios retagged
+    ``@schema-v3.1`` are invisible to the artifact — the instrument reports on a
+    population that a tag edit can silently shrink. Lane E converts that filter
+    into a recorded field: membership is the scenario's ``@T-*`` identity tag
+    (which a provenance retag cannot move), and the provenance tags are carried
+    on the record as data.
+
+    Graded on the two retagged members specifically, and on what the artifact
+    then says about them: both are genuinely DORMANT today (pytest-bdd raises
+    ``StepDefinitionNotFoundError`` on their first Given), so honest measurement
+    must report them ``steps_bound=False`` with the unbound step named — the
+    exact fact the current filter hides.
+    """
+    data = _run_bdd_slice(tmp_path, UC006_FILE, UC006_MARKER)
+    scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
+
+    slice_scenarios = _slice_scenarios("BR-UC-006-sync-creatives.feature", UC006_MARKER)
+    retagged = [s for s in slice_scenarios if storyboard_spec.TAG not in s.tags]
+    # The premise of this test: the slice really does contain members whose
+    # provenance tag is not @storyboard-v3.1. If a retag ever removes them, this
+    # fails loudly rather than passing vacuously over an empty list.
+    assert {s.identifier for s in retagged} == {
+        "T-UC-006-storyboard-provenance-claim-contradicted",
+        "T-UC-006-storyboard-creative-reception-stateful-render",
+    }
+
+    unbound_given = {
+        "T-UC-006-storyboard-provenance-claim-contradicted": (
+            'the Buyer Agent submits a creative claiming digital_source_type "digital_capture"'
+        ),
+        "T-UC-006-storyboard-creative-reception-stateful-render": (
+            "the Buyer Agent pushes creative assets to a stateful sales agent"
+        ),
+    }
+
+    for scenario in retagged:
+        record = scenarios[scenario.identifier]
+        # The provenance tag is DATA on the record, not the membership predicate.
+        assert set(record["tags"]) == {t.lstrip("@") for t in scenario.tags}
+        # Dormancy, measured — this is what the collection filter currently hides.
+        assert record["steps_bound"] is False
+        assert unbound_given[scenario.identifier] in record["unbound_steps"]
+        assert record["harness_wired"] is None
+        assert {o["transport"] for o in record["observations"]} == IN_PROCESS_TRANSPORTS
+        assert all(o["outcome"] == "xfailed" for o in record["observations"])
+        assert all(o["reason_category"] == "no_steps_bound" for o in record["observations"])
+
+
+def test_liveness_artifact_is_identical_under_xdist_and_serial(tmp_path: Path) -> None:
+    """A sharded run must publish the same measurement a serial run does.
+
+    ``tox.ini:138`` runs the bdd env under ``-n {env:BDD_XDIST_N:auto}``, but
+    ``scenario_liveness._RECORDS`` is a per-PROCESS module global: every worker
+    accumulates its own records and the controller — which has none — writes the
+    artifact last. The published file is therefore EMPTY in exactly the
+    configuration CI uses.
+
+    ``--dist load`` is PINNED here deliberately. ``tox.ini`` pairs ``-n`` with
+    ``--dist loadfile``, and mirroring that "for fidelity" would put this
+    single-file slice entirely on ONE worker — a last-writer-wins non-fix would
+    then pass this grader vacuously. Under ``--dist load`` the slice's 8
+    scenarios x 3 in-process transports = 24 items genuinely split across the
+    two workers, so only a real shard-and-merge satisfies the comparison.
+
+    The comparison itself is SET EQUALITY of scenario ids plus per-scenario
+    observation counts, never non-emptiness: an artifact carrying one worker's
+    shard is non-empty and still wrong.
+    """
+    serial = _run_bdd_slice(tmp_path / "serial", UC006_FILE, UC006_MARKER, extra_args=("-p", "no:randomly"))
+    sharded = _run_bdd_slice(
+        tmp_path / "sharded", UC006_FILE, UC006_MARKER, extra_args=("-p", "no:randomly", "-n", "2", "--dist", "load")
+    )
+
+    serial_records = {s["scenario_id"]: s for s in serial["scenarios"]}
+    sharded_records = {s["scenario_id"]: s for s in sharded["scenarios"]}
+
+    assert set(sharded_records) == set(serial_records), (
+        f"-n 2 --dist load published {len(sharded_records)} scenario(s); serial published "
+        f"{len(serial_records)}. The sharded run's measurements never reached the process "
+        "that wrote the artifact."
+    )
+
+    # Anti-vacuity: the serial baseline must itself be the full slice, otherwise
+    # "sharded == serial" could be satisfied by two equally-broken runs.
+    assert set(serial_records) == _identity_tags(_slice_scenarios("BR-UC-006-sync-creatives.feature", UC006_MARKER))
+
+    assert {sid: len(r["observations"]) for sid, r in sharded_records.items()} == {
+        sid: len(r["observations"]) for sid, r in serial_records.items()
+    }
+
+    for scenario_id, serial_record in serial_records.items():
+        sharded_record = sharded_records[scenario_id]
+        assert {o["transport"] for o in sharded_record["observations"]} == {
+            o["transport"] for o in serial_record["observations"]
+        }
+        # The merge must not lose or invert the joined verdicts either.
+        assert sharded_record["steps_bound"] == serial_record["steps_bound"]
+        assert sharded_record["unbound_steps"] == serial_record["unbound_steps"]
+        assert sharded_record["ledgered"] == serial_record["ledgered"]
+        assert sharded_record["harness_wired"] == serial_record["harness_wired"]
