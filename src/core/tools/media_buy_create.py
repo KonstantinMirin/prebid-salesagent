@@ -3558,6 +3558,13 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 media_buy_status=simulated_lifecycle,  # AdCP 3.1: mirrors deprecated `status`
                 valid_actions=valid_actions_for_status(simulated_lifecycle),
+                # Dry run: nothing is persisted, so there is no row to read and these
+                # are stated rather than fetched. Both follow from the simulated
+                # lifecycle itself: pending_start is NOT a committed status, so the
+                # seller has made no commitment and confirmed_at is null; a row that
+                # WOULD be created starts at the column's server_default of 1.
+                confirmed_at=datetime.now(UTC),
+                revision=1,
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
@@ -3634,7 +3641,7 @@ async def _create_media_buy_impl(
         try:
             with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
                 assert create_uow.media_buys is not None
-                create_uow.media_buys.create_from_request(
+                created_row = create_uow.media_buys.create_from_request(
                     media_buy_id=response.media_buy_id,
                     req=req,
                     principal_id=principal_id,
@@ -3649,6 +3656,12 @@ async def _create_media_buy_impl(
                     account_id=identity.account_id if identity else None,
                     payload_hash=request_hash,
                 )
+                # Read the two columns the REPOSITORY owns, inside the UoW while the
+                # row is still attached. The response reports what was persisted; it
+                # does not mint its own (see CreateMediaBuySuccess: both fields lost
+                # their defaults precisely so this read is not optional).
+                persisted_confirmed_at = created_row.confirmed_at
+                persisted_revision = created_row.revision
                 # UoW auto-commits on clean exit
         except IntegrityError as exc:
             return _resolve_idempotency_race_or_raise(
@@ -4090,6 +4103,11 @@ async def _create_media_buy_impl(
         adcp_response = CreateMediaBuySuccess.sync_success(
             media_buy_id=response.media_buy_id,
             packages=response_packages,
+            # Read from the row the repository just wrote, not minted here. A buy that
+            # is not yet committed carries a NULL confirmed_at, and saying so is the
+            # whole point: the previous default reported "now" for it.
+            confirmed_at=persisted_confirmed_at,
+            revision=persisted_revision,
             # AdCP 3.1 preferred status; mirrors deprecated `status`. Lifecycle on
             # the wire, from the same single source that drives valid_actions
             # (spec 3.1.1 create-media-buy-response.json;

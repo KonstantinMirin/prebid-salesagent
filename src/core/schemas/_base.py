@@ -505,29 +505,77 @@ class CreateMediaBuySuccess(CompletedTaskStatusMixin, AdCPCreateMediaBuySuccess)
     ``SyncAccountsResponse``.
     """
 
-    # adcp 6.6 (spec 3.1.1) made these required on the success envelope. They are
-    # invariant for a synchronous committed success, so declare spec-correct defaults
-    # here rather than threading identical literals through every constructor:
-    #   status      — see CompletedTaskStatusMixin (composed above); this class is a
-    #                 permanent adopter, the parent already types the field.
-    #   confirmed_at — seller commitment timestamp (stable after set).
-    #   revision     — initial revision number (schema minimum: 1).
-    # NOTE (SDK divergence): spec allows confirmed_at=null for provisional/manual-approval
-    # buys, but adcp 6.6 types it non-nullable AwareDatetime; that branch can't be modeled.
-    confirmed_at: AwareDatetime = Field(default_factory=lambda: datetime.now(UTC))
-    revision: int = 1
+    # adcp 6.6 (spec 3.1.1) made these required on the success envelope. Only ``status``
+    # is invariant for a synchronous success (see CompletedTaskStatusMixin, composed
+    # above). ``confirmed_at`` and ``revision`` are NOT: they are columns the repository
+    # owns, so they carry NO default here and every construction site states where its
+    # value came from. A default made this model a second producer of persisted state —
+    # and an invisible one, because the write-seam guard scans assignments and a
+    # ``default_factory`` is not an assignment.
+    #
+    # What the default asserted: ``confirmed_at=datetime.now(UTC)`` on EVERY success,
+    # including a ``pending_creatives`` buy whose column is NULL precisely because the
+    # seller has not committed. The docstring of ``CreateMediaBuySubmitted`` below
+    # already rejects that reasoning in so many words ("would falsely assert the seller
+    # confirmed a buy that is not yet committed"); the Success arm was doing it.
+    #
+    # Both keep the parent's REQUIRED types and lose only their local defaults, so
+    # omitting either is a construction error instead of a fabricated value.
+    #
+    # Deliberately NOT widened to ``| None``, though the pinned
+    # ``create-media-buy-response.json`` @ 3.1.1 types ``confirmed_at``
+    # ``["string", "null"]`` (verified against the pin, and it is in ``required``).
+    # Null is what a seller sends when it returns a SUCCESS for a buy it has not
+    # committed to — and this seller never does: ``create_from_request`` calls
+    # ``_stamp_confirmation_if_needed`` before flush, so a row created in any
+    # committed status is stamped at creation, and a create that is NOT committed
+    # (manual approval pending) returns the ``CreateMediaBuySubmitted`` arm instead.
+    # Emitting a non-null value where the spec permits null is a strict subset of
+    # what the spec allows; widening the annotation would buy nothing and would cost
+    # a type-checker suppression against the SDK's non-nullable parent (the ratchet
+    # this PR exists to bring back to 63).
+    confirmed_at: AwareDatetime
+    revision: int
 
     @classmethod
     def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
-        """Construct a synchronous create_media_buy success.
+        """Construct a synchronous create_media_buy success the BUYER will receive.
 
-        The spec-3.1.1 envelope invariants (status/confirmed_at/revision) come from the
-        subclass field defaults above — that is the single source of truth. This factory
-        exists ONLY because mypy's pydantic plugin does not treat those subclass defaults
-        as satisfying the required parent fields (spurious ``call-arg``); callers route the
-        untyped ``**kwargs`` through here to dodge that. Do NOT re-default the fields here —
-        that would let the factory drift from the class defaults.
+        ``confirmed_at`` and ``revision`` are required keyword arguments in practice:
+        they carry no field default, so omitting them is a construction error rather
+        than a silently fabricated value. Pass what the persisted row holds — the
+        repository owns both columns.
+
+        This factory exists ONLY because mypy's pydantic plugin does not treat the
+        subclass ``status`` default as satisfying the required parent field (spurious
+        ``call-arg``); callers route the untyped ``**kwargs`` through here to dodge
+        that. Do NOT re-default anything here.
         """
+        return cls(**kwargs)
+
+    @classmethod
+    def carrier(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
+        """Construct a Success that is NOT the buyer-facing envelope.
+
+        An adapter's ``create_media_buy`` returns this type, but what it returns is not
+        an envelope: the tool builds a fresh one for the buyer after the row is
+        written. Only ``media_buy_id``, ``packages``, ``creative_deadline`` and
+        ``workflow_step_id`` are ever read off an adapter response — verified across
+        every read site in ``media_buy_create``.
+
+        So ``confirmed_at``/``revision`` are meaningless here, and an adapter has no
+        row to read them from (adapters do not touch the database — that is the
+        boundary). The same is true of a test that needs *a* Success object to hand to
+        an envelope or a str() check: it is not speaking for the repository either.
+
+        Rather than restore a field default — which would let a real wire producer
+        omit them silently, the defect this lane exists to remove — the placeholders
+        live HERE, once, behind a name that says what the object is. A construction
+        that IS the buyer-facing envelope must use ``sync_success`` and pass the row's
+        values; that is the distinction the two factories draw.
+        """
+        kwargs.setdefault("confirmed_at", datetime.now(UTC))
+        kwargs.setdefault("revision", 1)
         return cls(**kwargs)
 
     # account/sandbox/creative_deadline/valid_actions/context: inherited from the
@@ -629,9 +677,10 @@ class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
     protocol-envelope ``status="submitted"`` (const) plus a required ``task_id``
     the buyer polls for the outcome. ``media_buy_id`` and ``packages`` land on
     the task's COMPLETION artifact, not this envelope. This is distinct from
-    ``CreateMediaBuySuccess``, whose adcp-6.6 defaults (``status="completed"``,
-    ``confirmed_at=<now>``, ``revision=1``) would falsely assert the seller
-    confirmed a buy that is not yet committed. Mirrors ``UpdateMediaBuySubmitted``.
+    ``CreateMediaBuySuccess``, whose ``status="completed"`` would assert a
+    synchronously committed buy. (Its ``confirmed_at``/``revision`` defaults used to
+    be part of that false assertion too; they are gone — every site now reads the
+    persisted row.) Mirrors ``UpdateMediaBuySubmitted``.
 
     ``status`` defaults to ``"submitted"`` on the library base; ``task_id`` is
     required (the workflow step id the admin approval flow acts on).

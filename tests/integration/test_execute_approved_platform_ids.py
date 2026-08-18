@@ -239,7 +239,7 @@ class TestExecuteApprovedPlatformIds:
         package_id = pending_media_buy_with_package["package_id"]
 
         # Build adapter response with _platform_line_item_ids attached
-        adapter_response = CreateMediaBuySuccess(
+        adapter_response = CreateMediaBuySuccess.carrier(
             media_buy_id=media_buy_id,
             packages=[],
         )
@@ -296,7 +296,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess(
+        adapter_response = CreateMediaBuySuccess.carrier(
             media_buy_id=media_buy_id,
             packages=[],
         )
@@ -327,7 +327,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess(
+        adapter_response = CreateMediaBuySuccess.carrier(
             media_buy_id=media_buy_id,
             packages=[],
         )
@@ -346,7 +346,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess(
+        adapter_response = CreateMediaBuySuccess.carrier(
             media_buy_id=media_buy_id,
             packages=[],
         )
@@ -371,7 +371,7 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         media_buy_id = data["media_buy_id"]
         tenant_id = data["tenant_id"]
 
-        adapter_response = CreateMediaBuySuccess(
+        adapter_response = CreateMediaBuySuccess.carrier(
             media_buy_id=media_buy_id,
             packages=[],
         )
@@ -513,7 +513,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
         # (2) ...fed through the REAL execute_approved_media_buy writeback. The adapter
         # response carries the GAM order id; the adapter itself is a stand-in whose
         # creatives_manager returns the real producer's output.
-        adapter_response = CreateMediaBuySuccess(media_buy_id=gam_order_id, packages=[])
+        adapter_response = CreateMediaBuySuccess.carrier(media_buy_id=gam_order_id, packages=[])
         mock_adapter = MagicMock()
         mock_adapter.creatives_manager.add_creative_assets.return_value = produced
         mock_adapter.orders_manager.approve_order.return_value = True

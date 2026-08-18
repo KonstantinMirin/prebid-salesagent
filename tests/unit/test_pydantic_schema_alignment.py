@@ -868,7 +868,15 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         selector="media_buy_id",
         model=CreateMediaBuySuccess,
         # packages requires the local package shape; synthesize is not reliable.
-        sample_override={"media_buy_id": "mb_1", "packages": [{"package_id": "pkg_1", "paused": False}]},
+        # confirmed_at/revision carry NO model default any more (they are columns the
+        # repository owns), so the sample has to supply them like any other
+        # schema-required field the model will not fill in for itself.
+        sample_override={
+            "media_buy_id": "mb_1",
+            "packages": [{"package_id": "pkg_1", "paused": False}],
+            "confirmed_at": "2026-03-15T12:00:00Z",
+            "revision": 1,
+        },
         # Forward-compat fields production emits that must be explicitly declared (F4, PR #1388).
         declared_fields_override=frozenset({"valid_actions", "context"}),
     ),
@@ -1530,10 +1538,10 @@ class TestResponseModelAlignment:
         - the model has no default -> omitting it MUST raise ValidationError
           (the model rejects an incomplete construction), or
         - the model declares a spec-correct literal default (e.g.
-          CreateMediaBuySuccess.status/confirmed_at/revision — see that
-          class's docstring: these are invariant for a synchronous success,
-          so the model guarantees the value itself rather than threading an
-          identical literal through every call site) -> omitting it must NOT
+          CreateMediaBuySuccess.status, which IS invariant for a synchronous
+          success — unlike confirmed_at/revision, which are columns the
+          repository owns and therefore carry no default: a default there made
+          the response a second producer of persisted state) -> omitting it must NOT
           raise, and the constructed model must still carry a non-None value
           for it. Either way the schema's requiredness invariant holds; only
           silently accepting an omitted field with no value at all would be

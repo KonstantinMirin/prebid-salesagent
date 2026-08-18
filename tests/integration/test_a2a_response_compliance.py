@@ -172,7 +172,7 @@ class TestA2ASpecCompliance:
     def test_create_media_buy_spec_compliance(self):
         """Test create_media_buy returns only spec-defined fields."""
         ctx = {"user_id": "1234567890"}
-        response = CreateMediaBuySuccess(
+        response = CreateMediaBuySuccess.carrier(
             media_buy_id="mb-456",
             packages=[],  # Required field per AdCP spec
             context=ctx,

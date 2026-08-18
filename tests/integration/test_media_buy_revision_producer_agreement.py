@@ -229,6 +229,58 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
     )
 
 
+@pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
+def test_create_response_reports_the_persisted_confirmed_at_and_revision(integration_db, transport):
+    """The CREATE producer is the same producer, for both persisted fields.
+
+    This module graded update, dry-run and pause/resume, and never the arm the buyer
+    meets FIRST. That gap is why the create response could mint its own values for
+    two years of review rounds: ``confirmed_at`` defaulted to ``datetime.now(UTC)``
+    and ``revision`` to ``1``, neither read from the row the repository had just
+    written one function earlier.
+
+    ``confirmed_at`` is the sharper of the two. The pinned
+    ``create-media-buy-response.json`` @ 3.1.1 types it ``["string", "null"]`` and
+    calls it stable once set, and ``models.py`` stamps it only when the buy reaches a
+    seller-COMMITTED status. A buy that is not committed therefore has a NULL column —
+    and the old default reported an instant anyway, asserting on the wire that the
+    seller had committed to a buy it had not. That is the same falsehood
+    ``CreateMediaBuySubmitted``'s own docstring refuses.
+
+    Both fields are compared against ``get_media_buys``, not against a literal, because
+    the obligation is producer AGREEMENT: a literal would pin today's lifecycle rather
+    than the invariant that the two producers read one row.
+    """
+    with MediaBuyCreateUpdateListEnv() as env:
+        _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+
+        created = env.call_via(transport, **_create_kwargs(product, domain="create-agreement.example.com"))
+        create_body = _wire(created, transport)
+        media_buy_id = create_body["media_buy_id"]
+
+        listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
+        listed_buys = _wire(listed, transport)["media_buys"]
+
+    assert len(listed_buys) == 1, f"{transport}: expected exactly the buy under test, got {listed_buys}"
+    listed_buy = listed_buys[0]
+
+    assert "confirmed_at" in create_body, (
+        f"{transport}: the create response dropped confirmed_at, which the pinned "
+        f"create-media-buy-response.json lists in `required` (keys: {sorted(create_body)})"
+    )
+    assert create_body["confirmed_at"] == listed_buy["confirmed_at"], (
+        f"{transport}: create reported confirmed_at={create_body['confirmed_at']!r} while "
+        f"get_media_buys reports {listed_buy['confirmed_at']!r} for the same buy. Two producers "
+        f"for a field the pin calls stable after it is set; the create arm must read the column, "
+        f"not stamp its own clock"
+    )
+    assert create_body["revision"] == listed_buy["revision"], (
+        f"{transport}: create reported revision={create_body['revision']!r} while get_media_buys "
+        f"reports {listed_buy['revision']!r}. The pin names the two as interchangeable sources of "
+        f"one optimistic-concurrency token"
+    )
+
+
 def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integration_db):
     """A simulated update reports the token the buy has NOW, not a bump.
 

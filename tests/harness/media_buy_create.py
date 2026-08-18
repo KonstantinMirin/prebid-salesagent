@@ -261,7 +261,11 @@ class MediaBuyCreateEnv(IntegrationEnv):
                 pkg_count = 1
 
             media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
-            return CreateMediaBuySuccess(
+            # adapter_ack, not a bare construction: this stands in for an ad-server
+            # adapter's return, and an adapter has no row to read confirmed_at/revision
+            # from. Using the same factory production adapters use keeps the fake
+            # honest about which envelope fields it is entitled to speak for.
+            return CreateMediaBuySuccess.carrier(
                 media_buy_id=media_buy_id,
                 packages=[
                     {
@@ -428,7 +432,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         if status == "submitted":
             response = CreateMediaBuySubmitted(status=status, **data)
         elif data.get("media_buy_id") is not None:
-            response = CreateMediaBuySuccess(**data)
+            response = CreateMediaBuySuccess.carrier(**data)
         else:
             response = CreateMediaBuyError(**data)
         return CreateMediaBuyResult(response=response, status=status, replayed=replayed)

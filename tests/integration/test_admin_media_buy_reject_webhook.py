@@ -195,6 +195,19 @@ def _post_approval_action(admin_session, ids: dict, data: dict):
     assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
 
 
+def _parse_instant(value: str):
+    """Parse a wire ISO-8601 timestamp into an aware datetime.
+
+    Both sides of the confirmed_at comparison go through a parse: the wire carries a
+    string (with a trailing "Z" that fromisoformat wants spelled "+00:00"), the column
+    carries a datetime, and comparing the two textually would grade formatting rather
+    than the instant.
+    """
+    from datetime import datetime
+
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _media_buy_state(tenant_id: str, media_buy_id: str):
     """Read the persisted media buy through the repository, in a fresh session.
 
@@ -322,9 +335,9 @@ class TestAdminMediaBuyRejectWebhook:
 
         Pin for PR #1567 round-2 cleanup (approve site routed through the sync_success()
         factory): the buy IS committed at approval time, so the embedded result
-        must keep asserting completion — status="completed", confirmed_at and
-        revision from the subclass defaults, the media_buy_id, and NO leaked
-        internal fields. Guards the factory switch against any wire drift and
+        must keep asserting completion — status="completed", the media_buy_id, NO
+        leaked internal fields, and confirmed_at/revision AGREEING WITH THE PERSISTED
+        ROW (they no longer come from subclass defaults; the repository owns both). Guards the factory switch against any wire drift and
         pins that approve stays a Success (never the Submitted variant the
         pending-approval CREATE path now emits — PR #1567 round-2 item 2).
         """
@@ -340,8 +353,22 @@ class TestAdminMediaBuyRejectWebhook:
         assert embedded.get("status") == "completed", (
             f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
         )
+        # Both are read off the PERSISTED row, not asserted as constants. They used to
+        # be pinned at the schema defaults (a truthy confirmed_at and revision == 1),
+        # which is precisely what made the response a second producer: the row here is
+        # several bumps past 1 by the time approval completes, and the old assertion
+        # passed only because the envelope was reporting a fabricated value.
+        persisted = _media_buy_state(tenant_id, media_buy_id)
         assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
-        assert embedded.get("revision") == 1, "approved buy must carry the initial revision"
+        assert _parse_instant(embedded["confirmed_at"]) == persisted.confirmed_at, (
+            f"embedded confirmed_at {embedded['confirmed_at']!r} disagrees with the persisted "
+            f"column {persisted.confirmed_at!r} — one producer per field"
+        )
+        assert embedded.get("revision") == persisted.revision, (
+            f"embedded revision {embedded.get('revision')!r} disagrees with the persisted column "
+            f"{persisted.revision!r}; get_media_buys publishes the column, so a buyer taking the "
+            f"token from this webhook would hand back a stale one"
+        )
         assert "workflow_step_id" not in embedded, "internal workflow_step_id must not leak onto the wire"
         # Absent-context branch pin (PR #1567 round-3): with no "context" key in
         # the workflow step's request_data, the echo path stays dormant and the

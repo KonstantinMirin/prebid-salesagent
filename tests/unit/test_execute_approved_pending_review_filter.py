@@ -91,7 +91,7 @@ class TestExecuteApprovedPendingReviewFilter:
         from src.core.schemas import CreateMediaBuySuccess, Principal
 
         principal = Principal(principal_id="p1", name="Test", platform_mappings={})
-        adapter_response = CreateMediaBuySuccess(
+        adapter_response = CreateMediaBuySuccess.carrier(
             media_buy_id="gam_order_1",
             packages=[],
         )

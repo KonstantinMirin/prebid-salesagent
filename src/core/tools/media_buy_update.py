@@ -48,7 +48,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPInvalidRequestError,
-    AdCPMediaBuyNotFoundError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -108,26 +107,6 @@ from src.services.targeting_capabilities import (
 )
 
 
-def _buy_and_revision_or_raise(media_buy: "MediaBuy | None", media_buy_id: str) -> tuple["MediaBuy", int]:
-    """The row and its persisted revision, or the typed not-found error.
-
-    The buy was fetched-or-raised at the top of the tool, so a None here means the
-    row vanished mid-transaction. Reporting the model's default instead would put a
-    fabricated optimistic-concurrency token on a success envelope for a buy that no
-    longer exists — the buyer would send it back as their expected revision and the
-    seller would compare it against nothing. A missing row is a not-found, not a
-    revision of 1.
-
-    Returns the row as well as the revision so this is the ONE place that proves the
-    buy exists: callers get a non-optional ``MediaBuy`` to hand to
-    ``_adcp_status_and_actions``, which requires one. Returning only the int left
-    every call site re-asserting non-None by hand, or not at all.
-    """
-    if media_buy is None:
-        raise AdCPMediaBuyNotFoundError(media_buy_id)
-    return media_buy, media_buy.revision
-
-
 def _adcp_status_and_actions(buy: "MediaBuy", today: date | None = None) -> tuple[MediaBuyStatus | None, list[str]]:
     """Map a media buy to ``(media_buy_status, valid_actions)``, DATE-REFINED.
 
@@ -144,10 +123,11 @@ def _adcp_status_and_actions(buy: "MediaBuy", today: date | None = None) -> tupl
     ``pending_approval``/``failed``/``draft``) never feeds a non-AdCP token to
     ``valid_actions_for_status`` (which would yield ``[]`` + a null status).
 
-    The row is REQUIRED. Every caller passes it to ``_buy_and_revision_or_raise`` in the same
-    envelope construction, which raises ``AdCPMediaBuyNotFoundError`` for a row that
-    vanished mid-transaction — so a missing row never reaches an envelope and this
-    helper does not carry a second answer for one. ``today`` defaults to the current
+    The row is REQUIRED. Every caller obtains it from
+    ``MediaBuyRepository.get_by_id_or_raise``, which raises
+    ``AdCPMediaBuyNotFoundError`` (with a message, a suggestion and the buyer's
+    context) for a row that vanished mid-transaction — so a missing row never reaches
+    an envelope and this helper does not carry a second answer for one. ``today`` defaults to the current
     UTC date (mock-time aware, matching ``get_media_buys``); callers may pass an
     explicit reference date.
 
@@ -561,7 +541,7 @@ def _update_media_buy_impl(
 
                 # Look up current status for valid_actions (date-refined for
                 # parity with get_media_buys — see _adcp_status_and_actions).
-                _dry_run_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                _dry_run_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "", context=req.context)
 
                 # Build simulated response.
                 # The wire status="completed" is KEPT for dry_run and is
@@ -574,9 +554,7 @@ def _update_media_buy_impl(
                 # (-> Error), a dry_run buyer asked to SIMULATE the would-be
                 # outcome, which IS completion -> "completed" is a truthful preview, not a
                 # lie. Guarded by tests/integration/test_media_buy_dry_run_status.py.
-                # Typed not-found FIRST: the helper requires a row, and a vanished buy
-                # must surface as MEDIA_BUY_NOT_FOUND rather than an AttributeError.
-                _dry_run_mb, _dry_run_revision = _buy_and_revision_or_raise(_dry_run_mb, req.media_buy_id or "")
+                _dry_run_revision = _dry_run_mb.revision
                 _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_mb)
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
@@ -754,8 +732,8 @@ def _update_media_buy_impl(
                     # Fall back to the current state-machine target only if the DB
                     # row is missing (e.g., adapter deleted it under us) — no row
                     # means no dates to refine.
-                    _post_action_mb = uow.media_buys.get_by_id(req.media_buy_id)
-                    _post_action_mb, _post_action_revision = _buy_and_revision_or_raise(_post_action_mb, media_buy_id)
+                    _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id, context=req.context)
+                    _post_action_revision = _post_action_mb.revision
                     _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
@@ -1410,8 +1388,8 @@ def _update_media_buy_impl(
             # - AdCP-required fields (package_id) for spec compliance
             # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
-            _final_mb = uow.media_buys.get_by_id(req.media_buy_id)
-            _final_mb, _final_revision = _buy_and_revision_or_raise(_final_mb, req.media_buy_id or "")
+            _final_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "", context=req.context)
+            _final_revision = _final_mb.revision
             _final_mbs, _final_actions = _adcp_status_and_actions(_final_mb)
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",

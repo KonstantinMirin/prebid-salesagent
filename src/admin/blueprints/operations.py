@@ -508,13 +508,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # the creative approval webhook in blueprints/creatives.py).
                         approve_context = echo_context(request_data)
 
-                        # The buy IS committed at this point, so a confirmed Success
-                        # (status/confirmed_at/revision from the subclass defaults) is
-                        # semantically correct here — route through the sync_success()
-                        # factory like every sibling construction site (PR #1567 round-2 cleanup).
+                        # The buy IS committed at this point — the approval above ran
+                        # update_status, which stamps confirmed_at and bumps revision.
+                        # So read them back off the row rather than asserting them: this
+                        # envelope reports the same two columns get_media_buys will
+                        # publish, and there is exactly one producer for each.
+                        approved_row = approve_repo.get_by_id_or_raise(media_buy_id)
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
+                            confirmed_at=approved_row.confirmed_at,
+                            revision=approved_row.revision,
                             context=approve_context,
                         )
                         metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)

@@ -97,7 +97,7 @@ class TestExecuteApprovedStatusUpdate:
             platform_mappings={},
         )
 
-        adapter_response = CreateMediaBuySuccess(
+        adapter_response = CreateMediaBuySuccess.carrier(
             media_buy_id="mb_test_001",
             packages=[],
         )

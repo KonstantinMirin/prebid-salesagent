@@ -1960,7 +1960,7 @@ class TestAdCPContract:
         # Note: packages in response require package_id and paused field (adcp 2.12.0+)
         from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
 
-        successful_response = CreateMediaBuySuccess(
+        successful_response = CreateMediaBuySuccess.carrier(
             media_buy_id="mb_12345",
             packages=[{"package_id": "pkg_1", "paused": False}],
             creative_deadline=datetime.now(UTC) + timedelta(days=7),
@@ -2004,7 +2004,7 @@ class TestAdCPContract:
 
         # Test that Union type works for type hints
 
-        success_via_union: CreateMediaBuyResponse = CreateMediaBuySuccess(
+        success_via_union: CreateMediaBuyResponse = CreateMediaBuySuccess.carrier(
             media_buy_id="mb_union",
             packages=[],
         )
