@@ -21,7 +21,9 @@ for its lifetime); the domain envs supply production. Neither is re-derived.
 
 from __future__ import annotations
 
+import uuid
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
@@ -47,10 +49,17 @@ def _drop_registered_auth(stashed: Any) -> Any:
     from src.core.webhooks.registration import ValidatedWebhookRegistration
 
     if isinstance(stashed, ValidatedWebhookRegistration):
+        from src.core.schema_helpers import to_push_notification_config
+
+        # Rebuild from the value's own wire dump minus the auth block, rather than
+        # re-listing its fields: the value HOLDS the library PushNotificationConfig,
+        # so a field added there (operation_id, token, ...) keeps surviving this
+        # mutation instead of being silently dropped by a stale field list here.
+        document = {key: value for key, value in stashed.to_stash().items() if key != "authentication"}
+        coerced = to_push_notification_config(document)
+        assert coerced is not None
         return ValidatedWebhookRegistration(
-            url=stashed.url,
-            authentication_type=None,
-            authentication_token=None,
+            config=coerced,
             auth=webhook_auth_for(None, None),  # type: ignore[arg-type]
         )
     stripped = type(stashed)()
@@ -205,6 +214,132 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
         step.request_data = request_data
         self.get_session().add(step)
         self.get_session().commit()
+
+    def minimal_create_kwargs(self, product: Any, pricing_option: Any, **overrides: Any) -> dict[str, Any]:
+        """The minimal valid ``create_media_buy`` kwargs against this env's seeded chain.
+
+        Lives on the env rather than in each grader because every registration
+        case needs the identical valid request and differs only in what it hangs
+        off ``push_notification_config`` — a per-file copy is the shape the DRY
+        invariant forbids, and it is also how two graders drift into dispatching
+        against subtly different buys. ``idempotency_key`` is fresh per call, so
+        a case that registers TWICE (row-identity) is two executions rather than
+        one execution and one cached replay.
+        """
+        kwargs: dict[str, Any] = {
+            "brand": {"domain": "testbrand.com"},
+            "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+            "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+            "idempotency_key": f"fo99-{uuid.uuid4().hex}",
+            "packages": [
+                {
+                    "product_id": product.product_id,
+                    "budget": 5000.0,
+                    "pricing_option_id": (
+                        f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_"
+                        + ("fixed" if pricing_option.is_fixed else "auction")
+                    ),
+                }
+            ],
+        }
+        kwargs.update(overrides)
+        return kwargs
+
+    def widen_stashed_schemes(self, step: Any, schemes: list[str]) -> None:
+        """Rewrite the stash's ``authentication.schemes`` to *schemes* — a LEGACY row.
+
+        Not a mutation that damages anything: it manufactures the one shape a
+        pre-deploy row can already hold. A ``schemes`` array with more than one
+        entry is schema-invalid against the pin (``maxItems: 1``), so nothing
+        typed could ever have written it — but the untyped A2A tool path forwards
+        the buyer's raw dict, and ``schemes[0]`` accepted it silently, so rows
+        like this exist in the wild and their delivery behavior is already
+        decided. Asserts the stash held a single-entry list first: widening a
+        stash that carried no schemes at all would grade nothing.
+        """
+        stashed = self.stashed_push_config(step)
+        auth = stashed.get("authentication")
+        assert isinstance(auth, dict) and len(auth.get("schemes") or []) == 1, (
+            f"expected a single-scheme stash to widen, found authentication={auth!r} — "
+            f"this helper manufactures a legacy row, it cannot invent the credential half"
+        )
+        request_data = dict(step.request_data)
+        request_data["push_notification_config"] = {
+            **stashed,
+            "authentication": {**auth, "schemes": list(schemes)},
+        }
+        step.request_data = request_data
+        self.get_session().add(step)
+        self.get_session().commit()
+
+    @contextmanager
+    def rehydration_refuses_multi_scheme(self) -> Iterator[None]:
+        """Make ``from_stash`` STRICT about scheme cardinality — the reverse-TDD mutation.
+
+        The alternative design the lane rejected: refuse a >1 ``schemes`` array
+        everywhere, rehydration included. Applying it here is what proves the
+        tolerance case is graded rather than merely green — with rehydration
+        strict, a legacy row's delivery must stop, because the delivery path
+        fails CLOSED on ``AdCPValidationError`` (``context_manager``'s per-webhook
+        ``continue``), which is the regression the case exists to catch.
+        """
+        from src.core.exceptions import AdCPValidationError
+        from src.core.webhooks.registration import ValidatedWebhookRegistration
+
+        original = ValidatedWebhookRegistration.from_stash.__func__  # type: ignore[attr-defined]
+
+        def _strict_from_stash(cls: Any, stashed: Any, **kwargs: Any) -> Any:
+            auth = stashed.get("authentication") if isinstance(stashed, dict) else None
+            schemes = (auth or {}).get("schemes") or [] if isinstance(auth, dict) else []
+            if len(schemes) > 1:
+                raise AdCPValidationError(
+                    "Invalid push_notification_config.authentication.schemes: exactly one scheme is allowed.",
+                    field="push_notification_config.authentication.schemes",
+                )
+            return original(cls, stashed, **kwargs)
+
+        with patch.object(ValidatedWebhookRegistration, "from_stash", classmethod(_strict_from_stash)):
+            yield
+
+    @contextmanager
+    def wrapper_loses_the_row_identity(self) -> Iterator[None]:
+        """Drop the row id between the transport wrapper and ``_impl``.
+
+        The reverse-TDD mutation for the row-identity grader, written
+        shape-agnostically for the same reason ``_drop_registered_auth`` is: the
+        row id travels inside the buyer's raw dict today (``config["id"]``, read
+        at ``media_buy_create.py`` to key the upsert) and is expected to travel
+        as its own ``config_id`` argument once the config parameter is typed —
+        the AdCP model has no ``id`` field, so coercion drops it silently. This
+        removes whichever one is present, so the control keeps meaning "the row
+        the buyer named did not survive to the upsert" across that change.
+
+        Asserts on exit that it removed something: a control that mutates
+        nothing would report a vacuous grader as a real one.
+        """
+        import src.core.tools.media_buy_create as create_module
+
+        original_impl = create_module._create_media_buy_impl
+        stripped: list[str] = []
+
+        async def _impl_without_the_row_identity(*args: Any, **kwargs: Any) -> Any:
+            config = kwargs.get("push_notification_config")
+            if isinstance(config, dict) and config.get("id") is not None:
+                kwargs["push_notification_config"] = {k: v for k, v in config.items() if k != "id"}
+                stripped.append("push_notification_config['id']")
+            if kwargs.get("config_id") is not None:
+                kwargs["config_id"] = None
+                stripped.append("config_id")
+            return await original_impl(*args, **kwargs)
+
+        with patch.object(create_module, "_create_media_buy_impl", _impl_without_the_row_identity):
+            yield
+
+        assert stripped, (
+            "the mutation removed no row identity — either the wrapper never forwarded one, "
+            "or it now travels under a name this control does not know about; either way the "
+            "grader it controls is not actually graded by it"
+        )
 
     def persisted_config_rows(self) -> list[Any]:
         """Every push-notification row this env's tenant currently holds."""

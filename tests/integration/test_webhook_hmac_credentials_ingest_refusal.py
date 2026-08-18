@@ -116,8 +116,18 @@ _HMAC_WITHOUT_CREDENTIALS = [
     # compares exactly against the enum spelling would wave this one through
     # into precisely the unservable state the exact-spelling rows are refused
     # for.
-    pytest.param({"schemes": ["hmac-sha256"]}, id="credentials-absent-lowercase-scheme"),
+    #
+    # MOVED OUT of this list by Epic D lane C3 (salesagent-fo99.3): the A2A TOOL
+    # path now coerces through the pinned model like MCP and REST already did, so
+    # ``hmac-sha256`` is refused for the SCHEME (it is not a member of the pinned
+    # AuthenticationScheme enum) BEFORE the credential requirement is reached. It
+    # is still refused, still correctable, and now names the field that is
+    # actually wrong — a strictly better answer than "you are missing a credential
+    # for a scheme that does not exist". Graded in its own case below.
 ]
+
+# The lowercase spelling, now refused for the SCHEME on every transport.
+_LOWERCASE_SCHEME = {"schemes": ["hmac-sha256"]}
 
 
 def _create_kwargs(product, authentication: dict | None) -> dict:
@@ -160,6 +170,39 @@ class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
             )
             _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
 
+    @pytest.mark.parametrize("transport", _UNTYPED_TRANSPORTS, ids=lambda t: t.value)
+    def test_lowercase_scheme_is_refused_naming_the_scheme(self, integration_db, transport):
+        """``hmac-sha256`` is refused for the SCHEME, and nothing is persisted.
+
+        Epic D lane C3 moved this case here from the credentials list. Before C3
+        the untyped A2A path had no enum between the buyer and ``_impl``, so the
+        registration gate caught the lowercase spelling as "HMAC asked for, no
+        secret" — right refusal, wrong field. Now that the A2A tool wrapper
+        coerces through the pinned model, the document is refused for the member
+        that is actually invalid, matching what MCP and REST have always done.
+
+        Still refused, still correctable, still nothing stored: the buyer cannot
+        end up with an unservable row either way. What changed is only that
+        error.field now names the thing the buyer must fix.
+        """
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+
+            result = env.call_via(transport, **_create_kwargs(product, _LOWERCASE_SCHEME))
+
+            assert result.is_error, (
+                "a scheme outside the pinned AuthenticationScheme enum must fail create_media_buy "
+                f"at ingest. Got: {getattr(result, 'wire_response', None) or result.payload!r}"
+            )
+            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            assert_envelope_shape(
+                envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                field="push_notification_config.authentication.schemes[0]",
+            )
+            _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
+
     def test_hmac_registration_with_credentials_is_accepted(self, integration_db):
         """The control: the same request WITH a secret is not refused.
 
@@ -191,18 +234,22 @@ class TestSchemaTypedTransportsRefuseTheSameDocument:
 
     What is asserted here is everything the buyer contract needs — refusal, wire
     code, recovery semantics, that the named field is the CREDENTIAL and not the
-    URL, and that nothing persisted. What is deliberately NOT asserted is the
-    ``push_notification_config.`` prefix: ``format_validation_error``
-    (``src/core/validation_helpers.py``) derives ``field`` from Pydantic's
-    ``loc``, which is relative to the sub-model being validated, so this layer
-    emits ``authentication.credentials`` while the gate emits the absolute path.
+    URL, and that nothing persisted.
 
-    That prefix inconsistency is real and pre-existing — the same buyer error
-    reaches ``error.field`` differently depending on transport — but it affects
-    EVERY field this validator reports, not just this one, so correcting it is a
-    cross-cutting wire change and not salesagent-47n9.20's to make. Tracked as
-    its own ticket; asserting ``endswith`` here pins the credential naming
-    without pretending the prefix question is settled.
+    The ``push_notification_config.`` prefix USED to diverge here: this layer
+    derived ``field`` from Pydantic's ``loc``, which is relative to the sub-model
+    being validated, so it emitted ``authentication.credentials`` while the
+    registration gate emitted the absolute path. Epic D lane C3 closed that fork
+    for THIS field — ``to_push_notification_config`` now qualifies the derived
+    location, so every transport reports
+    ``push_notification_config.authentication.credentials``, which is what FastMCP
+    already emitted and what the gate raises.
+
+    The ``endswith`` assertions below are RETAINED anyway, deliberately: the
+    broader inconsistency across every OTHER field this validator reports is
+    gh-#1895 and is still open, so a suffix assertion here keeps this case honest
+    about what it is pinning — the credential naming — rather than quietly
+    becoming a prefix regression test for a change it does not own.
     """
 
     @pytest.mark.parametrize(

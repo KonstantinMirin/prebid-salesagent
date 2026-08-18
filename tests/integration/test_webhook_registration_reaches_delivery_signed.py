@@ -42,6 +42,7 @@ from typing import Any
 
 import pytest
 
+from src.core.exceptions import AdCPValidationError
 from tests.harness import A2APushRegistrationEnv, MediaBuyPushRegistrationEnv
 from tests.helpers import SIGNATURE_HEADER, assert_signature_verifies_over_wire_body
 
@@ -313,31 +314,32 @@ class TestRefusedStashCostsTheWebhookNotTheTransition:
 
 
 class TestBlankUrlRegistrationIsNotPersisted:
-    """A whitespace-only URL must not become a stored config row.
+    """A whitespace-only URL must never become a stored config row.
 
-    Grades design item 2's CORRECTED writer guard. The obvious spelling —
-    ``if registration:`` — is wrong, and silently so: the registration gate is a
-    documented no-op on blank/None URLs, so ``accept_push_notification_config``
-    RETURNS a value for ``url="   "`` rather than raising. Keying the write on
-    the value's PRESENCE therefore persists a row whose url is whitespace, where
-    today the write is skipped — and with lane C2 deleting the repository's own
-    ``ValueError``, nothing downstream refuses it either. Measured, the columns
-    that would be written are ``{'url': '   ', 'authentication_type':
-    'HMAC-SHA256', 'authentication_token': <secret>}``.
+    The obligation is stable across two lanes; only WHO refuses has changed, and
+    each change made the answer stronger:
 
-    Driven over A2A, and that is the whole point of the case. Both typed paths
-    refuse this document ABOVE the guard (the MCP tool parameter and
-    ``CreateMediaBuyRequest`` validate ``url`` as a pydantic ``AnyUrl``), so an
-    MCP-driven version of this test fails with a transport ``VALIDATION_ERROR``
-    without ever reaching its subject. A2A reaches it because the skill handler
-    does ``params.pop("push_notification_config")`` and forwards the buyer's RAW
-    DICT, which ``create_media_buy_raw`` passes through unchanged — its
-    ``isinstance(..., PushNotificationConfig)`` coercion has an ``else`` branch,
-    and the parameter annotation is not enforced at runtime. That untyped
-    forward is exactly the path the guard exists for.
+    - Lane C2 gave ``_impl`` a write guard keyed on ``registration.url.strip()``.
+      That mattered because the registration gate is a documented no-op on blank
+      URLs, so ``accept_push_notification_config`` RETURNS a value for
+      ``url="   "``; keying the write on the value's PRESENCE persisted a row with
+      a whitespace url (measured: ``('   ', 'HMAC-SHA256')``), and C2 also deleted
+      the repository ValueError that used to catch it downstream.
+    - Lane C3 then made the A2A tool wrapper coerce through the pinned model, so a
+      whitespace url is now REFUSED at ingest — correctably, naming
+      ``push_notification_config.url`` — instead of being silently dropped. The
+      buyer learns their registration did not take effect, which is the whole
+      point of the epic.
+
+    The C2 write guard is GONE, and its removal is part of the same movement: with
+    ``_impl`` typed, ``PushNotificationConfig(url="   ")`` raises ``url_parsing``,
+    so a blank-url config cannot be constructed and the guard became unreachable
+    code. The protection did not disappear — it moved into the type, and this case
+    grades it at the wrapper, which is why it asserts a REFUSAL as well as the
+    absent row rather than only the absent row.
     """
 
-    def test_whitespace_only_url_writes_no_config_row(self, integration_db):
+    def test_whitespace_only_url_is_refused_and_writes_no_config_row(self, integration_db):
         with MediaBuyPushRegistrationEnv() as env:
             _, _principal, product, pricing_option = env.setup_media_buy_data()
             kwargs = _create_kwargs(product, pricing_option)
@@ -346,11 +348,15 @@ class TestBlankUrlRegistrationIsNotPersisted:
                 "authentication": _tool_auth_block(),
             }
 
-            env.call_a2a(**kwargs)
+            with pytest.raises(AdCPValidationError) as refusal:
+                env.call_a2a(**kwargs)
 
+            assert refusal.value.field == "push_notification_config.url", (
+                f"a whitespace-only URL must be refused by name; got field={refusal.value.field!r}"
+            )
             rows = env.persisted_config_rows()
             assert rows == [], (
                 f"a whitespace-only URL was persisted as "
-                f"{[(row.url, row.authentication_type) for row in rows]} — the write guard is "
-                f"keyed on the registration's presence rather than on its url"
+                f"{[(row.url, row.authentication_type) for row in rows]} — a refused registration "
+                f"must leave nothing behind"
             )

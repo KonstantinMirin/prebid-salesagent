@@ -44,7 +44,7 @@ def _sync_creatives_impl(
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
-    push_notification_config: PushNotificationConfig | dict | None = None,
+    push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:

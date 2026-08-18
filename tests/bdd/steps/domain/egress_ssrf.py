@@ -80,6 +80,24 @@ _HMAC_SCHEME = "HMAC-SHA256"
 # instead (singular ``scheme``); see the message/send step below.
 _HMAC_WITHOUT_CREDENTIALS = {"schemes": [_HMAC_SCHEME]}
 
+# TWO schemes in one array — the shape the pin FORBIDS outright
+# (``authentication.schemes`` is ``minItems: 1, maxItems: 1``), not a shape whose
+# precedence the seller may resolve for itself: the block's own description says
+# "Precedence is a switch, not a fallback ... A seller MUST NOT sign the same
+# webhook both ways". Credentials are absent as well, and that is deliberate —
+# it is the document the lane's own bug report names, and it is measured (against
+# the pinned model, 2026-08-18) to fail at ``authentication.schemes`` rather than
+# at ``authentication.credentials``, because ``too_long`` on the array is
+# reported before the missing secret. The scenario states that field exactly.
+_TWO_SCHEMES = {"schemes": ["Bearer", _HMAC_SCHEME]}
+
+# One character short of the pinned ``credentials`` ``minLength: 32``. A boundary
+# value rather than a token: a 5-character secret would also be refused by a
+# hand-written "looks too short" rule that has nothing to do with the pin, while
+# 31 is refused only by the pinned minimum itself.
+_SHORT_SECRET = "a" * 31
+_HMAC_WITH_SHORT_CREDENTIALS = {"schemes": [_HMAC_SCHEME], "credentials": _SHORT_SECRET}
+
 # Anything that could spell an IP address. Deliberately over-broad: the tokens it
 # yields are then handed to ``ipaddress``, which is the actual decision. A regex
 # alone would either miss ``fd00:ec2::254`` or flag every ISO timestamp.
@@ -206,31 +224,87 @@ def when_create_media_buy_with_push_url(ctx: dict, webhook_url: str) -> None:
     dispatch_request(ctx, **kwargs)
 
 
-# ── When steps: the CREDENTIAL half of a registration ───────────────
+# ── When steps: the AUTHENTICATION half of a registration ───────────
 #
-# Four registration surfaces, one document: HMAC-SHA256 named, no secret
-# supplied. Each dispatches through ``dispatch_request`` so the refusal is
+# Registration surfaces carrying an authentication block the seller cannot
+# serve. Each dispatches through ``dispatch_request`` so the refusal is
 # production's, on the wire, and none of them builds the request model in the
 # test — a test-side ``ValidationError`` would prove the harness validates, not
 # that the buyer is refused.
+#
+# The block is the only thing that varies between them, so the dispatch itself
+# is written once per TOOL and the steps supply the document: a second copy
+# differing only in a dict literal is the shape the DRY invariant forbids, and
+# it is also how the two documents would drift into being dispatched against
+# different requests.
 
 
-@when("the buyer creates a media buy registering HMAC-SHA256 with no credentials")
-def when_create_media_buy_hmac_without_credentials(ctx: dict) -> None:
-    """Dispatch create_media_buy with a credential-less HMAC push_notification_config.
+def _dispatch_create_registering(ctx: dict, authentication: dict) -> None:
+    """Dispatch create_media_buy registering *authentication* on a safe URL.
 
-    The surface that runs BOTH registration halves today. Everything except the
-    authentication block comes from the harness's minimal valid create, so a
-    package/pricing rejection can never stand in for the refusal under test.
+    Everything except the authentication block comes from the harness's minimal
+    valid create, so a package/pricing rejection can never stand in for the
+    refusal under test, and the URL is public so the SSRF gate that runs first
+    cannot be the thing that refuses.
     """
     from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
 
     kwargs = harness_create_request_kwargs(ctx)
     kwargs["push_notification_config"] = {
         "url": _SAFE_WEBHOOK_URL,
-        "authentication": _HMAC_WITHOUT_CREDENTIALS,
+        "authentication": authentication,
     }
     dispatch_request(ctx, **kwargs)
+
+
+def _dispatch_sync_registering(ctx: dict, authentication: dict) -> None:
+    """Dispatch sync_creatives registering *authentication* on a safe URL.
+
+    ``push_notification_config`` is request-level here (unlike
+    ``creatives[].format_id.agent_url``), so the whole request must be refused —
+    a per-item failure would tell the buyer to fix a creative when the thing that
+    is wrong is the registration. The creative comes from
+    ``CreativeAssetFactory`` so a missing required field cannot produce a
+    VALIDATION_ERROR that resembles this refusal for the wrong reason.
+    """
+    from tests.factories.creative_asset import CreativeAssetFactory
+
+    creative = CreativeAssetFactory(
+        creative_id="c_creds_refusal",
+        name="Credential Refusal Creative",
+    )
+    dispatch_request(
+        ctx,
+        creatives=[creative],
+        push_notification_config={
+            "url": _SAFE_WEBHOOK_URL,
+            "authentication": authentication,
+        },
+    )
+
+
+@when("the buyer creates a media buy registering HMAC-SHA256 with no credentials")
+def when_create_media_buy_hmac_without_credentials(ctx: dict) -> None:
+    """Dispatch create_media_buy with a credential-less HMAC push_notification_config.
+
+    The surface that runs BOTH registration halves today.
+    """
+    _dispatch_create_registering(ctx, _HMAC_WITHOUT_CREDENTIALS)
+
+
+@when("the buyer creates a media buy registering two authentication schemes")
+def when_create_media_buy_two_schemes(ctx: dict) -> None:
+    """Dispatch create_media_buy with a ``schemes`` array the pin forbids.
+
+    The document lane C3 exists for: today the untyped A2A tool path forwards
+    the buyer's raw dict to ``_impl``, where ``schemes[0]`` selects "Bearer" and
+    the HMAC half is never inspected — so the registration is ACCEPTED, stored,
+    and then never signed at delivery. The typed transports refuse it above the
+    gate, but with a field path relative to the sub-model they validated, so the
+    same buyer error currently reaches ``error.field`` differently depending on
+    which wire it arrived on.
+    """
+    _dispatch_create_registering(ctx, _TWO_SCHEMES)
 
 
 @when("the buyer updates the media buy registering HMAC-SHA256 with no credentials")
@@ -261,29 +335,22 @@ def when_update_media_buy_hmac_without_credentials(ctx: dict) -> None:
 
 @when("the buyer syncs a creative registering HMAC-SHA256 with no credentials")
 def when_sync_creatives_hmac_without_credentials(ctx: dict) -> None:
-    """Dispatch sync_creatives with a credential-less HMAC push_notification_config.
+    """Dispatch sync_creatives with a credential-less HMAC push_notification_config."""
+    _dispatch_sync_registering(ctx, _HMAC_WITHOUT_CREDENTIALS)
 
-    ``push_notification_config`` is request-level here (unlike
-    ``creatives[].format_id.agent_url`` above), so the whole request must be
-    refused — a per-item failure would tell the buyer to fix a creative when the
-    thing that is wrong is the registration. The creative comes from
-    ``CreativeAssetFactory`` so a missing required field cannot produce a
-    VALIDATION_ERROR that resembles this refusal for the wrong reason.
+
+@when("the buyer syncs a creative registering HMAC-SHA256 with a 31-character secret")
+def when_sync_creatives_short_credentials(ctx: dict) -> None:
+    """Dispatch sync_creatives with a secret one character under the pinned minimum.
+
+    The sync twin of the multi-scheme create above, and the second hole the same
+    untyped forward opens: ``sync_creatives_raw`` DECLARES
+    ``PushNotificationConfig | None`` but performs no coercion, so the buyer's
+    raw dict travels to ``_sync_creatives_impl`` and a secret the pin calls too
+    short is stored and later used to sign — a secret both ends must agree on,
+    accepted at a strength the spec says neither end may rely on.
     """
-    from tests.factories.creative_asset import CreativeAssetFactory
-
-    creative = CreativeAssetFactory(
-        creative_id="c_creds_refusal",
-        name="Credential Refusal Creative",
-    )
-    dispatch_request(
-        ctx,
-        creatives=[creative],
-        push_notification_config={
-            "url": _SAFE_WEBHOOK_URL,
-            "authentication": _HMAC_WITHOUT_CREDENTIALS,
-        },
-    )
+    _dispatch_sync_registering(ctx, _HMAC_WITH_SHORT_CREDENTIALS)
 
 
 @when("the buyer sends a request registering HMAC-SHA256 with no credentials in the protocol envelope")

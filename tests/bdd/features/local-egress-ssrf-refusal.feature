@@ -319,3 +319,60 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     When the buyer sends a request registering HMAC-SHA256 with no credentials in the protocol envelope
     Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
     And the refusal names the missing shared secret and not the URL
+
+  # ── The CARDINALITY half, and the credential MINIMUM ───────────────
+  #
+  # Epic D lane C3 (salesagent-fo99.3). The two scenarios below grade the two
+  # documents the PINNED schema forbids outright but which reach `_impl`
+  # unvalidated today, because the A2A skill handler pops the buyer's raw dict
+  # (`adcp_a2a_server.py`) and `create_media_buy_raw` / `sync_creatives_raw`
+  # forward it without coercion. Neither is a judgement call this repo makes —
+  # both come from the pin, read at the tag:
+  #
+  #   git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/core/push-notification-config.json
+  #     authentication.schemes:     {"type": "array", "minItems": 1, "maxItems": 1}
+  #     authentication.credentials: {"type": "string", "minLength": 32}
+  #     authentication.required:    ["schemes", "credentials"]
+  #   git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/enums/auth-scheme.json
+  #     enum: ["Bearer", "HMAC-SHA256"]
+  #
+  # So a two-entry `schemes` array is not "undefined precedence" the seller may
+  # resolve as it likes — it is SCHEMA-INVALID, and the block's own description
+  # ("Precedence is a switch, not a fallback ... A seller MUST NOT sign the same
+  # webhook both ways") forbids honouring both anyway. `schemes[0]` is therefore
+  # not a narrowing rule; it is a swallow, and the half it swallows is the half
+  # that decides whether the callback can be signed at all.
+  #
+  # UNGRADED BY STORYBOARD, same standing as the credential group above: nothing
+  # in dist/compliance/3.1.1/ grades a seller refusing a schema-invalid webhook
+  # registration. The refusal SHAPE is therefore settled by the sibling gates one
+  # field over — VALIDATION_ERROR / correctable / field — which is also what the
+  # coercion funnel already emits on the transports that DO type this parameter.
+  #
+  # WHY EVERY WIRED TRANSPORT, unlike the @a2a_untyped_ingest group above: those
+  # scenarios grade a gate only A2A can reach, because the typed transports refuse
+  # the document one layer higher with a field path relative to the sub-model they
+  # validated. These two are the lane that makes those two answers ONE answer, so
+  # "every transport names the same field" IS the obligation — parametrizing on a
+  # single transport would grade exactly the half that already works.
+  #
+  # THE EXPECTED FIELD IS PER-SCENARIO, NOT ONE STRING (measured against the
+  # pinned model, 2026-08-18): a >1 array fails `too_long` at
+  # `authentication.schemes`, while a bad enum MEMBER fails at
+  # `authentication.schemes[0]` — WITH the index — and an absent-or-short secret
+  # fails at `authentication.credentials`. Each scenario states its own.
+  #
+  # The URL is the same public host the group above uses, so a green here can
+  # never be the SSRF gate firing by luck; and the exact-field assertion is what
+  # rules out the A2A `_invalid_params_from_ssrf_error` funnel re-enveloping this
+  # as a URL refusal (it manufactures `push_notification_config.url`).
+
+  @T-EGRESS-SCHEMES-multi-create @egress_create @invariant
+  Scenario: a two-scheme registration is refused at create ingest
+    When the buyer creates a media buy registering two authentication schemes
+    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.schemes"
+
+  @T-EGRESS-CREDS-short-sync @egress_sync_creds @invariant
+  Scenario: a shared secret shorter than the pinned minimum is refused at sync ingest
+    When the buyer syncs a creative registering HMAC-SHA256 with a 31-character secret
+    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"

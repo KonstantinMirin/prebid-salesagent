@@ -1538,23 +1538,32 @@ Source: BR-RULE-026
 
 #### Scenario: MCP Wrapper Serializes AnyUrl to Plain String
 **Obligation ID** UC-002-TRANSPORT-PNC-SERIALIZATION-01
-**Layer** behavioral
+**Layer** implementation
+**Spec** none — AdCP 3.1.1 says nothing about Python types, pydantic models or ORM columns. The pinned `core/push-notification-config.json` constrains this object as `url` (required), `authentication` (optional; requires `schemes` maxItems 1 and `credentials` minLength 32 when present), `operation_id` and `token`. None of that is what this obligation grades.
+**Storyboard** ungraded — no step under `dist/compliance/3.1.1/` grades in-process type shape.
+**Protects** gh-#1377: a pydantic object reaching a SQLAlchemy `String` column raises `StatementError` at flush. That is an implementation regression, not a protocol requirement, and it is labelled as such rather than borrowing protocol authority it does not have.
 **Given** a `create_media_buy` MCP request with `push_notification_config.url` set to a Pydantic `AnyUrl` value
-**When** the MCP wrapper serializes the `PushNotificationConfig` model to a dict before calling `_impl`
-**Then** the `url` field in the resulting dict is a plain `str`, not a Pydantic `AnyUrl` object
-**And** enum fields such as `authentication.schemes` are serialized to their string values
-**And** `_impl` receives a dict whose values are all plain Python types compatible with SQLAlchemy `String` columns
+**When** the MCP wrapper forwards the `PushNotificationConfig` model to `_impl` and the registration value is constructed from it
+**Then** the `url` written to persistence is a plain `str`, not a Pydantic `AnyUrl` object
+**And** enum fields such as `authentication.schemes` become plain `str` values, not `AuthenticationScheme` members
+**And** every value handed to a SQLAlchemy `String` column is a plain Python type
 **Priority:** P0 (regression: gh-#1377)
+**Note:** the RISK is unchanged since gh-#1377 — a pydantic object in a `String` column raises `StatementError` at flush. Epic D lane C3 moved WHERE it is prevented: from `model_dump(mode="json")` repeated in every transport wrapper (which the A2A wrapper's passthrough branch skipped entirely) to a single conversion inside `ValidatedWebhookRegistration`, at the one boundary where wire types become stored primitives.
 
 #### Scenario: A2A Wrapper Serializes AnyUrl to Plain String
 **Obligation ID** UC-002-TRANSPORT-PNC-SERIALIZATION-02
-**Layer** behavioral
-**Given** a `create_media_buy` A2A request with `push_notification_config` as a `PushNotificationConfig` model instance
-**When** the A2A wrapper (`create_media_buy_raw`) serializes the model to a dict before calling `_impl`
-**Then** the `url` field in the resulting dict is a plain `str`, not a Pydantic `AnyUrl` object
-**And** enum fields such as `authentication.schemes` are serialized to their string values
-**And** `_impl` receives a dict whose values are all plain Python types compatible with SQLAlchemy `String` columns
+**Layer** implementation
+**Spec** none — AdCP 3.1.1 says nothing about Python types, pydantic models or ORM columns. The pinned `core/push-notification-config.json` constrains this object as `url` (required), `authentication` (optional; requires `schemes` maxItems 1 and `credentials` minLength 32 when present), `operation_id` and `token`. None of that is what this obligation grades.
+**Storyboard** ungraded — no step under `dist/compliance/3.1.1/` grades in-process type shape.
+**Protects** gh-#1377: a pydantic object reaching a SQLAlchemy `String` column raises `StatementError` at flush. That is an implementation regression, not a protocol requirement, and it is labelled as such rather than borrowing protocol authority it does not have.
+**Given** a `create_media_buy` A2A request carrying `push_notification_config` as either a `PushNotificationConfig` model or the buyer's raw wire dict
+**When** the A2A wrapper (`create_media_buy_raw`) coerces it through the pinned model before calling `_impl`
+**Then** the `url` written to persistence
+**And** a raw dict is coerced rather than forwarded unchanged is a plain `str`, not a Pydantic `AnyUrl` object
+**And** enum fields such as `authentication.schemes` become plain `str` values, not `AuthenticationScheme` members
+**And** every value handed to a SQLAlchemy `String` column is a plain Python type
 **Priority:** P0 (regression: gh-#1377)
+**Note:** the raw-dict passthrough this scenario once asserted was the untyped seam Epic D traced — it let a schema-invalid registration reach `_impl`, be stored, and then never deliver. Coercing here refuses it by name instead.
 
 ---
 

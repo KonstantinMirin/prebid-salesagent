@@ -16166,3 +16166,21 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    # Lane C3 (salesagent-fo99.3): the two documents the pinned schema forbids
+    # outright — a >1 `schemes` array (maxItems 1) and a `credentials` shorter
+    # than minLength 32 — which reach `_impl` unvalidated on the untyped A2A tool
+    # path. Same standing as the group above: grounded on the pin
+    # (core/push-notification-config.json + enums/auth-scheme.json), ungraded by
+    # dist/compliance/3.1.1/, so obligation_id null / status new.
+    - adcp_scenario_id: "T-EGRESS-SCHEMES-multi-create"
+      adcp_feature: "local-egress-ssrf-refusal.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-EGRESS-CREDS-short-sync"
+      adcp_feature: "local-egress-ssrf-refusal.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new

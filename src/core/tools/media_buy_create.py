@@ -129,7 +129,12 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
+from src.core.schema_helpers import (
+    to_brand_reference,
+    to_context_object,
+    to_push_notification_config,
+    to_reporting_webhook,
+)
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -2057,7 +2062,8 @@ def _resolve_idempotency_race_or_raise(
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    push_notification_config: dict[str, Any] | None = None,
+    push_notification_config: PushNotificationConfig | None = None,
+    config_id: str | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -2112,8 +2118,6 @@ async def _create_media_buy_impl(
             context=req.context,
         )
     if push_notification_config:
-        # Bound, not yet consumed: lane 2 (registration-persistence) threads this
-        # value into upsert in place of the loose primitives below.
         registration = accept_push_notification_config(
             push_notification_config,
             field_prefix="push_notification_config",
@@ -2215,33 +2219,37 @@ async def _create_media_buy_impl(
         if push_notification_config:
             from src.core.database.repositories import PushNotificationConfigUoW
 
-            # Match the pre-gate: whitespace-only URL must not reach upsert. Keyed
-            # on the VALUE's own field — the registration gate is a documented
-            # no-op on blank/None, so a value EXISTS for a blank URL and keying on
-            # its presence would write a url="" row.
-            # Log only inside the guard so blank URLs stay silent (same as sync).
-            if registration.url.strip():
-                # Log scheme+host+path only — never credentials / full auth blob.
-                logger.info(
-                    "[MCP/A2A] Registering push notification config id=%s url=%s",
-                    push_notification_config.get("id"),
-                    webhook_url_for_log(registration.url),
-                )
-                # id is not a value field — it identifies the ROW, not the registration.
-                config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
+            # No blank-URL guard here any more, and that is the TYPE doing the work
+            # rather than an omission. Lane C2 needed one: _impl took a dict, the
+            # registration gate is a documented no-op on blank/None URLs, so a value
+            # existed for url="   " and an unguarded write persisted it. Now _impl
+            # takes PushNotificationConfig, whose url is a pydantic AnyUrl —
+            # PushNotificationConfig(url="   ") raises url_parsing, so a blank-url
+            # config cannot be constructed, let alone arrive here. A whitespace URL
+            # is refused at the wrapper, correctably, naming push_notification_config.url.
+            # Log scheme+host+path only — never credentials / full auth blob.
+            logger.info(
+                "[MCP/A2A] Registering push notification config id=%s url=%s",
+                config_id,
+                webhook_url_for_log(registration.url),
+            )
+            # The row the buyer named, or a fresh one. The fallback lives HERE and
+            # only here — wrappers pass through the id they saw (or None) rather
+            # than each minting their own.
+            row_id = config_id or f"pnc_{uuid.uuid4().hex[:16]}"
 
-                with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
-                    assert pnc_uow.push_notification_configs is not None
-                    _config, created = pnc_uow.push_notification_configs.upsert(
-                        registration,
-                        config_id=config_id,
-                        principal_id=principal_id,
-                    )
-                    logger.info(
-                        "[MCP/A2A] Push notification config %s: %s",
-                        "created" if created else "updated",
-                        config_id,
-                    )
+            with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
+                assert pnc_uow.push_notification_configs is not None
+                _config, created = pnc_uow.push_notification_configs.upsert(
+                    registration,
+                    config_id=row_id,
+                    principal_id=principal_id,
+                )
+                logger.info(
+                    "[MCP/A2A] Push notification config %s: %s",
+                    "created" if created else "updated",
+                    config_id,
+                )
 
     try:
         # Validate input parameters
@@ -4535,14 +4543,15 @@ async def create_media_buy(
 
     identity = enrich_identity_with_account(identity, req.account)
 
-    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None).
-    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
-    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
-    # String columns cannot coerce, causing StatementError at flush time.
-    pnc_dict = push_notification_config.model_dump(mode="json") if push_notification_config else None
+    # The typed model goes through untouched. config_id is None because the AdCP
+    # model carries no id: an MCP registration has never been able to name a row,
+    # and this preserves that rather than changing it. Passed EXPLICITLY because
+    # test_architecture_boundary_completeness requires every wrapper to forward
+    # every _impl parameter.
     result = await _create_media_buy_impl(
         req=req,
-        push_notification_config=pnc_dict,
+        push_notification_config=push_notification_config,
+        config_id=None,
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
@@ -4624,19 +4633,21 @@ async def create_media_buy_raw(
     # pass identity directly without ctx, so this is best-effort)
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
 
-    # Serialize SDK model to dict for _impl (which uses dict-based config access).
-    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
-    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
-    # String columns cannot coerce, causing StatementError at flush time.
-    pnc_dict = (
-        push_notification_config.model_dump(mode="json")
-        if isinstance(push_notification_config, PushNotificationConfig)
-        else push_notification_config
-    )
+    # Row identity is read BEFORE coercion and threaded separately: the AdCP model
+    # has no `id` field and is extra="ignore", so coercing DROPS a buyer-supplied
+    # id silently. Left unread, every A2A re-registration would stop upserting and
+    # insert a fresh row instead. `id` names the ROW, not the registration — the
+    # same reason validation_token is a kwarg rather than a value field.
+    config_id = push_notification_config.get("id") if isinstance(push_notification_config, dict) else None
 
+    # Coerce here rather than forwarding a raw dict: this is the untyped seam. The
+    # A2A skill hands us the buyer's dict straight off the wire, so without this
+    # the typed annotation below is decorative and a document the pinned schema
+    # forbids reaches _impl unchallenged.
     return await _create_media_buy_impl(
         req=req,
-        push_notification_config=pnc_dict,
+        push_notification_config=to_push_notification_config(push_notification_config),
+        config_id=config_id,
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,

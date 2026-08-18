@@ -53,7 +53,10 @@ _WEBHOOK_URL = "https://buyer.example.com/adcp/webhook"
 # The pinned AdCP 3.1.1 ``AuthenticationScheme`` spelling, which is what every
 # writer in ``src/`` persists.
 _HMAC_SCHEME = "HMAC-SHA256"
-_SECRET = "buyer-shared-secret"
+# >= 32 chars: the pinned schema (core/push-notification-config.json) sets
+# authentication.credentials minLength 32, so a shorter fixture would be refused
+# by the model before the case under test is reached.
+_SECRET = "buyer-shared-secret-thirty-two-plus"
 
 # The three parameters that must CEASE TO EXIST — the columns are written from
 # the value's fields instead.

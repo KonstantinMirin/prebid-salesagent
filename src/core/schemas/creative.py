@@ -349,10 +349,6 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
-    push_notification_config: dict[str, Any] | None = Field(  # type: ignore[assignment]
-        None,
-        description="Application-level webhook config (NOTE: Protocol-level push notifications via A2A/MCP transport take precedence)",
-    )
 
 
 class SyncSummary(SalesAgentBaseModel):

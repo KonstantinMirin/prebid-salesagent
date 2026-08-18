@@ -528,7 +528,14 @@ class WebhookDeliveryService:
         # the only one of three senders that refuses a short secret -- the same
         # divergence, re-created one line lower. A length minimum is a REGISTRATION
         # policy: it belongs beside the credential-presence gate at ingest, where
-        # the buyer can still act on it, and AdCP 3.1.1 mandates no minimum.
+        # the buyer can still act on it. Pinned AdCP 3.1.1 DOES mandate one --
+        # core/push-notification-config.json gives authentication.credentials
+        # minLength 32 -- and Epic D lane C3 enforces it there, at ingest, on every
+        # transport. It stays absent HERE on purpose: rows predating that gate are
+        # already stored, and refusing them at send time would convert "delivered"
+        # into "never delivered at all" for buyers who can no longer be asked to fix
+        # anything. (An earlier revision of this comment asserted the pin mandates NO
+        # minimum -- that was false; the conclusion it supported is not.)
         if isinstance(auth, BearerToken):
             headers["Authorization"] = f"Bearer {auth.token}"
         elif isinstance(auth, BasicCredentials):
