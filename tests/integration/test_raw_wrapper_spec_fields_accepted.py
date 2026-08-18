@@ -69,6 +69,67 @@ async def test_get_products_raw_accepts_account_on_a_real_call(product_env):
     assert isinstance(response, GetProductsResponse)
 
 
+# ── update_media_buy_raw joins the seam (change-set v3 §S1) ───────────────
+#
+# The two `isinstance`-only assertions above prove a previously-rejected field
+# BINDS and executes. They cannot distinguish a wrapper that threads the field
+# from one that strips it before the body — which is precisely how
+# `update_media_buy(canceled=...)` came to report success on a still-spending
+# buy. The two tests below add the missing half on the raw path: accepted, and
+# then actually honored.
+#
+# REST forwards into `update_media_buy_raw` and the A2A skill handler calls it
+# directly, so on those two transports the decorator never runs, the pinned
+# request model is never built, and `canceled` is not accepted AT ALL — the
+# raw wrapper's signature (media_buy_update.py:1598) declares no `canceled` or
+# `cancellation_reason`. `T-UC-003-storyboard-not-cancellable-on-recancel`
+# is graded on a2a/rest, so this path owes the same honor-or-refuse contract.
+
+
+async def test_update_media_buy_raw_accepts_canceled(live_media_buy_env):
+    """A direct call carrying `canceled` must bind, not raise TypeError.
+
+    The raw-wrapper analogue of salesagent-g6m2.10's `get_products_raw(ext=...)`
+    reproduction: Python rejects the keyword before the coroutine is created,
+    so a2a/rest cannot even deliver a cancellation today.
+    """
+    from src.core.tools.media_buy_update import update_media_buy_raw
+
+    env, media_buy = live_media_buy_env
+
+    await update_media_buy_raw(
+        media_buy_id=media_buy.media_buy_id,
+        canceled=True,
+        cancellation_reason="Campaign pulled by the brand.",
+        identity=env.identity_for(Transport.A2A),
+    )
+
+
+async def test_update_media_buy_raw_honors_canceled_on_a_live_buy(live_media_buy_env):
+    """Binding is not honoring: the buy must actually end up canceled.
+
+    Closes the refuse-everywhere loophole on the raw path, the same way
+    ``test_canceled_true_on_a_live_buy_actually_cancels_it`` closes it on MCP.
+    """
+    from src.core.database.models import MediaBuy
+    from src.core.tools.media_buy_update import update_media_buy_raw
+
+    env, media_buy = live_media_buy_env
+
+    await update_media_buy_raw(
+        media_buy_id=media_buy.media_buy_id,
+        canceled=True,
+        cancellation_reason="Campaign pulled by the brand.",
+        identity=env.identity_for(Transport.A2A),
+    )
+
+    persisted = env.get_one(MediaBuy, media_buy_id=media_buy.media_buy_id)
+    assert persisted.status == "canceled", (
+        f"update_media_buy_raw(canceled=True) left the buy {persisted.status!r} — "
+        "the A2A/REST path accepted a cancellation and kept the buy spending."
+    )
+
+
 async def test_get_products_raw_still_rejects_truly_unknown_arguments(product_env):
     """Accepting the SPEC'd fields must not become accepting anything.
 

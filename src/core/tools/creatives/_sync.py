@@ -13,6 +13,7 @@ from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import AdCPError
 from src.core.helpers import log_tool_activity
+from src.core.idempotency_seam import hash_payload, probe_verbatim_replay, record_verbatim_success
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
@@ -36,6 +37,116 @@ def _append_warning(result: SyncCreativeResult, warning: str) -> None:
     result.warnings = (result.warnings or []) + [warning]
 
 
+# Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name),
+# mirroring create_media_buy's `_IDEMPOTENCY_TOOL_NAME`.
+_IDEMPOTENCY_TOOL_NAME = "sync_creatives"
+
+
+def _idempotency_scope(identity: ResolvedIdentity | None) -> tuple[str, str, str | None] | None:
+    """(tenant_id, principal_id, account_id) for the cache scope, or None.
+
+    The spec scopes idempotency to agent + account + key. Returns None when the
+    identity cannot supply a scope, in which case the probe is skipped entirely —
+    an unscoped cache would let one principal replay another's response.
+    """
+    if identity is None or not identity.tenant_id or not identity.principal_id:
+        return None
+    return identity.tenant_id, identity.principal_id, getattr(identity, "account_id", None)
+
+
+def _idempotency_payload(frame: dict[str, Any]) -> dict[str, Any]:
+    """The canonical request payload for hashing.
+
+    Only the fields that change what gets WRITTEN. `context` and
+    `push_notification_config` are deliberately excluded: two retries that differ
+    only in correlation id or webhook target are the same write, and treating them
+    as a conflict would reject honest retries — the failure mode rule 5 exists to
+    avoid.
+    """
+
+    def _jsonable(value: Any) -> Any:
+        # The canonical hasher accepts JSON-native types only. `creatives` arrives
+        # as Pydantic models on some transports and as dicts on others, and the
+        # SAME logical request must hash identically either way — otherwise an
+        # honest retry over a different transport would look like a key reuse with
+        # a changed payload and be rejected as a conflict.
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json", exclude_none=True)
+        if isinstance(value, list | tuple):
+            return [_jsonable(v) for v in value]
+        if isinstance(value, dict):
+            return {k: _jsonable(v) for k, v in value.items()}
+        return value
+
+    return {
+        "creatives": _jsonable(frame.get("creatives")),
+        "assignments": _jsonable(frame.get("assignments")),
+        "creative_ids": _jsonable(frame.get("creative_ids")),
+        "delete_missing": frame.get("delete_missing"),
+        "validation_mode": _jsonable(frame.get("validation_mode")),
+    }
+
+
+def _parse_sync_envelope(envelope: dict[str, Any]) -> SyncCreativesResponse | None:
+    """Rebuild the response from a stored envelope.
+
+    The cache stores ``{"status": <protocol task status>, "response": <dump>}``.
+    sync_creatives declares ``status`` on the response itself (it has no wrapper
+    envelope — see SyncCreativesResponse), so the domain response is the
+    "response" member; the pre-envelope legacy shape is tolerated by falling back
+    to the whole dict.
+    """
+    body = envelope.get("response", envelope) if isinstance(envelope, dict) else envelope
+    return SyncCreativesResponse.model_validate(body)
+
+
+def _lookup_sync_replay(
+    idempotency_key: str,
+    scope: tuple[str, str, str | None],
+    *,
+    request_payload: dict[str, Any],
+) -> SyncCreativesResponse | None:
+    """Probe the SHARED verbatim cache (src.core.idempotency_seam)."""
+    from src.core.database.repositories.uow import CreativeUoW
+
+    tenant_id, principal_id, account_id = scope
+    with CreativeUoW(tenant_id) as uow:
+        return probe_verbatim_replay(
+            uow,
+            principal_id=principal_id,
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+            request_hash=hash_payload(request_payload),
+            parse=_parse_sync_envelope,
+        )
+
+
+def _record_sync_success(
+    idempotency_key: str,
+    scope: tuple[str, str, str | None],
+    response: SyncCreativesResponse,
+    *,
+    request_payload: dict[str, Any],
+) -> None:
+    """Store the verbatim success envelope via the SHARED seam."""
+    from src.core.database.repositories.uow import CreativeUoW
+
+    tenant_id, principal_id, account_id = scope
+    with CreativeUoW(tenant_id) as uow:
+        record_verbatim_success(
+            uow,
+            principal_id=principal_id,
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+            tool_name=_IDEMPOTENCY_TOOL_NAME,
+            request_hash=hash_payload(request_payload),
+            response=response,
+            # sync_creatives returns synchronously; the replayed wrapper must carry
+            # the same protocol status the original did.
+            protocol_status="completed",
+        )
+
+
 def _sync_creatives_impl(
     creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
     assignments: dict | None = None,
@@ -46,6 +157,7 @@ def _sync_creatives_impl(
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
     identity: ResolvedIdentity | None = None,
+    idempotency_key: str | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 
@@ -111,6 +223,25 @@ def _sync_creatives_impl(
                 "[sync_creatives] Push notification webhook URL: %s",
                 webhook_url_for_log(str(webhook_url)),
             )
+
+    # Idempotency probe — BEFORE any mutation (Lane A P0 #2).
+    #
+    # AdCP 3.1.1 `universal/idempotency.yaml`: "Every mutating request in AdCP
+    # carries an idempotency_key so buyers can safely retry after network errors
+    # without double-booking", and a replay with an equivalent payload MUST return
+    # the cached response WITHOUT re-executing resource mutations. sync_creatives
+    # is an upsert, so a silently re-executed retry rewrites creatives the buyer
+    # believed were already written — the plan's named P0.
+    #
+    # This REUSES create_media_buy's cache (the same IdempotencyAttemptRepository,
+    # now reachable from CreativeUoW) rather than growing a second implementation:
+    # `test_architecture_idempotency_single_seam` asserts exactly one module owns
+    # the verbatim cache.
+    _idem_scope = _idempotency_scope(identity)
+    if idempotency_key and _idem_scope is not None and not dry_run:
+        _cached = _lookup_sync_replay(idempotency_key, _idem_scope, request_payload=_idempotency_payload(locals()))
+        if _cached is not None:
+            return _cached
 
     # Track actions per creative for AdCP-compliant response
 
@@ -467,8 +598,14 @@ def _sync_creatives_impl(
         message += f", {len(creatives_needing_approval)} require approval"
 
     # Build AdCP-compliant response (per official spec)
-    return SyncCreativesResponse(
+    _response = SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
         context=context,
     )
+    # Cache the SUCCESS only, and only after the mutations are done — rule 3
+    # ("Only successful responses are cached") plus the storyboard's warning that
+    # a handler which writes state then errors will double-write on retry.
+    if idempotency_key and _idem_scope is not None and not dry_run:
+        _record_sync_success(idempotency_key, _idem_scope, _response, request_payload=_idempotency_payload(locals()))
+    return _response

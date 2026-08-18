@@ -236,6 +236,13 @@ class CreativeSyncEnv(IntegrationEnv):
         if "push_notification_config" in kwargs and kwargs["push_notification_config"] is not None:
             pnc = kwargs["push_notification_config"]
             body["push_notification_config"] = pnc.model_dump(mode="json") if hasattr(pnc, "model_dump") else pnc
+        if "idempotency_key" in kwargs and kwargs["idempotency_key"] is not None:
+            # Schema-REQUIRED on sync_creatives (pinned_request_schema_fields
+            # reports it in the required set). It is carried by the acceptance
+            # seam rather than declared on SyncCreativesBody, so it must ride the
+            # REST body for the REST leg to grade idempotency at all — omitting it
+            # here would make every REST idempotency assertion vacuous.
+            body["idempotency_key"] = kwargs["idempotency_key"]
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:

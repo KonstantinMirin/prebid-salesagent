@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
@@ -20,6 +20,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     ReportingDimensions,
 )
 from fastapi import APIRouter, Depends, Request
+from pydantic import model_validator
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
@@ -43,7 +44,12 @@ from src.core.tools import properties as properties_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
-from src.core.version_compat import apply_version_compat
+from src.core.version_compat import (
+    SPEC_ENVELOPE_FIELDS,
+    apply_version_compat,
+    pinned_request_schema_fields,
+    spec_request_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +71,40 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # extra="ignore" in prod) — the same validation the MCP/A2A request models get.
 
 
-class GetProductsBody(SalesAgentBaseModel):
+class SeamAwareBody(SalesAgentBaseModel):
+    """A REST body whose spec fields are carried by the acceptance seam.
+
+    Restores the invariant's SECOND arm, which a blanket `extra="ignore"` had
+    removed. The problem it solves: once the seam decides acceptance, a Body that
+    does not DECLARE a spec field would 422 it (SalesAgentBaseModel forbids extras
+    in dev/CI) — refusing a field the seller honors. But answering that with
+    `extra="ignore"` accepts EVERYTHING, so a field nothing honors returns 200 OK
+    with no effect and no signal: silently dropped, which is precisely what the
+    Core Invariant forbids.
+
+    So this drops exactly the fields the PINNED SCHEMA defines — those reach the
+    tool through the seam, not through this model — and leaves every other unknown
+    field to the inherited `extra="forbid"`, which refuses it loudly. Honored or
+    refused; nothing silent in between.
+    """
+
+    _SPEC_TOOL: ClassVar[str] = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_fields_the_seam_carries(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or not cls._SPEC_TOOL:
+            return data
+        model = spec_request_model(cls._SPEC_TOOL)
+        schema_fields, _ = pinned_request_schema_fields(cls._SPEC_TOOL)
+        carried = (set(model.model_fields) if model else set()) | set(schema_fields) | SPEC_ENVELOPE_FIELDS
+        declared = set(cls.model_fields)
+        return {k: v for k, v in data.items() if k in declared or k not in carried}
+
+
+class GetProductsBody(SeamAwareBody):
+    _SPEC_TOOL: ClassVar[str] = "get_products"
+
     brief: str = ""
     # dict BrandReference or string domain/URL shorthand (#1324)
     brand: dict[str, Any] | str | None = None
@@ -73,7 +112,9 @@ class GetProductsBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class CreateMediaBuyBody(SalesAgentBaseModel):
+class CreateMediaBuyBody(SeamAwareBody):
+    _SPEC_TOOL: ClassVar[str] = "create_media_buy"
+
     # dict BrandReference or string domain/URL shorthand (#1324); coerced to
     # BrandReference at the boundary via to_brand_reference.
     brand: BrandReference | dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
@@ -93,7 +134,9 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class UpdateMediaBuyBody(SalesAgentBaseModel):
+class UpdateMediaBuyBody(SeamAwareBody):
+    _SPEC_TOOL: ClassVar[str] = "update_media_buy"
+
     paused: bool | None = None
     flight_start_date: str | None = None
     flight_end_date: str | None = None
@@ -117,7 +160,9 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
+class GetMediaBuyDeliveryBody(SeamAwareBody):
+    _SPEC_TOOL: ClassVar[str] = "get_media_buy_delivery"
+
     media_buy_ids: list[str] | None = None
     status_filter: Any = None
     start_date: str | None = None
@@ -130,7 +175,9 @@ class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class SyncCreativesBody(SalesAgentBaseModel):
+class SyncCreativesBody(SeamAwareBody):
+    _SPEC_TOOL: ClassVar[str] = "sync_creatives"
+
     creatives: list[dict[str, Any]] = []
     assignments: dict[str, Any] | None = None
     creative_ids: list[str] | None = None
@@ -143,7 +190,9 @@ class SyncCreativesBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class ListCreativesBody(SalesAgentBaseModel):
+class ListCreativesBody(SeamAwareBody):
+    _SPEC_TOOL: ClassVar[str] = "list_creatives"
+
     media_buy_id: str | None = None
     media_buy_ids: list[str] | None = None
     status: str | None = None

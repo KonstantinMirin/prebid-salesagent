@@ -49,7 +49,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPError,
     AdCPFormatNotFoundError,
-    AdCPIdempotencyConflictError,
     AdCPIdempotencyExpiredError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
@@ -99,6 +98,10 @@ def validate_agent_url(url: str | None) -> bool:
 
 
 # Tool-specific imports
+from adcp.types.generated_poc.media_buy.create_media_buy_request import (
+    CreateMediaBuyRequest as LibraryCreateMediaBuyRequest,
+)
+
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
@@ -123,6 +126,13 @@ from src.core.helpers.creative_helpers import (
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
+)
+from src.core.idempotency_seam import (
+    expire_old_attempts,
+    find_attempt_including_expired,
+    probe_verbatim_replay,
+    raise_on_payload_conflict,
+    record_verbatim_success,
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
@@ -158,6 +168,7 @@ from src.core.tools.financial_validation import (
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
+from src.core.version_compat import accepts_spec_request_fields
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -1663,7 +1674,6 @@ def _raise_degraded_replay_outcome(
 
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
-        assert uow.idempotency_attempts is not None
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
             raise AdCPValidationError(
@@ -1678,8 +1688,8 @@ def _raise_degraded_replay_outcome(
         # replay-window authority the probe path filters on. Fall back to the
         # MediaBuy creation time only when no cache row survives (evicted after
         # expiry, or the race winner's cache write still in flight).
-        cached = uow.idempotency_attempts.find_including_expired(
-            principal_id=principal_id, idempotency_key=idempotency_key, account_id=account_id
+        cached = find_attempt_including_expired(
+            uow, principal_id=principal_id, idempotency_key=idempotency_key, account_id=account_id
         )
         now = datetime.now(UTC)
         window_expired = (
@@ -1700,25 +1710,13 @@ def _raise_degraded_replay_outcome(
         # Rule 5: same key + different canonical payload conflicts even on the
         # degraded path — never resolve a request to a buy it does not describe.
         # Legacy rows without a stored hash carry no conflict signal.
-        _raise_on_payload_conflict(existing.payload_hash, request_hash)
+        raise_on_payload_conflict(existing.payload_hash, request_hash)
 
     raise AdCPServiceUnavailableError(
         "the verbatim replay for this idempotency_key is not yet available — "
         "the original response is still being committed; retry shortly",
         retry_after=1,
     )
-
-
-def _raise_on_payload_conflict(stored_hash: str | None, request_hash: str | None) -> None:
-    """Raise IDEMPOTENCY_CONFLICT when the same key carries a different canonical payload.
-
-    Applied at both lookup points — the probe and the post-race recovery — so a
-    conflicting duplicate can never be resolved to someone else's response.
-    Production writes always store a hash (``record_success`` requires it); a row
-    without one carries no conflict signal, so it never conflicts (legacy tolerance).
-    """
-    if stored_hash is not None and stored_hash != request_hash:
-        raise AdCPIdempotencyConflictError("idempotency_key was reused with a different request payload")
 
 
 def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | None:
@@ -1775,25 +1773,24 @@ def _lookup_cached_replay(
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
     from src.core.database.repositories import MediaBuyUoW
 
+    def _on_miss(attempts: Any) -> None:
+        # A fresh key is about to insert a cache row; the per-scope insert rate
+        # and row count are bounded. Only the front probe enforces it — the
+        # post-race path inserts nothing.
+        from src.services.idempotency_policy import enforce_insert_ceiling
+
+        enforce_insert_ceiling(attempts, principal_id=principal_id, account_id=account_id)
+
     with MediaBuyUoW(tenant_id) as uow:
-        assert uow.idempotency_attempts is not None
-        cached = uow.idempotency_attempts.find_by_key(
+        return probe_verbatim_replay(
+            uow,
             principal_id=principal_id,
             account_id=account_id,
             idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            parse=_replay_cached_success,
+            on_miss=_on_miss if enforce_ceiling else None,
         )
-        if cached is None:
-            if enforce_ceiling:
-                from src.services.idempotency_policy import enforce_insert_ceiling
-
-                enforce_insert_ceiling(
-                    uow.idempotency_attempts,
-                    principal_id=principal_id,
-                    account_id=account_id,
-                )
-            return None
-        _raise_on_payload_conflict(cached.payload_hash, request_hash)
-        return _replay_cached_success(cached.response_envelope)
 
 
 # Fraction of successful keyed creates that run storage reclamation. Eviction
@@ -1818,8 +1815,7 @@ def _maybe_evict_expired(tenant_id: str) -> None:
 
     try:
         with MediaBuyUoW(tenant_id) as uow:
-            assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.expire_old()
+            expire_old_attempts(uow)
     except Exception:
         logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
 
@@ -1878,15 +1874,15 @@ def _cache_and_return(
 
     try:
         with MediaBuyUoW(identity.tenant_id) as uow:
-            assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.record_success(
+            record_verbatim_success(
+                uow,
                 principal_id=identity.principal_id,
                 account_id=identity.account_id,
                 tool_name=_IDEMPOTENCY_TOOL_NAME,
                 idempotency_key=req.idempotency_key,
-                response_model=result.response,
+                response=result.response,
                 protocol_status=result.status,
-                payload_hash=request_hash,
+                request_hash=request_hash,
             )
     except IntegrityError:
         logger.info(
@@ -4420,6 +4416,10 @@ async def create_media_buy(
         ),
     ] = None,
     ctx: Context | ToolContext | None = None,
+    # Seam carrier: the wire request as this tool's pinned model. Present on
+    # EVERY seam member under the same name — uniform or it is not a seam —
+    # and filtered out of the published schema by the decorator.
+    _spec_request: LibraryCreateMediaBuyRequest | None = None,
 ):
     """Create a media buy with the specified parameters.
 
@@ -4493,6 +4493,7 @@ async def create_media_buy(
     return mcp_result(result)
 
 
+@accepts_spec_request_fields
 async def create_media_buy_raw(
     brand: BrandReference | str | None = None,
     # A2A/REST send wire dicts; CreateMediaBuyRequest validates them as the
@@ -4511,6 +4512,9 @@ async def create_media_buy_raw(
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
+    # Seam carrier — see the MCP sibling above. Present on every seam member,
+    # raw wrappers included: the decorator passes it unconditionally.
+    _spec_request: LibraryCreateMediaBuyRequest | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 

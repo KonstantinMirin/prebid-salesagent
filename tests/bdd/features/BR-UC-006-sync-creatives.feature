@@ -998,6 +998,42 @@ Feature: BR-UC-006 Sync Creative Assets
       | too_short      | "abc1234"  | the error should be IDEMPOTENCY_KEY_TOO_SHORT with suggestion |
       | too_long       | "a]x256"   | the error should be IDEMPOTENCY_KEY_TOO_LONG with suggestion  |
 
+    # --- idempotency_key BEHAVIOR (the partitions above grade the key's SHAPE only) ---
+    # AdCP 3.1.1 dist/compliance/3.1.1/universal/idempotency.yaml, narrative:
+    #   "Every mutating request in AdCP carries an idempotency_key so buyers can safely
+    #    retry after network errors without double-booking."
+    #   2. "Replay with the same key and an equivalent payload returns the cached response
+    #       without re-executing resource mutations."
+    #   3. "Replay with the same key but a materially different payload is rejected with
+    #       IDEMPOTENCY_CONFLICT."
+    #   "Sellers that do not support create_media_buy SHOULD still pass idempotency
+    #    compliance on whichever mutating task they do implement."
+    # sync_creatives' pinned request schema marks idempotency_key REQUIRED, but the
+    # universal storyboard has NO `task: sync_creatives` step at 3.1.1 — the obligation
+    # is mandated and UNGRADED, so these two scenarios are its only grading for this tool.
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/idempotency.yaml
+
+  @T-UC-006-idempotency-replay @uc006-idempotency @idempotency-key @happy-path
+  Scenario: Retrying a sync with the same idempotency_key does not re-execute the write
+    Given the Buyer is authenticated with a valid principal_id
+    And a creative with a known format_id
+    And that creative was already synced with idempotency_key "sync-retry-0001-abcd"
+    When the Buyer Agent syncs the creative
+    Then every creative result has action "created"
+    And the per-creative result should carry no changes list
+    And no additional creative approval workflow step should have been created
+
+  @T-UC-006-idempotency-conflict @uc006-idempotency @idempotency-key @error-details
+  Scenario: Reusing an idempotency_key with a materially different payload conflicts
+    Given the Buyer is authenticated with a valid principal_id
+    And a creative with a known format_id
+    And that creative was already synced with idempotency_key "sync-conflict-01-abcd"
+    And the creative name is changed to "Materially Different Creative"
+    When the Buyer Agent syncs the creative
+    Then the operation should fail
+    And the error code should be "IDEMPOTENCY_CONFLICT"
+    And the error recovery should be "correctable"
+
   @T-UC-006-boundary-approval @boundary @approval-mode
   Scenario Outline: Approval mode boundary — <boundary_point>
     Given the Buyer is authenticated with a valid principal_id

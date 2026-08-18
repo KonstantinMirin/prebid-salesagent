@@ -490,6 +490,10 @@ async def list_creatives(
     sort_order: Annotated[str, PydanticField(description="Sort direction: 'asc' or 'desc'")] = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    # Seam carrier: the wire request as this tool's pinned model. Present on
+    # EVERY seam member under the same name — uniform or it is not a seam —
+    # and filtered out of the published schema by the decorator.
+    _spec_request: ListCreativesRequest | None = None,
 ):
     """List and filter creative assets from the centralized library (AdCP v2.5).
 
@@ -570,6 +574,9 @@ def list_creatives_raw(
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    # Seam carrier — see the MCP sibling above. Present on every seam member,
+    # raw wrappers included: the decorator passes it unconditionally.
+    _spec_request: ListCreativesRequest | None = None,
 ):
     """List creative assets with filtering and pagination (raw function for A2A server use, AdCP v2.5).
 

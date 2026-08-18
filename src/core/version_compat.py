@@ -13,14 +13,16 @@ per-tool request schema declares in its own `properties` (see
 `SPEC_ENVELOPE_FIELDS`).
 """
 
+import contextlib
+import contextvars
 import functools
 import inspect
 import posixpath
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from adcp import types as adcp_types
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from src.core import adcp_pinned_schema
 from src.core.product_conversion import dump_products_v2_compat, needs_v2_compat
@@ -39,6 +41,65 @@ from src.core.product_conversion import dump_products_v2_compat, needs_v2_compat
 # schema says. This is a known SDK-vs-spec divergence, filed upstream against
 # the adcp SDK; this set is the salesagent-side compensating seam until the
 # SDK models carry these fields themselves.
+# The single carrier parameter by which a tool receives the wire request as its
+# pinned model. One name, identical on every tool that opts in — a per-field
+# parameter would move acceptance back to the argument binder, which is the whole
+# defect this seam replaces. Underscore-prefixed because it is plumbing, not a
+# spec field, and it is filtered out of the published schema.
+SPEC_REQUEST_PARAM = "_spec_request"
+
+# ---------------------------------------------------------------------------
+# The inbound wire carrier (Lane A / S4)
+# ---------------------------------------------------------------------------
+# Acceptance is decided at the seam every transport crosses. That is only true
+# if the seam SEES the whole request — and a decorator can only see what the
+# caller already bound. MCP happened to satisfy this (FastMCP binds from the
+# decorator-rewritten signature); A2A hands over a curated dict and REST a Body
+# model, both BEFORE the decorator runs, so for them the deciding site stayed at
+# the transport's argument binder — exactly what the Core Invariant forbids.
+#
+# So each transport hands the seam the request it ALREADY holds, at the one point
+# it already normalizes it. Three set-sites, read at exactly one place
+# (`_build_spec_request`). The rejected alternative — threading a `_wire_request=`
+# parameter through ~6 REST routes and ~14 A2A handlers — is 20 places to forget;
+# the 15th handler would rejoin the seam in name only.
+#
+# NORMALIZED wire dict, never `raw_wire_payload`: that one is deliberately
+# pre-normalization because its consumer is the idempotency payload hash, where
+# seller-side compat-table changes must not turn honest retries into conflicts.
+# Feeding it here would reintroduce deprecated-name drops. Two consumers of "the
+# wire dict"; they are not interchangeable.
+_WIRE_REQUEST: contextvars.ContextVar[tuple[str, dict[str, Any]] | None] = contextvars.ContextVar(
+    "adcp_wire_request", default=None
+)
+
+
+@contextlib.contextmanager
+def set_wire_request(tool_name: str, params: dict[str, Any] | None) -> Iterator[None]:
+    """Publish the normalized wire request for *tool_name* to the seam.
+
+    Tool-scoped on purpose: `_build_spec_request` ignores this unless the tool
+    names match, so a nested tool call cannot inherit the outer request's fields.
+    """
+    token = _WIRE_REQUEST.set((tool_name, dict(params or {})))
+    try:
+        yield
+    finally:
+        _WIRE_REQUEST.reset(token)
+
+
+def _ambient_wire_request(tool_name: str) -> dict[str, Any]:
+    """The published wire dict for *tool_name*, or empty when absent/mismatched.
+
+    Empty is the correct fallback, not an error: direct `_impl` and harness calls
+    have no transport boundary, and they keep working off bound kwargs alone.
+    """
+    current = _WIRE_REQUEST.get()
+    if current is None or current[0] != tool_name:
+        return {}
+    return current[1]
+
+
 SPEC_ENVELOPE_FIELDS = frozenset(
     {
         "idempotency_key",
@@ -160,23 +221,12 @@ def spec_request_model(tool_name: str) -> type[BaseModel] | None:
     return model if isinstance(model, type) and issubclass(model, BaseModel) else None
 
 
-def spec_response_model(tool_name: str) -> type[BaseModel] | None:
-    """The pinned SDK response model for an MCP tool, or None if there isn't one
-    single class to parse into.
-
-    `get_products` -> `adcp.types.GetProductsResponse`. Mirrors
-    `spec_request_model` above, mechanically, with the same "a miss carries
-    information" reading: several tools resolve to a `Union` of outcome
-    variants at the SDK level (`create_media_buy` -> immediate success /
-    validation-error / async-task variants) rather than one plain
-    `BaseModel` subclass — `isinstance(model, type)` is False for those
-    (`types.UnionType`, not a class), so this deliberately returns `None`
-    for them rather than guessing which union member a given wire dict
-    matches. "No model" therefore means "no single pinned class to parse
-    the wire body into", not "this tool has no response schema at all".
-    """
-    model = getattr(adcp_types, "".join(part.title() for part in tool_name.split("_")) + "Response", None)
-    return model if isinstance(model, type) and issubclass(model, BaseModel) else None
+# `spec_response_model()` used to live here. It resolved a tool's pinned SDK
+# RESPONSE model, and had ZERO production callers — its only consumers were
+# the test harness client and its tests. A response-side parse-back helper
+# for the harness is not a production concern, and leaving a test-only export
+# in a production module is the "owned by two concerns" this lane exists to
+# resolve rather than leave silent. Moved to tests/harness/spec_models.py.
 
 
 def _field_annotation(model: type[BaseModel], name: str) -> Any:
@@ -197,6 +247,60 @@ def _field_annotation(model: type[BaseModel], name: str) -> Any:
     if field is not None:
         return field.annotation
     return _ENVELOPE_ONLY_FIELD_ANNOTATIONS.get(name, str | None)
+
+
+def _build_spec_request(model: Any, carried: set[str], tool_name: str, kwargs: dict[str, Any]) -> Any:
+    """The wire request as the pinned model, TOLERANT of missing required fields.
+
+    A partial request is normal here: a buyer legitimately sends only the
+    fields it wants to change, and this seam's job is to carry what arrived,
+    not to enforce required-ness (that is `_impl`'s, and enforcing it here
+    would fail requests the graders require to succeed).
+
+    Values that ARE present are coerced against their field's ANNOTATION —
+    `model_construct` alone skips validation entirely and would hand `_impl`
+    raw wire types. Two limits, stated because the previous wording overclaimed
+    and contradicted the code four lines below it:
+
+    - TYPE coercion only. `field.annotation` drops `field.metadata`, so
+      constraint validators (Ge, MaxLen, pattern) do NOT run here. That is
+      deliberate: this carrier's job is to CARRY the request, and enforcing
+      constraints at the seam would push more fields into the raw arm — less
+      typing, not more. `_impl` enforces.
+    - A field that fails coercion is NOT left out; its RAW value rides
+      through and `_impl` decides. One malformed optional must not deny
+      service to a request the tool could otherwise honor.
+    """
+    # The wire dict the transport published, overlaid by the kwargs actually
+    # bound. BOUND KWARGS WIN: by the time they exist they are coerced objects
+    # (AccountReference, BrandReference, PushNotificationConfig), while the
+    # ambient dict is raw wire — preferring the raw form would undo the
+    # transport's own coercion. The ambient dict's job is to supply the fields
+    # the transport never bound at all, which is precisely the set that used
+    # to be accepted and dropped.
+    merged = {**_ambient_wire_request(tool_name), **kwargs}
+    present = {k: v for k, v in merged.items() if k in carried}
+    validated: dict[str, Any] = {}
+    for name, value in present.items():
+        field = model.model_fields.get(name)
+        if field is None or field.annotation is None:
+            validated[name] = value
+            continue
+        try:
+            # Coerce against the FIELD'S OWN annotation. A TypeAdapter returns
+            # the coerced VALUE; `validate_assignment` returns the model and
+            # would need subscripting it, which BaseModel does not support —
+            # that mistake silently routed every field into the except arm
+            # below and handed `_impl` raw wire dicts and strings.
+            validated[name] = TypeAdapter(field.annotation).validate_python(value)
+        except ValidationError:
+            # One malformed OPTIONAL must not deny service to a request the
+            # tool could otherwise honor, so the raw value rides through and
+            # `_impl` decides. Deliberately ValidationError only: a TypeError
+            # or AttributeError here means the coercion machinery itself is
+            # wrong, and swallowing that is what hid this bug.
+            validated[name] = value
+    return model.model_construct(**validated)
 
 
 def accepts_spec_request_fields(tool_func: Callable) -> Callable:
@@ -295,8 +399,38 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     # .yaml` grades reads for accepting it (the 5 known_failures.txt entries
     # this closes are graduated separately, by a live conformance run, not by
     # this decorator edit).
-    schema_fields, schema_required = pinned_request_schema_fields(tool_func.__name__.removesuffix("_raw"))
-    accepted_names = sorted((schema_fields | SPEC_ENVELOPE_FIELDS | set(model.model_fields)) - declared)
+    schema_fields, _schema_required = pinned_request_schema_fields(tool_func.__name__.removesuffix("_raw"))
+
+    # DISPOSITION IS DERIVED, NEVER DECLARED. Every candidate field gets exactly
+    # one of three dispositions, decided here from the tool's own pinned model —
+    # there is no per-tool marker, allowlist or registry to keep in sync, which
+    # is precisely what stops a seventeenth tool from silently opting out.
+    #
+    #   on the model            -> BODY-SEMANTIC. Rides to the tool in the
+    #                              request model (`_spec_request`). Whether the
+    #                              tool HONORS or REFUSES it is the tool's own
+    #                              runtime job; what is forbidden is dropping it
+    #                              silently at the TRANSPORT. A tool that declares
+    #                              the carrier and ignores it still drops the
+    #                              field — that is per-field work, not something
+    #                              this seam can assert away.
+    #   envelope-only           -> accept-and-ignore, still published. These are
+    #                              the spec-prose envelope names (security.mdx);
+    #                              refusing them would be a conformance regression.
+    #   in the schema, neither  -> NOT accepted. It never enters the published
+    #                              schema, so the transport refuses it loudly
+    #                              rather than accepting and dropping it.
+    #
+    # The third arm is empty at the 3.1.1 pin (every tool's schema fields are a
+    # subset of its model fields) and `test_architecture_spec_field_disposition`
+    # asserts that. It is implemented anyway: without it, a spec bump that adds a
+    # schema field the SDK model lacks would silently reinstate accept-and-drop.
+    model_field_names = set(model.model_fields)
+    candidates = (schema_fields | SPEC_ENVELOPE_FIELDS | model_field_names) - declared
+    body_semantic = {name for name in candidates if name in model_field_names}
+    envelope_only = {name for name in candidates - body_semantic if name in SPEC_ENVELOPE_FIELDS}
+    accepted_names = sorted(body_semantic | envelope_only)
+
     additions = [
         inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=None, annotation=_field_annotation(model, name))
         for name in accepted_names
@@ -305,28 +439,73 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
         return tool_func
 
     accepted = {p.name for p in additions}
+    # Every field the model declares, including ones the tool's own signature
+    # already binds — the model is the tool's view of the request, not a diff
+    # against its signature.
+    #
+    # NOT `- SPEC_ENVELOPE_FIELDS`. A name in that set is envelope-class only
+    # when the model does NOT declare it; when the model DOES, it is a real field
+    # of this request and must ride. `idempotency_key` is the case that matters:
+    # it is envelope-class on reads (no model declares it) but body-semantic on
+    # writes, and subtracting the whole set dropped it from exactly the requests
+    # whose retry-safety depends on it.
+    carried = model_field_names
 
     def _strip(kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Remove the decorator-added names from the FLAT kwargs.
+
+        This stays whole on purpose. A body-semantic field is not rescued by
+        surviving here — it is rescued by riding in `_spec_request`. Letting
+        honored names through would push them at a signature that never declared
+        them (TypeError), and "honored means unstripped" is the drift this seam
+        exists to prevent.
+        """
         return {k: v for k, v in kwargs.items() if k not in accepted}
+
+    tool_name = tool_func.__name__.removesuffix("_raw")
+
+    # The ONE carrier. A tool opts in by declaring `SPEC_REQUEST_PARAM` in its own
+    # signature; the decorator then hands it the parsed request model. Per-field
+    # parameters are deliberately NOT how a field reaches a tool — that would put
+    # acceptance back at the transport's argument binder, one signature at a time,
+    # which is the defect this seam replaces. One parameter, same name everywhere.
+    def _call_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+        stripped = _strip(kwargs)
+        # UNCONDITIONAL. The carrier is not opt-in: a tool that does not declare
+        # it fails loudly here rather than quietly reverting to accept-and-drop.
+        # That noise IS the enforcement — it is what stops a seventeenth tool
+        # from rejoining the seam in name only, which is the whole property the
+        # derived disposition above exists to guarantee.
+        stripped[SPEC_REQUEST_PARAM] = _build_spec_request(model, carried, tool_name, kwargs)
+        return stripped
 
     if is_async:
 
         @functools.wraps(tool_func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            return await tool_func(*args, **_strip(kwargs))
+            return await tool_func(*args, **_call_kwargs(kwargs))
 
         wrapper: Callable = async_wrapper
     else:
 
         @functools.wraps(tool_func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            return tool_func(*args, **_strip(kwargs))
+            return tool_func(*args, **_call_kwargs(kwargs))
 
         wrapper = sync_wrapper
 
     # Keyword-only additions go last, after any **kwargs-free tail, so the
     # resulting signature stays valid regardless of the tool's own parameters.
-    parameters = [p for p in original.parameters.values() if p.kind is not inspect.Parameter.VAR_KEYWORD]
+    #
+    # The carrier is FILTERED OUT here. FastMCP builds the published input schema
+    # from this signature, so leaving it in would advertise an internal plumbing
+    # parameter to buyers as if it were a spec field — and the
+    # published-schema-minus-honored grader would (correctly) flag it.
+    parameters = [
+        p
+        for p in original.parameters.values()
+        if p.kind is not inspect.Parameter.VAR_KEYWORD and p.name != SPEC_REQUEST_PARAM
+    ]
     var_keyword = [p for p in original.parameters.values() if p.kind is inspect.Parameter.VAR_KEYWORD]
 
     # `__signature__` is not a declared attribute of Callable, so the assignment
@@ -340,15 +519,15 @@ def accepts_spec_request_fields(tool_func: Callable) -> Callable:
     # copied the original's: pydantic builds a callable's argument schema from
     # `get_type_hints()`, not from the signature object, so a parameter present
     # only in __signature__ raises KeyError while the schema is generated.
-    decorated.__annotations__ = {**tool_func.__annotations__, **{p.name: p.annotation for p in additions}}
+    decorated.__annotations__ = {k: v for k, v in tool_func.__annotations__.items() if k != SPEC_REQUEST_PARAM} | {
+        p.name: p.annotation for p in additions
+    }
 
-    # Required-ness per the PINNED SCHEMA (not the SDK model, which diverges —
-    # see the docstring). This decorator only ACCEPTS fields; it never rejects
-    # a call for a missing one. Recorded here so a later caller that DOES want
-    # to enforce required-ness (thread-or-reject each spec-required field
-    # instead of silently accepting-and-dropping it) has a single place to
-    # read it from rather than re-deriving it.
-    decorated.__spec_required_fields__ = schema_required
+    # `__spec_required_fields__` used to be recorded here, computed and read by
+    # nobody, against the day some later caller wanted to enforce required-ness
+    # at this seam. That day cannot come: enforcing it here would reject the
+    # partial requests this decorator exists to carry. Required-ness is `_impl`'s
+    # to enforce, on the model it now receives.
     return wrapper
 
 

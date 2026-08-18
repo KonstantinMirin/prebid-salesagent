@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from adcp.types import ContextObject
+from adcp.types.generated_poc.protocol.list_tasks_request import ListTasksRequest as LibraryListTasksRequest
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
@@ -35,6 +36,10 @@ async def list_tasks(
     context: ContextObject | None = None,
     ctx: Context | None = None,
     identity: ResolvedIdentity | None = None,
+    # Seam carrier: the wire request as this tool's pinned model. Present on
+    # EVERY seam member under the same name — uniform or it is not a seam —
+    # and filtered out of the published schema by the decorator.
+    _spec_request: LibraryListTasksRequest | None = None,
 ) -> dict[str, Any]:
     """List workflow tasks with filtering options.
 

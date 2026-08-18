@@ -294,6 +294,10 @@ async def get_adcp_capabilities(
     protocols: list[str] | None = None,
     context: ContextObject | None = None,
     ctx: Context | None = None,
+    # Seam carrier: the wire request as this tool's pinned model. Present on
+    # EVERY seam member under the same name — uniform or it is not a seam —
+    # and filtered out of the published schema by the decorator.
+    _spec_request: GetAdcpCapabilitiesRequest | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
 
@@ -342,6 +346,9 @@ async def get_adcp_capabilities_raw(
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    # Seam carrier — see the MCP sibling above. Present on every seam member,
+    # raw wrappers included: the decorator passes it unconditionally.
+    _spec_request: GetAdcpCapabilitiesRequest | None = None,
 ) -> GetAdcpCapabilitiesResponse:
     """Get the capabilities of this AdCP sales agent.
 

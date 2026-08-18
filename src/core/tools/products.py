@@ -14,6 +14,7 @@ from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
+from adcp.types.generated_poc.media_buy.get_products_request import GetProductsRequest as LibraryGetProductsRequest
 from fastmcp.server.context import Context
 from pydantic import Field
 
@@ -790,6 +791,10 @@ async def get_products(
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # payload-level context
+    # Seam carrier: the wire request as its pinned model. Same NAME on every
+    # tool that opts in; typed as this tool's own pinned request model, and
+    # filtered out of the published schema by the decorator.
+    _spec_request: LibraryGetProductsRequest | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Get available products matching the brief.
@@ -843,6 +848,9 @@ async def get_products_raw(
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    # Seam carrier — see the MCP sibling above. Present on every seam member,
+    # raw wrappers included: the decorator passes it unconditionally.
+    _spec_request: LibraryGetProductsRequest | None = None,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
 

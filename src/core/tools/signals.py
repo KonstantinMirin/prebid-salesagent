@@ -18,6 +18,7 @@ from src.core.exceptions import (
 )
 from src.core.tool_context import ToolContext
 from src.core.validation_helpers import adcp_validation_boundary
+from src.core.version_compat import accepts_spec_request_fields
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +364,7 @@ async def get_signals_raw(
     return await _get_signals_impl(req, identity)
 
 
+@accepts_spec_request_fields
 async def activate_signal_raw(
     signal_agent_segment_id: str,
     campaign_id: str = None,
@@ -370,6 +372,10 @@ async def activate_signal_raw(
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    # Seam carrier — see the sibling wrappers. activate_signal_raw was
+    # decorated NOWHERE and excluded NOWHERE until the derived membership
+    # predicate surfaced it; the hand-listed tuple had been hiding it.
+    _spec_request: ActivateSignalRequest | None = None,
 ) -> ActivateSignalResponse:
     """Activate a signal for use in campaigns (raw function for A2A server use).
 

@@ -45,23 +45,60 @@ import inspect
 
 import pytest
 
-from src.core.tools.capabilities import get_adcp_capabilities_raw
-from src.core.tools.creatives.listing import list_creatives_raw
-from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
-from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
-from src.core.tools.media_buy_list import get_media_buys_raw
-from src.core.tools.products import get_products_raw
 from src.core.version_compat import spec_request_model
 
-# (raw function, tool name spec_request_model() resolves to)
-RAW_WRAPPERS = (
-    (get_products_raw, "get_products"),
-    (get_media_buy_delivery_raw, "get_media_buy_delivery"),
-    (sync_creatives_raw, "sync_creatives"),
-    (list_creatives_raw, "list_creatives"),
-    (get_adcp_capabilities_raw, "get_adcp_capabilities"),
-    (get_media_buys_raw, "get_media_buys"),
-)
+
+# Seam membership is DERIVED, never hand-listed (Lane A / S2). A literal tuple
+# is a second place to keep in sync, and a 16th `_raw()` that forgets to appear
+# in it rejoins the seam in name only — silently, with this guard still green.
+#
+# Every `_raw()` under src/core/tools/ must satisfy EXACTLY ONE arm:
+#   (a) it carries @accepts_spec_request_fields, or
+#   (b) it is req-object-based, so whatever the caller puts on `req` rides
+#       through and no per-field acceptance exists to get wrong, or
+#   (c) spec_request_model() resolves None — a non-spec surface with no pinned
+#       fields to accept.
+# Arms (b) and (c) are PREDICATES evaluated here, not name lists, so a new raw
+# function is classified by what it IS rather than by remembering to add it.
+def _all_raw_wrappers() -> list[tuple[str, object]]:
+    """Every `*_raw` callable defined under src/core/tools/, found by import."""
+    import importlib
+    import pkgutil
+
+    import src.core.tools as tools_pkg
+
+    found: dict[str, object] = {}
+    for mod in pkgutil.walk_packages(tools_pkg.__path__, prefix="src.core.tools."):
+        try:
+            module = importlib.import_module(mod.name)
+        except Exception:  # a module that cannot import is another guard's problem
+            continue
+        for attr in dir(module):
+            if attr.endswith("_raw") and callable(getattr(module, attr, None)):
+                found.setdefault(attr, getattr(module, attr))
+    return sorted(found.items())
+
+
+def _is_req_object_based(fn) -> bool:
+    """Arm (b): the wrapper takes a `req` model rather than flat spec fields."""
+    inner = inspect.unwrap(fn)
+    return "req" in inspect.signature(inner).parameters
+
+
+def _seam_members() -> list[tuple[object, str]]:
+    """Arm (a) members: the raw wrappers that must carry the decorator."""
+    members = []
+    for name, fn in _all_raw_wrappers():
+        tool_name = name.removesuffix("_raw")
+        if spec_request_model(tool_name) is None:  # arm (c)
+            continue
+        if _is_req_object_based(fn):  # arm (b)
+            continue
+        members.append((fn, tool_name))
+    return members
+
+
+RAW_WRAPPERS = tuple(_seam_members())
 
 
 @pytest.mark.parametrize("raw_fn,tool_name", RAW_WRAPPERS, ids=lambda x: getattr(x, "__name__", x))

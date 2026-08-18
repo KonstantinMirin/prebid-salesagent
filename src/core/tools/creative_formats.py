@@ -545,6 +545,10 @@ async def list_creative_formats(
     ] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
+    # Seam carrier: the wire request as this tool's pinned model. Present on
+    # EVERY seam member under the same name — uniform or it is not a seam —
+    # and filtered out of the published schema by the decorator.
+    _spec_request: ListCreativeFormatsRequest | None = None,
 ):
     """List all available creative formats (AdCP spec endpoint).
 

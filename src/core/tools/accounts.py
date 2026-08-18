@@ -177,6 +177,10 @@ async def list_accounts(
     sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    # Seam carrier: the wire request as this tool's pinned model. Present on
+    # EVERY seam member under the same name — uniform or it is not a seam —
+    # and filtered out of the published schema by the decorator.
+    _spec_request: ListAccountsRequest | None = None,
 ) -> Any:
     """List accounts accessible to the authenticated agent (MCP tool).
 
@@ -696,6 +700,10 @@ async def sync_accounts(
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
+    # Seam carrier: the wire request as this tool's pinned model. Present on
+    # EVERY seam member under the same name — uniform or it is not a seam —
+    # and filtered out of the published schema by the decorator.
+    _spec_request: SyncAccountsRequest | None = None,
 ) -> Any:
     """Sync accounts by natural key (MCP tool).
 

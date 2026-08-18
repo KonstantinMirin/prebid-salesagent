@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, CreativeAsset, ValidationMode
+from adcp.types.generated_poc.creative.sync_creatives_request import SyncCreativesRequest as LibrarySyncCreativesRequest
 from fastmcp.server.context import Context
 from pydantic import Field
 
@@ -29,6 +30,10 @@ async def sync_creatives(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     account: LibraryAccountReference | None = None,
+    # Seam carrier: the wire request as its pinned model. Same NAME on every
+    # tool that opts in; typed as this tool's own pinned request model, and
+    # filtered out of the published schema by the decorator.
+    _spec_request: LibrarySyncCreativesRequest | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -70,6 +75,10 @@ async def sync_creatives(
         push_notification_config=push_notification_config,
         context=context,
         identity=identity,
+        # From the acceptance seam's request model, not a per-tool parameter:
+        # the wire may carry idempotency_key even when this wrapper's own
+        # signature never bound it, which is exactly the case the seam exists for.
+        idempotency_key=getattr(_spec_request, "idempotency_key", None),
     )
     return mcp_result(response)
 
@@ -89,6 +98,9 @@ def sync_creatives_raw(
     account: LibraryAccountReference | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    # Seam carrier — see the MCP sibling above. Present on every seam member,
+    # raw wrappers included: the decorator passes it unconditionally.
+    _spec_request: LibrarySyncCreativesRequest | None = None,
 ):
     """Sync creative assets to the centralized creative library (raw function for A2A server use).
 
@@ -134,4 +146,8 @@ def sync_creatives_raw(
         push_notification_config=push_notification_config,
         context=context,
         identity=identity,
+        # From the acceptance seam's request model, not a per-tool parameter:
+        # the wire may carry idempotency_key even when this wrapper's own
+        # signature never bound it, which is exactly the case the seam exists for.
+        idempotency_key=getattr(_spec_request, "idempotency_key", None),
     )

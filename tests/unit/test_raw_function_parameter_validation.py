@@ -39,35 +39,66 @@ class TestRawFunctionParameterValidation:
         # 1. Be passed to helper (except adcp_version which is NOT in helper)
         # 2. Be valid for some other purpose
 
-        # accepts_spec_request_fields (salesagent-g6m2.10) makes get_products_raw
-        # CALLABLE with every field the pinned GetProductsRequest schema defines,
-        # but deliberately does NOT forward any of them to create_get_products_request
-        # or anywhere else -- see that decorator's SCOPE docstring. Those are not
-        # "dropped" parameters this test should flag: nothing downstream honors them
-        # yet, by design, exactly like the MCP wrapper's identical mechanism.
-        # functools.wraps (used by that decorator) preserves __wrapped__, so the
-        # decorator-added params are exactly the set difference vs. the undecorated
-        # signature -- derived, not hand-listed, so a spec bump can't silently
-        # reopen this test.
-        wrapped = getattr(get_products_raw, "__wrapped__", None)
-        decorator_injected = (
-            set(raw_sig.parameters) - set(inspect.signature(wrapped).parameters) if wrapped is not None else set()
-        )
-
+        # REGRADED against the pinned schema, not an exemption (Lane A / A3).
+        #
+        # The old shape asked "is every accepted param passed to the helper?" and,
+        # when the answer became no, EXEMPTED the difference. That exemption is
+        # what let acceptance and honoring drift apart: a field could be advertised
+        # on the wire, excused here, and reach nothing.
+        #
+        # Post-seam the question is different, and stricter: a field may reach the
+        # tool body EITHER as a flat helper parameter OR on the pinned request
+        # model the seam delivers (`_spec_request`). What is forbidden is reaching
+        # NEITHER. So the accepted set is graded against
+        # `pinned_request_schema_fields(tool)` + the model's own fields, and any
+        # accepted name that is on neither is a real drop this test must fail on.
+        # The decorator-injected exemption is GONE (Lane A / A3). It existed
+        # because `accepts_spec_request_fields` made a wrapper CALLABLE with spec
+        # fields it then dropped, so "accepted" did not imply "reaches the helper"
+        # and the difference had to be excused. After A1+A2 every accepted field
+        # has a disposition — it rides in the pinned request model or it is not
+        # accepted at all — so there is nothing left to exempt, and re-adding an
+        # exemption here would be the tell that acceptance and honoring have come
+        # apart again.
+        #
         # Known valid parameters that are NOT passed to helper
         valid_non_helper_params = {
             "min_exposures",  # Optional, not in helper
             "strategy_id",  # Optional, not in helper
-        } | decorator_injected
+        }
 
         # Parameters that SHOULD be in helper
-        should_be_in_helper = raw_params - valid_non_helper_params
+        # A field is DISPOSED if it reaches the helper directly, or if the seam
+        # carries it on the pinned request model, or it is one of the two
+        # documented non-helper options above.
+        from src.core.version_compat import (
+            SPEC_ENVELOPE_FIELDS,
+            SPEC_REQUEST_PARAM,
+            pinned_request_schema_fields,
+            spec_request_model,
+        )
 
-        # Verify all should-be-in-helper params are actually in helper
-        missing_in_helper = should_be_in_helper - helper_params
+        schema_fields, _ = pinned_request_schema_fields("get_products")
+        carried = set(spec_request_model("get_products").model_fields) | set(schema_fields)
 
-        assert not missing_in_helper, (
-            f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
+        # The ENVELOPE class is a DISPOSITION, not an exemption. AdCP 3.1.1's
+        # security.mdx requires a seller to ACCEPT idempotency_key, context_id and
+        # governance_context on every tool — including reads — and ignore what it
+        # cannot act on rather than reject the call. Reaching nothing is the
+        # SPECIFIED behavior for these three on a read; refusing them would be the
+        # conformance regression. That is categorically different from a
+        # body-semantic field reaching nothing, which is the drop this test exists
+        # to catch — and the two are distinguished by the model, not by a list
+        # someone maintains.
+        undisposed = (
+            raw_params - valid_non_helper_params - helper_params - carried - SPEC_ENVELOPE_FIELDS - {SPEC_REQUEST_PARAM}
+        )
+
+        assert not undisposed, (
+            f"get_products_raw accepts {sorted(undisposed)} which reach NOTHING: not the helper, "
+            "not the pinned request model the seam delivers, and not documented as intentionally "
+            "unforwarded. An accepted field that reaches nothing is accept-and-drop — the buyer is "
+            "told it applied. Give each a disposition (honor it, or stop accepting it)."
         )
 
     def test_all_raw_functions_have_context_parameter(self):

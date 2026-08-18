@@ -58,6 +58,7 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     Targeting,
     _upgrade_legacy_format_ids,
+    apply_replay_marker,
     copy_before_mutating,
     strip_none_deep,
 )
@@ -507,12 +508,20 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     # (#1399 R3-F2).
     creatives: list[SyncCreativeResult]  # type: ignore[assignment]
 
+    # Protocol-envelope idempotency replay marker (core/protocol-envelope.json).
+    # Declared directly on the response for the same reason as `status` above --
+    # sync_creatives has no wrapper envelope. Omitted from the wire when False so a
+    # fresh sync stays byte-identical to the pre-idempotency wire; emitted as
+    # `replayed: true` on a verbatim replay, which is what AdCP 3.1.1
+    # compliance/universal/idempotency.yaml:389-392 grades.
+    replayed: bool = False
+
     def model_dump(self, **kwargs):
         """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
         result = super().model_dump(**kwargs)
         if "creatives" in result and self.creatives:
             result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
-        return result
+        return apply_replay_marker(result, self.replayed)
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

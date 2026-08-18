@@ -27,6 +27,12 @@ from src.core.tools.media_buy_create import create_media_buy_raw
 from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
 from src.core.tools.media_buy_update import update_media_buy_raw
 from src.core.tools.performance import update_performance_index_raw
+from src.core.version_compat import (
+    SPEC_ENVELOPE_FIELDS,
+    SPEC_REQUEST_PARAM,
+    pinned_request_schema_fields,
+    spec_request_model,
+)
 from src.routes.api_v1 import (
     CreateMediaBuyBody,
     GetMediaBuyDeliveryBody,
@@ -71,34 +77,23 @@ _PAIRS = [
 ]
 
 
-def _decorator_injected_params(fn) -> set[str]:
-    """Params `accepts_spec_request_fields` added to `fn`, absent from any REST-forwarding check.
-
-    That decorator (salesagent-g6m2.10) makes a raw wrapper CALLABLE with
-    every field its pinned SDK request model defines, but explicitly does
-    NOT forward or honor them (see its SCOPE docstring) — nothing in the
-    system, REST included, acts on them yet. They are therefore not a
-    "capability REST silently drops": no capability exists anywhere for
-    REST to lose. `functools.wraps` (used by that decorator) preserves
-    `__wrapped__`, so the params it added are exactly the set difference
-    between the decorated and undecorated signatures.
-    """
-    wrapped = getattr(fn, "__wrapped__", None)
-    if wrapped is None:
-        return set()
-    return set(inspect.signature(fn).parameters) - set(inspect.signature(wrapped).parameters)
-
-
 def _raw_param_names(fn) -> set[str]:
-    """Named keyword/positional parameters of a raw wrapper, minus transport plumbing
-    and minus fields accepts_spec_request_fields added (accepted, not honored anywhere)."""
-    injected = _decorator_injected_params(fn)
+    """Named keyword/positional parameters of a raw wrapper, minus transport plumbing.
+
+    The `_decorator_injected_params` exemption is GONE (Lane A / A3). It excused
+    every field `accepts_spec_request_fields` added, on the reasoning that nothing
+    honored them so REST could not be "losing" a capability. That reasoning expired
+    the moment the seam gave those fields a disposition — and while it stood it hid
+    real drops: five body-semantic fields on `update_media_buy_raw` (account,
+    adcp_major_version, invoice_recipient, new_packages, revision) were accepted on
+    the wire and silently discarded at the REST body, with this guard green.
+    """
     return {
         name
         for name, p in inspect.signature(fn).parameters.items()
         if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
         and name not in _TRANSPORT_PARAMS
-        and name not in injected
+        and name != SPEC_REQUEST_PARAM
     }
 
 
@@ -108,7 +103,21 @@ def test_rest_bodies_forward_all_raw_wrapper_params():
     for body_cls, raw_fn in _PAIRS:
         body_fields = set(body_cls.model_fields) - _BODY_META
         allow = set(_ALLOWLIST.get(body_cls.__name__, {}))
-        missing = _raw_param_names(raw_fn) - body_fields - allow
+        # A field REACHES the tool if the Body declares it, OR if the acceptance
+        # seam carries it (Lane A / S4): the REST middleware publishes the whole
+        # normalized body, and the decorator builds the pinned request model from
+        # it. So a Body that omits a spec field no longer loses it — which is the
+        # point of the seam, and why "declare all 50+ on every Body" was rejected
+        # as the per-transport disease with more lines.
+        #
+        # What this guard still catches, and must: a field the wrapper accepts
+        # that is on NEITHER the Body NOR the pinned request model — accepted on
+        # the wire and reaching nothing.
+        tool_name = raw_fn.__name__.removesuffix("_raw")
+        model = spec_request_model(tool_name)
+        schema_fields, _ = pinned_request_schema_fields(tool_name)
+        carried = (set(model.model_fields) if model else set()) | set(schema_fields)
+        missing = _raw_param_names(raw_fn) - body_fields - allow - carried - SPEC_ENVELOPE_FIELDS
         if missing:
             violations.append(f"  {body_cls.__name__} drops {sorted(missing)} accepted by {raw_fn.__name__}()")
     assert not violations, (
