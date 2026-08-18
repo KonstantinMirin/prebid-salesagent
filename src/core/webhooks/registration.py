@@ -40,7 +40,7 @@ the recovery value derives from the SDK's bundled pinned
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 from adcp.types import ContextObject
 
@@ -51,6 +51,21 @@ from src.core.security.webhook_egress import (
     webhook_auth_for,
 )
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url
+
+
+class WebhookConfigColumns(TypedDict):
+    """The persistable projection's exact shape.
+
+    A TypedDict rather than ``dict[str, Any]`` on purpose: this projection exists
+    so the persistence boundary does not destructure the value, and that boundary's
+    whole thesis is "the type is the receipt". Handing it a bag of ``Any`` would
+    trade three type-checked attribute reads for three string-keyed lookups, making
+    a key typo a runtime ``KeyError`` instead of a mypy error.
+    """
+
+    url: str
+    authentication_type: str | None
+    authentication_token: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +85,84 @@ class ValidatedWebhookRegistration:
     authentication_type: str | None
     authentication_token: str | None
     auth: DeliverableWebhookAuth
+
+    @classmethod
+    def from_stash(
+        cls,
+        stashed: Any,
+        *,
+        field_prefix: str = "push_notification_config",
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> ValidatedWebhookRegistration:
+        """Rehydrate a stashed registration by RE-RUNNING the ingest gate.
+
+        Deliberately delegates to :func:`accept_push_notification_config` rather
+        than parsing the stash itself. A stash is buyer-supplied data that has sat
+        in a JSONB column, possibly across a deploy, possibly written by a producer
+        that stores the wire shape directly -- so "trust the row" is exactly the
+        assumption that let an unreceipted config reach a sender before.
+        Re-running the gate means a stash that skipped one cannot become a value,
+        and ingest and delivery still resolve auth through the same
+        :func:`webhook_auth_for`.
+
+        Callers at DELIVERY time must fail CLOSED on ``AdCPValidationError`` (skip
+        that webhook), never let it escape: a validation error raised while
+        updating a task's status must cost the webhook, not the transition.
+        """
+        return accept_push_notification_config(
+            stashed,
+            field_prefix=field_prefix,
+            context=context,
+        )
+
+    def to_columns(self) -> WebhookConfigColumns:
+        """The persistable projection: exactly the columns a config row stores.
+
+        The value knows which columns it becomes, so the repository never has to
+        destructure it. That is not only cohesion — reading
+        ``registration.authentication_type`` / ``.authentication_token`` at a call
+        site is precisely the shape
+        ``tests/unit/test_architecture_no_inline_webhook_auth_resolution.py``
+        forbids, because it is how three senders each grew their own answer to
+        "is this signed?". Projecting here (off ``self``) keeps the columns in one
+        place and leaves no credential read at the persistence call site.
+        """
+        return WebhookConfigColumns(
+            url=self.url,
+            authentication_type=self.authentication_type,
+            authentication_token=self.authentication_token,
+        )
+
+    def to_stash(self) -> dict[str, Any]:
+        """Serialize for ``workflow_steps.request_data["push_notification_config"]``.
+
+        Emits the WIRE shape — the same one
+        ``PushNotificationConfig.model_dump(mode="json")`` writes — because this
+        key already has other producers this lane does not convert
+        (``media_buy_update`` stashes the whole request model,
+        ``creatives/_workflow`` stashes the config object) and rows written
+        before a deploy are wire-shaped too. One shape means the generic reader
+        in :mod:`src.core.context_manager` can rehydrate ALL of them through
+        :func:`from_stash`, instead of each producer needing its own parser.
+
+        The ``authentication`` block is OMITTED when there is no scheme rather
+        than emitted as ``{"schemes": [None], "credentials": None}``: both
+        rehydrate identically, but only the omitting form is byte-identical to
+        the library dump, and byte-identity is the whole point of "one shape".
+
+        Note the projection: the library ``PushNotificationConfig`` carries
+        ``operation_id`` and ``token`` alongside ``url``/``authentication``, and
+        this value carries neither, so a stash written from here drops them.
+        No reader in ``src/`` reads either today; recorded so the lane that
+        implements ``operation_id`` echo does not find it missing and guess why.
+        """
+        stashed: dict[str, Any] = {"url": self.url}
+        if self.authentication_type is not None:
+            stashed["authentication"] = {
+                "schemes": [self.authentication_type],
+                "credentials": self.authentication_token,
+            }
+        return stashed
 
     def __post_init__(self) -> None:
         # Belt to the annotation's braces: mypy already refuses HmacSecretMissing

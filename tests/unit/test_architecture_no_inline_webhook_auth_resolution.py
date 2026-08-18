@@ -248,7 +248,10 @@ class TestDetectorAllowsCleanSnippets:
         ("label", "snippet"),
         [
             ("resolver-call", "auth = webhook_auth_for(config.authentication_type, config.authentication_token)\n"),
-            ("keyword-write", "repo.upsert(authentication_type=auth_type, authentication_token=credentials)\n"),
+            (
+                "keyword-write",
+                "existing.authentication_type = registration.authentication_type\n",
+            ),
             ("attribute-write", "existing.authentication_token = authentication_token\n"),
             ("secret-write", "existing.webhook_secret = webhook_secret\n"),
             ("own-attribute-read", "digest = hmac.new(self.webhook_secret.encode())\n"),

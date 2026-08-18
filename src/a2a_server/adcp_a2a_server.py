@@ -56,7 +56,6 @@ from google.protobuf import json_format, struct_pb2
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
-from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
@@ -258,7 +257,9 @@ class AdCPRequestHandler(RequestHandler):
     def __init__(self):
         """Initialize the AdCP A2A request handler."""
         self.tasks: dict[str, Task] = {}  # In-memory task storage
-        self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
+        # The VALUE, not the raw protobuf: what is stashed here is handed straight
+        # to the sender, so it must carry the gate's receipt.
+        self._task_push_configs: dict[str, ValidatedWebhookRegistration] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
@@ -456,26 +457,18 @@ class AdCPRequestHandler(RequestHandler):
 
             push_notification_service = get_protocol_webhook_service()
 
-            from uuid import uuid4
-
-            url = webhook_config.url
-            if not url:
+            if not webhook_config.url.strip():
                 logger.info("[red]No push notification URL present; skipping webhook[/red]")
                 return
 
-            auth = webhook_config.authentication if webhook_config.HasField("authentication") else None
-            auth_type = auth.scheme if auth and auth.scheme else None
-            auth_token = auth.credentials if auth and auth.credentials else None
-
-            push_notification_config = DBPushNotificationConfig(
-                id=webhook_config.id or f"pnc_{uuid4().hex[:16]}",
-                tenant_id="",
-                principal_id="",
-                url=url,
-                authentication_type=auth_type,
-                authentication_token=auth_token,
-                is_active=True,
-            )
+            # The stashed VALUE is handed to the sender directly. There is nothing to
+            # fabricate: send_notification reads exactly .url / .authentication_type /
+            # .authentication_token, which is precisely what the value carries. The
+            # detached DBPushNotificationConfig(tenant_id="", principal_id="") that
+            # used to stand in here was a config-shaped object with empty scope ids,
+            # built purely to satisfy a type — i.e. a way to hand a sender a config
+            # that no repository ever receipted.
+            push_notification_config = webhook_config
 
             # Convert status string to GeneratedTaskStatus enum
             try:
@@ -628,9 +621,11 @@ class AdCPRequestHandler(RequestHandler):
 
             # SSRF-reject unsafe push URLs after the auth-required gate so callers
             # that need credentials see AUTH_REQUIRED before scheme/blocked-host checks.
+            # ONE branch: stash iff a registration was built. Previously the gate ran
+            # under `config and config.url` while the stash ran under `config` alone,
+            # so a blank-url config was stashed ungated (the reader then early-returned
+            # on it). Observably equivalent, minus the ungated stash.
             if push_notification_config and push_notification_config.url:
-                # Bound, not yet consumed: lane 2 (registration-persistence) replaces the
-                # raw-protobuf stash below with this validated value.
                 registration = _accept_a2a_push_config(
                     push_notification_config.url,
                     *_a2a_push_config_auth(push_notification_config),
@@ -640,8 +635,7 @@ class AdCPRequestHandler(RequestHandler):
                     task_id,
                     webhook_url_for_log(push_notification_config.url),
                 )
-            if push_notification_config:
-                self._task_push_configs[task_id] = push_notification_config
+                self._task_push_configs[task_id] = registration
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
@@ -1232,26 +1226,20 @@ class AdCPRequestHandler(RequestHandler):
             # wording for a non-AdCP error -- so a credential refusal raised from
             # inside the repository would reach the buyer as "fix your URL" about a
             # URL that is fine (salesagent-47n9.20).
-            # Bound, not yet consumed: lane 2 (registration-persistence) threads this
-            # value into upsert in place of the loose primitives below.
             registration = _accept_a2a_push_config(url, auth_type, auth_token_value)
 
-            try:
-                with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
-                    assert uow.push_notification_configs is not None
-                    _config, created = uow.push_notification_configs.upsert(
-                        config_id=config_id,
-                        principal_id=tool_context.principal_id,
-                        url=url,
-                        authentication_type=auth_type,
-                        authentication_token=auth_token_value,
-                        validation_token=validation_token,
-                        session_id=None,
-                    )
-            except ValueError as e:
-                # Repository SSRF gate (defense in depth) — same enveloped path as
-                # _accept_a2a_push_config above.
-                raise _invalid_params_from_ssrf_error(e) from e
+            # No ValueError funnel around upsert any more: the repository no longer
+            # re-validates, because the value it now takes IS the receipt that the
+            # gate above ran. The funnel existed only to catch that second gate, and
+            # its own comment (above) documents how it mislabelled what it caught.
+            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                assert uow.push_notification_configs is not None
+                _config, created = uow.push_notification_configs.upsert(
+                    registration,
+                    config_id=config_id,
+                    principal_id=tool_context.principal_id,
+                    validation_token=validation_token,
+                )
 
             logger.info(
                 f"Push notification config {'created' if created else 'updated'}: {config_id} for tenant {tool_context.tenant_id}"

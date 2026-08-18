@@ -2194,7 +2194,10 @@ async def _create_media_buy_impl(
         # Pass model directly — ContextManager serializes at the DB boundary
         workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
         if push_notification_config:
-            workflow_metadata["push_notification_config"] = push_notification_config
+            # The VALUE's canonical dump, not the buyer's raw dict: what
+            # context_manager reads back at delivery time is then gate-receipted
+            # data, rehydrated through the same gate via from_stash.
+            workflow_metadata["push_notification_config"] = registration.to_stash()
 
         step = ctx_manager.create_workflow_step(
             context_id=persistent_ctx.context_id,
@@ -2212,33 +2215,27 @@ async def _create_media_buy_impl(
         if push_notification_config:
             from src.core.database.repositories import PushNotificationConfigUoW
 
-            url = push_notification_config.get("url")
-            authentication = push_notification_config.get("authentication", {})
-
-            # Match the pre-gate: whitespace-only URL must not reach upsert.
+            # Match the pre-gate: whitespace-only URL must not reach upsert. Keyed
+            # on the VALUE's own field — the registration gate is a documented
+            # no-op on blank/None, so a value EXISTS for a blank URL and keying on
+            # its presence would write a url="" row.
             # Log only inside the guard so blank URLs stay silent (same as sync).
-            if url is not None and str(url).strip():
+            if registration.url.strip():
                 # Log scheme+host+path only — never credentials / full auth blob.
                 logger.info(
                     "[MCP/A2A] Registering push notification config id=%s url=%s",
                     push_notification_config.get("id"),
-                    webhook_url_for_log(str(url)),
+                    webhook_url_for_log(registration.url),
                 )
-                schemes = authentication.get("schemes", []) if authentication else []
-                auth_type = schemes[0] if schemes else None
-                credentials = authentication.get("credentials") if authentication else None
+                # id is not a value field — it identifies the ROW, not the registration.
                 config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
 
                 with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
                     assert pnc_uow.push_notification_configs is not None
                     _config, created = pnc_uow.push_notification_configs.upsert(
+                        registration,
                         config_id=config_id,
                         principal_id=principal_id,
-                        url=str(url),
-                        authentication_type=auth_type,
-                        authentication_token=credentials,
-                        validation_token=None,
-                        session_id=None,
                     )
                     logger.info(
                         "[MCP/A2A] Push notification config %s: %s",

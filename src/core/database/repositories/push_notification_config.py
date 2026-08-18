@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import PushNotificationConfig
-from src.core.webhook_validator import WebhookURLValidator
+from src.core.webhooks.registration import ValidatedWebhookRegistration
 
 
 class PushNotificationConfigRepository:
@@ -85,42 +85,46 @@ class PushNotificationConfigRepository:
 
     def upsert(
         self,
+        registration: ValidatedWebhookRegistration,
         *,
         config_id: str,
         principal_id: str,
-        url: str,
-        authentication_type: str | None,
-        authentication_token: str | None,
-        validation_token: str | None,
+        validation_token: str | None = None,
         session_id: str | None = None,
     ) -> tuple[PushNotificationConfig, bool]:
         """Insert or update a config within the (tenant, principal) scope.
 
+        Takes the VALUE, not three loose strings. ``ValidatedWebhookRegistration``
+        is the receipt that both ingest preconditions ran — the registration SSRF
+        gate on the URL half and ``webhook_auth_for`` on the credential half — so
+        persisting a config that skipped a gate no longer type-checks.
+
+        That is why this module no longer re-validates the URL. The former
+        "defense-in-depth" check here existed because the receipt evaporated at
+        this boundary: a caller that had never gated looked exactly like one that
+        had. It also could not produce a good error — the repository cannot know
+        the request path, so ``error.field`` was lost. SEND time is not this
+        module's business either: every outbound request goes through the egress
+        seam (``src.core.security.outbound_http``), which re-resolves and re-judges
+        the URL when it is actually dialled.
+
+        ``validation_token`` stays an explicit kwarg rather than a value field: it
+        is sender-side ``X-Webhook-Token`` material, deliberately outside the auth
+        resolver, and only the A2A ``setTaskPushNotificationConfig`` path stores one.
+
         Returns:
             (config, created): ``created`` is True if a new row was inserted,
             False if an existing row was updated (or reactivated).
-
-        Raises:
-            ValueError: If ``url`` fails the *registration* SSRF gate
-                (``WebhookURLValidator.validate_webhook_url_registration`` —
-                no DNS; optional localhost under ``ADCP_TESTING``). Deliberate
-                defense-in-depth: callers also gate before upsert. SEND time is
-                not this module's business and no longer has a gate of its own:
-                every outbound request goes through the egress seam
-                (``src.core.security.outbound_http``), which re-resolves and
-                re-judges the URL when it is actually dialled.
         """
-        is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
-        if not is_valid:
-            raise ValueError(f"Invalid webhook URL: {error_msg}")
+        columns = registration.to_columns()
 
         existing = self.get_by_id(config_id, principal_id, active_only=False)
         now = datetime.now(UTC)
 
         if existing is not None:
-            existing.url = url
-            existing.authentication_type = authentication_type
-            existing.authentication_token = authentication_token
+            existing.url = columns["url"]
+            existing.authentication_type = columns["authentication_type"]
+            existing.authentication_token = columns["authentication_token"]
             existing.validation_token = validation_token
             existing.session_id = session_id
             existing.updated_at = now
@@ -133,9 +137,9 @@ class PushNotificationConfigRepository:
             tenant_id=self._tenant_id,
             principal_id=principal_id,
             session_id=session_id,
-            url=url,
-            authentication_type=authentication_type,
-            authentication_token=authentication_token,
+            url=columns["url"],
+            authentication_type=columns["authentication_type"],
+            authentication_token=columns["authentication_token"],
             validation_token=validation_token,
             is_active=True,
         )

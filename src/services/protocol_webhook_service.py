@@ -17,7 +17,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from a2a.types import Task, TaskStatusUpdateEvent
@@ -27,7 +27,6 @@ from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.security.outbound_http import (
     OutboundDeliveryFailed,
@@ -43,6 +42,34 @@ from src.core.security.webhook_egress import (
     webhook_auth_for,
 )
 from src.core.webhook_validator import webhook_url_for_log
+
+
+class DeliverableWebhookTarget(Protocol):
+    """What this sender actually needs off a push-notification config: three fields.
+
+    Structural, and READ-ONLY on purpose. Two kinds of object arrive here — the
+    stored ORM ``PushNotificationConfig`` row, and the
+    ``ValidatedWebhookRegistration`` value handed straight from the A2A protocol
+    stash — and both satisfy this without either knowing about the other. Before
+    this, the annotation named the ORM class, so the A2A path fabricated a
+    detached row with ``tenant_id=""`` / ``principal_id=""`` purely to type-check:
+    a config-shaped object with empty scope ids, which is exactly how an
+    unreceipted config reached a sender.
+
+    Declared as properties rather than plain attributes because a Protocol with
+    mutable attributes is invariant, and would then REFUSE a frozen(slots)
+    dataclass — the read-only form admits both.
+    """
+
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def authentication_type(self) -> str | None: ...
+
+    @property
+    def authentication_token(self) -> str | None: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +269,7 @@ class ProtocolWebhookService:
 
     async def send_notification(
         self,
-        push_notification_config: PushNotificationConfig,
+        push_notification_config: DeliverableWebhookTarget,
         payload: Task | TaskStatusUpdateEvent | McpWebhookPayload,
         metadata: dict[str, Any],
     ) -> bool:

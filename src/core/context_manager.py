@@ -20,12 +20,18 @@ from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
+from src.core.exceptions import (
+    AdCPError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+    normalize_to_adcp_error,
+)
 from src.core.security.outbound_http import OutboundError
 from src.core.webhook_validator import (
     validate_webhook_task_type,
     webhook_url_for_log,
 )
+from src.core.webhooks.registration import ValidatedWebhookRegistration
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -830,34 +836,34 @@ class ContextManager(DatabaseManager):
                 )
 
                 for _webhook_config in webhooks:
-                    # build push notification config from step request data
-                    from uuid import uuid4
-
+                    # Rehydrate the registration by RE-RUNNING the ingest gate. The
+                    # stash is buyer data that has sat in JSONB, possibly across a
+                    # deploy, possibly written by a producer that stores the wire
+                    # shape directly — so it is parsed by the one gate, never
+                    # re-plucked here into loose strings. That re-pluck is what let
+                    # an HMAC registration resolve to Unauthenticated and go out
+                    # unsigned if any producer's shape drifted.
                     cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
-                    url = cfg_dict.get("url")
-                    if not url:
+                    if not str(cfg_dict.get("url") or "").strip():
                         console.print("[red]No push notification URL present; skipping webhook[/red]")
                         continue
 
-                    authentication = cfg_dict.get("authentication") or {}
-                    schemes = authentication.get("schemes") or []
-                    auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
-                    auth_token = authentication.get("credentials")
+                    try:
+                        push_notification_config = ValidatedWebhookRegistration.from_stash(cfg_dict)
+                    except AdCPValidationError as exc:
+                        # FAIL CLOSED: this runs inside a status update. A stashed
+                        # config that no longer passes the gate must cost the
+                        # webhook, never the status transition.
+                        console.print(
+                            f"[red]Stashed push notification config is not deliverable "
+                            f"({exc.message}); skipping webhook[/red]"
+                        )
+                        continue
 
                     # Derive principal/tenant from the step context if available
                     context_obj = getattr(step, "context", None)
                     derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
                     derived_principal_id = getattr(context_obj, "principal_id", None)
-
-                    push_notification_config = PushNotificationConfig(
-                        id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
-                        tenant_id=derived_tenant_id,
-                        principal_id=derived_principal_id,
-                        url=url,
-                        authentication_type=auth_type,
-                        authentication_token=auth_token,
-                        is_active=True,
-                    )
 
                     service = get_protocol_webhook_service()
 

@@ -327,20 +327,21 @@ def test_reject_unsafe_webhook_registration_url_allows_unresolvable_public_hostn
     )
 
 
-def test_push_notification_config_repo_upsert_rejects_ssrf_url() -> None:
-    """Repository upsert is a second registration gate (A2A set_push_notification_config)."""
-    from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
-
-    repo = PushNotificationConfigRepository(MagicMock(), "t1")
-    with pytest.raises(ValueError, match="Invalid webhook URL"):
-        repo.upsert(
-            config_id="pnc_bad",
-            principal_id="p1",
-            url=_METADATA_URL,
-            authentication_type=None,
-            authentication_token=None,
-            validation_token=None,
-        )
+# DELETED WITH THE BEHAVIOR IT GRADED (Epic D lane C2, salesagent-fo99.2):
+# test_push_notification_config_repo_upsert_rejects_ssrf_url called
+# repo.upsert(url=..., authentication_type=..., authentication_token=...) and asserted the
+# repository's own "defense-in-depth" ValueError. Both the signature and that second gate
+# CEASE TO EXIST in this lane: upsert now takes a ValidatedWebhookRegistration, which IS
+# the receipt that the registration gate ran, so there is nothing left for the repository
+# to re-check. The test's SUBJECT was deleted -- this is not a failing test rationalized
+# away.
+#
+# The obligation it stood for (an SSRF URL is refused before a push config is persisted)
+# remains graded, on this same file, at the surface where the refusal actually happens:
+#   * test_accept_a2a_push_config_rejects_metadata_url (the A2A translation seam)
+#   * test_a2a_set_push_handler_rejects_metadata_url (the setTaskPushNotificationConfig
+#     handler, which reaches the gate BEFORE the try, so this lane's deletion of the
+#     ValueError funnel does not touch it)
 
 
 @pytest.mark.asyncio
