@@ -23,7 +23,27 @@ _AGENT_URL = "https://creative.adcontextprotocol.org"
 # format_id_identity (creative_formats.py:279-280), so the returned formats[]
 # contains only the single matching entry regardless of catalog order --
 # formats[0] is always the captured pair.
-_FORMAT_ID = "display_300x250_image"
+#
+# PIN-EXPRESSIBLE ON PURPOSE. The obligation here is format_id RESOLUTION — the
+# seller returns the format it advertised, verbatim — not any particular asset shape.
+# The previous seed, display_300x250_image, carries three `pixel_tracker` assets, and
+# the pinned AdCP 3.1.1 format-declaration union (core/format.json, 16 arms: image,
+# video, audio, text, markdown, html, css, javascript, zip, vast, daast, url, webhook,
+# brief, catalog) has no such arm — verified directly against the pinned schema. So
+# full schema validation of the returned format reports one violation per tracker,
+# and the roundtrip obligation could not be graded through it.
+#
+# That is a CATALOG-vs-PIN gap (the fixture was captured from the reference agent
+# after the pin; 45 of its 57 formats carry pixel_tracker), owned by #1998. It is not
+# a defect in format_id resolution, and it must not cost us the grading of format_id
+# resolution — which is what xfailing this scenario did. Seeding one of the 12
+# pin-expressible formats keeps the storyboard obligation live on all three
+# transports while #1998 carries the catalog.
+#
+# NOTE for whoever fixes #1998: the manifest-side core/assets/asset-union.json DOES
+# carry pixel-tracker-asset.json at 3.1.1. The union reached through core/format.json
+# does not. Chasing the wrong file is the easy mistake here.
+_FORMAT_ID = "video_vast"
 
 
 @given("the Buyer Agent captured a format_id object {agent_url, id} from a prior get_products response")

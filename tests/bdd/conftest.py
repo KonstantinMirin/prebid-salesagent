@@ -771,25 +771,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # former `not is_mcp` exclusion is removed (MCP no longer passes vacuously).
             "T-UC-005-inv-049-8-violated",
             "T-UC-005-inv-049-8-nofield",
-            # FIXME(#1998): the ADCP_TESTING catalog serves assets the pinned AdCP 3.1.1
-            # schema cannot express. tests/fixtures/creative_formats/reference_formats.json
-            # puts `asset_type: pixel_tracker` on 45 of 57 reference formats (captured from
-            # a reference creative agent AFTER the pin), and the pinned asset union has no
-            # such arm — so full pinned-schema validation reports one violation per
-            # pixel_tracker asset (formats.0.assets.2/.3/.4: impression_tracker,
-            # viewability_tracker, ...).
-            #
-            # This scenario did NOT previously fail: its module registered an exact-text
-            # step for the schema-valid sentence whose entire body was
-            # `assert isinstance(formats, list)`, shadowing the generic parser that runs
-            # real validation. GH #1941 deleted that step, so the sentence now means what
-            # it says and the catalog-vs-pin gap it was hiding is visible. Confirmed on the
-            # full-suite run: 3 failed (a2a/mcp/rest), was 3 passed before the deletion.
-            #
-            # Routed, not re-hidden. strict=False because #1998 may be resolved by
-            # regenerating the catalog, at which point this passes and should be deleted
-            # rather than becoming an XPASS failure.
-            "T-UC-005-storyboard-format-id-roundtrip-from-products",
         }
         if marker_names & _UC005_PARTIAL_TAGS and not is_e2e_rest:
             item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
