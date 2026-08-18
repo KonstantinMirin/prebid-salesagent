@@ -3033,10 +3033,14 @@ def _published_media_buy_entries(ctx: dict) -> list[dict]:
     result = ctx["result"]
     if result.is_success:
         return _collect_media_buy_entries(wire_dict(ctx))
-    envelope = ctx.get("wire_error_envelope")
+    # The refusal envelope is read off the TransportResult, which is where the
+    # dispatcher normalizes it for every transport — not re-derived from ctx here.
+    # A step that reaches around the harness for an envelope is a step that can
+    # disagree with `assert_wire_error` about what the buyer received.
+    envelope = result.wire_error_envelope
     assert envelope is not None, (
         f"{ctx.get('transport')}: the request failed but no wire error envelope was captured, so there is "
-        f"no buyer-visible document to inspect and this step would assert nothing. Error: {ctx.get('error')!r}"
+        f"no buyer-visible document to inspect and this step would assert nothing. Error: {result.error!r}"
     )
     return _collect_media_buy_entries(envelope)
 

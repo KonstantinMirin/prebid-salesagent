@@ -2201,3 +2201,85 @@ def then_slack_notification_sent(ctx: dict) -> None:
         tenant_id=ANY,
         success=True,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v3.1 sync-success envelope: revision, confirmed_at, valid_actions
+# ═══════════════════════════════════════════════════════════════════════
+# Authored to wake @T-UC-002-v31-success-revision-and-actions, which had no step
+# definitions and so sat behind the UC-002 harness xfail. It grades the three v3.1
+# fields on the arm the buyer meets first — the same three the create response used
+# to fabricate from schema defaults rather than read from the persisted row.
+
+
+@then(parsers.parse('the response should include "{field}" as an ISO 8601 timestamp'))
+def then_response_field_is_iso8601(ctx: dict, field: str) -> None:
+    """Assert the WIRE field parses as an ISO 8601 instant carrying an offset.
+
+    Both halves matter: that it serialized as a string at all (a raw datetime object
+    reaching a JSON document is a real failure mode for a hand-built payload), and
+    that parsing yields an AWARE datetime — a timestamp without an offset denotes a
+    different instant for every reader.
+    """
+    from datetime import datetime
+
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    value = wire_dict(ctx).get(field)
+    assert isinstance(value, str), f"{field} must be an ISO 8601 STRING on the wire, got {value!r}"
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None, f"{field} carries no timezone designator: {value!r}"
+
+
+@then(parsers.parse('the response should include "{field}" with an integer value of at least {minimum:d}'))
+def then_response_field_integer_at_least(ctx: dict, field: str, minimum: int) -> None:
+    """Assert the WIRE field is an integer at or above *minimum*.
+
+    ``_is_wire_integer`` rather than ``isinstance(int)``: A2A frames its DataPart as a
+    protobuf Struct whose only numeric kind is a double, so a legal revision arrives
+    as ``1.0`` there and ``1`` on MCP. A value that is not integral at all is itself a
+    violation and is reported as one rather than quietly coerced.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    value = wire_dict(ctx).get(field)
+    assert value is not None, f"{field} is absent from the wire response"
+    assert isinstance(value, int | float) and float(value).is_integer(), (
+        f"{field} must be an integer on the wire, got {value!r}"
+    )
+    assert int(value) >= minimum, f"{field} must be at least {minimum} per the pinned schema, got {value!r}"
+
+
+@then(parsers.parse('the response should include a "{field}" array'))
+def then_response_field_is_array(ctx: dict, field: str) -> None:
+    """Assert the WIRE field is a NON-EMPTY array.
+
+    Emptiness is the failure this guards. An empty ``valid_actions`` is exactly what a
+    status the derivation does not recognise produces, and it tells the buyer there is
+    nothing it may do next — so "present" is not the obligation, "populated" is.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    value = wire_dict(ctx).get(field)
+    assert isinstance(value, list), f"{field} must be an array on the wire, got {value!r}"
+    assert value, f"{field} is empty; the buyer plans its next call from it"
+
+
+@then("every value in valid_actions should be a member of the media-buy-valid-action enum")
+def then_valid_actions_are_enum_members(ctx: dict) -> None:
+    """Assert every emitted action is a member of the PINNED enum.
+
+    Read from the pinned schema rather than a literal list restated here: a list in
+    the test would let a pin bump widen the enum without anyone noticing, and would
+    let a typo'd action pass by matching the typo.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+    from tests.helpers import pinned_schema
+
+    enum_members = set(pinned_schema.load_canonicalized("enums/media-buy-valid-action.json")["enum"])
+    actions = wire_dict(ctx).get("valid_actions") or []
+    unknown = [a for a in actions if a not in enum_members]
+    assert not unknown, (
+        f"valid_actions carries {unknown!r}, which the pinned media-buy-valid-action enum does not "
+        f"define (legal: {sorted(enum_members)})"
+    )

@@ -2329,3 +2329,86 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
             "media_buy_id": mb.media_buy_id,
         }
     return ctx["update_kwargs"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BR-RULE-215: revision as the buyer's optimistic-concurrency token
+# ═══════════════════════════════════════════════════════════════════════
+# These four steps wake the two revision scenarios, which had no step definitions
+# at all — the reason they sat dormant behind the UC-003 harness xfail. The
+# obligation they carry is the one the whole revision surface rests on: a mutating
+# update advances the token and REPORTS the advanced value, so a buyer can take it
+# from the response and hand it straight back on the next call.
+
+
+@given(parsers.parse('the media buy "{label}" is at revision {revision:d}'))
+def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
+    """Put the persisted row at *revision*, then prove it took.
+
+    Written through the repository''s own column rather than a factory rebuild, so the
+    scenario starts from a row the update path will really read. The read-back is not
+    ceremony: seeding a distinctive value is what separates "reports the post-write
+    value" from "reports a plausible constant", and a seed that silently did not land
+    would turn the whole scenario green for the wrong reason.
+    """
+    from sqlalchemy import update as sa_update
+
+    from src.core.database.models import MediaBuy
+
+    env = ctx["env"]
+    real_id = _resolve_media_buy_id(ctx, label)
+    session = env._session  # noqa: SLF001 — the harness's session seam, as used above
+    session.execute(sa_update(MediaBuy).where(MediaBuy.media_buy_id == real_id).values(revision=revision))
+    session.commit()
+
+    seeded = session.get(MediaBuy, real_id)
+    session.refresh(seeded)
+    assert seeded.revision == revision, (
+        f"seeding media buy {label!r} to revision {revision} did not take (column reads "
+        f"{seeded.revision!r}); every assertion below would grade the wrong starting point"
+    )
+    ctx.setdefault("seeded_revisions", {})[label] = revision
+
+
+@given(parsers.parse("the request revision is set to {revision:d}"))
+def given_request_revision(ctx: dict, revision: int) -> None:
+    """Send *revision* as the buyer''s expected-current token on the update request."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["revision"] = revision
+
+
+@then(parsers.parse("the response should contain a revision with value {expected:d}"))
+def then_response_revision_value(ctx: dict, expected: int) -> None:
+    """Assert the WIRE revision is the post-write value.
+
+    Read off the wire rather than the typed payload, because the regression this
+    guards is a producer reporting a value it never read — a schema default reaching
+    the buyer looks identical in a typed object and is only visible in what was sent.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    actual = wire_dict(ctx).get("revision")
+    assert actual == expected, (
+        f"expected the update response to carry revision {expected} (the value AFTER this "
+        f"write — spec 3.1.1 update-media-buy-response.json: 'Revision number after this "
+        f"update'), got {actual!r}"
+    )
+
+
+@then("the response should contain a valid_actions array")
+def then_response_valid_actions_array(ctx: dict) -> None:
+    """Assert valid_actions is present AND non-empty on the wire.
+
+    Presence alone would pass on an empty list, which is what a non-AdCP status string
+    produces — the exact defect valid_actions derivation exists to prevent. INT-002:
+    the buyer plans its next call from this array without a get_media_buys round-trip,
+    and an empty array tells it there is nothing it may do.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    actions = wire_dict(ctx).get("valid_actions")
+    assert isinstance(actions, list), f"valid_actions must be an array on the wire, got {actions!r}"
+    assert actions, (
+        "valid_actions is empty; a buyer reads it to plan its next call, and an empty "
+        "array is what an unnormalized status string yields"
+    )

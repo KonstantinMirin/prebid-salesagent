@@ -1442,6 +1442,7 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: Annotated[int | None, Field(description="Expected current revision (optimistic concurrency)")] = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1497,6 +1498,8 @@ def _build_update_request(
         request_params["ext"] = ext
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
+    if revision is not None:
+        request_params["revision"] = revision
 
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
@@ -1619,6 +1622,7 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
+    revision: int | None = None,  # AdCP expected-current optimistic-concurrency token
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1645,6 +1649,10 @@ def update_media_buy_raw(
         reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
         idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        revision: Buyer's expected-current revision, per the pinned
+            update-media-buy-request.json. Accepted on every transport so a buyer can
+            hand back the token it read; the stale-token CONFLICT check itself is a
+            separate, still-ungraded gap.
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -1668,6 +1676,7 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

@@ -2818,6 +2818,15 @@ _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
     "T-UC-002-alt-manual",
 }
 
+# The v3.1 sync-success envelope scenario. It was dormant because it had no step
+# definitions, not because the harness could not reach it — it needs exactly the full
+# create the manual-approval arm already runs. It grades revision / confirmed_at /
+# valid_actions on the response the buyer meets first, which is the surface where
+# those three were being fabricated from schema defaults.
+_UC002_V31_SUCCESS_WIRED: set[str] = {
+    "T-UC-002-v31-success-revision-and-actions",
+}
+
 
 def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
     """True when a brand_shorthand scenario targets create_media_buy (UC-002 harness)."""
@@ -3258,10 +3267,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_pricing_option"] = pricing_option
                 ctx["dispatch_mode"] = "create"
                 yield
-        elif marker_names & (_UC002_IDEMPOTENCY_WIRED | _UC002_MANUAL_APPROVAL_WIRED) or _is_brand_shorthand_media_buy(
-            marker_names
-        ):
-            if marker_names & _UC002_MANUAL_APPROVAL_WIRED:
+        elif marker_names & (
+            _UC002_IDEMPOTENCY_WIRED | _UC002_MANUAL_APPROVAL_WIRED | _UC002_V31_SUCCESS_WIRED
+        ) or _is_brand_shorthand_media_buy(marker_names):
+            if marker_names & (_UC002_MANUAL_APPROVAL_WIRED | _UC002_V31_SUCCESS_WIRED):
                 # Tells the shared When step to dispatch a FULL create through
                 # the parametrized transport (not account resolution). (PR #1567)
                 ctx["uc002_full_create"] = True
@@ -3311,6 +3320,17 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
         }
+        # The two BR-RULE-215 revision scenarios. They were dormant for a reason that
+        # was not "the harness cannot reach them": they had NO step definitions at all,
+        # so the xfail below was standing in for missing work rather than for a
+        # production gap. The steps exist now, and these grade the obligation the whole
+        # revision surface rests on — a mutating update advances the buyer's
+        # optimistic-concurrency token and REPORTS the advanced value. They need the
+        # same seeded existing buy as the manual-approval arm, so they share it.
+        _UC003_REVISION = {
+            "T-UC-003-revision-success-increments",
+            "T-UC-003-revision-and-idempotency-independent",
+        }
         if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
@@ -3333,7 +3353,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 _setup_existing_media_buy(ctx, env, tenant, principal, product)
                 env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
                 yield
-        elif marker_names & _UC003_MANUAL_APPROVAL:
+        elif marker_names & (_UC003_MANUAL_APPROVAL | _UC003_REVISION):
             # BOUNDED (PR #1567): the 3 manual-approval submitted-envelope
             # scenarios are graded here (they exercise UpdateMediaBuySubmitted
             # cross-transport). Every other non-extension UC-003 scenario stays

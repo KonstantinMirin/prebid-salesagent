@@ -66,11 +66,24 @@ from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-# The two in-process transports that stash a REAL wire body (tests/CLAUDE.md
-# "TransportResult.wire_response"): A2A's artifact DataPart and MCP's
-# structured_content. IMPL has no wire by definition, and REST is not routed on
-# this composite env (get_media_buys has no REST route in this flow).
-_WIRE_TRANSPORTS = [Transport.A2A, Transport.MCP]
+# Transport coverage is decided PER SCENARIO by what the scenario actually drives,
+# not by one module-wide constant. A single list applied to everything silently
+# under-grades whichever cases could reach further — and REST is where a wrapper most
+# easily drops a field, so excluding it by default is the expensive direction to be
+# wrong in.
+#
+# A2A (artifact DataPart) and MCP (structured_content) stash a REAL wire body;
+# IMPL has no wire by definition.
+#
+# Scenarios that POLL get_media_buys stop here: that tool has no REST route, a
+# pre-existing surface fact, so a REST parametrization would grade nothing.
+_GET_MEDIA_BUYS_TRANSPORTS = [Transport.A2A, Transport.MCP]
+
+# Scenarios that drive update_media_buy ONLY reach further: it routes
+# PUT /api/v1/media-buys/{id} (proven by
+# test_harness_rest_refusal.py::TestNonListRestRoutingIsPreserved), so REST is a real
+# surface for them and is graded.
+_UPDATE_ONLY_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 
 # A buy that has already been mutated several times. Distinctive on purpose: it is
 # neither the schema default (1) nor adjacent to it, so the dry-run assertion below
@@ -100,16 +113,6 @@ _TOGGLE_CASES = [
     pytest.param("active", True, id="pause"),
     pytest.param("paused", False, id="resume"),
 ]
-
-
-def _wire(result: Any, transport: Transport) -> dict[str, Any]:
-    """The body the buyer actually received, or a failure naming the transport."""
-    assert result.is_success, f"{transport}: expected success, got error {result.error!r}"
-    assert result.wire_response is not None, (
-        f"{transport}: no wire body was stashed — the dispatch bypassed the real "
-        f"pipeline, so any assertion below would grade a harness reconstruction"
-    )
-    return result.wire_response
 
 
 def _seed_buy(env: MediaBuyCreateUpdateListEnv, tenant: Any, principal: Any, *, status: str) -> Any:
@@ -186,7 +189,7 @@ class _VanishingRow:
         assert_envelope_shape(result.wire_error_envelope, "MEDIA_BUY_NOT_FOUND", recovery="correctable")
 
 
-@pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
+@pytest.mark.parametrize("transport", _GET_MEDIA_BUYS_TRANSPORTS)
 def test_update_responses_and_get_media_buys_report_the_same_revision(integration_db, transport):
     """Two updates report 2 then 3; get_media_buys reports 3 for the same buy.
 
@@ -204,15 +207,15 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
         _tenant, _principal, product, _pricing = env.setup_media_buy_data()
 
         created = env.call_via(transport, **_create_kwargs(product, domain="revision-agreement.example.com"))
-        media_buy_id = _wire(created, transport)["media_buy_id"]
+        media_buy_id = created.require_wire()["media_buy_id"]
 
         first = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=20000.0))
         second = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=30000.0))
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
 
-        first_revision = _wire(first, transport)["revision"]
-        second_revision = _wire(second, transport)["revision"]
-        listed_buys = _wire(listed, transport)["media_buys"]
+        first_revision = first.require_wire()["revision"]
+        second_revision = second.require_wire()["revision"]
+        listed_buys = listed.require_wire()["media_buys"]
 
     assert (first_revision, second_revision) == (2, 3), (
         f"{transport}: the two update responses must report the revision AFTER each own write "
@@ -229,7 +232,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
     )
 
 
-@pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
+@pytest.mark.parametrize("transport", _GET_MEDIA_BUYS_TRANSPORTS)
 def test_create_response_reports_the_persisted_confirmed_at_and_revision(integration_db, transport):
     """The CREATE producer is the same producer, for both persisted fields.
 
@@ -255,11 +258,11 @@ def test_create_response_reports_the_persisted_confirmed_at_and_revision(integra
         _tenant, _principal, product, _pricing = env.setup_media_buy_data()
 
         created = env.call_via(transport, **_create_kwargs(product, domain="create-agreement.example.com"))
-        create_body = _wire(created, transport)
+        create_body = created.require_wire()
         media_buy_id = create_body["media_buy_id"]
 
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
-        listed_buys = _wire(listed, transport)["media_buys"]
+        listed_buys = listed.require_wire()["media_buys"]
 
     assert len(listed_buys) == 1, f"{transport}: expected exactly the buy under test, got {listed_buys}"
     listed_buy = listed_buys[0]
@@ -337,7 +340,7 @@ def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integrati
     )
 
 
-@pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
+@pytest.mark.parametrize("transport", _UPDATE_ONLY_TRANSPORTS)
 def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction(integration_db, transport):
     """A row that disappears under the write must not yield a success envelope.
 
@@ -363,7 +366,7 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
         _tenant, _principal, product, _pricing = env.setup_media_buy_data()
 
         created = env.call_via(transport, **_create_kwargs(product, domain="revision-vanish.example.com"))
-        media_buy_id = _wire(created, transport)["media_buy_id"]
+        media_buy_id = created.require_wire()["media_buy_id"]
 
         with vanish.patched() as patcher:
             patcher.setattr(MediaBuyRepository, "update_fields", vanish.arming(MediaBuyRepository.update_fields))
@@ -373,7 +376,7 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
     vanish.assert_reported_not_found(result, transport)
 
 
-@pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
+@pytest.mark.parametrize("transport", _GET_MEDIA_BUYS_TRANSPORTS)
 @pytest.mark.parametrize(("seeded_status", "paused"), _TOGGLE_CASES)
 def test_pause_resume_response_reports_the_rows_revision_and_agrees_with_get_media_buys(
     integration_db, transport, seeded_status, paused
@@ -409,9 +412,9 @@ def test_pause_resume_response_reports_the_rows_revision_and_agrees_with_get_med
         toggled = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, paused=paused))
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
 
-        bumped_revision = _wire(bumped, transport)["revision"]
-        toggled_revision = _wire(toggled, transport)["revision"]
-        listed_buys = _wire(listed, transport)["media_buys"]
+        bumped_revision = bumped.require_wire()["revision"]
+        toggled_revision = toggled.require_wire()["revision"]
+        listed_buys = listed.require_wire()["media_buys"]
 
     assert bumped_revision > _SEEDED_REVISION, (
         f"{transport}: the budget update that precedes the toggle reported {bumped_revision}, which is "
@@ -434,7 +437,7 @@ def test_pause_resume_response_reports_the_rows_revision_and_agrees_with_get_med
     )
 
 
-@pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)
+@pytest.mark.parametrize("transport", _UPDATE_ONLY_TRANSPORTS)
 @pytest.mark.parametrize(("seeded_status", "paused"), _TOGGLE_CASES)
 def test_pause_resume_reports_media_buy_not_found_when_the_row_vanishes_mid_transaction(
     integration_db, transport, seeded_status, paused
