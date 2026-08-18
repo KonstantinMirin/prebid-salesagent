@@ -6,7 +6,7 @@ from ``src.core.schemas`` for backward compatibility.
 
 from datetime import date
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 from adcp.types import AggregatedTotals as LibraryAggregatedTotals
 from adcp.types import DeliveryMeasurement as LibraryDeliveryMeasurement
@@ -29,7 +29,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel
+from src.core.schemas._base import AlwaysIncludeFieldsMixin, NestedModelSerializerMixin, SalesAgentBaseModel
 
 # ---------------------------------------------------------------------------
 # Simple enum / leaf types
@@ -307,7 +307,9 @@ class AggregatedTotals(LibraryAggregatedTotals):
 # ---------------------------------------------------------------------------
 
 
-class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuyDeliveryResponse):
+class GetMediaBuyDeliveryResponse(
+    AlwaysIncludeFieldsMixin, NestedModelSerializerMixin, LibraryGetMediaBuyDeliveryResponse
+):
     """Extends library GetMediaBuyDeliveryResponse with local overrides.
 
     Library provides: reporting_period, currency, errors, context, ext,
@@ -326,17 +328,15 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuy
         ..., description="Array of delivery data for each media buy"
     )
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """Override to ensure webhook metadata fields are present when notification_type is set.
+    # ``next_expected_at`` is required-and-nullable only once ``notification_type``
+    # is set: the AdCP protocol wants it explicitly present (as null) so a consumer
+    # of a 'final' report knows no further reports are expected. That per-instance
+    # condition is why the mixin carries a ``_should_always_include`` seat — before
+    # it had one, this class hand-wrote the re-insert after ``model_dump()``.
+    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset({"next_expected_at"})
 
-        The base AdCPBaseModel excludes None values, but the AdCP protocol requires
-        next_expected_at to be explicitly present (as null) when notification_type
-        is 'final' so consumers know no further reports are expected.
-        """
-        result = super().model_dump(**kwargs)
-        if self.notification_type is not None and "next_expected_at" not in result:
-            result["next_expected_at"] = None
-        return result
+    def _should_always_include(self, field: str) -> bool:
+        return self.notification_type is not None
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

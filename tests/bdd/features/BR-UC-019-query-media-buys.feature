@@ -524,6 +524,38 @@ Feature: BR-UC-019 Query Media Buys
       | rejected  | rejected  |
       | canceled  | canceled  |
 
+  @T-UC-019-confirmed-at-null-survives-exclude-none @hand-edited @BR-RULE-150 @schema-v3.1
+  Scenario Outline: A buy that was never confirmed still carries confirmed_at as null
+    # HAND-EDITED (#1900): authored locally, not rendered from adcp-req. The marker is
+    # load-bearing — compile_bdd's merge classifies a LEGACY-only scenario without one
+    # as LEGACY-DELETE, and an Examples row added to an UPSTREAM scenario is replaced
+    # wholesale by the EXAMPLES-ONLY bucket. So this obligation can only be graded
+    # locally as its own marked scenario.
+    #
+    # Why it exists: confirmed_at is required-and-nullable on the pinned item schema,
+    # and the library base serializes with exclude_none=True. Every other confirmed_at
+    # scenario seeds a NON-null value, so the key survives there on its own merit and
+    # the retention path is never exercised. These buys reach the buyer with the column
+    # still NULL, which is exactly where a dropped key produces an item that fails
+    # item-level validation.
+    #
+    # The seeds are the statuses OUTSIDE _SELLER_COMMITTED_STATUSES (models.py) that
+    # get_media_buys publishes: rejected is INV-7's terminal pass-through, draft and
+    # pending_approval are INV-8's pre-serving states. canceled is deliberately NOT
+    # here — it IS a committed status, so its confirmed_at is legitimately stamped, and
+    # seeding it would assert a premise production correctly refuses.
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
+    And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
+    And today is "2026-03-15"
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
+    Then the media buy "mb-001" confirmed_at should be null on the wire
+
+    Examples:
+      | persisted        |
+      | rejected         |
+      | draft            |
+      | pending_approval |
+
   @T-UC-019-inv-150-8 @invariant @BR-RULE-150 @schema-v3.1
   Scenario Outline: INV-8 holds - pre-serving persisted states map to their pending status
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"

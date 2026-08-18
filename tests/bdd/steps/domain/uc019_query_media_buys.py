@@ -2913,6 +2913,28 @@ def then_media_buy_includes_confirmed_at(ctx: dict, mb_id: str) -> None:
     )
 
 
+@then(parsers.parse('the media buy "{mb_id}" confirmed_at should be null on the wire'))
+def then_media_buy_confirmed_at_is_null(ctx: dict, mb_id: str) -> None:
+    """Assert confirmed_at is present AND carries an explicit null.
+
+    The presence-only step above cannot fail for a buy that HAS a confirmed_at, so
+    it never exercises the retention path: the key survives there because it has a
+    value, not because anything kept it. This step grades the case the retention
+    exists for — a buy whose confirmed_at column is NULL — where the library base's
+    ``exclude_none=True`` drops the key unless ``AlwaysIncludeFieldsMixin`` puts it
+    back. Both halves are asserted, because a dropped key and a key holding some
+    substituted non-null value are different regressions with the same cause.
+    """
+    buy = _wire_media_buy_entry(ctx, mb_id)
+    assert "confirmed_at" in buy, (
+        f"media buy '{mb_id}' carries no confirmed_at key; the pinned item schema requires it "
+        f"even when the seller has not committed (keys: {sorted(buy)})"
+    )
+    assert buy["confirmed_at"] is None, (
+        f"media buy '{mb_id}' confirmed_at should be null for a never-confirmed buy, got {buy['confirmed_at']!r}"
+    )
+
+
 @then(parsers.parse('the confirmed_at value should be the ISO 8601 timestamp "{timestamp}"'))
 @then(parsers.parse('the media buy "{mb_id}" confirmed_at should equal "{timestamp}"'))
 def then_confirmed_at_equals(ctx: dict, timestamp: str, mb_id: str | None = None) -> None:

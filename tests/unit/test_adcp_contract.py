@@ -450,9 +450,14 @@ class TestGetMediaBuysAlwaysIncludeNullFields:
         item that fails validation for every not-yet-confirmed buy.
 
         This pin is DECLARATION-only by design — the behavioural net is the wire-reading
-        UC-019 step `then_media_buy_includes_confirmed_at`. What it adds is the reverse
-        direction: a pin bump that makes a SECOND field required+nullable reddens here,
-        and the only sane way to green it is to grow the declared set.
+        UC-019 step `then_media_buy_confirmed_at_is_null`, graded by
+        `@T-UC-019-confirmed-at-null-survives-exclude-none` on a2a+mcp. That step, not
+        `then_media_buy_includes_confirmed_at`, is the net for THIS pin: the presence-only
+        step is reached exclusively by scenarios seeding a NON-null confirmed_at, where the
+        key survives because it has a value — so it cannot fail when retention breaks.
+        What this pin adds is the reverse direction: a pin bump that makes a SECOND field
+        required+nullable reddens here, and the only sane way to green it is to grow the
+        declared set.
         """
         from src.core.schemas._base import GetMediaBuysMediaBuy
         from tests.helpers import pinned_schema

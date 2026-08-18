@@ -10865,6 +10865,12 @@ mappings:
       upstream_refs: ["BR-RULE-150"]
       business_rules: ["BR-RULE-150"]
       status: new
+    - adcp_scenario_id: "T-UC-019-confirmed-at-null-survives-exclude-none"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
     - adcp_scenario_id: "T-UC-019-inv-150-8"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null

@@ -278,29 +278,51 @@ def copy_before_mutating(values: dict[str, Any]) -> dict[str, Any]:
     return values.copy()
 
 
-class NestedModelSerializerMixin:
-    """Mixin that ensures nested Pydantic models use their custom model_dump().
+class WireSerializerMixin:
+    """The single ``@model_serializer(mode="wrap")`` seat for wire shaping.
 
-    Pydantic's default serialization doesn't automatically call custom model_dump() methods
-    on nested models. This mixin introspects all fields and explicitly calls model_dump()
-    on any nested BaseModel instances, ensuring internal fields are properly excluded.
+    Pydantic runs only the FIRST model serializer it finds in the MRO and silently
+    drops the rest — two mixins that each declare one do not compose, they shadow.
+    (Verified on the pinned pydantic: two wrap serializers on one model produce one
+    call.) So every wire-shaping concern shares this one seat and is switched on by
+    a class attribute, rather than each concern bringing its own serializer.
 
-    This approach is resilient to schema changes - no hardcoded field names.
+    Two concerns live here today:
 
-    Usage:
-        class MyResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
-            nested_field: NestedModel
-            # Automatically serializes nested_field correctly
+    * **nested re-serialization** — opt in via :class:`NestedModelSerializerMixin`.
+    * **required-nullable retention** — opt in via :class:`AlwaysIncludeFieldsMixin`.
+
+    A class that needs both names both mixins and still gets exactly one serializer.
     """
 
-    @model_serializer(mode="wrap")
-    def _serialize_nested_models(self, serializer, info):
-        """Automatically serialize nested Pydantic models using their custom model_dump()."""
-        # Get default serialization
-        data = serializer(self)
+    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset()
+    _SERIALIZE_NESTED_MODELS: ClassVar[bool] = False
 
-        # Introspect all fields and re-serialize nested Pydantic models
-        for field_name, _ in self.__class__.model_fields.items():
+    def _should_always_include(self, field: str) -> bool:
+        """Whether *field* is required-nullable on THIS instance.
+
+        The overridable seat for a conditional adopter: a field the spec requires
+        only in some states (``GetMediaBuyDeliveryResponse.next_expected_at``, which
+        is required only once ``notification_type`` is set) answers per instance
+        instead of hand-writing a re-insert block after ``model_dump()``.
+        """
+        return True
+
+    @model_serializer(mode="wrap")
+    def _serialize_wire(self, serializer, info):
+        data = serializer(self)
+        if self._SERIALIZE_NESTED_MODELS:
+            data = self._apply_nested_models(data, info)
+        return self._apply_always_include(data, info)
+
+    def _apply_nested_models(self, data, info):
+        """Re-serialize nested models through their own ``model_dump()``.
+
+        Pydantic's default serialization does not call a nested model's custom
+        ``model_dump()``, so internal fields it excludes would survive. Introspects
+        fields rather than hardcoding names, so schema changes need no edit here.
+        """
+        for field_name in self.__class__.model_fields:
             if field_name not in data:
                 continue
 
@@ -308,15 +330,57 @@ class NestedModelSerializerMixin:
             if field_value is None:
                 continue
 
-            # Handle list of Pydantic models
             if isinstance(field_value, list) and field_value:
                 if isinstance(field_value[0], BaseModel):
                     data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
-            # Handle single Pydantic model
             elif isinstance(field_value, BaseModel):
                 data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
+
+    def _apply_always_include(self, data, info):
+        """Put back the declared required-nullable fields ``exclude_none`` dropped.
+
+        Two rules, which between them close both hazards the previous
+        ``model_dump()`` override could only document in prose:
+
+        1. A field the caller explicitly named in ``exclude=`` (or left out of
+           ``include=``) is never re-inserted. The wrap serializer receives the
+           caller's selection on ``info``, which a ``model_dump()`` override could
+           not see — so the exclusion is honoured for every value, not just the
+           ones that happened to be non-null.
+        2. Only a ``None`` value is ever put back. A non-null value absent from
+           *data* was dropped deliberately, and ``None`` is the same token in every
+           serialization mode, so nothing can land a live ``datetime`` in a
+           ``mode="json"`` dump.
+        """
+        excluded = info.exclude or ()
+        included = info.include
+        for field in self._ALWAYS_INCLUDE_NULL_FIELDS:
+            if field in data or field in excluded:
+                continue
+            if included is not None and field not in included:
+                continue
+            if not self._should_always_include(field):
+                continue
+            if getattr(self, field, None) is None:
+                data[field] = None
+        return data
+
+
+class NestedModelSerializerMixin(WireSerializerMixin):
+    """Ensures nested Pydantic models are dumped through their custom ``model_dump()``.
+
+    Usage:
+        class MyResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
+            nested_field: NestedModel
+            # Automatically serializes nested_field correctly
+
+    The behaviour lives in :class:`WireSerializerMixin` — see the note there on why
+    it is one shared serializer rather than one per mixin.
+    """
+
+    _SERIALIZE_NESTED_MODELS: ClassVar[bool] = True
 
 
 class CompletedTaskStatusMixin:
@@ -353,7 +417,7 @@ class CompletedTaskStatusMixin:
     status: Literal["completed"] = "completed"
 
 
-class AlwaysIncludeFieldsMixin:
+class AlwaysIncludeFieldsMixin(WireSerializerMixin):
     """Keeps spec-required fields on the wire even when their value is null.
 
     The library base serializes with ``exclude_none=True``, which is right for
@@ -362,29 +426,16 @@ class AlwaysIncludeFieldsMixin:
     of those produces a response that fails item-level validation: the same class
     of silent omission as the missing envelope status (GH #1900).
 
-    Adopters declare the field names in ``_ALWAYS_INCLUDE_NULL_FIELDS``.
+    Adopters declare the field names in ``_ALWAYS_INCLUDE_NULL_FIELDS``, and an
+    adopter whose field is required only in some states overrides
+    ``_should_always_include``. Both hooks and the serializer itself live in
+    :class:`WireSerializerMixin`; this class is the opt-in name.
 
-    Two footguns, named here rather than inherited silently:
-
-    1. The re-insert reads ``getattr(self, field)``, so a caller passing an
-       explicit ``exclude={...}`` to this model would get the REAL value back
-       instead of the exclusion it asked for. No production path does — the only
-       dump of these items goes through ``NestedModelSerializerMixin``, which
-       passes ``mode`` and nothing else — but a future one could.
-    2. Under ``mode="json"`` the re-insert puts the RAW Python value in. That is
-       harmless only because a field reaches this code exclusively by being
-       ``None``; a non-None absent field would land a live ``datetime`` in a JSON
-       dump.
+    The two footguns this mixin used to document are fixed rather than described —
+    see ``WireSerializerMixin._apply_always_include``: only a ``None`` value is
+    ever re-inserted, so an explicit ``exclude=`` is honoured and no raw Python
+    value can reach a ``mode="json"`` dump.
     """
-
-    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset()
-
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        result = super().model_dump(**kwargs)  # type: ignore[misc]
-        for field in self._ALWAYS_INCLUDE_NULL_FIELDS:
-            if field not in result:
-                result[field] = getattr(self, field, None)
-        return result
 
 
 class SalesAgentBaseModel(LibraryAdCPBaseModel):
