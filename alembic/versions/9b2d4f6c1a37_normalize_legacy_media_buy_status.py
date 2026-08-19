@@ -99,10 +99,17 @@ def downgrade() -> None:
     So this is a deliberate no-op with a record, not a missing implementation: the
     migration-completeness guard wants a non-empty downgrade, and the honest
     non-empty body is one that states the irreversibility instead of faking it.
+
+    The record is this docstring and the explicit ``return`` below — NOT an
+    ``op.execute`` of a comment. That was the first shape here and it broke the
+    Migration Roundtrip job: PostgreSQL parses a comment-only string to zero
+    statements, so psycopg2 raises ``ProgrammingError: can't execute an empty
+    query`` and the whole upgrade/downgrade/upgrade cycle fails. A SQL comment is
+    not a statement; do not reintroduce one to satisfy the guard.
+
+    ``return`` rather than ``pass`` is also deliberate: ``is_empty_body``
+    (scripts/ci/migration_helpers.py) counts a body of only ``pass`` and/or a
+    docstring as empty, so ``pass`` here would fail the completeness guard while
+    doing exactly the same nothing.
     """
-    op.execute(
-        sa.text(
-            "-- 9b2d4f6c1a37 is not invertible: original status casing is not recorded, "
-            "and the abort branch mutates nothing. No rows are changed."
-        )
-    )
+    return
