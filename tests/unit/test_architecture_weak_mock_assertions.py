@@ -110,12 +110,16 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
 
         for child in iter_call_expressions(node):
             func = child.func
-            if (
-                isinstance(func, ast.Attribute)
-                and func.attr in {"assert_called", "assert_called_once"}
-                and len(child.args) == 0
-                and len(child.keywords) == 0
-            ):
+            if not isinstance(func, ast.Attribute):
+                continue
+            if func.attr in {"assert_called", "assert_called_once"} and not child.args and not child.keywords:
+                has_bare_called_once = True
+            elif func.attr in {"assert_called_with", "assert_called_once_with"} and _asserts_only_any(child):
+                # assert_called_once_with(ANY) is the bare form wearing a
+                # disguise: it pins the call COUNT and nothing about the
+                # arguments, so pairing it with a call_args dissection is the
+                # same split assertion the guard exists to ban. Laundering it
+                # through ANY must not buy an exemption.
                 has_bare_called_once = True
 
         for child in ast.walk(node):
@@ -126,6 +130,26 @@ def _find_split_assertions(file_path: str) -> list[tuple[str, str, int]]:
             violations.append((file_path, node.name, node.lineno))
 
     return violations
+
+
+def _is_any(node: ast.expr) -> bool:
+    """True for ``ANY`` / ``mock.ANY`` — the wildcard that asserts nothing."""
+    return (isinstance(node, ast.Name) and node.id == "ANY") or (isinstance(node, ast.Attribute) and node.attr == "ANY")
+
+
+def _asserts_only_any(call: ast.Call) -> bool:
+    """True when EVERY argument of an assert_called*_with is ``ANY``.
+
+    Requires at least one argument, deliberately: a zero-argument
+    ``assert_called_once_with()`` is a PRECISE assertion — "called with no
+    arguments at all" — and would otherwise be vacuously "every argument is
+    ANY". One sits in the very function this rule was written against.
+
+    A call that passes ANY for one argument while pinning the others is NOT
+    matched: that is a targeted wildcard, not an absent assertion.
+    """
+    args = list(call.args) + [kw.value for kw in call.keywords]
+    return bool(args) and all(_is_any(a) for a in args)
 
 
 def _collect_split_assertion_violations() -> set[tuple[str, str]]:

@@ -283,7 +283,6 @@ class TestWebhook503RetryBackoff:
             assert result["attempts"] == 2
             assert env.delivery_attempts == 2
             assert env.mock["sleep"].call_count == 1
-            assert env.mock["sleep"].call_count == 1
             assert_backoff_schedule([float(c.args[0]) for c in env.mock["sleep"].call_args_list], jitter=None)
 
     # Graduated (salesagent-4fya.11): the module is on the jittered egress seam, so

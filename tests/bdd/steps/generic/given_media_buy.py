@@ -22,6 +22,7 @@ from tests.factories import (
     ProductFactory,
 )
 from tests.helpers.adcp_factories import valid_reporting_webhook
+from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
 # Gherkin date token resolver — single source for all BDD step files.
 # Matches {now}, {N days from now}, {N days ago}.
@@ -3269,7 +3270,7 @@ def given_webhook_configured(ctx: dict) -> None:
     # Must pass ingest egress policy under every hatch posture (validate_url
     # runs inside _create_media_buy_impl): https public-unicast IP literal, no
     # DNS dependency. Never fetched by these scenarios.
-    webhook_url = "https://1.1.1.1/webhooks/adcp-notifications"
+    webhook_url = f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/webhooks/adcp-notifications"
     push_config = {"url": webhook_url, "events": ["status_change"]}
     ctx["push_notification_config"] = push_config
     # Also wire into request_kwargs if they exist (for create requests)

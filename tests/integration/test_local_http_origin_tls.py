@@ -202,3 +202,41 @@ class TestLocalOriginTLSFront:
 
         assert excinfo.value.attempts == 1
         assert excinfo.value.last_status is None
+
+
+class TestListenBacklog:
+    """The shared origin binds a backlog large enough for xdist bursts.
+
+    ``request_queue_size`` is the listen backlog, and socketserver reads it at
+    BIND time — so it has to be a class attribute before construction, which is
+    why ``serve_in_thread`` builds its own server class rather than applying it
+    through ``server_attrs`` (setattr, post-construct, too late).
+
+    This is graded rather than trusted because its failure mode is invisible on
+    a quiet machine: at socketserver's default backlog of 5, a burst of ~20
+    concurrent writers produces ``ConnectionResetError`` on a many-core box and
+    passes everywhere else. The value was introduced to stop exactly that, and
+    without an assertion it can be deleted without anything going red.
+    """
+
+    def test_serve_in_thread_binds_a_128_deep_backlog_by_default(self):
+        from http.server import BaseHTTPRequestHandler
+
+        from tests.helpers.local_http_origin import serve_in_thread
+
+        class _Silent(BaseHTTPRequestHandler):
+            def log_message(self, *args):  # noqa: D102 - silence the default stderr logging
+                pass
+
+        with serve_in_thread(_Silent) as server:
+            assert server.request_queue_size == 128, (
+                f"the shared origin bound a listen backlog of {server.request_queue_size}; at "
+                "socketserver's default of 5 a burst of concurrent writers produces "
+                "ConnectionResetError on a busy box and passes on a quiet one"
+            )
+
+        with serve_in_thread(_Silent, request_queue_size=7) as server:
+            assert server.request_queue_size == 7, (
+                f"an explicit backlog was not honoured (got {server.request_queue_size}) — a caller "
+                "with a different burst profile cannot express it"
+            )

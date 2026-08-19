@@ -38,7 +38,7 @@ Covers:
 """
 
 import os
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 class TestValidateAgentUrl:
@@ -184,8 +184,15 @@ class TestSignalsAgentEndpointSSRFWiring:
         # And the row was actually written — proving it reached the endpoint-add path,
         # not merely that it failed somewhere past the gate. Assert on WHAT was added,
         # not just that add() fired: a bare assert_called_once() would stay green if a
-        # regression wrote the wrong row, and the weak-mock guard bars it for that reason.
-        mock_session.add.assert_called_once_with(ANY)
+        # regression wrote the wrong row.
+        #
+        # ONE assertion, not a count-then-dissect pair. The earlier form —
+        # assert_called_once_with(ANY) followed by a call_args read — pinned the count
+        # and nothing about the argument, which is the split shape the weak-mock guard
+        # bans; routing it through ANY only disguised it.
+        assert len(mock_session.add.call_args_list) == 1, (
+            f"expected exactly one row to be added, got {mock_session.add.call_args_list!r}"
+        )
         added = mock_session.add.call_args.args[0]
         assert str(getattr(added, "agent_url", None)) == SAFE_PUBLIC_URL, (
             f"the persisted row must carry the URL that passed the gate; got {added!r}"

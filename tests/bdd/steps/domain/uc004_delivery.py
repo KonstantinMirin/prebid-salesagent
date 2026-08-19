@@ -23,6 +23,7 @@ from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
 from tests.harness._mixins import LocalOriginMixin
 from tests.helpers.backoff_assertions import assert_backoff_schedule
+from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -339,7 +340,7 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 # dependency) and is refused by no gate, unlike the previous
 # ``buyer.example.com``, which NXDOMAINs and is therefore refused even with
 # both hatches open.
-_DECLARED_WEBHOOK_URL = "https://1.1.1.1/webhook"
+_DECLARED_WEBHOOK_URL = f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/webhook"
 
 # A destination the egress seam refuses under EVERY hatch posture. The cloud
 # metadata address is blocked by the SDK's address policy even with

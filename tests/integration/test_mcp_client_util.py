@@ -37,6 +37,7 @@ from src.core.utils.mcp_client import (
     call_mcp_tool,
 )
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
+from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
 
 # Reused rather than restated (precedent: tests/integration/test_vendor_egress.py):
 # the jitter pin, the escape-hatch setter and the backoff-base knob name are the
@@ -137,7 +138,7 @@ class TestCreateMCPClient:
 
     async def test_respects_max_retries(self, monkeypatch):
         """Connection failures respect max_attempts parameter."""
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true")
+        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "true")
         # A loopback port with nothing listening: resolves, fails fast, and the retry
         # budget is what is graded. It needs the private-range hatch because policy
         # refuses loopback addresses by default (https is required unconditionally now
@@ -203,7 +204,7 @@ class TestErrorHandling:
     async def test_timeout_handling(self, monkeypatch):
         """Connection timeout is respected."""
         # Use a URL that will timeout (assuming nothing on port 9999)
-        monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "true")
+        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "true")
         # Unchanged target: a loopback port with nothing listening, which fails fast.
         # It needs the private-range hatch because policy refuses loopback
         # addresses by default (https is required unconditionally now regardless of
@@ -280,7 +281,7 @@ def egress_hatches_closed(monkeypatch):
     machines this suite runs on. There is no scheme hatch to close anymore
     (salesagent-e6h0 deleted it) — https is required unconditionally.
     """
-    monkeypatch.setenv("ADCP_OUTBOUND_ALLOW_PRIVATE", "false")
+    monkeypatch.setenv(ALLOW_PRIVATE_ENV, "false")
 
 
 @pytest.mark.asyncio

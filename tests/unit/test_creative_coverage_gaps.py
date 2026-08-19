@@ -29,6 +29,7 @@ from tests.helpers.creative_test_helpers import (
 from tests.helpers.creative_test_helpers import (
     sync_patches as _sync_patches,
 )
+from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -83,7 +84,7 @@ class TestSyncPushNotificationConfig:
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
                 identity=identity,
-                push_notification_config={"url": "https://1.1.1.1/hook"},
+                push_notification_config={"url": f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook"},
             )
         assert response.creatives[0].action == "created"
 
@@ -95,7 +96,7 @@ class TestSyncPushNotificationConfig:
         from src.core.tools.creatives import _sync_creatives_impl
 
         config = PushNotificationConfig(
-            url="https://1.1.1.1/hook",
+            url=f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook",
             authentication=Authentication(credentials="a" * 32, schemes=[AuthenticationScheme.Bearer]),
         )
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):

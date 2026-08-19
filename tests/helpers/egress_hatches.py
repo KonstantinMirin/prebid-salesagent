@@ -27,6 +27,19 @@ inert) env var has no effect — see
 from __future__ import annotations
 
 ALLOW_PRIVATE_ENV = "ADCP_OUTBOUND_ALLOW_PRIVATE"
+
+# An https public-unicast IP LITERAL, used as a destination that is deliberately
+# never dialled. It lives beside the hatch names because the reason is about hatch
+# posture: an IP literal passes under EVERY posture without resolving DNS, so a test
+# that only needs "a syntactically valid, non-private, non-loopback destination"
+# gets one without doing live DNS (a hostname would make the test NXDOMAIN-refuse,
+# or worse, actually resolve). 1.1.1.1 specifically is a well-known public resolver
+# address that no test suite should ever connect to — the choice is deliberate.
+#
+# Only the ORIGIN is shared: callers append their own path, because the path is the
+# part each site varies (and in uc004 the host is the only variable under test,
+# deliberately parallel to its BLOCKED_WEBHOOK_URL sibling).
+UNDIALLED_PUBLIC_HTTPS_ORIGIN = "https://1.1.1.1"
 ALLOW_INSECURE_ENV = "ADCP_OUTBOUND_ALLOW_INSECURE"
 
 

@@ -81,6 +81,7 @@ def serve_in_thread(
     port: int = 0,
     server_attrs: dict[str, Any] | None = None,
     ssl_context: ssl.SSLContext | None = None,
+    request_queue_size: int = 128,
 ) -> Iterator[ThreadingHTTPServer]:
     """Serve ``handler_class`` on ``port`` of ``listen_host``, in a daemon thread.
 
@@ -94,6 +95,15 @@ def serve_in_thread(
     starts, so a handler may read per-server state (e.g. the programmable
     origin) on its very first request without a data race.
 
+    ``request_queue_size`` is the listen backlog, and it is a CONSTRUCTOR
+    parameter rather than a ``server_attrs`` entry because socketserver reads it
+    at BIND time — setting it after construction, which is all ``server_attrs``
+    can do, is too late to have any effect. It defaults to 128 rather than
+    socketserver's 5: a burst of ~20 concurrent writers against a backlog-5
+    listener reliably produces ``ConnectionResetError`` on a many-core box and
+    passes on a quieter one, which is exactly how a backlog-too-small bug hides
+    until CI is busy.
+
     ``ssl_context``, if given, wraps the listening socket in TLS before the
     serving thread starts accepting — every accepted connection then comes
     back already negotiated, so nothing downstream of ``accept()`` changes.
@@ -101,7 +111,12 @@ def serve_in_thread(
     rest of the e2e stack trusts (``scripts/dev/gen_test_tls.py``); this
     helper does not generate or know about any certificate itself.
     """
-    server = _server_class_for(listen_host)((listen_host, port), handler_class)
+    # Subclass to carry the backlog: request_queue_size is read during bind, so it
+    # has to be a CLASS attribute present before construction — the same reason
+    # server_attrs (setattr, post-construct) cannot carry it.
+    base = _server_class_for(listen_host)
+    server_class = type(base.__name__, (base,), {"request_queue_size": request_queue_size})
+    server = server_class((listen_host, port), handler_class)
     for name, value in (server_attrs or {}).items():
         setattr(server, name, value)
     if ssl_context is not None:
