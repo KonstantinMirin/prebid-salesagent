@@ -96,6 +96,13 @@ class CommittedAIReview:
     status: str | None
     #: ``creatives.data["ai_review"]``, or None when no verdict was committed.
     verdict: dict[str, Any] | None
+    #: ``creatives.data["ai_review_error"]``, or None when the reviewer did not
+    #: fail. Present here because the reviewer's own ``except Exception`` handler
+    #: REVERTS a committed verdict's status to ``pending_review`` and writes this
+    #: key, WITHOUT clearing ``ai_review``. A test that checks only ``verdict``
+    #: therefore reads "approved" from a review that actually blew up
+    #: (salesagent-prkv.14) -- so the absence of this key is part of the grade.
+    error: dict[str, Any] | None = None
 
 
 def creative_fingerprint(creative: Any) -> tuple[str, str]:
@@ -403,7 +410,11 @@ class CreativeSyncEnv(IntegrationEnv):
             if row is None:
                 return CommittedAIReview(status=None, verdict=None)
             data = row.data if isinstance(row.data, dict) else {}
-            return CommittedAIReview(status=row.status, verdict=data.get("ai_review"))
+            return CommittedAIReview(
+                status=row.status,
+                verdict=data.get("ai_review"),
+                error=data.get("ai_review_error"),
+            )
 
     @realize_e2e(
         e2e_unsupported(

@@ -96,12 +96,12 @@ KNOWN_UNCOVERED = (
 #: fails until it is deleted.
 ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
     {
-        # FIXME(salesagent-db4ci): P1. update_media_buy calls _sync_creatives_impl
+        # FIXME(#1644): P1. update_media_buy calls _sync_creatives_impl
         # from inside its own MediaBuyUoW; the inner unit commits the outer
         # update's in-flight writes and then closes the shared scoped session.
         # Fix = the optional-uow shape from _assignments.py:88-91.
         ("src/core/tools/media_buy_update.py", "_update_media_buy_impl", "_sync_creatives_impl"),
-        # FIXME(salesagent-tf3w9): the delivery webhook scheduler holds a
+        # FIXME(#1644): the delivery webhook scheduler holds a
         # get_db_session() session open, hands it to _send_report_for_media_buy,
         # and that helper calls _get_media_buy_delivery_impl, which opens its own
         # MediaBuyUoW on the same scoped session — and the caller keeps using the

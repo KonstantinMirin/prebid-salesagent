@@ -182,11 +182,11 @@ def _defer_ai_review(
     from src.admin.blueprints.creatives import _ai_review_executor, _ai_review_lock, _ai_review_tasks
 
     def _submit() -> None:
-        from src.admin.blueprints.creatives import _ai_review_creative_async
+        from src.admin.blueprints.creatives import _ai_review_creative
 
         task_id = f"ai_review_{creative_id}_{uuid.uuid4().hex[:8]}"
         future = _ai_review_executor.submit(
-            _ai_review_creative_async,
+            _ai_review_creative,
             creative_id=creative_id,
             tenant_id=tenant["tenant_id"],
             webhook_url=webhook_url,

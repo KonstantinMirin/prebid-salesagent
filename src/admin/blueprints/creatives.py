@@ -22,6 +22,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
+from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -792,7 +793,7 @@ def reject_creative(tenant_id, creative_id, **kwargs):
         return jsonify({"error": str(e)}), 500
 
 
-async def _ai_review_creative_async(
+def _ai_review_creative(
     creative_id: str,
     tenant_id: str,
     webhook_url: str | None = None,
@@ -901,7 +902,14 @@ async def _ai_review_creative_async(
                 logger.warning(f"[AI Review Async] Failed to send Slack notification: {slack_e}")
 
         if should_call_webhook:
-            asyncio.run(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
+            # run_async_in_sync_context, not asyncio.run: the sanctioned bridge
+            # (disease-scan row 2). It takes a COROUTINE OBJECT and raises
+            # TypeError on a coroutine FUNCTION, so it cannot silently no-op the
+            # way submit() did. asyncio.run would also work now that this
+            # function is a plain def on a pool worker with no running loop, but
+            # that correctness would be incidental -- it was the live landmine
+            # while the caller was async (salesagent-prkv.14).
+            run_async_in_sync_context(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
             logger.info(f"[AI Review Async] Webhook called for {creative_id}")
 
     except Exception as e:
