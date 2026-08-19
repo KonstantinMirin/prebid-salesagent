@@ -14,17 +14,31 @@ import atexit
 import logging
 import os
 import threading
+import time
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from adcp import get_adcp_spec_version
 
-from src.core.security.webhook_egress import deliver_webhook
+from src.core.database.repositories.delivery import DeliveryRepository
+from src.core.security.webhook_egress import (
+    WebhookDeliveryOutcome,
+    WebhookTaskContext,
+    deliver_webhook,
+)
 from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
+
+# The ``task_type`` this sender stamps on its rows. It differs from the protocol
+# sender's ("media_buy_delivery") because the two senders are answering about
+# different things; ``WebhookTaskContext.records_delivery_log`` admits both. What
+# must NOT differ is what a row SAYS became of a delivery — that vocabulary lives
+# once, in DeliveryRepository.record_outcome.
+DELIVERY_REPORT_TASK_TYPE = "delivery_report"
 
 
 # How long a single delivery attempt may take. Read at CALL time, not import, so a
@@ -423,9 +437,58 @@ class WebhookDeliveryService:
                         logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
                         continue
 
-                    # Deliver from queue with enhanced features
-                    if self._deliver_with_backoff(endpoint_key, circuit_breaker, queue):
+                    attempt_started = time.time()
+
+                    # ONE conclusion per config. The outcome arrives from the
+                    # delivery function; what to DO about it — write it down, feed
+                    # the breaker, count it — is decided here, once, for every kind.
+                    # Splitting that across the delivery function's arms is how this
+                    # sender ended up feeding a breaker but recording nothing.
+                    outcome = self._deliver_with_backoff(endpoint_key, queue)
+                    if outcome is None:
+                        # The queue was empty: nothing was attempted, so there is no
+                        # outcome to record and no signal to give the breaker.
+                        continue
+
+                    ctx = WebhookTaskContext(
+                        task_id=media_buy_id,
+                        task_type=DELIVERY_REPORT_TASK_TYPE,
+                        tenant_id=tenant_id,
+                        principal_id=principal_id,
+                        media_buy_id=media_buy_id,
+                        sequence_number=delivery_payload.get("sequence_number", 1),
+                        notification_type=delivery_payload.get("notification_type"),
+                    )
+                    # Persistence is observability; it does not get a vote on
+                    # delivery. Without this swallow a DB error would be caught by
+                    # this method's outer bare ``except`` and turn a webhook that WAS
+                    # delivered into ``False`` — and upstream into a spurious retry.
+                    try:
+                        DeliveryRepository(db, tenant_id).record_outcome(
+                            ctx=ctx,
+                            log_id=str(uuid4()),
+                            webhook_url=config.url,
+                            outcome=outcome,
+                            response_time_ms=int((time.time() - attempt_started) * 1000),
+                        )
+                        # Committed PER CONCLUSION, not once at the end: a later
+                        # config's failure must not roll back an earlier config's
+                        # recorded row. (expire_on_commit is True, so `config`
+                        # re-loads after this — safe, the session is still open, and
+                        # safe_url was computed above.)
+                        db.commit()
+                    except Exception as e:
+                        logger.error("Failed to write webhook delivery log: %s", e)
+                        db.rollback()
+
+                    # EVERY non-delivered kind records a breaker failure, exactly as
+                    # the base ``except OutboundError`` did: a destination we cannot
+                    # deliver to must not look healthy to the breaker.
+                    if outcome.kind == "delivered":
+                        circuit_breaker.record_success()
                         sent_count += 1
+                    else:
+                        circuit_breaker.record_failure()
 
                 if sent_count > 0:
                     logger.debug(f"✅ Delivery webhook sent to {sent_count} endpoint(s)")
@@ -441,22 +504,28 @@ class WebhookDeliveryService:
     def _deliver_with_backoff(
         self,
         endpoint_key: str,
-        circuit_breaker: CircuitBreaker,
         queue: WebhookQueue,
-    ) -> bool:
-        """Deliver webhook with exponential backoff and jitter.
+    ) -> WebhookDeliveryOutcome | None:
+        """Deliver one queued webhook and say WHAT BECAME OF IT.
+
+        Returns the outcome rather than a bool, and feeds neither the circuit
+        breaker nor the delivery log itself: this function knows what happened,
+        and :meth:`_send_webhook_enhanced` decides what to do about it, once, for
+        every kind. Concluding in ``bool`` here is what destroyed the fact that a
+        refusal is not a failure — and left this sender, alone among the two,
+        writing no delivery-log row at all.
 
         Args:
             endpoint_key: Unique endpoint identifier
-            circuit_breaker: Circuit breaker for this endpoint
             queue: Webhook queue for this endpoint
 
         Returns:
-            True if delivered successfully, False otherwise
+            The outcome, or ``None`` when the queue was empty and nothing was
+            attempted — which is not an outcome and must not be recorded as one.
         """
         webhook_data = queue.dequeue()
         if not webhook_data:
-            return False
+            return None
 
         config = webhook_data["config"]
         payload = webhook_data["payload"]
@@ -517,8 +586,11 @@ class WebhookDeliveryService:
             # The pinned transport's own wrong-host guard raises a bare RuntimeError,
             # which belongs here rather than escaping into the poller thread.
             logger.error("Unexpected error delivering to %s: %s", safe_url, e, exc_info=True)
-            circuit_breaker.record_failure()
-            return False
+            # No outcome kind covers a NON-transport failure, so this arm builds
+            # the one it means. It no longer feeds the breaker itself — every kind
+            # reaches the caller's single conclusion, so no arm can be the one that
+            # forgets.
+            return WebhookDeliveryOutcome(kind="exhausted", attempts=0, detail=str(e))
 
         if outcome.kind != "delivered":
             if outcome.kind == "refused_auth":
@@ -545,19 +617,14 @@ class WebhookDeliveryService:
                 logger.warning(
                     "Webhook delivery to %s failed after %s attempts (%s)", safe_url, outcome.attempts, cause
                 )
-            # EVERY non-delivered kind records a breaker failure, exactly as the base
-            # ``except OutboundError`` did: a destination we cannot deliver to must
-            # not look healthy to the breaker.
-            circuit_breaker.record_failure()
-            return False
+            return outcome
 
         logger.debug(
             "Webhook delivered to %s (status: %s)",
             safe_url,
             outcome.http_status,
         )
-        circuit_breaker.record_success()
-        return True
+        return outcome
 
     def reset_sequence(self, media_buy_id: str):
         """Reset sequence number for a media buy.

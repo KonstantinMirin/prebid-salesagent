@@ -52,9 +52,9 @@ from adcp.types import McpWebhookPayload
 
 from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
 from src.services.protocol_webhook_service import ProtocolWebhookService
-from tests.factories import MediaBuyFactory, PushNotificationConfigFactory
+from tests.factories import PushNotificationConfigFactory
 from tests.harness._base import IntegrationEnv
-from tests.harness._mixins import LocalOriginMixin
+from tests.harness._mixins import LocalOriginMixin, WebhookOutcomeRowsMixin
 
 # Test-speed base for the egress seam's retry backoff. The seam's real base is
 # 1s (BR-RULE-029: 1s/2s/4s + jitter), which a retry case would otherwise pay in
@@ -79,7 +79,7 @@ DELIVERY_PAYLOAD_TASK_TYPE = "update_media_buy"
 AUDIT_LOGGER_NAME = "adcp.audit"
 
 
-class ProtocolWebhookEnv(LocalOriginMixin, IntegrationEnv):
+class ProtocolWebhookEnv(WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationEnv):
     """Integration test environment for ``ProtocolWebhookService.send_notification``.
 
     The notification POST goes over real HTTP to a real local origin; the
@@ -131,17 +131,6 @@ class ProtocolWebhookEnv(LocalOriginMixin, IntegrationEnv):
         return self._service
 
     # -- Programming the inputs ---------------------------------------------
-
-    def make_media_buy(self, **overrides: Any) -> Any:
-        """Create the ``MediaBuy`` row the delivery log's foreign key requires.
-
-        ``webhook_delivery_log.media_buy_id`` references ``media_buys``, so a
-        delivery-log assertion against a media buy that does not exist would
-        grade nothing: ``_write_delivery_log`` swallows the integrity error and
-        logs it, leaving zero rows and no exception.
-        """
-        tenant, principal = self.setup_default_data()
-        return MediaBuyFactory(tenant=tenant, principal=principal, **overrides)
 
     def make_config(
         self,
@@ -218,7 +207,7 @@ class ProtocolWebhookEnv(LocalOriginMixin, IntegrationEnv):
     def delivery_logs(self, media_buy_id: str) -> list[WebhookDeliveryLog]:
         """Every ``webhook_delivery_log`` row for ``media_buy_id``, freshly read.
 
-        ``_write_delivery_log`` commits through its own ``get_db_session()``, so
+        ``record_outcome`` commits through its own ``get_db_session()``, so
         the env-bound session must drop anything it already has cached before
         the read or it would answer from its identity map.
         """

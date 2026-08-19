@@ -573,14 +573,17 @@ class TestResetSequence:
 
 
 class TestDeliverWithBackoffGenericException:
-    """_deliver_with_backoff breaks on non-httpx exceptions.
+    """_deliver_with_backoff turns a non-transport exception into an outcome.
 
-    Covers lines 514-516 of webhook_delivery_service.py (pre-removal line numbers).
+    The exception must not escape a function the poller thread calls with no
+    caller left to receive a raise, and it must not be reported as the same
+    nothing a refusal is.
     """
 
     def test_generic_exception_breaks_retry_loop(self):
         from unittest.mock import MagicMock
 
+        from src.core.security.webhook_egress import WebhookDeliveryOutcome
         from src.services.webhook_delivery_service import (
             CircuitBreaker,
             WebhookDeliveryService,
@@ -621,11 +624,24 @@ class TestDeliverWithBackoffGenericException:
         # exception escaping the delivery call, which no origin can serve, so it is
         # still injected here rather than at a transport this module never touches.
         with patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected):
-            result = svc._deliver_with_backoff("test_endpoint", cb, queue)
+            result = svc._deliver_with_backoff("test_endpoint", queue)
 
-        assert result is False
-        # Circuit breaker should record the failure
-        assert cb.failure_count >= 1
+        # The function concludes in an OUTCOME, not a bool: "it did not deliver"
+        # and "why" used to collapse into False, which is how a refusal became
+        # indistinguishable from three failed attempts. No kind covers a
+        # NON-transport failure, so the arm builds ``exhausted`` with the honest
+        # attempt count — zero — and carries the cause.
+        assert result == WebhookDeliveryOutcome(kind="exhausted", attempts=0, detail="unexpected")
+
+        # The circuit breaker is NOT fed here any more, and that is the change,
+        # not an oversight: _send_webhook_enhanced now feeds it from the outcome,
+        # once, for every kind — so no arm of this function can be the one that
+        # forgets. Asserting a failure tick here would pin the breaker to an arm
+        # it no longer belongs to. The obligation is graded where it moved, over
+        # the public surface: tests/integration/test_delivery_service_behavioral.py
+        # asserts get_circuit_breaker_state()'s failure_count for a delivery that
+        # did not succeed, including a refused URL reaching the open threshold.
+        assert cb.failure_count == 0
 
 
 class TestShutdownHandler:

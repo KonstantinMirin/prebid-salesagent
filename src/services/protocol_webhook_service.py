@@ -15,20 +15,21 @@ Application-level webhooks are configured via:
 import logging
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import extract_webhook_result_data
 from adcp.types import McpWebhookPayload
 from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.delivery import DeliveryRepository
-from src.core.security.webhook_egress import adeliver_webhook
+from src.core.security.webhook_egress import (
+    WebhookDeliveryOutcome,
+    WebhookTaskContext,
+    adeliver_webhook,
+)
 from src.core.webhook_validator import webhook_url_for_log
 
 
@@ -128,72 +129,6 @@ def _to_wire_dict(payload: Any) -> dict[str, Any]:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class WebhookTaskContext:
-    """A delivery's task identity, constructed once and consumed identically
-    by all three failure arms and the success path in
-    ``_send_with_retry_and_logging``.
-
-    Absorbs the metadata/payload pluck block that used to run inline at the
-    top of ``_send_with_retry_and_logging`` — repeating that pluck (or,
-    worse, re-threading its results as twelve independent kwargs at three
-    call sites) is how one of them ends up silently dropped at one site.
-    """
-
-    task_id: str
-    task_type: str | None
-    tenant_id: str | None
-    principal_id: str | None
-    media_buy_id: str | None
-    sequence_number: int
-    notification_type: str | None
-
-    @classmethod
-    def from_metadata(cls, metadata: dict[str, Any], payload: dict[str, Any]) -> "WebhookTaskContext":
-        task_type = metadata["task_type"] if "task_type" in metadata else None
-        tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
-        principal_id = metadata["principal_id"] if "principal_id" in metadata else None
-        media_buy_id = metadata["media_buy_id"] if "media_buy_id" in metadata else None
-
-        # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
-        # returns dict at runtime but is typed as AdcpAsyncResponseData | None
-        result = cast(dict[str, Any] | None, extract_webhook_result_data(payload))
-        # After serialization, payload is always a dict - extract task_id accordingly.
-        # A2A Task uses 'id'; A2A TaskStatusUpdateEvent uses camelCase 'taskId' (proto
-        # json_name wire contract); MCP uses snake_case 'task_id'.
-        task_id = payload.get("id") or payload.get("taskId") or payload.get("task_id") or ""
-
-        # If we are delivering media buy delivery report
-        notification_type_from_result = result.get("notification_type") if result is not None else None
-        sequence_number_from_result = result.get("sequence_number") if result is not None else None
-        notification_type = notification_type_from_result
-        sequence_number = sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
-
-        return cls(
-            task_id=task_id,
-            task_type=task_type,
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            media_buy_id=media_buy_id,
-            sequence_number=sequence_number,
-            notification_type=notification_type,
-        )
-
-    @property
-    def records_delivery_log(self) -> bool:
-        """Whether this delivery is eligible for a ``webhook_delivery_log`` row.
-
-        Spells the gating condition that used to appear twice (once per
-        failure/success branch) exactly once.
-        """
-        return (
-            self.task_type in ("delivery_report", "media_buy_delivery")
-            and bool(self.media_buy_id)
-            and bool(self.tenant_id)
-            and bool(self.principal_id)
-        )
-
-
 class ProtocolWebhookService:
     """
     Service for sending protocol-level push notifications to clients.
@@ -203,57 +138,6 @@ class ProtocolWebhookService:
     - Bearer: Sends credentials as Bearer token
     - None: No authentication
     """
-
-    def _record_delivery_failure(
-        self,
-        *,
-        ctx: WebhookTaskContext,
-        log_id: str,
-        url: str,
-        attempts: int,
-        http_status_code: int | None,
-        error: str,
-        payload_size_bytes: int,
-        start_time: float,
-        audit_logger: Any,
-    ) -> bool:
-        """Book one failed delivery: the log row, the audit entry, and ``False``.
-
-        Shared by all three failure arms — a refusal, a delivery failure and an
-        unexpected error differ only in what they know (attempts, status, wording),
-        not in what they must record. Repeating the row-and-audit block per arm is
-        how one of them ends up silently not recording, which for a refusal would
-        mean a misconfigured destination leaving no trace at all.
-        """
-        response_time_ms = int((time.time() - start_time) * 1000)
-
-        if ctx.records_delivery_log:
-            # records_delivery_log already requires all three of these truthy;
-            # the assert only narrows mypy's view from str | None to str (it
-            # cannot narrow through a property call) and can never fire.
-            assert ctx.tenant_id and ctx.principal_id and ctx.media_buy_id and ctx.task_type
-            self._write_delivery_log(
-                log_id=log_id,
-                tenant_id=ctx.tenant_id,
-                principal_id=ctx.principal_id,
-                media_buy_id=ctx.media_buy_id,
-                webhook_url=url,
-                task_type=ctx.task_type,
-                status="failed",
-                sequence_number=ctx.sequence_number,
-                notification_type=ctx.notification_type,
-                attempt_count=attempts,
-                http_status_code=http_status_code,
-                payload_size_bytes=payload_size_bytes,
-                response_time_ms=response_time_ms,
-                error_message=error,
-                completed_at=datetime.now(UTC),
-            )
-
-        if audit_logger:
-            audit_logger.log_warning(f"{ctx.task_type} webhook failed for task {ctx.task_id}: {error}")
-
-        return False
 
     async def send_notification(
         self,
@@ -333,50 +217,70 @@ class ProtocolWebhookService:
             credentials=push_notification_config.authentication_token,
         )
 
-    @staticmethod
-    def _write_delivery_log(
+    def _conclude(
+        self,
         *,
+        ctx: WebhookTaskContext,
         log_id: str,
-        tenant_id: str,
-        principal_id: str,
-        media_buy_id: str,
-        webhook_url: str,
-        task_type: str,
-        status: str,
-        sequence_number: int = 1,
-        notification_type: str | None = None,
-        attempt_count: int = 1,
-        http_status_code: int | None = None,
-        error_message: str | None = None,
-        payload_size_bytes: int | None = None,
-        response_time_ms: int | None = None,
-        completed_at: datetime | None = None,
-        next_retry_at: datetime | None = None,
-    ) -> None:
-        """Write a webhook delivery log entry via the DeliveryRepository."""
-        try:
-            with get_db_session() as session:
-                repo = DeliveryRepository(session, tenant_id)
-                repo.create_log(
-                    log_id=log_id,
-                    principal_id=principal_id,
-                    media_buy_id=media_buy_id,
-                    webhook_url=webhook_url,
-                    task_type=task_type,
-                    status=status,
-                    sequence_number=sequence_number,
-                    notification_type=notification_type,
-                    attempt_count=attempt_count,
-                    http_status_code=http_status_code,
-                    error_message=error_message,
-                    payload_size_bytes=payload_size_bytes,
-                    response_time_ms=response_time_ms,
-                    completed_at=completed_at,
-                    next_retry_at=next_retry_at,
+        url: str,
+        outcome: WebhookDeliveryOutcome,
+        start_time: float,
+        audit_logger: Any,
+    ) -> bool:
+        """Book one delivery: the row, the audit entry, and the bool the caller gets.
+
+        THE single conclusion for this sender. Every arm — refused destination,
+        client error, exhausted retries, an unexpected exception, and success —
+        ends here, because a refusal, a failure and a delivery differ only in
+        what they KNOW (attempts, status, wording), not in what they must record.
+        An arm that concludes on its own is an arm that can be written without
+        recording anything, which for a refusal means a misconfigured destination
+        leaving no trace at all — the absence lane salesagent-gra7.1 closes.
+
+        The outcome IS the conclusion: the returned bool is derived from it, not
+        decided here, and the row is written from it rather than from arguments
+        each arm re-derived.
+        """
+        response_time_ms = int((time.time() - start_time) * 1000)
+
+        # Persistence is observability; it does not get a vote on delivery. A DB
+        # error must not propagate out of a function contracted ``-> bool`` and
+        # turn a webhook that WAS delivered into a failure (and, upstream, into a
+        # retry). The swallow used to live at the write helper; it lives at the
+        # one conclusion now, which is the only place it is needed.
+        # Gated on the ELIGIBILITY property, not merely on tenant_id: record_outcome
+        # is a no-op for an ineligible ctx, so gating any wider would check out a
+        # session and commit an empty transaction for every task status update this
+        # sender fires — a per-webhook round trip that did not exist before.
+        if ctx.records_delivery_log:
+            # records_delivery_log already requires tenant_id truthy; the assert
+            # only narrows mypy's view from str | None to str and can never fire.
+            assert ctx.tenant_id
+            try:
+                with get_db_session() as session:
+                    DeliveryRepository(session, ctx.tenant_id).record_outcome(
+                        ctx=ctx,
+                        log_id=log_id,
+                        webhook_url=url,
+                        outcome=outcome,
+                        response_time_ms=response_time_ms,
+                    )
+                    session.commit()
+            except Exception as e:
+                logger.error(f"Failed to write webhook delivery log: {e}")
+
+        if audit_logger:
+            if outcome.kind == "delivered":
+                audit_logger.log_success(
+                    f"{ctx.task_type} webhook delivered successfully (sequence #{ctx.sequence_number}, "
+                    f"{response_time_ms}ms, {outcome.payload_size_bytes or 0} bytes)"
                 )
-                session.commit()
-        except Exception as e:
-            logger.error(f"Failed to write webhook delivery log: {e}")
+            else:
+                audit_logger.log_warning(
+                    f"{ctx.task_type} webhook failed for task {ctx.task_id}: {outcome.detail or outcome.kind}"
+                )
+
+        return outcome.kind == "delivered"
 
     async def _send_with_retry_and_logging(
         self,
@@ -445,21 +349,18 @@ class ProtocolWebhookService:
             # what it catches. The pinned transport's own wrong-host guard raises a
             # bare RuntimeError, which belongs here.
             logger.error(f"Unexpected error sending webhook for task {ctx.task_id}: {e}", exc_info=True)
-            return self._record_delivery_failure(
+            # Nothing reached the wire, and no outcome kind covers a NON-transport
+            # failure — so this arm builds the one it means: exhausted with zero
+            # attempts. The arm no longer decides what gets recorded; it only says
+            # what became of the delivery, and the epilogue books it.
+            return self._conclude(
                 ctx=ctx,
                 log_id=log_id,
                 url=url,
-                attempts=0,
-                http_status_code=None,
-                error=str(e),
-                payload_size_bytes=0,
+                outcome=WebhookDeliveryOutcome(kind="exhausted", attempts=0, detail=str(e)),
                 start_time=start_time,
                 audit_logger=audit_logger,
             )
-
-        # 0 when the seam refused before serializing: the column means "bytes we
-        # put on the wire", and nothing was put on the wire.
-        payload_size_bytes = outcome.payload_size_bytes or 0
 
         if outcome.kind == "refused_auth":
             # FAIL-CLOSED. This used to fall through to an unsigned delivery: the
@@ -468,69 +369,47 @@ class ProtocolWebhookService:
             # nothing was attempted, so a row claiming an attempt would misreport a
             # refusal as a delivery that failed on the wire. The refusal a buyer can
             # act on already happened at ingest.
+            #
+            # It still concludes through the epilogue, so this arm cannot be the one
+            # that forgets to. Both absences survive the move and are the RULING,
+            # not an oversight: record_outcome maps no status for ``refused_auth``
+            # (so no row), and _conclude is passed no audit_logger (so no entry).
             logger.error(
                 "Refusing to send webhook for task %s to %s: %s",
                 ctx.task_id,
                 webhook_url_for_log(url),
                 outcome.detail or outcome.reason,
             )
-            return False
-
-        if outcome.kind != "delivered":
-            if outcome.kind == "refused_destination":
-                # Refused before a connection was opened: attempts=0 is the honest
-                # count. It still writes a row and an audit entry — a misconfigured
-                # destination that leaves no trace is indistinguishable from one
-                # nobody configured.
-                error = "refused by egress policy"
-                logger.error(f"Webhook for task {ctx.task_id} was refused by egress policy")
-            else:
-                error = outcome.detail or f"failed after {outcome.attempts} attempts"
-                logger.error(f"Webhook for task {ctx.task_id} {error}")
-            return self._record_delivery_failure(
+            return self._conclude(
                 ctx=ctx,
                 log_id=log_id,
                 url=url,
-                attempts=outcome.attempts,
-                http_status_code=outcome.http_status,
-                error=error,
-                payload_size_bytes=payload_size_bytes,
+                outcome=outcome,
                 start_time=start_time,
-                audit_logger=audit_logger,
+                audit_logger=None,
             )
 
-        response_time_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Successfully sent webhook for task {ctx.task_id} (status: {outcome.http_status})")
-
-        if ctx.records_delivery_log:
-            # records_delivery_log already requires all three of these truthy;
-            # the assert only narrows mypy's view from str | None to str (it
-            # cannot narrow through a property call) and can never fire.
-            assert ctx.tenant_id and ctx.principal_id and ctx.media_buy_id and ctx.task_type
-            self._write_delivery_log(
-                log_id=log_id,
-                tenant_id=ctx.tenant_id,
-                principal_id=ctx.principal_id,
-                media_buy_id=ctx.media_buy_id,
-                webhook_url=url,
-                task_type=ctx.task_type,
-                status="success",
-                sequence_number=ctx.sequence_number,
-                notification_type=ctx.notification_type,
-                attempt_count=outcome.attempts,
-                http_status_code=outcome.http_status,
-                payload_size_bytes=payload_size_bytes,
-                response_time_ms=response_time_ms,
-                completed_at=datetime.now(UTC),
+        if outcome.kind == "refused_destination":
+            # Refused before a connection was opened. It still writes a row and an
+            # audit entry — a misconfigured destination that leaves no trace is
+            # indistinguishable from one nobody configured. The honest attempt count
+            # (0) and the ``refused`` spelling are the recorder's, not this arm's.
+            logger.error(f"Webhook for task {ctx.task_id} was refused by egress policy")
+        elif outcome.kind != "delivered":
+            logger.error(
+                f"Webhook for task {ctx.task_id} {outcome.detail or f'failed after {outcome.attempts} attempts'}"
             )
+        else:
+            logger.info(f"Successfully sent webhook for task {ctx.task_id} (status: {outcome.http_status})")
 
-        if audit_logger:
-            audit_logger.log_success(
-                f"{ctx.task_type} webhook delivered successfully (sequence #{ctx.sequence_number}, "
-                f"{response_time_ms}ms, {payload_size_bytes} bytes)"
-            )
-
-        return True
+        return self._conclude(
+            ctx=ctx,
+            log_id=log_id,
+            url=url,
+            outcome=outcome,
+            start_time=start_time,
+            audit_logger=audit_logger,
+        )
 
 
 # Global service instance

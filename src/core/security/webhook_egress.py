@@ -39,9 +39,9 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from adcp import sign_legacy_webhook
+from adcp import extract_webhook_result_data, sign_legacy_webhook
 from adcp.types import AuthenticationScheme
 from adcp.types.generated_poc.core.push_notification_config import (
     Authentication as LibraryAuthentication,
@@ -94,6 +94,79 @@ class WebhookDeliveryOutcome:
     payload_size_bytes: int | None = None
     reason: RefusalReason | None = None
     scheme: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookTaskContext:
+    """A delivery's task identity, constructed once and consumed identically
+    by all three failure arms and the success path in
+    ``_send_with_retry_and_logging``.
+
+    Absorbs the metadata/payload pluck block that used to run inline at the
+    top of ``_send_with_retry_and_logging`` — repeating that pluck (or,
+    worse, re-threading its results as twelve independent kwargs at three
+    call sites) is how one of them ends up silently dropped at one site.
+
+    Lives HERE, beside :class:`WebhookDeliveryOutcome`, rather than in
+    ``src/services/``: these are the two values
+    ``DeliveryRepository.record_outcome`` consumes — WHO the delivery was for
+    and WHAT became of it — and a repository importing a dataclass out of a
+    service module would invert the layering. Nothing about task identity is
+    sender-specific, which is the point: both senders build one of these.
+    """
+
+    task_id: str
+    task_type: str | None
+    tenant_id: str | None
+    principal_id: str | None
+    media_buy_id: str | None
+    sequence_number: int
+    notification_type: str | None
+
+    @classmethod
+    def from_metadata(cls, metadata: dict[str, Any], payload: dict[str, Any]) -> WebhookTaskContext:
+        task_type = metadata["task_type"] if "task_type" in metadata else None
+        tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
+        principal_id = metadata["principal_id"] if "principal_id" in metadata else None
+        media_buy_id = metadata["media_buy_id"] if "media_buy_id" in metadata else None
+
+        # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
+        # returns dict at runtime but is typed as AdcpAsyncResponseData | None
+        result = cast(dict[str, Any] | None, extract_webhook_result_data(payload))
+        # After serialization, payload is always a dict - extract task_id accordingly.
+        # A2A Task uses 'id'; A2A TaskStatusUpdateEvent uses camelCase 'taskId' (proto
+        # json_name wire contract); MCP uses snake_case 'task_id'.
+        task_id = payload.get("id") or payload.get("taskId") or payload.get("task_id") or ""
+
+        # If we are delivering media buy delivery report
+        notification_type_from_result = result.get("notification_type") if result is not None else None
+        sequence_number_from_result = result.get("sequence_number") if result is not None else None
+        notification_type = notification_type_from_result
+        sequence_number = sequence_number_from_result if isinstance(sequence_number_from_result, int) else 1
+
+        return cls(
+            task_id=task_id,
+            task_type=task_type,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=media_buy_id,
+            sequence_number=sequence_number,
+            notification_type=notification_type,
+        )
+
+    @property
+    def records_delivery_log(self) -> bool:
+        """Whether this delivery is eligible for a ``webhook_delivery_log`` row.
+
+        Spells the gating condition that used to appear twice (once per
+        failure/success branch) exactly once.
+        """
+        return (
+            self.task_type in ("delivery_report", "media_buy_delivery")
+            and bool(self.media_buy_id)
+            and bool(self.tenant_id)
+            and bool(self.principal_id)
+        )
 
 
 def _authentication_or_refusal(

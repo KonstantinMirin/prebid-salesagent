@@ -111,6 +111,14 @@ _MEASURABLE_DELAY_SECONDS = 0.25
 # the seam's scheme rule first, grading the scheme instead of the destination.
 _UNRESOLVABLE_WEBHOOK_URL = "https://webhook-sink.invalid/webhook"
 
+# The refusal wording an operator reads, in the delivery-log row AND in the audit
+# line. It is the EGRESS SEAM's — src/core/security/webhook_egress.py — not this
+# sender's: before lane salesagent-gra7.1 the sender's refusal arm overrode the
+# seam's detail with its own "refused by egress policy" string, which is one more
+# place the vocabulary could drift. Now the outcome carries the wording and the
+# recorder writes it down, so there is exactly one.
+_REFUSAL_DETAIL = "the destination was refused before any connection was made"
+
 # The identity values the refused delivery must carry onto its row. They are read
 # off the PAYLOAD's ``result`` (``extract_webhook_result_data``), NOT off the
 # metadata dict, and they are non-default on purpose: the env's default result
@@ -385,14 +393,20 @@ class TestRefusedDestinationRow:
                 "destination that leaves no trace is indistinguishable from one nobody configured"
             )
             row = rows[0]
-            assert row.status == "failed"
+            assert row.status == "refused", (
+                f"a destination refused before any connection was opened was written down as "
+                f"{row.status!r} — the same word the recorder uses for a delivery the buyer's "
+                "endpoint actually rejected. Lane salesagent-gra7.1 gave the refusal its own "
+                "status value precisely so an operator can tell a misconfigured URL from a "
+                "flaky endpoint"
+            )
             assert row.attempt_count == 0, (
                 f"the row claims {row.attempt_count} attempts for a delivery refused before any "
                 "connection was opened — an operator cannot tell it apart from one the buyer's "
                 "endpoint actually rejected"
             )
             assert row.http_status_code is None
-            assert row.error_message == "refused by egress policy"
+            assert row.error_message == _REFUSAL_DETAIL
             assert row.webhook_url == _UNRESOLVABLE_WEBHOOK_URL
             assert row.task_type == DELIVERY_METADATA_TASK_TYPE
             assert row.notification_type == _REFUSAL_NOTIFICATION_TYPE, (
@@ -414,7 +428,7 @@ class TestRefusedDestinationRow:
             warnings = _audit_messages(caplog, logging.WARNING)
             assert len(warnings) == 1, warnings
             assert warnings[0].endswith(
-                f"{DELIVERY_METADATA_TASK_TYPE} webhook failed for task task_001: refused by egress policy"
+                f"{DELIVERY_METADATA_TASK_TYPE} webhook failed for task task_001: {_REFUSAL_DETAIL}"
             ), warnings
 
 

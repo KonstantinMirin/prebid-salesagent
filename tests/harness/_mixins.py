@@ -370,6 +370,61 @@ class LocalOriginMixin:
         return self.origin.last_request
 
 
+class WebhookOutcomeRowsMixin:
+    """Read back the ``webhook_delivery_log`` rows a sender concluded with.
+
+    Shared by the two senders' envs (``CircuitBreakerEnv``,
+    ``ProtocolWebhookEnv``) because "what did production write down about this
+    delivery" is one question, and the whole point of lane salesagent-gra7.1 is
+    that both senders must answer it through ONE recorder. A per-env copy of
+    this read is how the two answers would be allowed to drift.
+
+    The read goes through :class:`~src.core.database.repositories.delivery.DeliveryRepository`
+    rather than a raw ``select()``: the repository is the tenant-scoped data
+    access layer, and grading the recorder against a query the grader wrote
+    itself would only prove the grader and the writer agree about columns.
+    """
+
+    def make_media_buy(self, **overrides: Any) -> Any:
+        """Create the ``MediaBuy`` row the delivery log's foreign key requires.
+
+        ``webhook_delivery_log.media_buy_id`` references ``media_buys``, so a
+        delivery-log assertion against a media buy that does not exist would
+        grade nothing: the writers swallow the integrity error and log it,
+        leaving zero rows and no exception.
+        """
+        from tests.factories import MediaBuyFactory
+
+        tenant, principal = self.setup_default_data()  # type: ignore[attr-defined]
+        return MediaBuyFactory(tenant=tenant, principal=principal, **overrides)
+
+    def recorded_outcomes(
+        self,
+        media_buy_id: str,
+        *,
+        task_type: str,
+        status: str | None = None,
+    ) -> list[Any]:
+        """The delivery-log rows a sender recorded for ``media_buy_id``.
+
+        ``task_type`` is REQUIRED, not optional. ``media_buy_delivery.py``
+        persists ``task_type="delivery_poll"`` counter rows that are also
+        ``status="success"`` on the same ``media_buy_id``; a read that did not
+        filter would let a grader for "the sender recorded a success" pass on a
+        row no sender wrote.
+
+        The senders commit through their own ``get_db_session()``, so the
+        env-bound session must drop what it has cached or it answers from its
+        identity map.
+        """
+        from src.core.database.repositories.delivery import DeliveryRepository
+
+        session = self.get_session()  # type: ignore[attr-defined]
+        session.expire_all()
+        repo = DeliveryRepository(session, self._tenant_id)  # type: ignore[attr-defined]
+        return repo.get_logs_by_webhook_id(media_buy_id, task_type=task_type, status=status)
+
+
 class WebhookMixin(LocalOriginMixin):
     """Shared fluent API for webhook delivery testing."""
 

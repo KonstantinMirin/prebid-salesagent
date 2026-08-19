@@ -49,7 +49,7 @@ from sqlalchemy import select
 from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
-from tests.harness._mixins import CircuitBreakerMixin
+from tests.harness._mixins import CircuitBreakerMixin, WebhookOutcomeRowsMixin
 
 
 class _LogCaptureHandler(logging.Handler):
@@ -63,7 +63,7 @@ class _LogCaptureHandler(logging.Handler):
         self.records.append(self.format(record))
 
 
-class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
+class CircuitBreakerEnv(WebhookOutcomeRowsMixin, CircuitBreakerMixin, IntegrationEnv):
     """Integration test environment for WebhookDeliveryService and CircuitBreaker.
 
     Only mocks timing and randomness. Delivery goes over real HTTP to a real

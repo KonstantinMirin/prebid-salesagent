@@ -1319,17 +1319,17 @@ class TestShortSecretRefusesRatherThanSigning:
 
 
 @pytest.mark.requires_db
-class TestEmptyDequeueReturnsFalse:
-    """_deliver_with_backoff returns False when queue is empty.
+class TestEmptyDequeueIsNotAnOutcome:
+    """An empty queue yields NO outcome — nothing was attempted.
 
-    Covers: line 447 of webhook_delivery_service.py
+    Distinct from every other return: ``None`` is not a delivery that failed. It
+    is what stops the caller's conclusion from running at all, so an empty queue
+    cannot write a delivery-log row or tick the circuit breaker for a webhook
+    that was never sent. When this function concluded in ``bool`` the two were
+    the same ``False``.
     """
 
     def test_deliver_with_backoff_empty_queue(self, integration_db):
-        """Calling _deliver_with_backoff with an empty queue returns False.
-
-        Covers: webhook_delivery_service.py line 447
-        """
         from src.services.webhook_delivery_service import CircuitBreaker, WebhookQueue
         from tests.harness import CircuitBreakerEnv
 
@@ -1338,5 +1338,13 @@ class TestEmptyDequeueReturnsFalse:
             cb = CircuitBreaker()
             empty_queue = WebhookQueue()
 
-            result = service._deliver_with_backoff(env.endpoint_key("t1"), cb, empty_queue)
-            assert result is False
+            result = service._deliver_with_backoff(env.endpoint_key("t1"), empty_queue)
+
+            assert result is None, (
+                f"an empty queue produced {result!r} — anything other than None is an outcome, "
+                "and an outcome would be recorded as a delivery that never happened"
+            )
+            assert cb.failure_count == 0, (
+                f"the breaker recorded {cb.failure_count} failure(s) for a webhook that was never "
+                "dequeued — an endpoint cannot look unhealthy because nothing was queued for it"
+            )
