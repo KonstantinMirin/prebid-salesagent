@@ -9,6 +9,7 @@ beads: salesagent-lqb
 
 from __future__ import annotations
 
+import pathlib
 from datetime import date, datetime
 from typing import Any
 
@@ -1612,6 +1613,56 @@ def then_fail_with_code(ctx: dict, code: str) -> None:
         assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
     else:
         raise AssertionError(f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}")
+
+
+def _pinned_recovery(code: str) -> str | None:
+    """Return the recovery classification the PINNED spec assigns to an error code.
+
+    Read from ``enums/error-code.json`` ``enumMetadata`` in the installed adcp
+    package, so the assertion is graded against the protocol rather than against
+    our own exception classes -- grading production's recovery with production's
+    own ``_default_recovery`` would be circular and could never fail. Returns
+    ``None`` for a code the pinned enum does not carry (sellers MAY emit
+    platform-specific codes), leaving recovery ungraded rather than inventing an
+    expectation the spec does not state.
+    """
+    import json
+
+    import adcp
+
+    schema = pathlib.Path(adcp.__file__).parent / "_schemas" / "3.1" / "enums" / "error-code.json"
+    metadata = json.loads(schema.read_text()).get("enumMetadata", {})
+    return (metadata.get(code) or {}).get("recovery")
+
+
+@then(parsers.parse('the request should be refused for "{media_buy_id}" with error code "{code}"'))
+def then_request_refused_for_media_buy(ctx: dict, media_buy_id: str, code: str) -> None:
+    """Assert the whole request was refused, naming the row that caused it.
+
+    "Refused" is stronger than "the response omitted the row": get_media_buys
+    must fail the entire request rather than silently dropping or reinterpreting
+    a defective row, so this step asserts an ERROR, not a short result set. It
+    grades three things:
+
+      * the wire error code, on both envelope layers (delegated to
+        ``then_fail_with_code``);
+      * the recovery classification the pinned spec assigns to that code, so a
+        terminal defect can never be reported as retryable;
+      * that the failure names the offending media buy -- without this the step
+        would pass on a refusal caused by some entirely different row.
+    """
+    then_fail_with_code(ctx, code)
+
+    expected_recovery = _pinned_recovery(code)
+    if expected_recovery is not None:
+        _assert_error_recovery(ctx, expected_recovery)
+
+    wire = _wire_error_object(ctx) or {}
+    haystack = " ".join(str(part) for part in (wire.get("message"), wire.get("details"), ctx.get("error")) if part)
+    assert media_buy_id in haystack, (
+        f"Expected the refusal to name media buy {media_buy_id!r} so the buyer can "
+        f"identify the defective row; got: {haystack!r}"
+    )
 
 
 @then("the error message should indicate that identity is required")
