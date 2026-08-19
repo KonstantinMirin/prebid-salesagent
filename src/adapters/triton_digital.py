@@ -698,4 +698,8 @@ class TritonDigital(AdServerAdapter):
 
             except requests.exceptions.RequestException as e:
                 self.log(f"Error updating Triton campaign/flight: {e}")
-                raise AdCPAdapterError(str(e)) from e
+                # ``requests``' text carries the ad server's URL/response body —
+                # an upstream API response from a seller-internal integration.
+                # AdCP 3.1.1 transport-errors.mdx § Security Considerations
+                # forbids it on the buyer wire; it goes to the log + slot.
+                raise AdCPAdapterError("Ad server rejected the media buy update", internal_detail=e) from e

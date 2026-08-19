@@ -18,6 +18,7 @@ from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no
 # ImageFormatAsset = individual image, VideoFormatAsset = individual video
 # RepeatableAssetGroup = repeatable_group (has nested assets, no asset_type)
 # Nested group assets: ImageFormatGroupAsset, VideoFormatGroupAsset, TextFormatGroupAsset, etc.
+from src.core.creative_agent_registry import CREATIVE_AGENT_UNREACHABLE_MESSAGE
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import PrincipalFactory
 
@@ -675,11 +676,14 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         healthy_formats = [
             _make_format("display_300x250", "Display 300x250"),
         ]
+        # The fixture is the message the registry ACTUALLY publishes. It used to
+        # hand-build "Creative agent at <url> is unreachable: Connection refused"
+        # — i.e. it normalized a leaking message as the expected shape while
+        # asserting nothing about it. AdCP 3.1.1 transport-errors.mdx § Security
+        # Considerations makes errors[] client-facing too, so the fixture now
+        # carries the first-party sentence and the assertions compare values.
         agent_errors = [
-            AdCPResponseError(
-                code="AGENT_UNREACHABLE",
-                message="Creative agent at https://failing-agent.example.com is unreachable: Connection refused",
-            ),
+            AdCPResponseError(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE),
         ]
         response = _call_impl_raw(healthy_formats, errors=agent_errors)
 
@@ -688,11 +692,15 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
 
         # Errors should report the failed agent
         assert response.errors is not None, "Response must include errors[] for failed agents, not silently drop them"
-        assert len(response.errors) >= 1
-        # Each error must have code and message per AdCP error.json
-        for err in response.errors:
-            assert err.code is not None
-            assert err.message is not None
+        assert len(response.errors) == 1
+        assert response.errors[0].code == "AGENT_UNREACHABLE"
+        assert response.errors[0].message == CREATIVE_AGENT_UNREACHABLE_MESSAGE
+        # NOTE (honest limit): these fixtures are fed straight to _call_impl_raw,
+        # so they grade the _impl's error PROPAGATION, never the registry's
+        # message construction. The construction site is graded by
+        # tests/integration/test_creative_formats_payload_error_wire_safety.py.
+        assert "Connection refused" not in response.errors[0].message
+        assert "https://" not in response.errors[0].message
 
 
 class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
@@ -711,16 +719,13 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
         """
         from adcp.types import Error as AdCPResponseError
 
-        # Simulate all agents failing — registry returns no formats but reports errors
+        # Simulate all agents failing — registry returns no formats but reports
+        # errors. Same conversion as UC-005-EXT-C-01 above: the fixtures carry
+        # the first-party sentence the registry actually publishes, not the
+        # leaking "<url> is unreachable: <raw cause>" shape they used to pin.
         agent_errors = [
-            AdCPResponseError(
-                code="AGENT_UNREACHABLE",
-                message="Creative agent at https://agent-1.example.com is unreachable: Connection refused",
-            ),
-            AdCPResponseError(
-                code="AGENT_UNREACHABLE",
-                message="Creative agent at https://agent-2.example.com is unreachable: Timeout",
-            ),
+            AdCPResponseError(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE),
+            AdCPResponseError(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE),
         ]
         response = _call_impl_raw(formats=[], errors=agent_errors)
 
@@ -730,10 +735,12 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
             "An empty formats[] without errors[] means 'no formats configured', "
             "not 'agents are down'."
         )
-        assert len(response.errors) >= 1
+        assert len(response.errors) == 2
         for err in response.errors:
-            assert err.code is not None
-            assert err.message is not None
+            assert err.code == "AGENT_UNREACHABLE"
+            assert err.message == CREATIVE_AGENT_UNREACHABLE_MESSAGE
+            assert "Connection refused" not in err.message
+            assert "https://" not in err.message
 
 
 class TestRegistryCreationFailureRaisesServiceUnavailable:
@@ -777,14 +784,14 @@ class TestErrorEntriesFollowAdCPSchema:
         """
         from adcp.types import Error
 
-        agent_errors = [Error(code="AGENT_UNREACHABLE", message="Creative agent at https://x is unreachable")]
+        agent_errors = [Error(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE)]
         response = _call_impl_raw(formats=[], errors=agent_errors)
 
         assert response.errors is not None
         for err in response.errors:
             assert isinstance(err, Error), f"Error must be an AdCP Error instance, got {type(err)}"
-            assert isinstance(err.code, str) and len(err.code) > 0
-            assert isinstance(err.message, str) and len(err.message) > 0
+            assert err.code == "AGENT_UNREACHABLE"
+            assert err.message == CREATIVE_AGENT_UNREACHABLE_MESSAGE
 
 
 class TestSuccessfulDiscoveryHasNoErrors:

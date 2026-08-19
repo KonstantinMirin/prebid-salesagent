@@ -52,21 +52,55 @@ def assert_no_raw_validation_leak(message: str) -> None:
     assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
 
 
+def _assert_marker_absent(rendered_region: Any, marker: str, *, region_label: str) -> None:
+    """Core of the wire-safety marker scan: ``marker`` must not appear in a region.
+
+    Shared by the two carriers the spec treats as equal — the two-layer ERROR
+    envelope and a SUCCESS payload's ``errors[]`` (error-compliance.yaml's
+    ``validate_error_shape`` grades a typed error code "via either adcp_error
+    (envelope) or errors[] (payload)"). One scan body, two entry points, so a
+    third carrier never becomes a third copy.
+    """
+    rendered = str(rendered_region)
+    assert marker not in rendered, f"marker {marker!r} leaked into {region_label}: {rendered!r}"
+
+
 def assert_no_marker_in_envelope(envelope: Mapping[str, Any] | None, marker: str) -> None:
     """Assert ``marker`` is absent from the FULL wire error envelope.
 
-    Sibling to :func:`assert_no_raw_validation_leak`, for the untyped-exception
-    wire-safety obligation (salesagent-prkv.8/prkv.18): unlike
-    ``assert_envelope_shape``'s ``message_substr`` (a positive match scoped to
-    ``errors[0].message`` only), this scans ``str(envelope)`` so a leak buried
-    anywhere in the envelope (``adcp_error.message``, ``errors[0].details``,
-    ``suggestion``, ``context``) fails the check — mirroring the exemplar
+    Sibling to :func:`assert_no_raw_validation_leak`, for the wire-safety
+    obligation: unlike ``assert_envelope_shape``'s ``message_substr`` (a
+    positive match scoped to ``errors[0].message`` only), this scans
+    ``str(envelope)`` so a leak buried anywhere in the envelope
+    (``adcp_error.message``, ``errors[0].details``, ``suggestion``, ``context``)
+    fails the check — mirroring the exemplar
     ``tests/integration/test_prkv8_untyped_exception_wire_leak.py::_assert_no_leak``,
     which scans the WHOLE envelope rather than a single field.
     """
     assert envelope is not None, f"no wire envelope captured to check for marker {marker!r}"
-    rendered = str(envelope)
-    assert marker not in rendered, f"marker {marker!r} leaked into wire envelope: {rendered!r}"
+    _assert_marker_absent(envelope, marker, region_label="wire error envelope")
+
+
+def assert_no_marker_in_payload_errors(wire_response: Mapping[str, Any] | None, marker: str) -> None:
+    """Assert ``marker`` is absent from a SUCCESS payload's ``errors[]``.
+
+    The success-path counterpart to :func:`assert_no_marker_in_envelope`. A tool
+    that degrades gracefully (``list_creative_formats`` with one unreachable
+    agent) returns HTTP success with per-agent failures reported in
+    ``errors[]`` — so ``result.is_error`` is False and ``wire_error_envelope``
+    is ``None``, which makes the envelope helpers either fail on their
+    ``not None`` guard or pass vacuously. That carrier is still buyer-facing:
+    AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations opens with
+    "Every field is client-facing", and the storyboard gives the two carriers
+    equal status.
+
+    Asserts ``errors[]`` is present and NON-EMPTY first, so the scan cannot
+    pass vacuously against a response that carried no errors at all.
+    """
+    assert wire_response is not None, f"no wire response captured to check for marker {marker!r}"
+    errors = wire_response.get("errors")
+    assert errors, f"expected a non-empty payload-level errors[] to scan for {marker!r}, got {wire_response!r}"
+    _assert_marker_absent(errors, marker, region_label="payload errors[]")
 
 
 def assert_envelope_shape(

@@ -1,5 +1,7 @@
 """Unit tests for property list resolver with caching."""
 
+import ipaddress
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -70,6 +72,41 @@ def _make_mock_response(response_json: dict, status_code: int = 200) -> MagicMoc
     mock_response.status_code = status_code
     mock_response.json.return_value = response_json
     return mock_response
+
+
+# The stable, first-party sentence the resolver publishes for EVERY SSRF
+# rejection. Deliberately reason-free: ``check_url_ssrf`` returns text like
+# "URL resolves to private/internal IP address: <ip>" — the DNS-resolution
+# result for the buyer's hostname as seen from the SELLER's network — and
+# AdCP 3.1.1 dist/docs/3.1.1/building/operating/transport-errors.mdx
+# § Security Considerations / Seller Requirements (lines 659-670) forbids
+# "internal service names, hostnames, or IP addresses" on a client-facing
+# field. Echoing the reason also turns get_products into a buyer-driven DNS
+# oracle over the seller's internal network view.
+_SSRF_REJECTION_MESSAGE = "Property list agent_url rejected"
+
+
+def _assert_ssrf_rejection(exc: AdCPAdapterError, *, detail_pattern: str, absent: str | None = None) -> None:
+    """Grade one SSRF rejection: safe on the wire, still discriminating server-side.
+
+    These assertions used to run against the buyer-facing message
+    (``match="HTTPS"``, ``match="blocked"``, ``match="[Bb]locked|[Pp]rivate|
+    [Ii]nternal"``), i.e. they REQUIRED the disclosure the spec forbids. The
+    discrimination they were really after now lives on the non-wire
+    ``internal_detail`` slot, so each test keeps its specific expectation
+    without the message carrying it.
+    """
+    assert exc.message == _SSRF_REJECTION_MESSAGE, f"buyer-facing message drifted: {exc.message!r}"
+    assert exc.suggestion is not None and "https://" in exc.suggestion, (
+        f"the static suggestion must still tell the buyer how to fix it, got {exc.suggestion!r}"
+    )
+    assert re.search(detail_pattern, str(exc.internal_detail)), (
+        f"the rejection reason must survive server-side on internal_detail; "
+        f"expected /{detail_pattern}/ in {exc.internal_detail!r}"
+    )
+    if absent is not None:
+        assert absent not in str(exc.message), f"{absent!r} leaked into the buyer-facing message: {exc.message!r}"
+        assert absent not in str(exc.suggestion), f"{absent!r} leaked into the buyer-facing suggestion"
 
 
 def _make_mock_client(get_side_effect=None, get_return_value=None) -> AsyncMock:
@@ -359,8 +396,15 @@ class TestErrorHandling:
             )
             mock_client_cls.return_value = mock_client
 
-            with pytest.raises(AdCPAdapterError, match="connection"):
+            with pytest.raises(AdCPAdapterError, match=r"^Failed to connect to property list service: ") as exc_info:
                 await resolve_property_list(ref)
+
+        # ``url`` derives from the buyer's own ref.agent_url, so echoing it back
+        # discloses nothing. httpx's own text does NOT go on the wire — it
+        # routinely carries resolver/proxy targets (transport-errors.mdx
+        # § Security Considerations). It survives on the non-wire slot.
+        assert "connection refused" not in str(exc_info.value)
+        assert "connection refused" in str(exc_info.value.internal_detail)
 
     @pytest.mark.asyncio
     async def test_failed_requests_are_not_cached(self):
@@ -425,8 +469,9 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url=malicious_url)
 
-        with pytest.raises(AdCPAdapterError, match="HTTPS"):
+        with pytest.raises(AdCPAdapterError) as exc_info:
             await resolve_property_list(ref)
+        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -449,8 +494,27 @@ class TestSSRFProtection:
             "src.core.security.url_validator.socket.gethostbyname",
             return_value=resolved_ip,
         ):
-            with pytest.raises(AdCPAdapterError, match="[Bb]locked|[Pp]rivate|[Ii]nternal"):
+            with pytest.raises(AdCPAdapterError) as exc_info:
                 await resolve_property_list(ref)
+
+        # The sharpest form of the obligation: ``resolved_ip`` is the
+        # DNS-resolution RESULT for a buyer-supplied hostname, seen from the
+        # seller's network. Emitting it would let a buyer use get_products as a
+        # DNS/network oracle. It must be absent from every buyer-facing field
+        # and present only on the non-wire slot.
+        _assert_ssrf_rejection(
+            exc_info.value,
+            detail_pattern="[Bb]locked|[Pp]rivate|[Ii]nternal",
+            absent=resolved_ip,
+        )
+        # The detail names the blocked CIDR the address fell into — assert the
+        # address really is inside it, so this stays a value comparison rather
+        # than a substring coincidence.
+        blocked_cidr = re.search(r"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}", str(exc_info.value.internal_detail))
+        assert blocked_cidr, f"internal_detail must name the blocked range: {exc_info.value.internal_detail!r}"
+        assert ipaddress.ip_address(resolved_ip) in ipaddress.ip_network(blocked_cidr.group()), (
+            f"{resolved_ip} is not inside the reported range {blocked_cidr.group()}"
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -463,8 +527,13 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url=f"https://{hostname}")
 
-        with pytest.raises(AdCPAdapterError, match="blocked"):
+        with pytest.raises(AdCPAdapterError) as exc_info:
             await resolve_property_list(ref)
+        # The hostname came from the buyer, but the fact that THIS seller
+        # blocklists it is seller-internal network topology, so the reason stays
+        # off the wire and is graded on internal_detail instead.
+        _assert_ssrf_rejection(exc_info.value, detail_pattern="blocked")
+        assert hostname in str(exc_info.value.internal_detail)
 
     @pytest.mark.asyncio
     async def test_rejects_non_https_url(self):
@@ -473,8 +542,9 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url="http://external-agent.example.com")
 
-        with pytest.raises(AdCPAdapterError, match="HTTPS"):
+        with pytest.raises(AdCPAdapterError) as exc_info:
             await resolve_property_list(ref)
+        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
 
     @pytest.mark.asyncio
     async def test_rejects_non_http_schemes(self):
@@ -483,8 +553,9 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url="file:///etc/passwd")
 
-        with pytest.raises(AdCPAdapterError, match="HTTPS"):
+        with pytest.raises(AdCPAdapterError) as exc_info:
             await resolve_property_list(ref)
+        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
 
     @pytest.mark.asyncio
     async def test_allows_valid_https_public_url(self):
@@ -513,8 +584,9 @@ class TestSSRFProtection:
         ref = _make_ref(agent_url="http://evil.internal:9200")
 
         with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            with pytest.raises(AdCPAdapterError, match="HTTPS"):
+            with pytest.raises(AdCPAdapterError) as exc_info:
                 await resolve_property_list(ref)
 
             # AsyncClient should never have been instantiated
             mock_client_cls.assert_not_called()
+        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")

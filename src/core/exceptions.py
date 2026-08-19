@@ -385,6 +385,32 @@ class AdCPError(Exception):
         context: Optional AdCP ContextObject (or dict) echoed in the
             envelope so buyer agents can correlate failures to the
             request that produced them (spec 3.0.0 normative).
+        internal_detail: Optional NON-WIRE diagnostic payload — the raw
+            third-party exception (or free text) that caused this error.
+            NEVER serialized: ``to_dict``, ``to_adcp_error`` and
+            ``build_two_layer_error_envelope`` all ignore it. It exists so a
+            raise site has a sanctioned destination for text whose provenance
+            we do not control, instead of interpolating it into ``message``.
+            See the class note below.
+
+    Message provenance (AdCP 3.1.1 ``transport-errors.mdx`` § Security
+    Considerations / Seller Requirements, lines 659-670): "Error responses
+    flow through LLM context. Every field is client-facing. Implementations
+    MUST NOT include: internal service names, hostnames, or IP addresses;
+    database error text …; stack traces or file paths; upstream API responses
+    from internal services; credentials, tokens, or session identifiers."
+
+    ``normalize_to_adcp_error()`` returns an already-typed ``AdCPError``
+    unchanged, so for a typed error THE RAISE SITE IS THE WIRE — there is no
+    downstream sanitization point. The trust decision therefore has to be
+    taken at construction time, per raise site, and it is opt-in: the spec
+    also POSITIVELY requires specific first-party message content in places
+    (version negotiation must name the buyer's requested version and the
+    seller's supported set), so a blanket boundary scrub would regress a
+    graded conformance step. Hence: ``message`` stays first-party text the
+    seller authored, and anything third-party goes in ``internal_detail``,
+    which is logged server-side by ``normalize_to_adcp_error()`` and never
+    emitted.
     """
 
     # Class-level identity defaults. Subclasses override these.
@@ -405,6 +431,7 @@ class AdCPError(Exception):
     error_code: str
     status_code: int
     recovery: RecoveryHint
+    internal_detail: BaseException | str | None
 
     def __init__(
         self,
@@ -418,6 +445,7 @@ class AdCPError(Exception):
         suggestion: str | None = None,
         retry_after: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
+        internal_detail: BaseException | str | None = None,
     ) -> None:
         # ``error_code`` and ``status_code`` kwargs are only used by the
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
@@ -430,6 +458,10 @@ class AdCPError(Exception):
         self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
         self.retry_after = retry_after
         self.context = context
+        # NON-WIRE. Deliberately absent from to_dict()/to_adcp_error()/
+        # build_two_layer_error_envelope(); emitted only to the server-side log
+        # by normalize_to_adcp_error(). Never add it to a serializer.
+        self.internal_detail = internal_detail
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
         self.recovery = recovery if recovery is not None else type(self)._default_recovery
@@ -1250,6 +1282,27 @@ def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[
     }
 
 
+def _log_internal_detail(exc: AdCPError) -> None:
+    """Emit an ``AdCPError``'s non-wire ``internal_detail`` to the server log.
+
+    The single emission point for every raise site that hands its raw cause to
+    ``internal_detail=`` instead of interpolating it into the buyer-facing
+    ``message``. It lives here because ``normalize_to_adcp_error()`` is the one
+    place every error from every transport (MCP, A2A, REST) passes through, so
+    one line replaces a hand-rolled ``logger.error(raw)`` at each raise site —
+    and covers the sites that log nothing at all today.
+    """
+    detail = exc.internal_detail
+    if detail is None:
+        return
+    logger.error(
+        "AdCPError %s internal detail (not emitted to the buyer): %s",
+        type(exc).__name__,
+        detail,
+        exc_info=detail if isinstance(detail, BaseException) else None,
+    )
+
+
 def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
@@ -1261,6 +1314,7 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
+        _log_internal_detail(exc)
         return exc
     if isinstance(exc, ValidationError):
         errors = exc.errors()

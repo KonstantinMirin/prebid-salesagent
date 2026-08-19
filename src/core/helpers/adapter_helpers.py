@@ -73,22 +73,41 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
 
     Always raises; the ``NoReturn`` annotation lets callers delegate from a single
     ``except ADCPError`` arm without a trailing ``raise``.
+
+    ``exc.message`` is THIRD-PARTY free text and never reaches the wire: the SDK
+    builds e.g. ``ADCPConnectionError`` as ``f"Failed to connect: {last_error}"``
+    over a raw httpx error (adcp/protocols/mcp.py, a2a.py), which routinely
+    carries host:port and resolver detail. AdCP 3.1.1 transport-errors.mdx
+    § Security Considerations forbids that on a buyer-facing message, so the
+    buyer gets the stable first-party sentence from the mapping table below and
+    the raw text goes to ``internal_detail`` (logged, not serialized).
     """
     from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPTimeoutError
 
-    from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
+    from src.core.exceptions import (
+        AdCPAdapterError,
+        AdCPAuthenticationError,
+        AdCPError,
+        AdCPServiceUnavailableError,
+    )
 
-    if isinstance(exc, ADCPAuthenticationError):
-        logger.error(f"Authentication failed for {agent_label}: {exc.message}")
-        raise AdCPAuthenticationError(f"Authentication failed: {exc.message}") from exc
-    if isinstance(exc, ADCPTimeoutError):
-        logger.error(f"Request timed out for {agent_label}: {exc.message}")
-        raise AdCPServiceUnavailableError(f"Request timed out: {exc.message}") from exc
-    if isinstance(exc, ADCPConnectionError):
-        logger.error(f"Connection failed for {agent_label}: {exc.message}")
-        raise AdCPServiceUnavailableError(f"Connection failed: {exc.message}") from exc
-    logger.error(f"AdCP error for {agent_label}: {exc.message}")
-    raise AdCPAdapterError(str(exc.message)) from exc
+    # (SDK exception, internal class, buyer-facing sentence + log label). One
+    # table + one raise, rather than four copies of "log raw / raise typed"
+    # differing only in the label and the class (CLAUDE.md DRY invariant).
+    mapping: tuple[tuple[type[Exception], type[AdCPError], str], ...] = (
+        (ADCPAuthenticationError, AdCPAuthenticationError, "Authentication failed"),
+        (ADCPTimeoutError, AdCPServiceUnavailableError, "Request timed out"),
+        (ADCPConnectionError, AdCPServiceUnavailableError, "Connection failed"),
+    )
+    error_class: type[AdCPError] = AdCPAdapterError
+    message = "AdCP agent request failed"
+    for sdk_class, internal_class, buyer_message in mapping:
+        if isinstance(exc, sdk_class):
+            error_class, message = internal_class, buyer_message
+            break
+
+    logger.error(f"{message} for {agent_label}: {exc.message}")
+    raise error_class(message, internal_detail=exc) from exc
 
 
 from src.adapters.google_ad_manager import GoogleAdManager

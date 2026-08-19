@@ -36,7 +36,21 @@ def _validate_agent_url(agent_url: str) -> None:
     """
     is_safe, error = check_url_ssrf(agent_url, require_https=True)
     if not is_safe:
-        raise AdCPAdapterError(f"Property list agent_url rejected: {error}")
+        # The rejection reason is deliberately NOT echoed: ``check_url_ssrf``
+        # returns text like "URL resolves to private/internal IP address: <ip>"
+        # — the DNS-resolution result for the buyer's hostname, seen from the
+        # seller's network. Emitting it turns this endpoint into a buyer-driven
+        # DNS/network oracle and violates AdCP 3.1.1 transport-errors.mdx
+        # § Security Considerations ("MUST NOT include: internal service names,
+        # hostnames, or IP addresses"). Its catch-all arms also return
+        # f"Invalid URL: {e}", i.e. third-party text. The static suggestion
+        # covers the closed set of causes (scheme / hostname / blocked host /
+        # private range / unresolvable); the reason goes to the log only.
+        raise AdCPAdapterError(
+            "Property list agent_url rejected",
+            suggestion="Provide an https:// agent_url that resolves to a publicly routable host",
+            internal_detail=error,
+        )
 
 
 async def resolve_property_list(ref: PropertyListReference) -> list[str]:
@@ -82,12 +96,21 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
         async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
+    # ``url`` is derived from the buyer's own ``ref.agent_url`` — echoing it
+    # back discloses nothing the buyer did not send. The third-party exception
+    # text does not go on the wire (transport-errors.mdx § Security
+    # Considerations); it goes to ``internal_detail``, which
+    # ``normalize_to_adcp_error()`` logs server-side. None of these three arms
+    # logged anything before, so the slot is also their only operator coverage.
     except httpx.HTTPStatusError as exc:
-        raise AdCPAdapterError(f"Failed to fetch property list from {url}: HTTP {exc.response.status_code}") from exc
+        raise AdCPAdapterError(
+            f"Failed to fetch property list from {url}: HTTP {exc.response.status_code}",
+            internal_detail=exc,
+        ) from exc
     except httpx.TimeoutException as exc:
-        raise AdCPAdapterError(f"Request to property list service timed out: {url}") from exc
+        raise AdCPAdapterError(f"Request to property list service timed out: {url}", internal_detail=exc) from exc
     except httpx.RequestError as exc:
-        raise AdCPAdapterError(f"Failed to connect to property list service: {url} — {exc}") from exc
+        raise AdCPAdapterError(f"Failed to connect to property list service: {url}", internal_detail=exc) from exc
 
     # Parse response
     parsed = GetPropertyListResponse.model_validate(response.json())

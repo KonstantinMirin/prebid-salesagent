@@ -766,4 +766,8 @@ class Kevel(AdServerAdapter):
 
             except requests.exceptions.RequestException as e:
                 self.log(f"Error updating Kevel flight: {e}")
-                raise AdCPAdapterError(str(e)) from e
+                # Same obligation as the Triton arm: ``requests``' text carries
+                # the ad server's URL/response body, which AdCP 3.1.1
+                # transport-errors.mdx § Security Considerations keeps off the
+                # buyer wire. Log + non-wire slot, stable first-party sentence.
+                raise AdCPAdapterError("Ad server rejected the media buy update", internal_detail=e) from e

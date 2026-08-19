@@ -74,6 +74,12 @@ _SCHEMA_VALIDATION_FAILURE_MARKERS = (
     "schema validation failed",
 )
 
+#: Buyer-facing text for an AGENT_UNREACHABLE entry in the ``list_creative_formats``
+#: SUCCESS payload's ``errors[]``. A module constant, not a literal at the raise
+#: site, so the wire-safety tests assert the exact published sentence instead of
+#: re-typing it (and drifting from it).
+CREATIVE_AGENT_UNREACHABLE_MESSAGE = "A configured creative agent is unreachable; its formats were not included"
+
 
 def _as_format_dict(fmt: Any) -> dict[str, Any]:
     """Normalize a format item (pydantic model or plain dict) to a dict.
@@ -487,7 +493,11 @@ class CreativeAgentRegistry:
                 debug_info = getattr(result, "debug_info", None)
                 if debug_info:
                     logger.debug(f"Debug info: {debug_info}")
-                raise AdCPAdapterError(f"Creative agent format fetch failed: {error_msg}")
+                # ``error_msg`` is the EXTERNAL agent's own error payload — an
+                # upstream API response, which AdCP 3.1.1 transport-errors.mdx
+                # § Security Considerations forbids on a buyer-facing message.
+                # It stays in the log line above and in ``internal_detail``.
+                raise AdCPAdapterError("Creative agent format fetch failed", internal_detail=error_text)
 
             else:
                 raise AdCPAdapterError(
@@ -552,14 +562,23 @@ class CreativeAgentRegistry:
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback HTTP error: {exc.response.status_code} from {mcp_url}")
+                # ``mcp_url`` stays off the wire for the same reason it does at the
+                # RequestError arm below: it is a SELLER-configured endpoint the buyer
+                # never sent and this seller does not publish through its capability
+                # declarations, and ``_connection_agent_url`` may substitute a
+                # deployment-internal host outright. transport-errors.mdx § Security
+                # Considerations bans internal service names/hostnames/IPs on
+                # client-facing error fields. The status code is kept: a numeric HTTP
+                # status is structured first-party data, not an identifier. The URL is
+                # already captured server-side by the logger.error above.
                 if exc.response.status_code == 429:
                     raise AdCPRateLimitError(
-                        f"Creative agent rate-limited: {mcp_url}",
+                        "Creative agent rate-limited",
                         details={"retry_after": exc.response.headers.get("Retry-After")},
                     ) from exc
                 if exc.response.status_code >= 500:
                     raise AdCPServiceUnavailableError(
-                        f"Creative agent unavailable (HTTP {exc.response.status_code}): {mcp_url}"
+                        f"Creative agent unavailable (HTTP {exc.response.status_code})"
                     ) from exc
                 # 4xx non-429 from an external agent is a buyer-side error
                 # (bad request, unauthorized, not found, etc.); retrying the
@@ -576,11 +595,19 @@ class CreativeAgentRegistry:
                     await asyncio.sleep(2**attempt)
                     continue
                 logger.error(f"Creative agent fallback timed out: {mcp_url}")
-                raise AdCPServiceUnavailableError(f"Request timed out: {mcp_url}") from exc
+                # Same rule as the sibling arms: the endpoint is server-side detail.
+                raise AdCPServiceUnavailableError("Request timed out", internal_detail=exc) from exc
             except httpx.RequestError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
-                raise AdCPServiceUnavailableError(f"Connection failed: {mcp_url} — {exc}") from exc
+                # Neither the httpx text nor ``mcp_url`` goes on the wire: the
+                # exception carries resolver/proxy detail, and ``mcp_url`` is a
+                # SELLER-configured creative-agent endpoint the buyer never sent
+                # and that this seller does not publish through its capability
+                # declarations. AdCP 3.1.1 transport-errors.mdx § Security
+                # Considerations bans both ("internal service names, hostnames,
+                # or IP addresses"; "upstream API responses").
+                raise AdCPServiceUnavailableError("Connection failed", internal_detail=exc) from exc
         else:
             raise AdCPServiceUnavailableError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
 
@@ -819,10 +846,18 @@ class CreativeAgentRegistry:
                 all_formats.extend(formats)
             except Exception as e:
                 logger.error(f"Failed to fetch formats from {agent.agent_url}: {e}", exc_info=True)
+                # errors[] on a SUCCESS payload is still buyer-facing — the
+                # storyboard grades a typed error code "via either adcp_error
+                # (envelope) or errors[] (payload)", and transport-errors.mdx
+                # § Security Considerations opens with "Every field is
+                # client-facing". So neither ``e`` nor the seller-configured
+                # ``agent.agent_url`` is interpolated. ``adcp.types.Error`` is
+                # an SDK model with no internal_detail slot; the raw cause is
+                # captured by the ``logger.error(..., exc_info=True)`` above.
                 errors.append(
                     AdCPResponseError(
                         code="AGENT_UNREACHABLE",
-                        message=f"Creative agent at {agent.agent_url} is unreachable: {e}",
+                        message=CREATIVE_AGENT_UNREACHABLE_MESSAGE,
                     )
                 )
                 continue

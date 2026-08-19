@@ -68,8 +68,18 @@ class TestStructuredContentFallbackTrigger:
         mock_client.agent.return_value = mock_agent_proxy
 
         with patch.object(registry, "_build_adcp_client", return_value=mock_client):
-            with pytest.raises(AdCPAdapterError, match="Creative agent format fetch failed"):
+            # ``mock_result.error`` is the EXTERNAL agent's own error payload.
+            # Matching only the first-party prefix was vacuous with respect to
+            # message provenance — it passed whether or not the upstream text was
+            # appended. Paired form per AdCP 3.1.1 transport-errors.mdx
+            # § Security Considerations ("upstream API responses" MUST NOT reach
+            # the buyer).
+            with pytest.raises(AdCPAdapterError, match=r"^Creative agent format fetch failed$") as exc_info:
                 await registry._fetch_formats_from_agent(mock_client, agent)
+        assert "Connection refused" not in str(exc_info.value), (
+            f"upstream agent payload leaked into the buyer-facing message: {exc_info.value!s}"
+        )
+        assert "Connection refused" in str(exc_info.value.internal_detail)
 
 
 class TestFetchFormatsRawMcp:
@@ -196,8 +206,19 @@ class TestFetchFormatsRawMcpErrorHandling:
         mock_http.__aexit__ = AsyncMock(return_value=False)
 
         with patch("httpx.AsyncClient", return_value=mock_http):
-            with pytest.raises(AdCPServiceUnavailableError, match="Connection failed"):
+            # Paired form: the first-party sentence is the WHOLE message. The
+            # httpx text AND the seller-configured agent URL used to be
+            # interpolated here; AdCP 3.1.1 transport-errors.mdx § Security
+            # Considerations forbids both on a client-facing field.
+            with pytest.raises(AdCPServiceUnavailableError, match=r"^Connection failed$") as exc_info:
                 await registry._fetch_formats_raw_mcp(agent)
+        assert "connection refused" not in str(exc_info.value), (
+            f"httpx detail leaked into the buyer-facing message: {exc_info.value!s}"
+        )
+        assert str(agent.agent_url) not in str(exc_info.value), (
+            f"seller-configured agent URL leaked into the buyer-facing message: {exc_info.value!s}"
+        )
+        assert "connection refused" in str(exc_info.value.internal_detail)
 
     @pytest.mark.asyncio
     async def test_http_5xx_raises_service_unavailable(self, registry, agent):

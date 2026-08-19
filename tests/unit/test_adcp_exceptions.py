@@ -880,3 +880,67 @@ class TestRetryAfterSerializerParity:
         exc = AdCPRateLimitError("slow down", retry_after=7)
         envelope = build_two_layer_error_envelope(exc)
         assert envelope["adcp_error"]["retry_after"] == 7
+
+
+class TestInternalDetailIsNeverSerialized:
+    """``internal_detail`` is the NON-WIRE destination for untrusted text.
+
+    A typed ``AdCPError`` passes through ``normalize_to_adcp_error()``
+    unchanged, so for a typed error the raise site IS the wire — there is no
+    downstream sanitization point. The slot exists so a raise site can preserve
+    a third party's raw text server-side without putting it on a client-facing
+    field, per AdCP 3.1.1
+    ``dist/docs/3.1.1/building/operating/transport-errors.mdx``
+    § Security Considerations / Seller Requirements (lines 659-670): "Every
+    field is client-facing. Implementations MUST NOT include: internal service
+    names, hostnames, or IP addresses … upstream API responses from internal
+    services".
+
+    These pin that guarantee on EVERY serializer, so adding the slot to one of
+    them later fails here rather than silently on the wire.
+    """
+
+    MARKER = "postgres://admin:s3cr3t@10.0.0.9:5432/prod_shadow"
+
+    def _exc(self):
+        from src.core.exceptions import AdCPServiceUnavailableError
+
+        return AdCPServiceUnavailableError("Connection failed", internal_detail=RuntimeError(self.MARKER))
+
+    def test_slot_is_stored_on_the_instance(self):
+        exc = self._exc()
+        assert self.MARKER in str(exc.internal_detail)
+        assert exc.message == "Connection failed"
+        assert str(exc) == "Connection failed"
+
+    def test_slot_defaults_to_none(self):
+        from src.core.exceptions import AdCPValidationError
+
+        assert AdCPValidationError("bad input").internal_detail is None
+
+    def test_to_dict_omits_internal_detail(self):
+        rendered = str(self._exc().to_dict())
+        assert self.MARKER not in rendered, f"internal_detail leaked into to_dict(): {rendered}"
+
+    def test_to_adcp_error_omits_internal_detail(self):
+        rendered = str(self._exc().to_adcp_error())
+        assert self.MARKER not in rendered, f"internal_detail leaked into to_adcp_error(): {rendered}"
+
+    def test_two_layer_envelope_omits_internal_detail(self):
+        from src.core.exceptions import build_two_layer_error_envelope
+
+        rendered = str(build_two_layer_error_envelope(self._exc()))
+        assert self.MARKER not in rendered, f"internal_detail leaked into the wire envelope: {rendered}"
+
+    def test_normalize_passes_the_typed_error_through_and_logs_the_detail(self, caplog):
+        """The one sanctioned emission point: the shared transport chokepoint."""
+        import logging
+
+        from src.core.exceptions import normalize_to_adcp_error
+
+        exc = self._exc()
+        with caplog.at_level(logging.ERROR, logger="src.core.exceptions"):
+            normalized = normalize_to_adcp_error(exc)
+
+        assert normalized is exc, "a typed AdCPError must pass through unchanged"
+        assert self.MARKER in caplog.text, "internal_detail must reach the server-side log"

@@ -316,7 +316,11 @@ async def _activate_signal_impl(
         raise
     except Exception as e:
         logger.error("Error activating signal %s: %s", signal_agent_segment_id, e)
-        raise AdCPAdapterError(str(e), context=context) from e
+        # Unbounded catch: whatever provider call replaces the mock, ``str(e)``
+        # has no provenance guarantee and this raise site sits directly on the
+        # buyer wire (a typed AdCPError passes through normalize_to_adcp_error
+        # unchanged). AdCP 3.1.1 transport-errors.mdx § Security Considerations.
+        raise AdCPAdapterError("Signal activation failed", context=context, internal_detail=e) from e
 
 
 async def activate_signal(
