@@ -1543,6 +1543,7 @@ async def update_media_buy(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: Annotated[int | None, Field(description="Expected current revision (optimistic concurrency)")] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1569,6 +1570,9 @@ async def update_media_buy(
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
         idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        revision: Buyer's expected-current revision (optional, per AdCP spec). Declared
+            on every transport so the token a buyer read off a response can be handed
+            back on any of them.
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1593,6 +1597,7 @@ async def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None

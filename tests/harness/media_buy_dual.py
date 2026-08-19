@@ -20,7 +20,6 @@ from unittest.mock import MagicMock, patch
 from src.core.schemas import UpdateMediaBuyRequest
 from tests.harness._mixins import make_adapter_update_side_effect
 from tests.harness.media_buy_create import MediaBuyCreateEnv
-from tests.harness.media_buy_update import _WRAPPER_UNSUPPORTED_FIELDS
 
 _UPDATE_MODULE = "src.core.tools.media_buy_update"
 
@@ -179,8 +178,6 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         if req is None:
             return dict(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
-        for key in _WRAPPER_UNSUPPORTED_FIELDS:
-            flat.pop(key, None)
         flat.update(kwargs)
         return flat
 
