@@ -103,10 +103,13 @@ class ImplDispatcher:
             payload = env.call_impl(**kwargs)
         except Exception as exc:
             return TransportResult(
+                has_wire=False,  # in-process call, no wire exists
                 error=exc,
                 synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
-        return TransportResult(payload=payload, envelope={"transport": "impl"})
+        return TransportResult(
+            payload=payload, envelope={"transport": "impl"}, has_wire=False
+        )  # in-process call, no wire exists
 
 
 class A2ADispatcher:
@@ -125,6 +128,7 @@ class A2ADispatcher:
             payload = env.call_a2a(**kwargs)
         except Exception as exc:
             return TransportResult(
+                has_wire=False,  # catch-all wrapping the whole call: may fire pre-send
                 error=exc,
                 wire_error_envelope=_wire_envelope_from_exception(exc),
             )
@@ -132,6 +136,7 @@ class A2ADispatcher:
         # (declared on BaseTestEnv, reset per call_via — read directly so a
         # missed capture surfaces as None against a known attribute, not getattr).
         return TransportResult(
+            has_wire=True,  # the artifact DataPart came back from the handler
             payload=payload,
             envelope={"transport": "a2a"},
             wire_response=env._last_wire_response,
@@ -163,6 +168,7 @@ class RestDispatcher:
                 body = response.json()
                 error = env.parse_rest_error(response.status_code, body)
                 return TransportResult(
+                    has_wire=True,  # >=400, but a real response was received
                     error=error,
                     envelope=envelope,
                     raw_response=response,
@@ -176,9 +182,11 @@ class RestDispatcher:
             # dispatcher owns the pristine-wire guarantee (#1417).
             payload = env.parse_rest_response(copy.deepcopy(body))
             # Real REST wire: the HTTP JSON body dict.
-            return TransportResult(payload=payload, envelope=envelope, raw_response=response, wire_response=body)
+            return TransportResult(
+                payload=payload, envelope=envelope, raw_response=response, wire_response=body, has_wire=True
+            )  # 2xx body came back over HTTP
         except Exception as exc:
-            return TransportResult(error=exc)
+            return TransportResult(error=exc, has_wire=False)  # catch-all: may fire before anything was sent
 
 
 class McpDispatcher:
@@ -213,6 +221,7 @@ class McpDispatcher:
 
                 error = _unwrap_mcp_tool_error(exc)
             return TransportResult(
+                has_wire=False,  # catch-all: may fire before anything was sent
                 error=error,
                 wire_error_envelope=wire,
                 # What production WOULD emit for the same exception — see the
@@ -222,6 +231,7 @@ class McpDispatcher:
         # Real MCP wire: the structured_content dict stashed by _run_mcp_client
         # (declared on BaseTestEnv, reset per call_via — read directly).
         return TransportResult(
+            has_wire=True,  # structured_content came back from the MCP client
             payload=payload,
             envelope={"transport": "mcp"},
             wire_response=env._last_wire_response,
@@ -245,7 +255,9 @@ class RestE2EDispatcher:
         import httpx
 
         if not env.e2e_config:
-            return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
+            return TransportResult(
+                error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"), has_wire=False
+            )  # no e2e_config: refused before any httpx call
 
         identity = kwargs.pop("identity", None)
         base_url = env.e2e_config.base_url
@@ -297,13 +309,16 @@ class RestE2EDispatcher:
                     details={"status_code": response.status_code, "raw_body": body_text},
                 )
                 error.status_code = response.status_code
-                return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+                return TransportResult(
+                    payload=None, envelope=envelope, error=error, raw_response=response, has_wire=True
+                )  # >=400, but a real response was received
             # Structured JSON error: mirror the in-process RestDispatcher and expose
             # the raw two-layer body as wire_error_envelope so error Then-steps assert
             # on the buyer-visible envelope (e.g. uc004 _assert_wire_rejection, or
             # assert_envelope_shape) instead of a lossy reconstructed exception. (#1420)
             error = env.parse_rest_error(response.status_code, body)
             return TransportResult(
+                has_wire=True,  # the response body came back over HTTP
                 payload=None,
                 envelope=envelope,
                 error=error,
@@ -317,13 +332,17 @@ class RestE2EDispatcher:
             # RestDispatcher (parsers strip envelope keys in place, #1417).
             payload = env.parse_rest_response(copy.deepcopy(wire_response))
         except Exception as exc:
-            return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
+            # has_wire=True: the 2xx response was RECEIVED; only parsing it failed.
+            # The bytes crossed the wire, so a reader must not re-serialize the
+            # typed payload as though none had.
+            return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response, has_wire=True)
 
         # Real HTTP wire body — the e2e analogue of the in-process RestDispatcher's
         # wire_response (parallel to wire_error_envelope on the error path), so
         # success-path wire-shape steps grade the live server too instead of
         # re-deriving from the typed payload (#rlgl.3).
         return TransportResult(
+            has_wire=True,  # the HTTP JSON body came back from the live server
             payload=payload,
             envelope=envelope,
             error=None,

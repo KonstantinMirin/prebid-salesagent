@@ -73,6 +73,12 @@ def _call_via(
             # Real serialized wire (REST/A2A/MCP); None on IMPL — surfaced for
             # success-path wire-shape steps (e.g. format_id federation contract).
             ctx["wire_response"] = result.wire_response
+        # Stashed on BOTH arms: the wire readers branch on result.has_wire, so a
+        # step that reaches them after an error path still needs the declaration.
+        # dispatch_request already stashes this; without it here, every scenario
+        # dispatched through _call_via would hit the readers' "no TransportResult"
+        # raise instead of being graded.
+        ctx["result"] = result
     except Exception as exc:
         ctx["error"] = exc
 

@@ -15,7 +15,6 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
@@ -1140,18 +1139,15 @@ def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
     through the production serializer — the same path that produces wire bytes for
     the other transports. A real-wire transport that did NOT stash wire_response is
     a loud failure, not a silent fallback to the typed model (which would let the
-    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
-    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
-    """
-    from tests.harness.transport import Transport
+    UpdateMediaBuySubmitted assertions pass vacuously).
 
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire
-    return _require_response(ctx).model_dump(mode="json")
+    Delegates to the shared ``wire_dict``: this used to be a third verbatim copy
+    of the same wire-presence predicate, which is how one copy would keep keying
+    on transport identity after the others stopped.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    return wire_dict(ctx)
 
 
 @then("the response should contain a task_id")

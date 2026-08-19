@@ -12,26 +12,65 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.harness.transport import Transport
+from tests.harness.transport import TransportResult
+
+
+def _wire_or_none(ctx: dict) -> dict | None:
+    """The real wire body for this dispatch, or ``None`` when there is no wire.
+
+    Branches on the DECLARATION the dispatcher made at construction
+    (``TransportResult.has_wire``), never on which transport enum is in play.
+    The old spelling inferred wire-presence from transport IDENTITY — a lookup
+    miss against the in-process transport member — so it would break, or
+    silently reclassify every result, the day that member is removed.
+
+    Two loud failures, both harness bugs rather than test failures:
+
+    * no ``TransportResult`` in ctx — the When step did not dispatch through
+      ``dispatch_request`` or ``when_request._call_via``, so there is no
+      declaration to branch on and any answer here would be a guess;
+    * ``has_wire`` with nothing stashed — the env crossed a wire and failed to
+      capture it. Falling back to re-serializing the typed payload would assert
+      nothing about the wire while looking green, which is the tautology these
+      helpers exist to prevent.
+    """
+    result = ctx.get("result")
+    if not isinstance(result, TransportResult):
+        # Both dispatch seams end in ``except Exception as exc: ctx["error"] = exc``
+        # WITHOUT stashing a result, so a dispatch that THREW arrives here too. Say
+        # so, rather than misreporting it as "never dispatched" and sending the
+        # reader hunting for a wiring bug that does not exist.
+        failure = ctx.get("error")
+        if failure is not None:
+            raise AssertionError(
+                f"no TransportResult in ctx because the dispatch RAISED: {failure!r} — "
+                "there is no wire to read; assert on the error instead"
+            )
+        raise AssertionError(
+            "no TransportResult in ctx — the When step did not dispatch through "
+            "dispatch_request/_call_via, so wire-presence cannot be determined"
+        )
+    if not result.has_wire:
+        return None
+    wire = result.wire_response
+    if wire is None:
+        raise AssertionError(
+            f"{ctx.get('transport')}: the dispatcher declared has_wire but stashed no "
+            "wire_response — the env does not capture success-path wire"
+        )
+    return wire
 
 
 def wire_field(ctx: dict, field: str) -> Any:
     """Return a top-level success-response field as the buyer sees it on the wire.
 
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``.
-    IMPL has no wire, so serialize the typed payload through the production
-    serializer — the same path that produces wire bytes for the other transports.
-
-    Loud guard: a real-wire transport (REST/A2A/MCP) that didn't stash
-    ``wire_response`` would otherwise fall through to the ``model_dump`` path and
-    assert nothing on the wire — a silent tautology. A sibling wired against a
-    non-stashing env trips this instead of passing green. IMPL (and the
-    non-parametrized ``None`` default) legitimately have no wire.
+    A dispatch that crossed a wire exposes the real success-path body; one that
+    did not (an in-process call) has none, so the typed payload is serialized
+    through the production serializer — the same path that produces wire bytes
+    for the other transports. Which case applies is read from the dispatcher's
+    own declaration, not guessed here; see :func:`_wire_or_none`.
     """
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    wire = _wire_or_none(ctx)
     if wire is not None:
         return wire[field]
     # IMPL has no wire — serialize the typed payload through the production
@@ -45,15 +84,10 @@ def wire_dict(ctx: dict) -> dict:
 
     The dict analogue of :func:`wire_field` — use when an oracle must test key
     PRESENCE/ABSENCE (e.g. an optional field) rather than read one known field.
-    Shares the same loud guard: a real-wire transport (REST/A2A/MCP) that did not
-    stash ``wire_response`` raises instead of silently asserting nothing. IMPL (and
-    the non-parametrized ``None`` default) serialize the typed payload through the
-    production serializer.
+    Shares the same loud guard and the same source of truth: see
+    :func:`_wire_or_none`.
     """
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    wire = _wire_or_none(ctx)
     if wire is not None:
         return wire
     return _require_response(ctx).model_dump(mode="json")

@@ -129,6 +129,44 @@ class TransportResult:
             IMPL transport, which has no wire. This is the canonical field
             for error verification — see ``tests/CLAUDE.md`` § Error
             Verification Policy.
+        has_wire: Whether these bytes crossed a REAL wire, declared by the
+            dispatcher AT CONSTRUCTION. Positive and required — never inferred
+            at a read site from which transport enum happens to be in play,
+            because that inference breaks (or, worse, silently reclassifies)
+            the day ``Transport.IMPL`` is removed.
+
+            REQUIRED and keyword-only, deliberately: a default would make
+            omission mean "no wire", so a forgetful new dispatcher would send
+            readers down the re-serialize path and a wire-shape assertion would
+            pass green against a ``model_dump`` — the silent tautology the wire
+            readers exist to raise on. Omitting it is a ``TypeError`` instead.
+
+            Declared PER SITE, not per transport class: it is True only where
+            the construction is downstream of an actual send/receive. A wire
+            dispatcher's "missing config" guard constructs a result for a request
+            that never left. Its catch-all ``except`` arm is a STRADDLE — it may
+            fire before OR after bytes moved, and cannot tell which — so it
+            declares False, because claiming a wire that may not exist is the
+            failure mode that matters here: it would send a reader looking for a
+            capture nothing produced.
+
+            ``has_wire=True`` with ``wire_response is None`` on a success path
+            means the env failed to STASH the wire. That is a harness bug to
+            raise on loudly; it must never fall back to serializing the typed
+            payload, which would assert nothing about the wire.
+
+            SCOPE — this predicate governs the SUCCESS path only, and
+            deliberately does NOT feed ``assert_wire_error``'s no-envelope
+            diagnostic (which lane salesagent-gra7.4 originally specified).
+            The reason is concrete: a dispatcher's catch-all arm declares
+            ``has_wire=False`` because it may fire before anything was sent, yet
+            it can still derive a ``wire_error_envelope`` from the exception —
+            ``A2ADispatcher``'s does exactly that. Wiring ``has_wire`` into that
+            diagnostic would therefore report a genuine wire rejection as "no
+            wire", which is worse than the message it replaces. Error-path
+            wire-presence needs its own per-site declaration; that is not this
+            lane's, and inventing one here would be the same identity-inference
+            mistake in a new spelling.
         synthesized_error_envelope: Two-layer envelope produced by
             ``build_two_layer_error_envelope`` against the IMPL-caught
             ``AdCPError`` — what production WOULD emit at the boundary.
@@ -146,6 +184,7 @@ class TransportResult:
     wire_response: dict[str, Any] | None = None
     wire_error_envelope: dict[str, Any] | None = None
     synthesized_error_envelope: dict[str, Any] | None = None
+    has_wire: bool = field(kw_only=True)
 
     @property
     def is_success(self) -> bool:
