@@ -18,6 +18,7 @@ from adcp.types import CreativeAsset
 from pydantic import BaseModel
 
 from src.core.exceptions import AdCPConfigurationError, wire_advisory
+from src.core.format_resolver import find_format, is_agent_backed, is_generative
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
@@ -192,18 +193,13 @@ def _update_existing_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            # ONE answer to "same format?", from format_resolver — not a local
+            # `==` over the model, which compares Python CLASSES as well as
+            # values and so missed every format the A2A path pre-upgraded.
+            format_obj = find_format(creative_format, all_formats)
 
-            if format_obj and format_obj.agent_url:
-                # Check if format is generative (has output_format_ids)
-                is_generative = bool(getattr(format_obj, "output_format_ids", None))
-
-                if is_generative:
+            if format_obj and is_agent_backed(format_obj):
+                if is_generative(format_obj):
                     # Generative creative update - rebuild using AI
                     logger.info(
                         f"[sync_creatives] Detected generative format update: {creative_format}, "
@@ -522,18 +518,13 @@ def _create_new_creative(
             # Use pre-fetched formats (fetched outside transaction at function start)
             # This avoids async HTTP calls inside savepoint
 
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            # ONE answer to "same format?", from format_resolver — not a local
+            # `==` over the model, which compares Python CLASSES as well as
+            # values and so missed every format the A2A path pre-upgraded.
+            format_obj = find_format(creative_format, all_formats)
 
-            if format_obj and format_obj.agent_url:
-                # Check if format is generative (has output_format_ids)
-                is_generative = bool(getattr(format_obj, "output_format_ids", None))
-
-                if is_generative:
+            if format_obj and is_agent_backed(format_obj):
+                if is_generative(format_obj):
                     # Generative creative - call build_creative
                     logger.info(
                         f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"

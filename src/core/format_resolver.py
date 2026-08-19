@@ -10,6 +10,11 @@ creative agent-based format discovery per AdCP v2.4.
 
 import json
 import logging
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from adcp.canonical_formats import format_is_supported, formats_are_equivalent
+from adcp.types import FormatId as LibraryFormatId
 
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPError, AdCPFormatNotFoundError, AdCPNotFoundError
@@ -17,7 +22,115 @@ from src.core.schemas import Format
 from src.core.security.outbound_http import UrlProvenance
 from src.core.validation_helpers import run_async_in_sync_context
 
+# What callers may hand the identity helpers: a structured reference, a bare
+# dict off the wire, or a legacy string id.
+FormatRef = str | LibraryFormatId | Mapping[str, Any]
+
+
+def _as_ref(value: FormatRef) -> Any:
+    """Normalize a reference to the shape the SDK predicates accept.
+
+    A Pydantic model is dumped to its wire dict: the SDK reads (agent_url, id)
+    off a mapping, and dumping is also what strips the LOCAL SUBCLASS identity
+    that made ``==`` fail in the first place — the value survives, the class
+    does not, which is the whole point.
+    """
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
+    return value
+
 logger = logging.getLogger(__name__)
+
+
+# ── Format identity and kind: asked here, never re-decided at a call site ─────
+#
+# Two format references name the same format when the SDK's own equivalence
+# predicate says so. Call sites used to compare with ``==`` on the model, which
+# is Pydantic's STRUCTURAL equality — same fields AND same class. That works
+# only while every producer happens to build the same concrete class, an
+# invariant nothing declared and one transport quietly broke: the local
+# ``FormatId`` subclass (schemas/_base.py, four convenience methods, zero extra
+# fields) never compares equal to the library value every other producer makes,
+# so a lookup keyed on ``==`` missed on A2A and the whole agent-dial arm was
+# skipped in silence.
+#
+# Identity is (agent_url, id) per the pinned core/format-id.json, and the SDK
+# already implements it — including the canonicalization. Nothing here
+# re-implements that; these are thin, named delegations so there is ONE answer
+# to "same format?" instead of one per call site.
+
+
+def format_ref_id(ref: FormatRef) -> str | None:
+    """The bare ``id`` of a format reference, whatever shape it arrives in.
+
+    A ``format_id`` reaches this module as a structured model, as a wire dict,
+    or as a legacy bare string, depending on which producer built it — so
+    reaching for ``.id`` works only until it does not. Asking here keeps that
+    fact in ONE place instead of at each call site, which is the same mistake
+    the ``==`` comparisons made about class identity.
+    """
+    if isinstance(ref, str):
+        return ref
+    if isinstance(ref, Mapping):
+        value = ref.get("id")
+        return str(value) if value is not None else None
+    value = getattr(ref, "id", None)
+    return str(value) if value is not None else None
+
+
+def same_format(left: FormatRef, right: FormatRef) -> bool:
+    """Whether two format references name the same format.
+
+    Delegates to ``adcp.canonical_formats.formats_are_equivalent`` — the spec
+    authors' own rule, which canonicalizes both agent_urls before comparing and
+    treats an omitted parameter as a wildcard. Deliberately NOT ``==``: that
+    compares Python classes as well as values.
+    """
+    return formats_are_equivalent(_as_ref(left), _as_ref(right))
+
+
+def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:
+    """Whether *supported* satisfies a request for *requested*.
+
+    Distinct from :func:`same_format`: support is directional (a parameterized
+    supported format can satisfy a narrower request), which is why the SDK gives
+    it its own predicate rather than reusing equivalence.
+    """
+    return format_is_supported(_as_ref(requested), _as_ref(supported))
+
+
+def find_format(ref: FormatRef, formats: Sequence[Format]) -> Format | None:
+    """The catalog Format naming the same format as *ref*, or None.
+
+    PURE: no HTTP and no DB, so it is callable from inside a savepoint where
+    ``get_format`` is not — the creative-sync paths pre-fetch their catalog
+    outside the transaction for exactly that reason and then need to select from
+    it without dialling anything.
+    """
+    return next((fmt for fmt in formats if same_format(fmt.format_id, ref)), None)
+
+
+def is_agent_backed(fmt: Format) -> bool:
+    """Whether this format is served by a creative agent.
+
+    Asks the format, rather than probing it: ``fmt.agent_url`` is a declared
+    property on the local Format (schemas/_base.py), not an attribute that may
+    or may not be there. Compose with — do not duplicate —
+    :func:`is_dialled_agent_url`: an adapter pseudo-URL is agent-backed but
+    never dialled.
+    """
+    return fmt.agent_url is not None
+
+
+def is_generative(fmt: Format) -> bool:
+    """Whether this format is built by the agent rather than supplied whole.
+
+    ``output_format_ids`` IS a declared field on ``adcp.types.Format``, so the
+    ``getattr(fmt, "output_format_ids", None)`` guard call sites used protected
+    against nothing while the sibling read of ``agent_url`` — the one that could
+    actually surprise — went undefended.
+    """
+    return bool(fmt.output_format_ids)
 
 
 def is_dialled_agent_url(agent_url: str) -> bool:
@@ -117,10 +230,18 @@ def get_format(
         if fmt:
             return fmt
     else:
-        # Search all agents for this format
+        # Search all agents for this format. The caller supplied NO agent scope,
+        # so the match is on the id alone — matching on full (agent_url, id)
+        # identity here would silently narrow "any agent" to "the reference
+        # agent", because upgrading a bare string defaults agent_url to the
+        # canonical creative agent.
+        #
+        # This branch was dead before: it compared ``fmt.format_id`` (a FormatId
+        # MODEL) against ``format_id`` (a str), which is never equal — so the
+        # one canonical resolver's fallback always fell through to the raise.
         all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id))
         for fmt in all_formats:
-            if fmt.format_id == format_id:
+            if format_ref_id(fmt.format_id) == format_id:
                 return fmt
 
     # Not found anywhere

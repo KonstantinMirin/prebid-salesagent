@@ -53,6 +53,12 @@ def mock_format_spec():
     spec.format_id = "display_300x250_image"
     spec.agent_url = "https://creative.adcontextprotocol.org"
     spec.name = "Medium Rectangle"
+    # STATED, not left to Mock's auto-attribute: a bare Mock answers every
+    # attribute with a truthy Mock, so an unset output_format_ids would make
+    # this fixture claim to be a GENERATIVE format. That went unnoticed while
+    # the catalog lookup compared FormatId models with `==` and never matched,
+    # so the agent-backed arm was skipped for every one of these tests.
+    spec.output_format_ids = None
     return spec
 
 
@@ -607,7 +613,11 @@ class TestValidationEdgeCases:
         async def mock_get_format(agent_url, format_id, **_kwargs):
             return mock_format_spec
 
+        async def mock_preview_creative(*_args, **_kwargs):
+            return {"preview_url": "https://creative.example/preview/c1"}
+
         mock_registry = Mock()
+        mock_registry.preview_creative = mock_preview_creative
         mock_registry.get_format = mock_get_format
 
         result = _validate_creative_input(creative, mock_registry, "p1")
