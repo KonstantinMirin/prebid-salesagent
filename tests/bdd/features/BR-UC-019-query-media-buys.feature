@@ -587,9 +587,9 @@ Feature: BR-UC-019 Query Media Buys
     # column CAN hold is swept through the projection by
     # tests/unit/test_media_buy_status_consistency.py.
     #
-    # BR-RULE-150 INV-11 needs reconciling upstream in adcp-req so --merge does not
-    # re-add it: the invariant as written mandates a defensive default that the pinned
-    # response schema cannot represent.
+    # BR-RULE-150 INV-11 was reconciled at the source (adcp-req 86a4cde) and
+    # regenerated: the invariant as written mandated a defensive default the pinned
+    # response schema cannot represent, and now states the enforced refusal instead.
 
     Examples:
       | persisted         |
@@ -786,28 +786,26 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-291: the pinned item schema types revision {"type":"integer","minimum":1}
     # and lists it in the item's `required`, so a buy whose persisted revision is
     # below that minimum is NOT publishable — the seller must not put it on the wire.
-    # That non-publication is what the two defective rows grade, deliberately WITHOUT
-    # naming an error code: see the note under this outline.
+    # The two defective rows grade that refusal by the code the buyer receives:
+    # CONFIGURATION_ERROR / terminal — see the note under this outline.
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
-    # WHY THE TWO DEFECTIVE ROWS NAME NO ERROR CODE (T-UC-019-boundary-revision)
-    # The obligation graded is the one the pin states outright and that holds however
-    # the seller refuses: a media buy whose persisted revision is below the pinned
-    # minimum is NEVER published to the buyer. Whether the seller refuses by erroring
-    # or by withholding the entry from a 200 document, the buyer must not receive it.
+    # WHY THE TWO DEFECTIVE ROWS NAME CONFIGURATION_ERROR (T-UC-019-boundary-revision)
+    # The obligation is that a media buy whose persisted revision is below the pinned
+    # minimum is NEVER published to the buyer — and that the refusal names the code the
+    # pin's own enumMetadata selects for it.
     #
-    # An error CODE is deliberately not asserted, because the code production emits
-    # today is itself in question. Production rejects the defective value at the
-    # response-model boundary (GetMediaBuysMediaBuy, src/core/tools/media_buy_list.py)
-    # and the boundary translates the Pydantic failure to VALIDATION_ERROR with
-    # recovery "correctable" (src/core/tool_error_logging.py). By the pin's own
-    # enumMetadata (enums/error-code.json) that tells the BUYER to "review error
-    # details and fix field values" for a defect in the SELLER's store — data the
-    # buyer does not own and cannot fix — and invites an unbounded retry;
-    # CONFIGURATION_ERROR / "terminal" is the code whose metadata matches a
-    # seller-side deployment defect. Pinning the current code here would freeze that
-    # into the graders, so these rows grade the non-publication invariant only. The
-    # earlier text demanded code "SCHEMA_VIOLATION", which is not in the pinned
-    # error-code enum at all — it is conformance-runner vocabulary, never a wire code.
+    # Production used to reject the defective value at the response-model boundary and
+    # let the boundary translate the Pydantic failure to VALIDATION_ERROR / recovery
+    # "correctable". By the pin (enums/error-code.json) that tells the BUYER to "review
+    # error details and fix field values" for a defect in the SELLER's store — data the
+    # buyer does not own, cannot fix, and would retry unboundedly. The read path now
+    # refuses it as AdCPPersistedStateError -> CONFIGURATION_ERROR / "terminal", whose
+    # metadata says to surface it to a human at the seller and MUST NOT auto-retry.
+    #
+    # The earlier text demanded code "SCHEMA_VIOLATION", which is not in the pinned
+    # error-code enum at all — it is conformance-runner vocabulary, never a wire code,
+    # so no conforming seller could have emitted it and no grader could have caught
+    # its absence. Corrected at the source (adcp-req 86a4cde) and regenerated.
     # RETIRED ROW (T-UC-019-boundary-revision): "revision absent" — a persisted store
     # missing revision (defective seller). Unreachable at BOTH layers, so wiring it
     # would have graded a state no seller running this code can produce:

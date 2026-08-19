@@ -213,19 +213,6 @@ def _parse_instant(value: str):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _media_buy_state(tenant_id: str, media_buy_id: str) -> MediaBuyState:
-    """This module's reader — the shared write-seam reader, which owns the session choice.
-
-    The admin route commits in its own session, so a reader on the fixture's session
-    would serve a stale identity-mapped copy; the shared reader opens a fresh one. This
-    also replaces a raw ``SASession(bind=get_engine())`` in a test body, which
-    tests/CLAUDE.md forbids.
-    """
-    state = read_media_buy_state(tenant_id, media_buy_id)
-    assert state.status is not None, f"media buy {media_buy_id} vanished"
-    return state
-
-
 def _webhook_body(captured: dict) -> dict:
     """The outbound webhook body as a plain dict (model_dump when a model)."""
     assert "payload" in captured, "route did not send a webhook payload"
@@ -353,7 +340,7 @@ class TestAdminMediaBuyRejectWebhook:
         # which is precisely what made the response a second producer: the row here is
         # several bumps past 1 by the time approval completes, and the old assertion
         # passed only because the envelope was reporting a fabricated value.
-        persisted = _media_buy_state(tenant_id, media_buy_id)
+        persisted = read_media_buy_state(tenant_id, media_buy_id)
         assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
         assert _parse_instant(embedded["confirmed_at"]) == persisted.confirmed_at, (
             f"embedded confirmed_at {embedded['confirmed_at']!r} disagrees with the persisted "
@@ -394,7 +381,7 @@ class TestAdminMediaBuyRejectWebhook:
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
 
-        before = _media_buy_state(tenant_id, media_buy_id)
+        before = read_media_buy_state(tenant_id, media_buy_id)
         before_revision = before.revision
         assert before.status == "pending_approval"
         assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
@@ -403,7 +390,7 @@ class TestAdminMediaBuyRejectWebhook:
             authenticated_admin_session, pending_reject_media_buy, {"action": "reject", "reason": "test"}
         )
 
-        after = _media_buy_state(tenant_id, media_buy_id)
+        after = read_media_buy_state(tenant_id, media_buy_id)
         # confirms=False: "rejected" is NOT a committed status, so this move must not
         # mint a commitment instant the seller never made.
         assert_status_move_carried_bookkeeping(
@@ -434,13 +421,13 @@ class TestAdminMediaBuyRejectWebhook:
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
 
-        before = _media_buy_state(tenant_id, media_buy_id)
+        before = read_media_buy_state(tenant_id, media_buy_id)
         before_revision = before.revision
         assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
         _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
 
-        after = _media_buy_state(tenant_id, media_buy_id)
+        after = read_media_buy_state(tenant_id, media_buy_id)
         assert after.approved_by == "test@example.com"
         # bumps=2: two real status moves, each owing exactly one bump. The shared oracle
         # takes an exact delta, so a path that routed only one of the two writes fails

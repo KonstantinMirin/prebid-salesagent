@@ -3559,11 +3559,13 @@ async def _create_media_buy_impl(
                 packages=simulated_packages,
                 media_buy_status=simulated_lifecycle,  # AdCP 3.1: mirrors deprecated `status`
                 valid_actions=valid_actions_for_status(simulated_lifecycle),
-                # Dry run: nothing is persisted, so there is no row to read and these
-                # are stated rather than fetched. Both follow from the simulated
-                # lifecycle itself: pending_start is NOT a committed status, so the
-                # seller has made no commitment and confirmed_at is null; a row that
-                # WOULD be created starts at the column's server_default of 1.
+                # Dry run: nothing is persisted, so there is no row to read and both
+                # values are stated rather than fetched. Both follow from the simulated
+                # lifecycle: pending_start IS a seller-committed status
+                # (models._SELLER_COMMITTED_STATUSES), so a row that WOULD be created
+                # is stamped by _stamp_confirmation_if_needed at creation — the
+                # simulated instant is what the real write would record, not an
+                # invented one — and it would start at the column's server_default of 1.
                 confirmed_at=datetime.now(UTC),
                 revision=1,
                 context=req.context,

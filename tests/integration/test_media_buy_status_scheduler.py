@@ -29,7 +29,6 @@ from src.core.database.models import (
 from src.core.database.repositories import MediaBuyRepository
 from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
 from tests.helpers.media_buy_write_seam import (
-    MediaBuyState,
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
@@ -174,11 +173,6 @@ def _create_creative_assignment(
         session.commit()
 
 
-def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> MediaBuyState:
-    """This module's reader — the shared write-seam reader, which owns the session choice."""
-    return read_media_buy_state(tenant_id, media_buy_id)
-
-
 # =============================================================================
 # Test: scheduled -> active (when start time has passed)
 # =============================================================================
@@ -205,7 +199,7 @@ async def test_scheduled_transitions_to_active_when_start_time_passed(integratio
     )
 
     # Verify initial status
-    before = _get_media_buy_status(tenant_id, media_buy_id)
+    before = read_media_buy_state(tenant_id, media_buy_id)
     assert before.status == "scheduled"
     assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
@@ -214,7 +208,7 @@ async def test_scheduled_transitions_to_active_when_start_time_passed(integratio
     await scheduler._update_statuses()
 
     # Verify status changed to active
-    after = _get_media_buy_status(tenant_id, media_buy_id)
+    after = read_media_buy_state(tenant_id, media_buy_id)
     assert after.status == "active"
 
     # The sweep is a mutation of the buy, so it must carry the buy's mutation
@@ -250,14 +244,14 @@ async def test_scheduled_stays_scheduled_when_start_time_not_passed(integration_
     )
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "scheduled"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "scheduled"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status unchanged
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "scheduled"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "scheduled"
 
 
 # =============================================================================
@@ -295,14 +289,14 @@ async def test_pending_activation_transitions_to_active_with_approved_creatives(
     _create_creative_assignment(tenant_id, media_buy_id, creative_id)
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "pending_activation"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status changed to active
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
 
 @pytest.mark.requires_db
@@ -335,14 +329,14 @@ async def test_pending_activation_stays_pending_with_unapproved_creatives(integr
     _create_creative_assignment(tenant_id, media_buy_id, creative_id)
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "pending_activation"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status unchanged (creatives not approved)
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "pending_activation"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
 
 
 @pytest.mark.requires_db
@@ -366,14 +360,14 @@ async def test_pending_activation_activates_without_creatives(integration_db):
     )
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "pending_activation"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status changed to active (no creatives = nothing to block)
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
 
 @pytest.mark.requires_db
@@ -406,14 +400,14 @@ async def test_pending_activation_stays_pending_when_start_time_not_passed(integ
     _create_creative_assignment(tenant_id, media_buy_id, creative_id)
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "pending_activation"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status unchanged (start time not passed)
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "pending_activation"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "pending_activation"
 
 
 # =============================================================================
@@ -442,14 +436,14 @@ async def test_active_transitions_to_completed_when_end_time_passed(integration_
     )
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status changed to completed
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "completed"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "completed"
 
 
 @pytest.mark.requires_db
@@ -473,14 +467,14 @@ async def test_active_stays_active_when_end_time_not_passed(integration_db):
     )
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status unchanged
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
 
 # =============================================================================
@@ -528,18 +522,18 @@ async def test_scheduler_updates_multiple_media_buys(integration_db):
     )
 
     # Verify initial statuses
-    assert _get_media_buy_status(tenant_id, "mb_multi_1").status == "scheduled"
-    assert _get_media_buy_status(tenant_id, "mb_multi_2").status == "active"
-    assert _get_media_buy_status(tenant_id, "mb_multi_3").status == "scheduled"
+    assert read_media_buy_state(tenant_id, "mb_multi_1").status == "scheduled"
+    assert read_media_buy_state(tenant_id, "mb_multi_2").status == "active"
+    assert read_media_buy_state(tenant_id, "mb_multi_3").status == "scheduled"
 
     # Run scheduler
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify expected transitions
-    assert _get_media_buy_status(tenant_id, "mb_multi_1").status == "active"
-    assert _get_media_buy_status(tenant_id, "mb_multi_2").status == "completed"
-    assert _get_media_buy_status(tenant_id, "mb_multi_3").status == "scheduled"  # No change
+    assert read_media_buy_state(tenant_id, "mb_multi_1").status == "active"
+    assert read_media_buy_state(tenant_id, "mb_multi_2").status == "completed"
+    assert read_media_buy_state(tenant_id, "mb_multi_3").status == "scheduled"  # No change
 
 
 # =============================================================================
@@ -570,14 +564,14 @@ async def test_scheduler_uses_start_date_when_start_time_not_set(integration_db)
     )
 
     # Verify initial status
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "scheduled"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "scheduled"
 
     # Run scheduler - should use start_date for transition
     scheduler = MediaBuyStatusScheduler()
     await scheduler._update_statuses()
 
     # Verify status changed to active (using start_date fallback)
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
 
 @pytest.mark.requires_db
@@ -600,13 +594,13 @@ async def test_scheduler_idempotent(integration_db):
         end_time=future_end,
     )
 
-    before = _get_media_buy_status(tenant_id, media_buy_id)
+    before = read_media_buy_state(tenant_id, media_buy_id)
 
     scheduler = MediaBuyStatusScheduler()
 
     # Run scheduler first time
     await scheduler._update_statuses()
-    after_first = _get_media_buy_status(tenant_id, media_buy_id)
+    after_first = read_media_buy_state(tenant_id, media_buy_id)
     assert after_first.status == "active"
     # The one sweep that DID transition carries the mutation bookkeeping.
     assert after_first.revision == before.revision + 1, (
@@ -619,11 +613,11 @@ async def test_scheduler_idempotent(integration_db):
 
     # Run scheduler second time - should be no-op
     await scheduler._update_statuses()
-    assert _get_media_buy_status(tenant_id, media_buy_id).status == "active"
+    assert read_media_buy_state(tenant_id, media_buy_id).status == "active"
 
     # Run scheduler third time - still no-op
     await scheduler._update_statuses()
-    after_third = _get_media_buy_status(tenant_id, media_buy_id)
+    after_third = read_media_buy_state(tenant_id, media_buy_id)
     assert after_third.status == "active"
 
     # Idempotent means idempotent on the whole row, not just on status: two sweeps
@@ -673,7 +667,7 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
         end_time=future_end,
     )
 
-    before = _get_media_buy_status(tenant_id, media_buy_id)
+    before = read_media_buy_state(tenant_id, media_buy_id)
     assert before.status == "scheduled"
 
     scheduler = MediaBuyStatusScheduler()
@@ -710,5 +704,5 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
     )
 
     # (c) The row itself is untouched — status, and the bookkeeping a real move carries.
-    after = _get_media_buy_status(tenant_id, media_buy_id)
+    after = read_media_buy_state(tenant_id, media_buy_id)
     assert after == before, f"a declined write must leave the row exactly as it was: {before} -> {after}"
