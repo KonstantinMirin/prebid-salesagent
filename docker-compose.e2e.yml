@@ -214,50 +214,42 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
-    # Runs as the INVOKING host user, not the image's default root --
-    # Dockerfile.test has no USER directive, so without this the container
-    # writes test-results/.tox/schemas/logs into the bind-mounted /app as
-    # literal root (no userns-remap on these hosts, so container root IS host
-    # root), and the next run -- as an ordinary user -- dies on `mkdir:
-    # Permission denied` before a single suite starts.
+    # NO `user:` pin, deliberately -- back to main's shape (Aug 2026).
     #
-    # Derived, never hardcoded. run_all_tests.sh exports TEST_UID/TEST_GID from
-    # `id -u`/`id -g`; the defaults here are only for a bare `docker compose
-    # run tests` and reproduce the old root behaviour rather than guessing.
-    # A literal uid here was correct on exactly one machine: pinning the CI
-    # box's 1003:1001 turned GitHub Actions red with
-    # `PermissionError: '/app/.tox'`, because .tox lives on the bind mount
-    # (see the volumes block) and the Actions checkout is owned by a different
-    # uid. Nothing local can catch that -- `BDD In-Network (e2e_rest)` is the
-    # only job that runs the suite INSIDE this container.
-    user: "${TEST_UID:-0}:${TEST_GID:-0}"
+    # The pin was added to stop the container writing test-results/.tox/schemas/
+    # logs into the bind-mounted /app as literal root, on the premise that there
+    # is "no userns-remap on these hosts, so container root IS host root". That
+    # premise no longer holds where it matters: the CI box runs ROOTLESS docker,
+    # where container root already maps to the invoking user, so the pin bought
+    # nothing there. Worse, it derived its value from `id -u` inside a
+    # supervisor that runs as root -- resolving to 0:0, i.e. exactly the image
+    # default it was written to override.
+    #
+    # What it did cost was real. Being non-root forced three separate
+    # workarounds for image paths owned by root (HOME/UV_CACHE_DIR,
+    # PLAYWRIGHT_BROWSERS_PATH -- the last re-downloading 113 MiB of chromium
+    # every run because the baked copy was unreachable), and it is why the
+    # tox_data volume had to be dropped: a fresh named volume's mountpoint is
+    # created root:root by the daemon before the container starts, which EACCES-
+    # blocks a non-root user from `mkdir .tox/<env>`. Running as root makes that
+    # mountpoint writable again, so the volume comes back below and .tox leaves
+    # the bind mount -- which was the pin's own stated reason for existing.
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      # Non-root (user: above) has no /etc/passwd entry for a raw numeric
-      # UID, so HOME defaults to "/" and Dockerfile.test's baked
-      # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
-      # unreachable -- uv fails with "Permission denied" trying to even
-      # create its cache dir, surfacing as a confusing "could not find
-      # python interpreter" error from tox. Redirect both to a
-      # container-local writable path (not the bind mount -- this is a
-      # throwaway per-run cache, no reason to fight over its ownership too).
-      HOME: /tmp
-      UV_CACHE_DIR: /tmp/uv-cache
-      # Same problem, third path found (Aug 2026): PLAYWRIGHT_BROWSERS_PATH
-      # is baked to /ms-playwright in the image -- root:root, chromium
-      # already installed there at build time. Non-root can't write into it,
-      # so `playwright install chromium` silently hangs trying to verify/
-      # write a lock file there instead of erroring cleanly. Redirecting
-      # here means chromium gets reinstalled fresh into a writable path
-      # every run (a real, unavoidable cost with this fix -- the baked-in
-      # copy at /ms-playwright is wasted). The complete fix is giving
-      # Dockerfile.test a real non-root USER with these paths pre-chowned
-      # at build time, which was explicitly deferred in favor of
-      # compose-only overrides -- worth reconsidering given this is the
-      # third path this pattern has hit.
-      PLAYWRIGHT_BROWSERS_PATH: /tmp/ms-playwright
+      # HOME, UV_CACHE_DIR and PLAYWRIGHT_BROWSERS_PATH overrides removed with
+      # the `user:` pin above (Aug 2026). All three existed solely to route
+      # around image paths owned by root (/cache/uv, /ms-playwright) that a raw
+      # numeric non-root UID could not write. As root those are writable again,
+      # and dropping PLAYWRIGHT_BROWSERS_PATH restores the chromium baked in at
+      # build time instead of re-downloading it into /tmp on every run.
+      #
+      # Unbuffered so pytest's progress reaches the run log as it happens rather
+      # than in block-sized bursts: the supervisor log IS the only live view of
+      # a detached run, and a buffered stream makes a working run look wedged
+      # and a wedged one look busy.
+      PYTHONUNBUFFERED: "1"
       # Fixed in-network DB address — never a host port, never collides. This is
       # the SUITE database used by unit(skip)/integration/bdd/admin.
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
@@ -374,15 +366,14 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
-      # tox_data named volume removed (Aug 2026): it's destroyed+recreated
-      # fresh every run (cleanup's `dc down -v`), so nothing ever persisted
-      # across runs anyway, and a fresh named volume's mountpoint is created
-      # root:root regardless of the `user:` override above (volume dir
-      # creation happens at the Docker daemon level, before the container
-      # process starts) -- permanently EACCES-blocking the non-root tests
-      # user from `mkdir .tox/<env>` every single run. .tox now lives on the
-      # bind mount instead, same as test-results, which already works
-      # correctly under the `user:` override.
+      # Restored with the removal of the `user:` pin above (Aug 2026), matching
+      # main. It was dropped because a fresh named volume's mountpoint is
+      # created root:root by the daemon before the container process starts,
+      # which EACCES-blocked a NON-ROOT tests user from `mkdir .tox/<env>`.
+      # That failure was a consequence of the pin, not of the volume: as root
+      # the mountpoint is writable, and .tox stays off the bind-mounted host
+      # tree where its ownership was never anyone's to fight over.
+      - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
     # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
@@ -551,3 +542,7 @@ networks:
 
 volumes:
   creative_pg_data:
+  # Destroyed and recreated by cleanup's `dc down -v` every run, so it persists
+  # nothing across runs by design -- its job is to keep .tox OFF the bind mount,
+  # not to cache anything.
+  tox_data:
