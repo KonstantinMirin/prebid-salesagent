@@ -251,7 +251,11 @@ class TestA2AWebhookPayloadTypes:
             context_id=context_id,
             push_notification_config={
                 "url": webhook_capture_server["url"],
-                "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
+                # 32 chars: the pinned Authentication.credentials minimum. These cases grade the
+                # webhook PAYLOAD shape, so the credential is incidental fixture data — but a
+                # shorter one is refused at the egress seam as ``credentials_too_short`` and no
+                # webhook arrives at all, which would fail them for a reason they do not test.
+                "authentication": {"schemes": ["Bearer"], "credentials": "e2e-webhook-token-padded-to-32ch"},
             },
         )
 
@@ -348,7 +352,11 @@ class TestA2AWebhookPayloadTypes:
             context_id=context_id,
             push_notification_config={
                 "url": webhook_capture_server["url"],
-                "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
+                # 32 chars: the pinned Authentication.credentials minimum. These cases grade the
+                # webhook PAYLOAD shape, so the credential is incidental fixture data — but a
+                # shorter one is refused at the egress seam as ``credentials_too_short`` and no
+                # webhook arrives at all, which would fail them for a reason they do not test.
+                "authentication": {"schemes": ["Bearer"], "credentials": "e2e-webhook-token-padded-to-32ch"},
             },
         )
 

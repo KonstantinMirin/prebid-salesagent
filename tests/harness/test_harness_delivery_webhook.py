@@ -110,7 +110,7 @@ class TestWebhookEnvContract:
     def test_signing_secret_flows_through(self):
         """Signing secret parameter reaches the delivery function."""
         with WebhookEnv() as env:
-            success, result = env.call_deliver(signing_secret="test-secret")
+            success, result = env.call_deliver(signing_secret="test-secret-padded-to-thirty-two-ch")
 
             assert success is True
             # Verify the endpoint received signature headers. Spec header name

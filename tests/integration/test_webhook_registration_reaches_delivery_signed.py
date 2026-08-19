@@ -175,7 +175,21 @@ class TestA2AProtocolRegistrationDeliversSigned:
             _assert_delivered_signed(env)
 
     def test_control_the_delivery_goes_unsigned_when_the_stash_loses_the_credentials(self, integration_db):
-        """Reverse-TDD: damage only the stash, and the case above must go red."""
+        """Reverse-TDD: damage only the stash, and the case above must go red.
+
+        Asserts an UNSIGNED delivery, not a refusal, and the distinction is the
+        spec's own: this mutation removes the ENTIRE ``authentication`` block, and
+        the pinned schema says "absence selects 9421" — an absent block is a
+        deliberate choice of the default profile, not a malformed one. So the row
+        still delivers, just without a signature, which is precisely what makes it a
+        control for the signed case above.
+
+        Contrast the refusals Epic D lane C4 introduced: those are blocks that are
+        PRESENT but do not conform (a scheme outside the pinned enum, a missing or
+        sub-32 credential, more than one scheme). Present-and-broken refuses;
+        absent-by-choice delivers plain. Conflating the two would have made this
+        control assert the wrong thing.
+        """
         with A2APushRegistrationEnv() as env:
             env.setup_default_data()
             env.set_http_status(200)

@@ -21,15 +21,7 @@ from typing import Any
 
 from adcp import get_adcp_spec_version
 
-from src.core.security.outbound_http import OutboundError, OutboundRequestBlocked, terminal_client_error_status
-from src.core.security.webhook_egress import (
-    BasicCredentials,
-    BearerToken,
-    HmacSecretMissing,
-    SignWithSecret,
-    deliver_signed_webhook,
-    webhook_auth_for,
-)
+from src.core.security.webhook_egress import deliver_webhook
 from src.core.webhook_validator import webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -489,122 +481,80 @@ class WebhookDeliveryService:
             "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
         }
 
-        auth = webhook_auth_for(config.authentication_type, config.authentication_token)
-
-        if isinstance(auth, HmacSecretMissing):
-            # FAIL-CLOSED, and deliberately log-and-return rather than raise -- the
-            # same shape and the same reasoning as order_approval_service's backstop
-            # (src/services/order_approval_service.py). The buyer asked for a
-            # signature this sender cannot produce; an unsigned POST to an endpoint
-            # that will reject it is strictly worse than no POST at all, because it
-            # is an unauthenticated request to a third party that no receiver can
-            # attribute to us.
-            #
-            # The refusal a buyer can ACT on already happened at ingest
-            # (media_buy_create and the A2A push-config handler both reject an
-            # HMAC-SHA256 registration carrying no credentials). By the time control
-            # reaches here the poller is on its own thread with no request in
-            # flight, so there is no caller left to receive a raise.
-            #
-            # This does NOT cite "No Quiet Failures": that rule's worked example
-            # bans exactly this shape, and the honest reason it is an exception is
-            # written above. It records a circuit-breaker failure for the same
-            # reason a refused URL does -- a destination we cannot deliver to must
-            # not look healthy to the breaker.
-            logger.error(
-                "Webhook to %s is configured for HMAC-SHA256 but has no credentials "
-                "stored -- refusing to send unsigned",
-                safe_url,
-            )
-            circuit_breaker.record_failure()
-            return False
-
-        signing_secret = auth.secret if isinstance(auth, SignWithSecret) else None
-
-        # No secret-strength gate. It used to live here and never once fired: it
-        # tested webhook_secret, the column with no writers. Re-pointing it at
-        # authentication_token would take every buyer whose credential is under 32
-        # characters from "delivered" to "not delivered at all", and would make this
-        # the only one of three senders that refuses a short secret -- the same
-        # divergence, re-created one line lower. A length minimum is a REGISTRATION
-        # policy: it belongs beside the credential-presence gate at ingest, where
-        # the buyer can still act on it. Pinned AdCP 3.1.1 DOES mandate one --
-        # core/push-notification-config.json gives authentication.credentials
-        # minLength 32 -- and Epic D lane C3 enforces it there, at ingest, on every
-        # transport. It stays absent HERE on purpose: rows predating that gate are
-        # already stored, and refusing them at send time would convert "delivered"
-        # into "never delivered at all" for buyers who can no longer be asked to fix
-        # anything. (An earlier revision of this comment asserted the pin mandates NO
-        # minimum -- that was false; the conclusion it supported is not.)
-        if isinstance(auth, BearerToken):
-            headers["Authorization"] = f"Bearer {auth.token}"
-        elif isinstance(auth, BasicCredentials):
-            headers["Authorization"] = f"Basic {auth.token}"
-
-        # One call: the seam owns attempts, the BR-RULE-029 schedule (plus any
-        # Retry-After the endpoint asks for), address and TLS policy, and which
-        # statuses are worth trying again. No ``field=`` — this URL is read back
-        # out of storage, not off a request document.
+        # ONE call. The seam validates the stored pair against the pinned type,
+        # applies whatever that scheme requires, dials, retries on the BR-RULE-029
+        # schedule, and reports what became of it. This sender no longer decides
+        # anything about authentication — which is the point: three senders each
+        # deciding is how one buyer's HMAC row signed on one path, went out
+        # unsigned on another, and matched nothing on a third.
         #
-        # The seam's redirect refusal is what #1697 reached for with
-        # ``follow_redirects=False``: httpx defaults to that and the seam never
-        # overrides it, so a 302 toward a private address or a metadata endpoint
-        # cannot carry this delivery past the validated destination.
+        # The credential-length rule that used to be argued about here now lives at
+        # the seam, applied to every sender at once. Pinned AdCP 3.1.1
+        # (core/push-notification-config.json) requires authentication.credentials
+        # with minLength 32, and owner ruling #2 for Epic D says a present-but
+        # -non-conforming block REFUSES rather than silently downgrading to a plain
+        # send. A stored row that cannot be delivered conformantly is not a delivery
+        # we should be making; its owner re-registers. Do NOT re-add a local
+        # tolerance here — that reinstates the divergence this seam removed.
         #
-        # Every log below names ``safe_url`` (scheme://host/path), never
-        # ``config.url``: a buyer's webhook URL may carry credentials in userinfo
-        # or a token in the query string, and these lines land in operator logs.
+        # No ``field=``: this URL is read back out of storage, not off a request
+        # document. Every log names ``safe_url`` (scheme://host/path), never
+        # ``config.url``, which may carry userinfo credentials or a query token.
         try:
-            result = deliver_signed_webhook(
+            outcome = deliver_webhook(
                 config.url,
                 payload,
-                secret=signing_secret,
+                scheme=config.authentication_type,
+                credentials=config.authentication_token,
                 headers=headers,
                 timeout=_delivery_timeout_seconds(),
                 max_attempts=3,
             )
-        except OutboundError as exc:
-            # The BASE class on purpose. A refused URL and a dead one both have to
-            # reach record_failure(), or a misconfigured destination stays
-            # invisible to the breaker while a merely unreachable one opens it.
-            terminal_status = terminal_client_error_status(exc)
-            if terminal_status is not None:
-                # Named at WARNING from THIS logger: the seam logs nothing on a
-                # non-retryable 4xx and its records do not propagate here, so this
-                # line is the only operator-visible trace of a rejected delivery.
+        except Exception as e:
+            # DELIBERATELY KEPT. The seam maps its OWN failure taxonomy onto the
+            # outcome, so nothing it raises lands here — but no outcome kind covers
+            # a NON-transport failure, and this function is contracted ``-> bool``.
+            # The pinned transport's own wrong-host guard raises a bare RuntimeError,
+            # which belongs here rather than escaping into the poller thread.
+            logger.error("Unexpected error delivering to %s: %s", safe_url, e, exc_info=True)
+            circuit_breaker.record_failure()
+            return False
+
+        if outcome.kind != "delivered":
+            if outcome.kind == "refused_auth":
+                # FAIL-CLOSED, and deliberately log-and-return rather than raise. The
+                # buyer asked for an authentication this sender cannot produce; an
+                # unsigned POST to an endpoint that will reject it is strictly worse
+                # than no POST, because it is an unauthenticated request to a third
+                # party that no receiver can attribute to us. By the time control
+                # reaches here the poller is on its own thread with no request in
+                # flight, so there is no caller left to receive a raise.
+                logger.error("Refusing to deliver webhook to %s: %s", safe_url, outcome.detail or outcome.reason)
+            elif outcome.kind == "client_error":
+                # The seam logs nothing on a non-retryable 4xx and its records do not
+                # propagate here, so this is the only operator-visible trace.
                 logger.warning(
                     "Webhook delivery to %s returned client error %s, will not retry",
                     safe_url,
-                    terminal_status,
+                    outcome.http_status,
                 )
-            elif isinstance(exc, OutboundRequestBlocked):
-                # Refused before a connection was opened -- attempts/last_status are
-                # both None (nothing was attempted), so "failed after None attempts"
-                # would misreport a refusal as a delivery that was tried and failed.
+            elif outcome.kind == "refused_destination":
                 logger.warning("Webhook delivery to %s was refused by egress policy", safe_url)
             else:
-                # Name the status and the attempt count. The seam's own message is a
-                # fixed constant by design, so interpolating only the exception tells
-                # an operator nothing about WHY — a rate limit, a 5xx and a dead
-                # socket would read identically.
-                cause = f"status {exc.last_status}" if exc.last_status is not None else "no response"
+                cause = f"status {outcome.http_status}" if outcome.http_status is not None else "no response"
                 logger.warning(
-                    "Webhook delivery to %s failed after %s attempts (%s)",
-                    safe_url,
-                    exc.attempts,
-                    cause,
+                    "Webhook delivery to %s failed after %s attempts (%s)", safe_url, outcome.attempts, cause
                 )
-            circuit_breaker.record_failure()
-            return False
-        except Exception as e:
-            logger.error("Unexpected error delivering to %s: %s", safe_url, e, exc_info=True)
+            # EVERY non-delivered kind records a breaker failure, exactly as the base
+            # ``except OutboundError`` did: a destination we cannot deliver to must
+            # not look healthy to the breaker.
             circuit_breaker.record_failure()
             return False
 
         logger.debug(
             "Webhook delivered to %s (status: %s)",
             safe_url,
-            result.status_code,
+            outcome.http_status,
         )
         circuit_breaker.record_success()
         return True

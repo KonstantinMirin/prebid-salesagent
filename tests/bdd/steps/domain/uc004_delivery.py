@@ -3151,7 +3151,16 @@ def _credential_label_to_config(label: str) -> tuple[str, str]:
     must be at least 32 characters).
     """
     text = label.lower()
-    if "bearer" in text:
+    if "lowercase" in text:
+        # The exact spelling the free-form A2A push-config endpoint stored. The
+        # pinned AuthenticationScheme is case-SENSITIVE, so this is not a member
+        # and the document is invalid — the casing is refused, not folded.
+        scheme = "hmac-sha256"
+    elif "basic" in text:
+        # Not an AdCP scheme at all. Reachable the same way, and equally invalid:
+        # the pinned enum is exactly ["Bearer", "HMAC-SHA256"].
+        scheme = "Basic"
+    elif "bearer" in text:
         scheme = "Bearer"
     elif "unknown" in text:  # "unknown_scheme" / "Unknown auth scheme not in enum"
         scheme = "Frobnicate-Not-A-Scheme"

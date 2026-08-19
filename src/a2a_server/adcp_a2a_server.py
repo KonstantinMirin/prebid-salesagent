@@ -588,6 +588,12 @@ class AdCPRequestHandler(RequestHandler):
         )
         self.tasks[task_id] = task
 
+        # Bound BEFORE the try because the handler below reads it: identity is
+        # resolved partway through, so any earlier failure — the push-config gate
+        # among them — used to raise UnboundLocalError from the error handler and
+        # replace the real error with a confusing one.
+        identity: ResolvedIdentity | None = None
+
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
@@ -640,7 +646,9 @@ class AdCPRequestHandler(RequestHandler):
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
             # to all downstream handlers. No handler should call resolve_identity().
-            identity: ResolvedIdentity | None = None
+            # Its `= None` initialisation used to live HERE, which is why a failure
+            # in the push-config gate above reached the error handler with the name
+            # unbound; it now sits before the `try` so every arm can read it.
             if auth_token:
                 identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
             elif not requires_auth:
@@ -661,7 +669,7 @@ class AdCPRequestHandler(RequestHandler):
                             skill_name,
                             parameters,
                             identity,
-                            push_notification_config=push_notification_config,
+                            push_config_registration=self._task_push_configs.get(task_id),
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
@@ -984,7 +992,11 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
-            # Use identity resolved at transport boundary (if available)
+            # Use identity resolved at transport boundary (if available).
+            # identity is initialised to None before the try (below), because it is
+            # bound partway through it: ANY failure before that point — the
+            # push-config gate among them — otherwise raised UnboundLocalError from
+            # the error handler itself and replaced the real error.
             err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
             err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
@@ -1451,7 +1463,7 @@ class AdCPRequestHandler(RequestHandler):
         skill_name: str,
         parameters: dict,
         identity: ResolvedIdentity | None,
-        push_notification_config: TaskPushNotificationConfig | None = None,
+        push_config_registration: ValidatedWebhookRegistration | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1462,7 +1474,7 @@ class AdCPRequestHandler(RequestHandler):
             skill_name: The AdCP skill name (e.g., "get_products")
             parameters: Dictionary of skill-specific parameters
             identity: Pre-resolved identity from transport boundary
-            push_notification_config: Push notification config from A2A protocol layer
+            push_config_registration: the ALREADY-ACCEPTED protocol-layer push config
 
         Returns:
             Dictionary containing the skill result
@@ -1476,18 +1488,19 @@ class AdCPRequestHandler(RequestHandler):
         # request as sent). Deep copy: downstream steps mutate nested dicts.
         raw_wire_payload = copy.deepcopy(parameters)
 
-        # Inject push_notification_config into parameters for skills that need it
-        # Serialize protobuf to dict at the transport boundary — _impl accepts dict
-        if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
-            pnc_dict = json_format.MessageToDict(push_notification_config)
-            # Translate A2A protobuf authentication.scheme (singular) → AdCP schemes (plural list).
-            # A2A's protobuf AuthenticationInfo uses a single `scheme` field; AdCP's
-            # PushNotificationConfig schema uses a `schemes` array.
-            auth = pnc_dict.get("authentication") if isinstance(pnc_dict, dict) else None
-            if isinstance(auth, dict) and "scheme" in auth and "schemes" not in auth:
-                scheme_value = auth.pop("scheme")
-                auth["schemes"] = [scheme_value] if scheme_value else []
-            parameters = {**parameters, "push_notification_config": pnc_dict}
+        # Inject the protocol-layer push config into parameters for skills that need it.
+        #
+        # The TYPED model the seam already accepted, not a dict re-derived from the
+        # protobuf. This used to re-serialize with MessageToDict and re-translate
+        # A2A's singular ``scheme`` into AdCP's ``schemes`` array — a second dialect
+        # for a config ``_accept_a2a_push_config`` had accepted moments earlier, and
+        # the reason gh-#1299's exemption leaked: the dict was re-validated by the
+        # skill's request body, where ``credentials`` minLength 32 applies and
+        # DIVERTED THE CREATE. Passing the model means ``to_push_notification_config``
+        # returns it unchanged (isinstance short-circuit), so the transport-layer
+        # config is validated exactly once, at the transport boundary that owns it.
+        if push_config_registration and skill_name in ("create_media_buy", "sync_creatives"):
+            parameters = {**parameters, "push_notification_config": push_config_registration.config}
         # Normalize deprecated fields before any handler sees the parameters
         from src.core.request_compat import normalize_request_params
 

@@ -151,7 +151,7 @@ class TestSignedBodyIntegrity:
         that happens to agree: compact-but-``ensure_ascii=False`` serialization
         matches the signature for ASCII input and diverges here.
         """
-        secret = "shared-webhook-secret"
+        secret = "shared-webhook-secret-thirty-two-plus"
 
         with ProtocolWebhookEnv() as env:
             buy = env.make_media_buy()
@@ -197,7 +197,7 @@ class TestSignedBodyIntegrity:
         timestamp and advertised another would leave the replay window
         unenforceable even if the body bytes were right.
         """
-        secret = "shared-webhook-secret"
+        secret = "shared-webhook-secret-thirty-two-plus"
 
         with ProtocolWebhookEnv() as env:
             env.make_media_buy()

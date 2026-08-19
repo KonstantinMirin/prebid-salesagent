@@ -896,6 +896,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | credentials_at_minimum  | valid    |
       | credentials_too_short   | invalid  |
       | unknown_scheme          | invalid  |
+      | lowercase_scheme        | invalid  |
+      | basic_scheme            | invalid  |
 
   @T-UC-004-boundary-credentials @boundary @reporting_webhook @BR-RULE-029
   Scenario Outline: Webhook credentials boundary - <boundary_point>
@@ -910,6 +912,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | credentials = 32 chars (minimum)            | valid    |
       | credentials = 31 chars (rejected)           | invalid  |
       | Unknown auth scheme not in enum             | invalid  |
+      | hmac-sha256 lowercase spelling              | invalid  |
+      | Basic scheme not in enum                    | invalid  |
 
   @T-UC-004-partition-resolution @partition @media_buy_resolution @BR-RULE-030 @schema-v3.1
   Scenario Outline: Media buy resolution partition - <partition>

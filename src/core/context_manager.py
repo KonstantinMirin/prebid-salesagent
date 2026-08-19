@@ -854,9 +854,24 @@ class ContextManager(DatabaseManager):
                         # FAIL CLOSED: this runs inside a status update. A stashed
                         # config that no longer passes the gate must cost the
                         # webhook, never the status transition.
-                        console.print(
-                            f"[red]Stashed push notification config is not deliverable "
-                            f"({exc.message}); skipping webhook[/red]"
+                        #
+                        # logger.error, NOT console.print, and that is load-bearing
+                        # rather than tidiness. This refusal produces no
+                        # WebhookDeliveryOutcome and no delivery-log row — the
+                        # outcome type has exactly one producer, the egress seam,
+                        # and this path never reaches it. With no durable record and
+                        # no migration for the rows this affects, THIS LINE IS THE
+                        # ONLY SURFACE the refusal has, so it must be enumerable
+                        # from the logs: an operator has to be able to list which
+                        # buyers stopped receiving webhooks and why.
+                        stash_context = getattr(step, "context", None)
+                        logger.error(
+                            "Stashed push notification config is not deliverable (%s); "
+                            "skipping webhook (tenant=%s, principal=%s, step=%s)",
+                            exc.message,
+                            tenant_id or getattr(stash_context, "tenant_id", None),
+                            getattr(stash_context, "principal_id", None),
+                            getattr(step, "step_id", None),
                         )
                         continue
 

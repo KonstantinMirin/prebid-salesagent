@@ -615,7 +615,12 @@ class TestDeliverWithBackoffGenericException:
         def _unexpected(*args, **kwargs):
             raise RuntimeError("unexpected")
 
-        with patch("src.services.webhook_delivery_service.deliver_signed_webhook", _unexpected):
+        # Patched at ``deliver_webhook`` since Epic D lane C4: the sender no longer
+        # calls the signing helper directly — it calls the seam, which owns the auth
+        # decision and returns an outcome. The subject is unchanged: a NON-transport
+        # exception escaping the delivery call, which no origin can serve, so it is
+        # still injected here rather than at a transport this module never touches.
+        with patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected):
             result = svc._deliver_with_backoff("test_endpoint", cb, queue)
 
         assert result is False

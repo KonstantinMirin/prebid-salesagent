@@ -15,17 +15,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig, SyncJob
-from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundRequestBlocked
-from src.core.security.webhook_egress import (
-    BasicCredentials,
-    BearerToken,
-    HmacSecretMissing,
-    SignWithSecret,
-    Unauthenticated,
-    WebhookAuth,
-    deliver_signed_webhook,
-    webhook_auth_for,
-)
+from src.core.security.webhook_egress import deliver_webhook
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import webhook_url_for_log
 
@@ -343,7 +333,7 @@ def _mark_approval_failed(
         logger.error(f"Failed to mark approval failed: {e}")
 
 
-def _approval_webhook_headers(auth: WebhookAuth, validation_token: str | None) -> dict[str, str]:
+def _approval_webhook_headers(validation_token: str | None) -> dict[str, str]:
     """Build HTTP headers for an order-approval webhook POST.
 
     Takes the already-resolved :class:`WebhookAuth` rather than the config row,
@@ -360,10 +350,10 @@ def _approval_webhook_headers(auth: WebhookAuth, validation_token: str | None) -
         "Content-Type": "application/json",
         "User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)",
     }
-    if isinstance(auth, BearerToken):
-        headers["Authorization"] = f"Bearer {auth.token}"
-    elif isinstance(auth, BasicCredentials):
-        headers["Authorization"] = f"Basic {auth.token}"
+    # No auth ladder here any more: the seam applies whatever the registered scheme
+    # requires. X-Webhook-Token STAYS, because it is sender-local — this sender
+    # emits it and protocol_webhook_service does not, so folding it into the shared
+    # decision would silently change one sender's headers under cover of unification.
     if validation_token:
         headers["X-Webhook-Token"] = validation_token
     return headers
@@ -373,7 +363,11 @@ def _post_approval_webhook(
     webhook_url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
-    secret: str | None = None,
+    *,
+    scheme: str | None = None,
+    credentials: str | None = None,
+    tenant_id: str | None = None,
+    principal_id: str | None = None,
 ) -> None:
     """POST the approval payload through the egress seam.
 
@@ -389,27 +383,56 @@ def _post_approval_webhook(
     its query string cannot reach the logs.
     """
     safe_url = webhook_url_for_log(webhook_url)
-    try:
-        result = deliver_signed_webhook(
-            webhook_url, payload, secret=secret, headers=headers, timeout=10.0, max_attempts=3
+    outcome = deliver_webhook(
+        webhook_url,
+        payload,
+        scheme=scheme,
+        credentials=credentials,
+        headers=headers,
+        timeout=10.0,
+        max_attempts=3,
+    )
+
+    if outcome.kind == "refused_auth":
+        # FAIL-CLOSED BACKSTOP -- deliberately log-and-return, and deliberately NOT
+        # a raise. This is not the primary refusal: a non-conforming registration is
+        # rejected at INGEST, where a request still exists to refuse into and the
+        # buyer -- the only party who can fix it -- actually sees it.
+        #
+        # By the time control reaches here we are on a daemon thread, after
+        # create_media_buy already returned, with the approval committed; this
+        # function's return value is discarded and its exceptions are blanket-caught
+        # by the caller. There is no caller left that could act on a raise, and
+        # TestExhaustedDeliveryIsSilent grades that this path stays non-raising. So
+        # the backstop's job is narrow: never let an unauthenticated request reach a
+        # receiver that asked to be authenticated.
+        #
+        # This does NOT cite "No Quiet Failures" -- that rule's worked example bans
+        # exactly this shape, and the honest reason it is an exception is above.
+        logger.error(
+            "Refusing to send approval webhook to %s: %s (tenant=%s, principal=%s)",
+            safe_url,
+            outcome.detail or outcome.reason,
+            tenant_id,
+            principal_id,
         )
-    except OutboundRequestBlocked:
-        # The URL never left the process. Deliberately opaque: the seam has
-        # already logged which policy refused it and why.
+    elif outcome.kind == "refused_destination":
+        # The URL never left the process. Deliberately opaque: the seam has already
+        # logged which policy refused it and why.
         logger.warning("Approval webhook to %s was refused by egress policy", safe_url)
-    except OutboundDeliveryFailed as e:
+    elif outcome.kind != "delivered":
         logger.error(
             "Failed to send approval webhook to %s after %s attempts (last status: %s)",
             safe_url,
-            e.attempts,
-            e.last_status,
+            outcome.attempts,
+            outcome.http_status,
         )
     else:
         logger.info(
             "Approval webhook sent to %s (status: %s, attempts: %s)",
             safe_url,
             payload.get("status"),
-            result.attempts,
+            outcome.attempts,
         )
 
 
@@ -458,49 +481,17 @@ def _send_approval_webhook(
             )
             config = db.scalars(stmt).first()
 
-        auth: WebhookAuth = (
-            webhook_auth_for(config.authentication_type, config.authentication_token) if config else Unauthenticated()
-        )
-
-        if isinstance(auth, HmacSecretMissing):
-            # FAIL-CLOSED BACKSTOP -- deliberately log-and-return, and deliberately
-            # NOT a raise. This is not the primary refusal: a config asking for
-            # HMAC-SHA256 without credentials is rejected at INGEST
-            # (media_buy_create and the A2A push-config handler), where a request
-            # still exists to refuse into and the buyer -- the only party who can
-            # supply the secret -- actually sees it.
-            #
-            # By the time control reaches here we are on a daemon thread, after
-            # create_media_buy already returned, with the approval committed; this
-            # function's return value is discarded and its exceptions are
-            # blanket-caught below. There is no caller left that could act on a
-            # raise, and TestExhaustedDeliveryIsSilent grades that this path stays
-            # non-raising. So the backstop's job is narrow: never let an unsigned
-            # request reach a receiver that asked for a signature.
-            #
-            # This does NOT cite "No Quiet Failures" -- that rule's worked example
-            # bans exactly this shape, and the honest reason it is an exception is
-            # written above (salesagent-47n9.20).
-            safe_url = webhook_url_for_log(webhook_url)
-            logger.error(
-                "Approval webhook to %s is configured for HMAC-SHA256 but has no "
-                "credentials stored -- refusing to send unsigned (tenant=%s, principal=%s)",
-                safe_url,
-                tenant_id,
-                principal_id,
-            )
-            return
-
-        secret = auth.secret if isinstance(auth, SignWithSecret) else None
-
         # The egress seam validates the URL as part of sending it, so there is no
         # separate SSRF pre-flight here: one refusal path, raised as
         # OutboundRequestBlocked before any connection is attempted.
         _post_approval_webhook(
             webhook_url,
             payload,
-            _approval_webhook_headers(auth, config.validation_token if config else None),
-            secret,
+            _approval_webhook_headers(config.validation_token if config else None),
+            scheme=config.authentication_type if config else None,
+            credentials=config.authentication_token if config else None,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
         )
 
     except Exception as e:

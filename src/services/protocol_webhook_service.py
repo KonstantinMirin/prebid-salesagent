@@ -28,19 +28,7 @@ from google.protobuf.json_format import MessageToDict
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.delivery import DeliveryRepository
-from src.core.security.outbound_http import (
-    OutboundDeliveryFailed,
-    OutboundRequestBlocked,
-    asend,
-    terminal_client_error_status,
-)
-from src.core.security.webhook_egress import (
-    BearerToken,
-    HmacSecretMissing,
-    SignWithSecret,
-    prepare_signed_request,
-    webhook_auth_for,
-)
+from src.core.security.webhook_egress import adeliver_webhook
 from src.core.webhook_validator import webhook_url_for_log
 
 
@@ -329,55 +317,20 @@ class ProtocolWebhookService:
         # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
         payload_dict: dict[str, Any] = _to_wire_dict(payload)
 
-        # Apply authentication based on schemes. HMAC-SHA256 and the unsigned
-        # case both route through prepare_signed_request so there is exactly
-        # one place that decides what bytes represent this payload — never a
-        # signer computing one serialization while something else transmits
-        # another. Bearer is a header-only credential, not a body signature,
-        # so it stays outside that seam.
-        auth = webhook_auth_for(
-            push_notification_config.authentication_type,
-            push_notification_config.authentication_token,
-        )
-        if isinstance(auth, HmacSecretMissing):
-            # FAIL-CLOSED (salesagent-47n9.24, GH #1893). This used to fall through
-            # to an unsigned delivery: the buyer asked for a signature and received
-            # none, with no error on any surface. All three webhook senders now
-            # answer this case identically -- see the identical backstop in
-            # order_approval_service and webhook_delivery_service.
-            #
-            # log-and-return rather than raise, and no delivery-log row: nothing was
-            # attempted, so a row claiming an attempt would misreport a refusal as a
-            # delivery that failed on the wire. The refusal a buyer can act on
-            # already happened at ingest, where the request that carried the
-            # credential still existed to be rejected into.
-            logger.error(
-                "Webhook to %s is configured for HMAC-SHA256 but has no credentials "
-                "stored -- refusing to send unsigned",
-                webhook_url_for_log(url),
-            )
-            return False
-
-        secret = None
-        if isinstance(auth, BearerToken):
-            headers["Authorization"] = f"Bearer {auth.token}"
-        elif isinstance(auth, SignWithSecret):
-            secret = auth.secret
-        # BasicCredentials and Unauthenticated fall through to an unsigned delivery:
-        # neither is a promise this sender is failing to keep. Basic is not an AdCP
-        # scheme and this sender has never applied it (order_approval_service is the
-        # one that honours it); Unauthenticated means the buyer selected no scheme,
-        # so there is nothing to apply.
-
-        # prepare_signed_request is called exactly once per delivery here —
-        # its returned body_bytes are the exact bytes that must reach the
-        # wire, so they are threaded through (not recomputed) all the way to
-        # the asend() call in _send_with_retry_and_logging.
-        headers, body_bytes = prepare_signed_request(payload_dict, secret, headers)
-
+        # No authentication decision here. The seam validates the stored pair against
+        # the pinned type and applies whatever that scheme requires — the same
+        # decision, made the same way, for every sender. This function used to
+        # resolve it, project it into a secret-or-header and call
+        # prepare_signed_request itself, which is how it became the only sender that
+        # silently dropped a stored Basic row.
         # Send notification with retry logic and logging
         return await self._send_with_retry_and_logging(
-            url=url, payload=payload_dict, headers=headers, metadata=metadata, body_bytes=body_bytes
+            url=url,
+            payload=payload_dict,
+            headers=headers,
+            metadata=metadata,
+            scheme=push_notification_config.authentication_type,
+            credentials=push_notification_config.authentication_token,
         )
 
     @staticmethod
@@ -431,7 +384,8 @@ class ProtocolWebhookService:
         payload: dict[str, Any],
         headers: dict,
         metadata: dict[str, Any],
-        body_bytes: bytes,
+        scheme: str | None = None,
+        credentials: str | None = None,
         max_attempts: int = 3,
     ) -> bool:
         """Deliver one webhook through the egress seam, with logging and audit trail.
@@ -442,8 +396,6 @@ class ProtocolWebhookService:
         this function does not call ``json.dumps`` on ``payload`` itself, so
         there is no second serialization that could disagree with the first.
         """
-        payload_size_bytes = len(body_bytes)
-
         ctx = WebhookTaskContext.from_metadata(metadata, payload)
 
         # Create webhook delivery log entry
@@ -477,54 +429,21 @@ class ProtocolWebhookService:
         # log line is the one place they would sit in cleartext (#1697).
         logger.info("Sending webhook for task %s to %s", ctx.task_id, webhook_url_for_log(url))
         try:
-            result_out = await asend(
+            outcome = await adeliver_webhook(
                 url,
-                content=body_bytes,
+                payload,
+                scheme=scheme,
+                credentials=credentials,
                 headers=headers,
                 timeout=10.0,
                 max_attempts=max_attempts,
             )
-        except OutboundRequestBlocked:
-            # Refused before a connection was opened: attempts=0 is the honest count.
-            # It still writes a row and an audit entry — a misconfigured destination
-            # that leaves no trace is indistinguishable from one nobody configured.
-            logger.error(f"Webhook for task {ctx.task_id} was refused by egress policy")
-            return self._record_delivery_failure(
-                ctx=ctx,
-                log_id=log_id,
-                url=url,
-                attempts=0,
-                http_status_code=None,
-                error="refused by egress policy",
-                payload_size_bytes=payload_size_bytes,
-                start_time=start_time,
-                audit_logger=audit_logger,
-            )
-        except OutboundDeliveryFailed as exc:
-            terminal_status = terminal_client_error_status(exc)
-            if terminal_status is not None:
-                error = f"client error {terminal_status}, not retried"
-            elif exc.last_status is not None:
-                error = f"failed after {exc.attempts} attempts (last status {exc.last_status})"
-            else:
-                error = f"failed after {exc.attempts} attempts (no response received)"
-            logger.error(f"Webhook for task {ctx.task_id} {error}")
-            return self._record_delivery_failure(
-                ctx=ctx,
-                log_id=log_id,
-                url=url,
-                attempts=exc.attempts,
-                http_status_code=exc.last_status,
-                error=error,
-                payload_size_bytes=payload_size_bytes,
-                start_time=start_time,
-                audit_logger=audit_logger,
-            )
         except Exception as e:
-            # Deliberately kept. A lone ``except OutboundError`` would let anything
-            # else escape a function contracted ``-> bool``, and the delivery
-            # scheduler re-raises what it catches. The pinned transport's own
-            # wrong-host guard raises a bare RuntimeError, which belongs here.
+            # Deliberately kept. The seam maps its OWN failure taxonomy onto the
+            # outcome, but relying on that alone would let anything else escape a
+            # function contracted ``-> bool``, and the delivery scheduler re-raises
+            # what it catches. The pinned transport's own wrong-host guard raises a
+            # bare RuntimeError, which belongs here.
             logger.error(f"Unexpected error sending webhook for task {ctx.task_id}: {e}", exc_info=True)
             return self._record_delivery_failure(
                 ctx=ctx,
@@ -533,13 +452,55 @@ class ProtocolWebhookService:
                 attempts=0,
                 http_status_code=None,
                 error=str(e),
+                payload_size_bytes=0,
+                start_time=start_time,
+                audit_logger=audit_logger,
+            )
+
+        # 0 when the seam refused before serializing: the column means "bytes we
+        # put on the wire", and nothing was put on the wire.
+        payload_size_bytes = outcome.payload_size_bytes or 0
+
+        if outcome.kind == "refused_auth":
+            # FAIL-CLOSED. This used to fall through to an unsigned delivery: the
+            # buyer asked for authentication and received none, with no error on any
+            # surface. log-and-return, and NO delivery-log row and no audit entry —
+            # nothing was attempted, so a row claiming an attempt would misreport a
+            # refusal as a delivery that failed on the wire. The refusal a buyer can
+            # act on already happened at ingest.
+            logger.error(
+                "Refusing to send webhook for task %s to %s: %s",
+                ctx.task_id,
+                webhook_url_for_log(url),
+                outcome.detail or outcome.reason,
+            )
+            return False
+
+        if outcome.kind != "delivered":
+            if outcome.kind == "refused_destination":
+                # Refused before a connection was opened: attempts=0 is the honest
+                # count. It still writes a row and an audit entry — a misconfigured
+                # destination that leaves no trace is indistinguishable from one
+                # nobody configured.
+                error = "refused by egress policy"
+                logger.error(f"Webhook for task {ctx.task_id} was refused by egress policy")
+            else:
+                error = outcome.detail or f"failed after {outcome.attempts} attempts"
+                logger.error(f"Webhook for task {ctx.task_id} {error}")
+            return self._record_delivery_failure(
+                ctx=ctx,
+                log_id=log_id,
+                url=url,
+                attempts=outcome.attempts,
+                http_status_code=outcome.http_status,
+                error=error,
                 payload_size_bytes=payload_size_bytes,
                 start_time=start_time,
                 audit_logger=audit_logger,
             )
 
         response_time_ms = int((time.time() - start_time) * 1000)
-        logger.info(f"Successfully sent webhook for task {ctx.task_id} (status: {result_out.status_code})")
+        logger.info(f"Successfully sent webhook for task {ctx.task_id} (status: {outcome.http_status})")
 
         if ctx.records_delivery_log:
             # records_delivery_log already requires all three of these truthy;
@@ -556,8 +517,8 @@ class ProtocolWebhookService:
                 status="success",
                 sequence_number=ctx.sequence_number,
                 notification_type=ctx.notification_type,
-                attempt_count=result_out.attempts,
-                http_status_code=result_out.status_code,
+                attempt_count=outcome.attempts,
+                http_status_code=outcome.http_status,
                 payload_size_bytes=payload_size_bytes,
                 response_time_ms=response_time_ms,
                 completed_at=datetime.now(UTC),

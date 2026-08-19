@@ -26,7 +26,18 @@ import ast
 from tests.unit._architecture_helpers import repo_root
 
 _MODULE_PATH = "src/core/security/webhook_egress.py"
-_GUARDED_FUNCTIONS = frozenset({"prepare_signed_request", "deliver_signed_webhook", "adeliver_signed_webhook"})
+# Repointed in Epic D lane C4 alongside the private rename, and EXTENDED to the two
+# new public entry points — leaving them out would let a future ``payload: bytes``
+# on the seam itself walk straight past this MUST.
+_GUARDED_FUNCTIONS = frozenset(
+    {
+        "prepare_signed_request",
+        "_deliver_signed_webhook",
+        "_adeliver_signed_webhook",
+        "deliver_webhook",
+        "adeliver_webhook",
+    }
+)
 _PAYLOAD_PARAM = "payload"
 
 # Names whose presence anywhere in the payload parameter's annotation means
@@ -105,7 +116,7 @@ def prepare_signed_request(payload: dict[str, Any] | bytes, secret, headers):
 
     def test_catches_a_bare_str_payload(self) -> None:
         snippet = """
-def deliver_signed_webhook(url, payload: str, *, secret=None):
+def _deliver_signed_webhook(url, payload: str, *, secret=None):
     pass
 """
         tree = ast.parse(snippet)
@@ -114,7 +125,7 @@ def deliver_signed_webhook(url, payload: str, *, secret=None):
 
     def test_catches_a_bare_any_payload(self) -> None:
         snippet = """
-async def adeliver_signed_webhook(url, payload: Any, *, secret=None):
+async def _adeliver_signed_webhook(url, payload: Any, *, secret=None):
     pass
 """
         tree = ast.parse(snippet)

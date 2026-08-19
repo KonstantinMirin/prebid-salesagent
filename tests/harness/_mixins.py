@@ -435,6 +435,7 @@ class WebhookMixin(LocalOriginMixin):
             payload=payload,
             headers=headers,
             signing_secret=signing_secret,
+            authentication_scheme="HMAC-SHA256" if signing_secret else None,
             max_retries=max_retries,
             timeout=timeout,
             event_type=event_type,

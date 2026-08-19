@@ -181,36 +181,42 @@ class TestStoredCredential:
     def test_bearer_token_from_the_stored_config_reaches_the_wire(self, integration_db):
         """A bearer row becomes ``Authorization: Bearer <token>`` on the request."""
         with OrderApprovalWebhookEnv() as env:
-            _bearer_config(env, token="test_token")
+            _bearer_config(env, token="test_token-padded-to-the-pinned-32-char-min")
             env.set_http_status(200)
 
             env.call_send_approval_webhook(status="approved")
 
             assert env.delivery_attempts == 1
-            assert env.last_delivery.headers["Authorization"] == "Bearer test_token"
+            assert env.last_delivery.headers["Authorization"] == "Bearer test_token-padded-to-the-pinned-32-char-min"
 
-    def test_a_lowercase_scheme_still_authenticates(self, integration_db):
-        """A row storing ``"bearer"`` gets the same ``Authorization`` header as ``"Bearer"``.
+    def test_a_lowercase_scheme_refuses_instead_of_being_folded(self, integration_db):
+        """A row storing ``"bearer"`` does NOT get an ``Authorization`` header — it refuses.
 
-        Lowercase rows are not hypothetical: the A2A
-        ``setTaskPushNotificationConfig`` handler stores
-        ``params.authentication.scheme`` verbatim from a free-form protobuf
-        string with no enum guarding that path, so a real buyer creates them.
-        ``webhook_auth_for`` therefore compares case-insensitively
-        (salesagent-47n9.20), and this is the only test holding that decision in
-        place — tightening the resolver to an exact match against the pinned
-        ``AuthenticationScheme`` enum would stop sending ``Authorization`` for
-        rows that are authenticated today, which is a regression wearing the
-        clothes of a tidy-up.
+        This asserted the opposite until the owner collapsed the vocabulary to the
+        pinned, case-sensitive ``AuthenticationScheme``. Lowercase rows are not
+        hypothetical — the A2A ``setTaskPushNotificationConfig`` handler stores
+        ``params.authentication.scheme`` verbatim from a free-form protobuf string
+        with no enum guarding that path — and folding them was how they kept
+        delivering. They are now MIGRATED instead: the owner re-registers with a
+        scheme the spec defines, and until then the row does not deliver.
+
+        Kept as a case rather than deleted because the folding repair is the
+        tempting one. It is invisible, it makes the row work, and RFC 7235 §2.1
+        licenses case-insensitive scheme names for HTTP. What it costs is a single
+        answer to "which scheme is this row?", and the cost was three senders
+        comparing three different spellings of one fact.
         """
         with OrderApprovalWebhookEnv() as env:
-            _bearer_config(env, token="test_token", scheme="bearer")
+            _bearer_config(env, token="test_token-padded-to-the-pinned-32-char-min", scheme="bearer")
             env.set_http_status(200)
 
             env.call_send_approval_webhook(status="approved")
 
-            assert env.delivery_attempts == 1
-            assert env.last_delivery.headers["Authorization"] == "Bearer test_token"
+            assert env.delivery_attempts == 0, (
+                f"a stored 'bearer' row produced {env.delivery_attempts} delivery attempt(s) — "
+                f"the scheme is not a member of the pinned enum, so the seam must refuse "
+                f"pre-flight without opening a socket"
+            )
 
     def test_no_stored_config_sends_no_authorization_header(self, integration_db):
         """With no active row the request still goes out — unauthenticated.
@@ -316,7 +322,7 @@ class TestSigningIsGatedByTheScheme:
     def test_a_bearer_row_is_delivered_unsigned(self, integration_db):
         """A stored bearer credential must not be pressed into service as a signing key."""
         with OrderApprovalWebhookEnv() as env:
-            _bearer_config(env, token="test_token")
+            _bearer_config(env, token="test_token-padded-to-the-pinned-32-char-min")
             env.set_http_status(200)
 
             env.call_send_approval_webhook(status="approved")

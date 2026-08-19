@@ -351,7 +351,7 @@ class TestSendWebhookEnhancedBearerAuth:
     """
 
     def test_bearer_token_sent_in_authorization_header(self, integration_db):
-        """When authentication_type='bearer' and authentication_token is set,
+        """When authentication_type='Bearer' and authentication_token is set,
         Authorization header is sent with 'Bearer <token>'.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
@@ -370,8 +370,11 @@ class TestSendWebhookEnhancedBearerAuth:
                 tenant=tenant,
                 principal=principal,
                 url=env.webhook_url,
-                authentication_type="bearer",
-                authentication_token="my-secret-token-xyz",
+                # The PINNED spelling. This case grades that a configured Bearer
+                # registration sends the header — not that casing is tolerated;
+                # a lowercase row refuses, graded in test_order_approval_webhook.
+                authentication_type="Bearer",
+                authentication_token="my-secret-token-xyz-padded-to-32ch",
             )
 
             env.set_http_response(200)
@@ -386,7 +389,7 @@ class TestSendWebhookEnhancedBearerAuth:
             assert result is True
             assert env.delivery_attempts == 1
             sent_headers = env.last_delivery.headers
-            assert sent_headers["Authorization"] == "Bearer my-secret-token-xyz"
+            assert sent_headers["Authorization"] == "Bearer my-secret-token-xyz-padded-to-32ch"
 
 
 # ---------------------------------------------------------------------------
@@ -1244,45 +1247,44 @@ class TestQueueFullDropsWebhook:
 
 
 @pytest.mark.requires_db
-class TestShortSecretStillSigns:
-    """A short HMAC credential is signed with, not quietly discarded.
+class TestShortSecretRefusesRatherThanSigning:
+    """A sub-32 HMAC credential REFUSES. Reversed twice; the history matters.
 
-    This class asserted the OPPOSITE until salesagent-47n9.24: that a secret
-    under 32 characters is dropped and the delivery goes out UNSIGNED, at
-    WARNING level. That was the defect written down as an expectation (GH #1894,
-    defect 1) -- a buyer who configured signing received unsigned webhooks and no
-    error. It is rewritten rather than deleted because the obligation is real;
-    only the required outcome changed.
+    v1 asserted such a secret was silently DISCARDED and the delivery went out
+    unsigned at WARNING level — a buyer who configured signing received unsigned
+    webhooks and no error (GH #1894, defect 1).
 
-    Refusing on a short secret was considered and rejected: the check tested
-    ``webhook_secret``, a column with no writers, so it had never once fired.
-    Re-pointing it at ``authentication_token`` would take every buyer holding a
-    credential under 32 characters from "delivered" to "not delivered at all",
-    and would make this the only one of three senders that refuses a short
-    secret -- the same divergence 47n9.24 exists to remove. A length minimum is
-    a REGISTRATION policy for the ingest gate, where the buyer can still act on
-    it; AdCP 3.1.1 mandates none.
+    v2 (salesagent-47n9.24) reversed that to "signed with, not discarded", and
+    explicitly recorded that refusing had been "considered and rejected" because it
+    would take buyers from "delivered" to "not delivered at all", adding: "AdCP
+    3.1.1 mandates none." THAT CLAIM WAS FALSE. The pinned schema
+    (core/push-notification-config.json) puts ``minLength: 32`` on
+    ``authentication.credentials``; the same false sentence lived in
+    webhook_delivery_service.py and has been corrected there too.
+
+    v3 — this one — refuses, by owner ruling for Epic D lane C4: "Refuse — spec or
+    nothing." A stored block that does not satisfy the pinned schema is not a
+    delivery we should be making. The delivered-to-never-delivered objection is
+    ANSWERED rather than waived: such a row is not a delivery we should have been
+    making, its owner re-registers, and no migration is supplied because a short
+    secret cannot be lengthened without changing what the receiver verifies against.
+
+    The reachability note from v2 still stands and is why this case exists at all:
+    create_media_buy's pydantic boundary enforces the minimum, but the A2A
+    setTaskPushNotificationConfig handler reads the credential off a free-form
+    protobuf string, so an A2A-registered row can carry a short secret today.
     """
 
-    def test_short_secret_is_signed_with_not_discarded(self, integration_db):
-        """A credential under the old 32-char minimum still produces a valid signature."""
+    def test_a_short_secret_refuses_instead_of_signing(self, integration_db):
+        """A credential under the pinned minimum stops the delivery, and says so."""
         from tests.factories import (
             PrincipalFactory,
             PushNotificationConfigFactory,
             TenantFactory,
         )
         from tests.harness import CircuitBreakerEnv
-        from tests.helpers import assert_signature_verifies_over_wire_body
 
-        # 8 chars. Reachable in production, and only one way: AdCP 3.1.1 puts
-        # MinLen=32 on ``Authentication.credentials``, which the create_media_buy
-        # Pydantic boundary enforces -- but the A2A setTaskPushNotificationConfig
-        # handler reads the credential off a free-form protobuf string and runs
-        # only the URL and missing-credential preconditions
-        # (``_reject_invalid_a2a_push_config``), so an A2A-registered row can carry
-        # a short secret today. Those are exactly the rows a delivery-time strength
-        # gate would have taken from "delivered" to "not delivered at all".
-        secret = "tooshort"
+        secret = "tooshort"  # 8 chars, against the pinned minLength of 32
 
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
@@ -1304,9 +1306,11 @@ class TestShortSecretStillSigns:
                 delivery_payload={"test": "data"},
             )
 
-            assert result is True
-            assert env.delivery_attempts == 1
-            assert_signature_verifies_over_wire_body(env.last_delivery, secret)
+            assert result is False, "a non-conforming credential must not report a successful delivery"
+            assert env.delivery_attempts == 0, (
+                f"the seam dialled {env.delivery_attempts} time(s) for a credential the pinned "
+                f"schema forbids — a refusal must not reach the wire at all"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Structural guard: no webhook-signing seam call may hardcode an unsigned secret.
 
 Backstops salesagent-47n9.15: ``order_approval_service.py`` called
-``deliver_signed_webhook(..., secret=None, ...)`` with a LITERAL ``None`` --
+``_deliver_signed_webhook(..., secret=None, ...)`` with a LITERAL ``None`` --
 never deriving it from the stored ``PushNotificationConfig`` -- so a config
 that asked for ``authentication_type == "HMAC-SHA256"`` signing was silently
 delivered unsigned, with no error. The fix threads a config-derived ``secret``
@@ -26,12 +26,32 @@ itself, MIGRATEd by this same PR) and zero others.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 import pytest
 
 from tests.unit._architecture_helpers import iter_call_expressions, repo_root, src_python_files
 
-_SIGNING_SEAM_FUNCTIONS = frozenset({"deliver_signed_webhook", "adeliver_signed_webhook", "prepare_signed_request"})
+# Repointed in Epic D lane C4: the two signed-webhook helpers went module-private
+# and the seam gained two PUBLIC entry points. Without this the set would name only
+# symbols that no longer exist, and the guard would scan an empty population and
+# pass forever — see test_the_guard_has_subjects below, added for exactly that.
+_SIGNING_SEAM_FUNCTIONS = frozenset(
+    {
+        "_deliver_signed_webhook",
+        "_adeliver_signed_webhook",
+        "prepare_signed_request",
+    }
+)
+
+# deliver_webhook / adeliver_webhook are deliberately NOT here. This guard's rule is
+# "a signing call that omits its secret, or passes a literal None, delivers unsigned
+# silently" — and those two take no ``secret`` parameter at all. They receive the
+# stored (scheme, credentials) pair and decide signing from the pinned type, so an
+# omitted secret is not expressible at that call. Listing them would flag all four
+# senders for calling the seam correctly.
+# They ARE guarded by test_architecture_no_webhook_egress_text_payload, whose rule
+# (no text-typed payload parameter) does apply to them.
 
 # prepare_signed_request(payload, secret, headers, *, timestamp=None) -- secret
 # is positional index 1. The other two are keyword-only (secret=None).
@@ -94,19 +114,19 @@ class TestDetectorCatchesKnownBadSnippets:
         [
             (
                 "deliver_signed_webhook-literal-none-keyword",
-                "deliver_signed_webhook(url, payload, secret=None, headers=h)\n",
+                "_deliver_signed_webhook(url, payload, secret=None, headers=h)\n",
             ),
             (
                 "deliver_signed_webhook-omitted-secret",
-                "deliver_signed_webhook(url, payload, headers=h)\n",
+                "_deliver_signed_webhook(url, payload, headers=h)\n",
             ),
             (
                 "adeliver_signed_webhook-literal-none-keyword",
-                "await adeliver_signed_webhook(url, payload, secret=None, headers=h)\n",
+                "await _adeliver_signed_webhook(url, payload, secret=None, headers=h)\n",
             ),
             (
                 "adeliver_signed_webhook-omitted-secret",
-                "await adeliver_signed_webhook(url, payload, headers=h)\n",
+                "await _adeliver_signed_webhook(url, payload, headers=h)\n",
             ),
             (
                 "prepare_signed_request-literal-none-positional",
@@ -131,11 +151,11 @@ class TestDetectorAllowsSignedCalls:
         [
             (
                 "deliver_signed_webhook-derived-variable",
-                "deliver_signed_webhook(url, payload, secret=secret, headers=h)\n",
+                "_deliver_signed_webhook(url, payload, secret=secret, headers=h)\n",
             ),
             (
                 "adeliver_signed_webhook-derived-attribute",
-                "await adeliver_signed_webhook(url, payload, secret=config.webhook_secret, headers=h)\n",
+                "await _adeliver_signed_webhook(url, payload, secret=config.webhook_secret, headers=h)\n",
             ),
             (
                 "prepare_signed_request-derived-positional",
@@ -154,3 +174,20 @@ class TestDetectorAllowsSignedCalls:
     def test_allows_clean_snippet(self, label: str, snippet: str) -> None:
         tree = ast.parse(snippet, filename=f"<known-good:{label}>")
         assert not find_hardcoded_unsigned_secret_violations(tree), f"detector false-flagged clean snippet: {label}"
+
+
+@pytest.mark.arch_guard
+def test_the_guard_has_subjects() -> None:
+    """The scanned population must be non-empty.
+
+    Added in Epic D lane C4 after a rename drained this guard silently: every name
+    in ``_SIGNING_SEAM_FUNCTIONS`` had gone private, so the scan matched nothing and
+    reported green. A guard that cannot fail is worse than no guard, because it
+    reads as coverage.
+    """
+    seam = Path("src/core/security/webhook_egress.py").read_text(encoding="utf-8")
+    present = {name for name in _SIGNING_SEAM_FUNCTIONS if f"def {name}(" in seam}
+    assert present, (
+        f"none of {sorted(_SIGNING_SEAM_FUNCTIONS)} is defined in webhook_egress.py — "
+        f"the guard is scanning for symbols that no longer exist and will pass forever"
+    )

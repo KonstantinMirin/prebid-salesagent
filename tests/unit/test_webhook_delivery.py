@@ -217,7 +217,7 @@ class TestWebhookDelivery:
         from tests.harness.delivery_webhook_unit import WebhookEnv
         from tests.helpers import assert_signature_verifies_over_wire_body
 
-        secret = "test-secret-key"
+        secret = "test-secret-key-padded-to-the-min"
 
         with WebhookEnv() as env:
             env.set_http_status(200)

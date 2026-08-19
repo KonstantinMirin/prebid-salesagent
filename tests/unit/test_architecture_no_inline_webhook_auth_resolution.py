@@ -78,7 +78,22 @@ _SCHEME_LITERALS = frozenset(
 )
 
 # Credential columns a sender may not read off a config object.
-_CREDENTIAL_ATTRS = frozenset({"authentication_token", "webhook_secret"})
+# NARROWED in Epic D lane C4 to ``webhook_secret`` alone.
+#
+# ``authentication_token`` was removed from this set deliberately, and the reason
+# is that the rule it served became unsatisfiable rather than unimportant. While a
+# resolver existed, a sender touching that column was about to DECIDE something,
+# so banning the read was a good proxy. Senders now pass the stored
+# ``(scheme, credentials)`` pair to the egress seam and branch on the returned
+# outcome — they must read the column to hand it over, so flagging the read would
+# forbid the very shape this epic installed.
+#
+# What the guard still catches is unchanged and is the real disease: comparing
+# ``authentication_type`` against a scheme literal (a sender answering "is this
+# HMAC?" itself), and reading ``webhook_secret`` — a column with ZERO writers in
+# src/, so any read of it is reaching for a credential nothing populates
+# (GH #1894 defect 1).
+_CREDENTIAL_ATTRS = frozenset({"webhook_secret"})
 
 # The resolver's own module — "outside the resolver" is the rule, so the
 # resolver is not scanned. Not an allowlist entry: an allowlist records debt,
@@ -87,7 +102,16 @@ _RESOLVER_MODULE = "src/core/security/webhook_egress.py"
 
 # The one function allowed to be handed the raw columns (see
 # ``_resolver_argument_nodes``).
-_RESOLVER_FUNCTION = "webhook_auth_for"
+# The seam that OWNS the auth decision. Repointed from ``webhook_auth_for`` in
+# Epic D lane C4, which deleted that resolver together with the hand-rolled union
+# it returned: the decision now lives in ``deliver_webhook`` / ``adeliver_webhook``,
+# which construct the pinned ``LibraryAuthentication`` and match on it once.
+#
+# The RULE is unchanged — a sender must not answer "how is this authenticated?"
+# itself — and so is the exemption's logic: a credential column read passed
+# DIRECTLY to the seam is the fix, not the disease, while stashing it in a local
+# and using it elsewhere is exactly the inline resolution this guard exists to stop.
+_RESOLVER_FUNCTIONS = ("deliver_webhook", "adeliver_webhook")
 
 # Files permitted to still contain the disease, by path. Shrink-only.
 #
@@ -103,26 +127,26 @@ _RESOLVER_FUNCTION = "webhook_auth_for"
 #
 # This guard grades the file SET; the source comments tell the next reader which
 # kind each one is.
-_ALLOWLIST: set[tuple] = {
-    # ``src/services/webhook_delivery_service.py`` was here until
-    # salesagent-47n9.24 (GH #1894) converged it on the resolver. Do not re-add
-    # it, or anything else: the only remaining entry below is a justified false
-    # positive, so a NEW debt entry would mean a sender started resolving auth
-    # inline again -- which is the whole disease.
-    #
-    # Justified false positive: ``on_get_task_push_notification_config`` and the
-    # config LIST response read ``config.authentication_token`` to echo the
-    # buyer's own registration back to them. That is a read-BACK, not a sender
-    # deciding how to authenticate an outbound request — the resolver has
-    # nothing to offer it.
-    ("src/a2a_server/adcp_a2a_server.py",),
-}
+# NOTE: `set()`, not `{}` — a brace literal containing only comments is an
+# empty DICT, which the allowlist helper cannot subtract.
+# ``src/services/webhook_delivery_service.py`` was here until
+# salesagent-47n9.24 (GH #1894) converged it on the resolver. Do not re-add
+# it, or anything else: the only remaining entry below is a justified false
+# positive, so a NEW debt entry would mean a sender started resolving auth
+# inline again -- which is the whole disease.
+#
+# The a2a_server entry (a read-BACK of authentication_token, echoing the
+# buyer's own registration to them) was REMOVED in Epic D lane C4: with the
+# set narrowed to webhook_secret, that read is no longer flagged at all, so the
+# entry became stale. The allowlist is now EMPTY and must stay that way.
+_ALLOWLIST: set[tuple] = set()
 
 _FIX_HINT = (
-    "Resolve webhook auth through src.core.security.webhook_egress.webhook_auth_for(scheme, credentials) "
-    "and match on the returned WebhookAuth variant. Do not compare authentication_type against a scheme "
-    "literal, and do not read authentication_token/webhook_secret off a config at the call site — that is "
-    "how three senders ended up with three different answers."
+    "Pass the stored (scheme, credentials) pair straight to "
+    "src.core.security.webhook_egress.deliver_webhook/adeliver_webhook and branch on the returned "
+    "WebhookDeliveryOutcome. Do not compare authentication_type against a scheme literal, and do not "
+    "stash authentication_token in a local to build headers with — that is how three senders ended up "
+    "with three different answers."
 )
 
 
@@ -142,17 +166,22 @@ def _is_self(node: ast.expr) -> bool:
 
 
 def _credential_read_lineno(node: ast.AST) -> int | None:
-    """Line number if *node* reads a credential column off another object."""
+    """Retained ONLY for ``webhook_secret``, a column with zero writers in src/.
+
+    Reading it means a sender is reaching for a credential that no writer ever
+    populates, which is a defect on its own terms (GH #1894 defect 1) and unrelated
+    to the resolver's removal.
+    """
     if isinstance(node, ast.Attribute):
-        reads_credential = node.attr in _CREDENTIAL_ATTRS and isinstance(node.ctx, ast.Load)
-        if reads_credential and not _is_self(node.value):
+        reads_dead_column = node.attr == "webhook_secret" and isinstance(node.ctx, ast.Load)
+        if reads_dead_column and not _is_self(node.value):
             return node.lineno
         return None
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr":
         # getattr(config, "webhook_secret", None) — the duck-typed spelling of
         # the same read, and the one webhook_delivery_service actually uses.
         if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
-            if node.args[1].value in _CREDENTIAL_ATTRS and not _is_self(node.args[0]):
+            if node.args[1].value == "webhook_secret" and not _is_self(node.args[0]):
                 return node.lineno
     return None
 
@@ -168,11 +197,12 @@ def _resolver_argument_nodes(tree: ast.AST) -> set[int]:
     inline resolution this guard exists to stop.
     """
     exempt: set[int] = set()
-    for node in iter_call_expressions(tree, _RESOLVER_FUNCTION):
-        for arg in node.args:
-            exempt.add(id(arg))
-        for keyword in node.keywords:
-            exempt.add(id(keyword.value))
+    for function_name in _RESOLVER_FUNCTIONS:
+        for node in iter_call_expressions(tree, function_name):
+            for arg in node.args:
+                exempt.add(id(arg))
+            for keyword in node.keywords:
+                exempt.add(id(keyword.value))
     return exempt
 
 
@@ -233,21 +263,23 @@ class TestDetectorCatchesKnownBadSnippets:
                 "compare-hmac": 'if cfg.authentication_type == "HMAC-SHA256":\n    pass\n',
                 "compare-literal-on-the-left": 'if "HMAC-SHA256" == cfg.authentication_type:\n    pass\n',
                 "compare-bare-name": 'if authentication_type == "Bearer":\n    pass\n',
-                "read-authentication-token": "token = config.authentication_token\n",
                 "read-webhook-secret": "secret = config.webhook_secret\n",
                 "getattr-webhook-secret": 'secret = getattr(config, "webhook_secret", None)\n',
-                "f-string-credential-read": 'headers["Authorization"] = f"Bearer {config.authentication_token}"\n',
             },
         )
 
 
 class TestDetectorAllowsCleanSnippets:
-    """(c) Negative meta-tests — persistence, logging and read-back stay legal."""
+    """(c) Negative meta-tests — persistence, logging, read-back and FORWARDING stay legal."""
 
     @pytest.mark.parametrize(
         ("label", "snippet"),
         [
-            ("resolver-call", "auth = webhook_auth_for(config.authentication_type, config.authentication_token)\n"),
+            (
+                "forward-to-the-seam",
+                "deliver_webhook(url, payload, scheme=config.authentication_type, "
+                "credentials=config.authentication_token)\n",
+            ),
             (
                 "keyword-write",
                 "existing.authentication_type = registration.authentication_type\n",

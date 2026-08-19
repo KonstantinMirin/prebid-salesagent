@@ -37,104 +37,168 @@ first.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from adcp import sign_legacy_webhook
+from adcp.types import AuthenticationScheme
+from adcp.types.generated_poc.core.push_notification_config import (
+    Authentication as LibraryAuthentication,
+)
+from pydantic import ValidationError
 
-from src.core.security.outbound_http import OutboundResult, asend, send
+from src.core.security.outbound_http import (
+    OutboundDeliveryFailed,
+    OutboundError,
+    OutboundRequestBlocked,
+    OutboundResult,
+    asend,
+    send,
+    terminal_client_error_status,
+)
+
+logger = logging.getLogger(__name__)
+
+
+RefusalReason = Literal[
+    "no_credentials",
+    "credentials_too_short",
+    "scheme_not_in_spec",
+    "multi_scheme",
+    "no_scheme",
+]
 
 
 @dataclass(frozen=True, slots=True)
-class SignWithSecret:
-    """Sign the body with ``secret`` (AdCP ``HMAC-SHA256``)."""
+class WebhookDeliveryOutcome:
+    """What became of one webhook delivery attempt. The seam's only return value.
 
-    secret: str
+    Senders used to conclude in ``bool`` — or in an exception they each caught
+    differently — so "refused", "failed after retries" and "the receiver said no"
+    all arrived as the same nothing, and each sender re-derived its own failure
+    literals from whatever it happened to catch. This type carries the conclusion
+    to whoever needs it instead.
 
-
-@dataclass(frozen=True, slots=True)
-class BearerToken:
-    """Send ``Authorization: Bearer <token>``. Header credential, no signature."""
-
-    token: str
-
-
-@dataclass(frozen=True, slots=True)
-class BasicCredentials:
-    """Send ``Authorization: Basic <token>``.
-
-    Not an AdCP scheme. Preserved because ``order_approval_service`` honours it
-    today and the A2A push-config endpoint stores a free-form protobuf string,
-    so a stored ``basic`` row is one a real buyer can have created. Dropping it
-    while unifying would silently stop sending a header those buyers rely on.
+    ``detail`` is PRE-SANITIZED at construction: never a URL, never a credential.
+    ``payload_size_bytes`` is carried because it maps 1:1 onto
+    ``WebhookDeliveryLog.payload_size_bytes`` and is the reason the protocol
+    sender used to reach past the seam for ``len(body_bytes)`` — which is why the
+    async twin had no caller.
     """
 
-    token: str
+    kind: Literal["delivered", "refused_destination", "refused_auth", "client_error", "exhausted"]
+    attempts: int
+    http_status: int | None = None
+    detail: str | None = None
+    payload_size_bytes: int | None = None
+    reason: RefusalReason | None = None
+    scheme: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class Unauthenticated:
-    """Deliver plain. The buyer selected no scheme, so there is nothing to apply."""
+def _authentication_or_refusal(
+    scheme: str | None,
+    credentials: str | None,
+) -> LibraryAuthentication | WebhookDeliveryOutcome | None:
+    """Validate the stored pair, or return the refusal it earns. The ONE decision.
 
+    Returns ``None`` for "no authentication block was registered" — deliver plain,
+    which is what the pinned schema's "absence selects 9421" means for a seller
+    that has not implemented the 9421 profile yet.
 
-@dataclass(frozen=True, slots=True)
-class HmacSecretMissing:
-    """``HMAC-SHA256`` was requested but no credential is stored.
+    Constructing :class:`~src.core.schemas.LibraryAuthentication` IS the
+    validation — it inherits ``credentials`` required with ``minLength: 32`` and
+    ``schemes`` ``maxItems: 1`` from the pinned type, widens the enum by exactly
+    the legacy schemes salesagent still honours, and folds casing before the enum
+    sees it. So there is no supported-set to keep in step with the spec and no
+    per-sender branching: a caller either gets a validated block or an outcome.
 
-    Deliberately NOT :class:`Unauthenticated`: that one means "send it plain",
-    this one means "the buyer asked for a signature this sender cannot produce".
-    Collapsing the two into a single ``None`` is what let a sender deliver
-    unsigned to a receiver that will reject it, with no error anywhere.
+    The blank-scheme pair is TWO different documents and must not be conflated:
+    no scheme and no credential means there was no ``authentication`` block at
+    all (the spec's own selector for the RFC 9421 baseline, so deliver plain),
+    while no scheme WITH a credential means a block existed whose ``schemes``
+    array was empty — which the pinned type refuses, and which
+    ``ValidatedWebhookRegistration.from_stash`` (which can see the array) already
+    refuses. Answering those the same way would give one stored row two answers
+    depending on which caller saw it.
     """
+    if not (scheme or "").strip():
+        if (credentials or "").strip():
+            # Reported as scheme=None, not as the blank string: a whitespace-only
+            # value is the ABSENCE of a scheme, and echoing "   " back at an
+            # operator tells them nothing they can search a row by.
+            return _refusal(None, "no_scheme", "an authentication block was stored with no scheme")
+        return _NO_AUTHENTICATION
+
+    try:
+        return LibraryAuthentication(schemes=[scheme], credentials=credentials)
+    except ValidationError as exc:
+        reason = _reason(exc)
+        return _refusal(scheme, reason, _REFUSAL_DETAIL[reason])
 
 
-# The auth outcomes a sender can actually APPLY. Named separately so a value
-# that has passed ingest (ValidatedWebhookRegistration.auth) can be typed as
-# "resolved and deliverable", making HmacSecretMissing unconstructible there
-# rather than merely unexpected.
-DeliverableWebhookAuth = SignWithSecret | BearerToken | BasicCredentials | Unauthenticated
-WebhookAuth = DeliverableWebhookAuth | HmacSecretMissing
+def _reason(
+    exc: ValidationError,
+) -> RefusalReason:
+    """Map the pinned type's own complaint onto the closed reason set.
 
-_HMAC_SCHEME = "hmac-sha256"
-_BEARER_SCHEME = "bearer"
-_BASIC_SCHEME = "basic"
-
-
-def webhook_auth_for(scheme: str | None, credentials: str | None) -> WebhookAuth:
-    """Turn a stored ``(authentication_type, authentication_token)`` pair into ONE decision.
-
-    Three senders used to answer this question inline and gave three different
-    answers — differing in both the FIELD they read and the VALUE spelling they
-    compared — so a buyer's HMAC row signed on one path, silently delivered
-    unsigned on another, and never matched at all on a third.
-
-    Takes PRIMITIVES, not a ``PushNotificationConfig``: this package holds no
-    edge into ``src.core.database.models`` and must not grow one, and three call
-    sites build detached/transient configs that a model-shaped resolver would
-    serve only by accident.
-
-    Comparison is CASE-INSENSITIVE. The A2A ``setTaskPushNotificationConfig``
-    handler stores ``params.authentication.scheme`` verbatim from a free-form
-    protobuf string — no enum guards that path — so lowercase rows exist in
-    production. Comparing exactly against the pinned enum
-    (``AuthenticationScheme = ["Bearer", "HMAC-SHA256"]``) would stop
-    authenticating rows that are authenticated today: a regression, not a
-    tightening.
-
-    An unrecognised scheme resolves to :class:`Unauthenticated`, matching what
-    every sender does with it today. It must not widen into
-    :class:`HmacSecretMissing`, which means specifically "HMAC was asked for".
+    Derived from the ``ValidationError`` rather than re-checked by hand, so the
+    reasons cannot drift from what the schema actually enforces.
     """
-    normalized = (scheme or "").strip().lower()
-    if not normalized:
-        return Unauthenticated()
-    if normalized == _HMAC_SCHEME:
-        return SignWithSecret(credentials) if credentials else HmacSecretMissing()
-    if normalized == _BEARER_SCHEME:
-        return BearerToken(credentials) if credentials else Unauthenticated()
-    if normalized == _BASIC_SCHEME:
-        return BasicCredentials(credentials) if credentials else Unauthenticated()
-    return Unauthenticated()
+    for error in exc.errors():
+        location = error.get("loc") or ()
+        kind = error.get("type", "")
+        if "credentials" in location:
+            # Explicit on the error type, never an else-catch: a key that is ABSENT
+            # reports "missing" while a key present with a null reports
+            # "string_type", and both mean the same thing to a buyer — no credential
+            # was supplied. Only an actual short string is credentials_too_short.
+            # An else-catch here silently relabels the first two, and this
+            # discriminator is graded against the buyer-visible refusal envelope.
+            if kind == "string_too_short":
+                return "credentials_too_short"
+            return "no_credentials"
+        if "schemes" in location:
+            return "multi_scheme" if kind == "too_long" else "scheme_not_in_spec"
+    return "scheme_not_in_spec"
+
+
+_REFUSAL_DETAIL: dict[RefusalReason, str] = {
+    "no_credentials": "the registration names an authentication scheme but stores no credential",
+    "credentials_too_short": "the stored credential is shorter than the 32 characters the spec requires",
+    "scheme_not_in_spec": "the stored authentication scheme is not one this seller supports",
+    "multi_scheme": "the registration names more than one authentication scheme",
+    "no_scheme": "an authentication block was stored with no scheme",
+}
+
+
+def _refusal(scheme: str | None, reason: RefusalReason, detail: str) -> WebhookDeliveryOutcome:
+    """A refusal outcome. Nothing is dialled, so ``attempts`` is zero by construction."""
+    # The log names BOTH the human sentence and the machine-readable reason. The
+    # reason is what an operator greps for to enumerate every affected registration;
+    # the sentence is what tells them what to do about it. With no outcome record on
+    # the rehydration seat and no migration for these rows, this line is the only
+    # surface the decision has.
+    logger.error(
+        "Refusing to deliver webhook [%s]: %s (scheme=%r). The registration must be corrected by its owner.",
+        reason,
+        detail,
+        scheme,
+    )
+    return WebhookDeliveryOutcome(
+        kind="refused_auth",
+        attempts=0,
+        http_status=None,
+        detail=detail,
+        reason=reason,
+        scheme=scheme,
+    )
+
+
+# Sentinel for "no authentication block was registered": deliver plain, which is
+# what the pinned schema's "absence selects 9421" means for a seller that has not
+# implemented the 9421 profile yet.
+_NO_AUTHENTICATION: LibraryAuthentication | None = None
 
 
 def _canonical_body(payload: dict[str, Any]) -> bytes:
@@ -171,7 +235,7 @@ def prepare_signed_request(
     or otherwise inspect the prepared request BEFORE sending it — logging the
     payload size ahead of a delivery that might fail before a response comes
     back — call this directly and pass the result to :func:`send`/:func:`asend`
-    themselves, rather than through :func:`deliver_signed_webhook`. Call this
+    themselves, rather than through :func:`_deliver_signed_webhook`. Call this
     at most ONCE per delivery: ``sign_legacy_webhook`` stamps the current time
     when no explicit ``timestamp`` is given, so calling it twice for the "same"
     delivery signs two different timestamps and only one bytes value may
@@ -189,7 +253,7 @@ def prepare_signed_request(
     return merged_headers, _canonical_body(payload)
 
 
-def deliver_signed_webhook(
+def _deliver_signed_webhook(
     url: str,
     payload: dict[str, Any],
     *,
@@ -208,7 +272,7 @@ def deliver_signed_webhook(
     return send(url, content=body_bytes, headers=signed_headers, timeout=timeout, max_attempts=max_attempts)
 
 
-async def adeliver_signed_webhook(
+async def _adeliver_signed_webhook(
     url: str,
     payload: dict[str, Any],
     *,
@@ -217,6 +281,137 @@ async def adeliver_signed_webhook(
     timeout: float = 10.0,
     max_attempts: int = 3,
 ) -> OutboundResult:
-    """Async twin of :func:`deliver_signed_webhook` — identical policy."""
+    """Async twin of :func:`_deliver_signed_webhook` — identical policy."""
     signed_headers, body_bytes = prepare_signed_request(payload, secret, headers or {})
     return await asend(url, content=body_bytes, headers=signed_headers, timeout=timeout, max_attempts=max_attempts)
+
+
+# ── The seam: one decision, one outcome ───────────────────────────────────────
+
+
+def _headers_for(
+    auth: LibraryAuthentication | None, headers: dict[str, str] | None
+) -> tuple[dict[str, str], str | None]:
+    """Turn a validated block into (headers, signing secret). Matched ONCE.
+
+    Shared by both twins deliberately: if each destructured the decision itself,
+    "decided here and nowhere else" would be false on the day this shipped.
+    """
+    prepared = dict(headers or {})
+    if auth is None:
+        return prepared, None
+
+    scheme = auth.schemes[0]
+    credential = auth.credentials
+    match scheme:
+        case AuthenticationScheme.HMAC_SHA256:
+            return prepared, credential
+        case AuthenticationScheme.Bearer:
+            prepared["Authorization"] = f"Bearer {credential}"
+            return prepared, None
+    # Adding a member to AuthenticationScheme without a branch here lands on this line
+    # rather than delivering the webhook with the new scheme silently ignored.
+    raise AssertionError(f"unhandled scheme: {scheme!r} — add a branch in _headers_for")
+
+
+def _outcome_for_outbound_error(exc: OutboundError, *, payload_size_bytes: int | None) -> WebhookDeliveryOutcome:
+    """Classify a seam failure. The ONE place the taxonomy is read.
+
+    Every sender used to re-derive these literals from whichever exception it
+    happened to catch, which is how three senders reported the same failure three
+    ways.
+    """
+    attempts = getattr(exc, "attempts", 0) or 0
+    status = getattr(exc, "last_status", None)
+    if isinstance(exc, OutboundRequestBlocked):
+        return WebhookDeliveryOutcome(
+            kind="refused_destination",
+            attempts=0,
+            http_status=None,
+            detail="the destination was refused before any connection was made",
+            payload_size_bytes=payload_size_bytes,
+        )
+    if terminal_client_error_status(exc) is not None:
+        return WebhookDeliveryOutcome(
+            kind="client_error",
+            attempts=attempts,
+            http_status=status,
+            detail=f"the receiver answered {status} and will not be retried",
+            payload_size_bytes=payload_size_bytes,
+        )
+    return WebhookDeliveryOutcome(
+        kind="exhausted",
+        attempts=attempts,
+        http_status=status,
+        detail="delivery did not succeed within the attempt budget",
+        payload_size_bytes=payload_size_bytes,
+    )
+
+
+def _delivered(result: OutboundResult, *, payload_size_bytes: int) -> WebhookDeliveryOutcome:
+    return WebhookDeliveryOutcome(
+        kind="delivered",
+        attempts=getattr(result, "attempts", 1) or 1,
+        http_status=getattr(result, "status_code", None),
+        detail=None,
+        payload_size_bytes=payload_size_bytes,
+    )
+
+
+def deliver_webhook(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    scheme: str | None = None,
+    credentials: str | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 10.0,
+    max_attempts: int = 3,
+) -> WebhookDeliveryOutcome:
+    """Deliver one webhook and say what became of it.
+
+    Takes the stored PRIMITIVES rather than a validated block on purpose: senders
+    read ``authentication_type`` / ``authentication_token`` off a row, and handing
+    them a type to construct would hand each of them a ``ValidationError`` to
+    interpret — three senders deciding again what an invalid registration means,
+    which is the divergence this seam exists to end. Primitives in, outcome out.
+    """
+    decided = _authentication_or_refusal(scheme, credentials)
+    if isinstance(decided, WebhookDeliveryOutcome):
+        return decided
+
+    signed_headers, secret = _headers_for(decided, headers)
+    body_bytes = _canonical_body(payload)
+    try:
+        result = _deliver_signed_webhook(
+            url, payload, secret=secret, headers=signed_headers, timeout=timeout, max_attempts=max_attempts
+        )
+    except (OutboundRequestBlocked, OutboundDeliveryFailed) as exc:
+        return _outcome_for_outbound_error(exc, payload_size_bytes=len(body_bytes))
+    return _delivered(result, payload_size_bytes=len(body_bytes))
+
+
+async def adeliver_webhook(
+    url: str,
+    payload: dict[str, Any],
+    *,
+    scheme: str | None = None,
+    credentials: str | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 10.0,
+    max_attempts: int = 3,
+) -> WebhookDeliveryOutcome:
+    """Async twin of :func:`deliver_webhook` — identical policy, shared helpers."""
+    decided = _authentication_or_refusal(scheme, credentials)
+    if isinstance(decided, WebhookDeliveryOutcome):
+        return decided
+
+    signed_headers, secret = _headers_for(decided, headers)
+    body_bytes = _canonical_body(payload)
+    try:
+        result = await _adeliver_signed_webhook(
+            url, payload, secret=secret, headers=signed_headers, timeout=timeout, max_attempts=max_attempts
+        )
+    except (OutboundRequestBlocked, OutboundDeliveryFailed) as exc:
+        return _outcome_for_outbound_error(exc, payload_size_bytes=len(body_bytes))
+    return _delivered(result, payload_size_bytes=len(body_bytes))

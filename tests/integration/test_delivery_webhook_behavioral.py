@@ -72,7 +72,7 @@ class TestWebhookDeliveryHappyPath:
                     "spend": 250.0,
                     "notification_type": "scheduled",
                 },
-                signing_secret="test-secret-key",
+                signing_secret="test-secret-key-padded-to-thirty-two",
                 max_retries=1,
             )
 
@@ -465,7 +465,7 @@ class TestEXT_G_06_HmacAuthRejection:
         from tests.harness import WebhookEnv
         from tests.helpers import assert_signature_verifies_over_wire_body
 
-        secret = "my-webhook-secret-key"
+        secret = "my-webhook-secret-key-padded-to-32"
 
         with WebhookEnv() as env:
             env.set_http_status(401, "Invalid signature")

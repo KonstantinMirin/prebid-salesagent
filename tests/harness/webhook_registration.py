@@ -45,7 +45,6 @@ def _drop_registered_auth(stashed: Any) -> Any:
     would silently stop mutating anything the day the representation changes —
     and a control that mutates nothing reports a vacuous grader as a real one.
     """
-    from src.core.security.webhook_egress import webhook_auth_for
     from src.core.webhooks.registration import ValidatedWebhookRegistration
 
     if isinstance(stashed, ValidatedWebhookRegistration):
@@ -54,14 +53,12 @@ def _drop_registered_auth(stashed: Any) -> Any:
         # Rebuild from the value's own wire dump minus the auth block, rather than
         # re-listing its fields: the value HOLDS the library PushNotificationConfig,
         # so a field added there (operation_id, token, ...) keeps surviving this
-        # mutation instead of being silently dropped by a stale field list here.
+        # mutation instead of being dropped by a stale field list here.
         document = {key: value for key, value in stashed.to_stash().items() if key != "authentication"}
         coerced = to_push_notification_config(document)
         assert coerced is not None
-        return ValidatedWebhookRegistration(
-            config=coerced,
-            auth=webhook_auth_for(None, None),  # type: ignore[arg-type]
-        )
+        return ValidatedWebhookRegistration(config=coerced)
+
     stripped = type(stashed)()
     stripped.CopyFrom(stashed)
     stripped.ClearField("authentication")
@@ -263,11 +260,29 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
             f"expected a single-scheme stash to widen, found authentication={auth!r} — "
             f"this helper manufactures a legacy row, it cannot invent the credential half"
         )
+        self.restash_authentication(step, {**auth, "schemes": list(schemes)})
+
+    def restash_authentication(self, step: Any, authentication: dict[str, Any]) -> None:
+        """Rewrite the stash's ``authentication`` block wholesale — the general LEGACY row.
+
+        :meth:`widen_stashed_schemes` is the cardinality-only special case of this
+        and delegates here, so there is one place that knows how a stashed
+        registration is rewritten and committed. A row whose block names an
+        unrecognised scheme, or holds a credential under the pinned
+        ``minLength: 32``, is manufactured with this — both are shapes the untyped
+        A2A path really wrote (it forwards the buyer's raw dict), and both are
+        what Epic D lane C4 stops delivering.
+
+        Asserts the stash already carried a block: rewriting one that was never
+        there would grade a document no producer writes.
+        """
+        stashed = self.stashed_push_config(step)
+        assert isinstance(stashed.get("authentication"), dict), (
+            f"the stash carries authentication={stashed.get('authentication')!r} — there is no "
+            f"registered block to rewrite, so this helper would manufacture a row no producer wrote"
+        )
         request_data = dict(step.request_data)
-        request_data["push_notification_config"] = {
-            **stashed,
-            "authentication": {**auth, "schemes": list(schemes)},
-        }
+        request_data["push_notification_config"] = {**stashed, "authentication": dict(authentication)}
         step.request_data = request_data
         self.get_session().add(step)
         self.get_session().commit()

@@ -49,15 +49,9 @@ from typing import Any
 import pytest
 
 from src.core.exceptions import AdCPValidationError
-from src.core.security.webhook_egress import (
-    BasicCredentials,
-    BearerToken,
-    SignWithSecret,
-    Unauthenticated,
-)
 from src.core.webhooks.registration import ValidatedWebhookRegistration, accept_push_notification_config
 from tests.harness import MediaBuyPushRegistrationEnv
-from tests.helpers import SIGNATURE_HEADER, assert_signature_verifies_over_wire_body
+from tests.helpers import assert_signature_verifies_over_wire_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -118,17 +112,29 @@ def _webhook_url_of(env: MediaBuyPushRegistrationEnv, config: dict[str, Any]) ->
     return {**config, "url": env.webhook_url}
 
 
-class TestLegacyMultiSchemeStashKeepsDelivering:
-    """A stashed 2-scheme registration still delivers exactly as it does today.
+class TestLegacyMultiSchemeStashNowRefuses:
+    """REVERSED BY OWNER DECISION — a multi-scheme stored row no longer delivers.
 
-    "Exactly as today" is asserted through what the buyer's endpoint receives,
-    not through the stash's shape: the lane rewrites how the registration is
-    represented, so any assertion about the intermediate form would have to be
-    rewritten by the change it is supposed to be guarding.
+    This class previously asserted the opposite: that a legacy ``["HMAC-SHA256",
+    "Bearer"]`` row keeps delivering, narrowed positionally to ``schemes[0]``,
+    because converting "delivered" into "never delivered at all" for a row whose
+    owner cannot be asked to fix it is the failure this epic exists to remove.
+
+    Owner ruling for Epic D lane C4: "Refuse — spec or nothing." The pinned schema
+    gives ``authentication.schemes`` ``maxItems: 1`` and states that a seller "MUST
+    NOT sign the same webhook both ways", so a multi-entry array is schema-INVALID,
+    not merely unusual. Such a row is not a delivery we should be making; its owner
+    re-registers with one scheme.
+
+    Its third method — a reverse-TDD control asserting that STRICT rehydration stops
+    the row delivering — was RETIRED rather than rewritten, because strictness is now
+    production: the control had no subject left, and its harness hook
+    ``rehydration_refuses_multi_scheme`` would have become a silent no-op that still
+    reported green. What replaces it is the pair below: the refusal itself, and the
+    conforming control proving the refusal is specific rather than blanket.
     """
 
-    def test_a_two_scheme_stash_still_delivers_signed_when_hmac_is_first(self, integration_db):
-        """``["HMAC-SHA256", "Bearer"]`` delivers signed, as ``schemes[0]`` already did."""
+    def test_a_two_scheme_stash_stops_delivering(self, integration_db):
         with MediaBuyPushRegistrationEnv() as env:
             _register_over_a2a(env, _seed(env), _webhook_url_of(env, _registration()))
             env.set_http_status(200)
@@ -137,20 +143,18 @@ class TestLegacyMultiSchemeStashKeepsDelivering:
             env.widen_stashed_schemes(step, [HMAC_SCHEME, BEARER_SCHEME])
             env.complete_step(step)
 
-            assert env.delivery_attempts == 1, (
-                f"a legacy 2-scheme row produced {env.delivery_attempts} deliveries — rehydration "
-                f"refused a row that delivers today, which costs the buyer the notification "
-                f"with nobody left to correct it"
+            assert env.delivery_attempts == 0, (
+                f"a multi-scheme row produced {env.delivery_attempts} deliveries — the pinned "
+                f"schema allows exactly one scheme and the owner ruled that a non-conforming "
+                f"stored block refuses rather than being narrowed to its first entry"
             )
-            assert_signature_verifies_over_wire_body(env.last_delivery, STRONG_SECRET)
 
-    def test_the_narrowing_is_positional_so_a_bearer_first_row_delivers_bearer(self, integration_db):
-        """``["Bearer", "HMAC-SHA256"]`` delivers as Bearer — first entry, not "the HMAC one".
+    def test_a_bearer_first_two_scheme_stash_also_stops_delivering(self, integration_db):
+        """The other order, so the refusal cannot be read as "we refuse HMAC-first rows".
 
-        The half that makes the case above a preservation guard rather than a
-        preference. "Resolve the array to whichever entry we can sign" would keep
-        the signed case green while CHANGING what this row delivers, and a stored
-        row's delivery behavior is exactly what the tolerance exists to preserve.
+        The previous version of this method asserted positional narrowing — that a
+        Bearer-first row delivers as Bearer. Under the ruling, order is irrelevant:
+        the array length is what makes the block invalid.
         """
         with MediaBuyPushRegistrationEnv() as env:
             _register_over_a2a(env, _seed(env), _webhook_url_of(env, _registration()))
@@ -160,31 +164,29 @@ class TestLegacyMultiSchemeStashKeepsDelivering:
             env.widen_stashed_schemes(step, [BEARER_SCHEME, HMAC_SCHEME])
             env.complete_step(step)
 
-            assert env.delivery_attempts == 1, f"a legacy Bearer-first row produced {env.delivery_attempts} deliveries"
-            assert env.last_delivery.headers.get("Authorization") == f"Bearer {STRONG_SECRET}", (
-                f"Authorization={env.last_delivery.headers.get('Authorization')!r} — the first "
-                f"scheme in the stored array is what this row has always been delivered as"
-            )
-            assert SIGNATURE_HEADER not in env.last_delivery.headers, (
-                f"a Bearer-first row arrived carrying {SIGNATURE_HEADER} — the resolution stopped "
-                f"being positional, so stored rows changed what they deliver"
+            assert env.delivery_attempts == 0, (
+                f"a Bearer-first multi-scheme row produced {env.delivery_attempts} deliveries — "
+                f"the refusal must key on the array being multi-entry, not on which scheme is first"
             )
 
-    def test_control_a_strict_rehydration_stops_the_legacy_row_delivering(self, integration_db):
-        """Reverse-TDD: make ``from_stash`` strict and the tolerance case must go red."""
+    def test_control_a_conforming_single_scheme_row_still_delivers(self, integration_db):
+        """The refusal is SPECIFIC: one scheme still delivers, signed.
+
+        Without this, a gate that refused every stored registration would pass both
+        cases above. This is what makes them a reversal rather than a blanket break.
+        """
         with MediaBuyPushRegistrationEnv() as env:
             _register_over_a2a(env, _seed(env), _webhook_url_of(env, _registration()))
             env.set_http_status(200)
 
             step = env.push_step("create_media_buy")
-            env.widen_stashed_schemes(step, [HMAC_SCHEME, BEARER_SCHEME])
-            with env.rehydration_refuses_multi_scheme():
-                env.complete_step(step)
+            env.complete_step(step)
 
-            assert env.delivery_attempts == 0, (
-                f"rehydration was made strict and the row STILL delivered ({env.delivery_attempts} "
-                f"attempts) — the tolerance case above is not graded by the strictness it pins"
+            assert env.delivery_attempts == 1, (
+                f"a conforming single-scheme row produced {env.delivery_attempts} deliveries — "
+                f"the multi-scheme refusal is over-broad"
             )
+            assert_signature_verifies_over_wire_body(env.last_delivery, STRONG_SECRET)
 
 
 class TestA2AReRegistrationUpsertsTheRowTheBuyerNamed:
@@ -225,7 +227,7 @@ class TestA2AReRegistrationUpsertsTheRowTheBuyerNamed:
             )
 
 
-class TestMultiSchemeIsRefusedAtIngestButToleratedAtRehydration:
+class TestMultiSchemeIsRefusedAtIngestAndAtRehydration:
     """The strict/tolerant split, graded from BOTH sides.
 
     Pinned AdCP 3.1.1 gives ``authentication.schemes`` ``{"minItems": 1,
@@ -260,71 +262,113 @@ class TestMultiSchemeIsRefusedAtIngestButToleratedAtRehydration:
             "the buyer can fix this by choosing a single scheme, so it is correctable"
         )
 
-    def test_rehydration_tolerates_the_same_document_and_delivers_as_before(self):
-        """The other side of the split: a stored row must not stop delivering.
+    def test_rehydration_refuses_the_same_document(self):
+        """REVERSED BY OWNER DECISION — the split this class was named for is gone.
 
-        Only the untyped path could have written such a row, and lane C2 proved
-        that path live — so these rows can exist. At rehydration there is no buyer
-        left to correct anything, and refusing would convert "delivered" into
-        "never delivered at all", which is accept-then-never-deliver arriving from
-        the other end. Narrowing reproduces exactly what the row delivered before.
+        It previously asserted that ingest refuses a multi-scheme registration while
+        rehydration tolerates it, narrowing to schemes[0] so a stored row keeps
+        delivering. Owner ruling for lane C4 — "Refuse — spec or nothing" — abolishes
+        that asymmetry for THIS shape: the pinned schema allows exactly one scheme,
+        so the block is invalid wherever it is read.
+
+        The strict/tolerant distinction still exists, but its remaining subject is
+        schema-invalidity OUTSIDE the authentication block (``token`` minLength 16 is
+        the live example) — not inside it.
         """
         stashed = {
             "url": "https://buyer.example.com/hook",
             "authentication": {"schemes": ["Bearer", "HMAC-SHA256"], "credentials": "s" * 32},
         }
 
-        rehydrated = ValidatedWebhookRegistration.from_stash(stashed)
+        with pytest.raises(AdCPValidationError) as refusal:
+            ValidatedWebhookRegistration.from_stash(stashed)
 
-        assert rehydrated.authentication_type == "Bearer", (
-            f"rehydration must resolve to schemes[0] — exactly what webhook_auth_for(schemes[0], ...) "
-            f"produced before this lane — got {rehydrated.authentication_type!r}"
-        )
-        assert isinstance(rehydrated.auth, BearerToken), (
-            f"the resolved auth must still be applied, not dropped; got {type(rehydrated.auth).__name__}"
+        assert refusal.value.field.startswith("push_notification_config.authentication"), (
+            f"the refusal must name the authentication block (or a field inside it); got {refusal.value.field!r}"
         )
 
 
 class TestStoredRegistrationsKeepDelivering:
-    """Rehydration must never convert "delivered" into "never delivered at all".
+    """What a STORED registration does at rehydration, after owner ruling #2.
 
-    Ingest validates against the pinned schema because a buyer is there to correct
-    what it rejects. A STORED row has no buyer left: it was accepted under whatever
-    gate existed when it was written, it delivers today, and the delivery path fails
-    CLOSED (``context_manager`` catches ``AdCPValidationError`` and skips the
-    webhook). So a stricter rehydration does not protect anyone — it silently stops
-    deliveries.
+    This class originally asserted that every legacy shape keeps delivering, because
+    converting "delivered" into "never delivered at all" for a row whose owner
+    cannot be asked to fix it is the failure this epic exists to remove.
 
-    Every shape below is one the untyped A2A path could have written, because it
-    stashed the buyer's RAW dict: production code states as fact that "the A2A
-    push-config endpoint stores a free-form protobuf string, so lowercase rows exist
-    in production". Each was measured DELIVERING before the SDK-composition
-    restructure, and each stopped when rehydration briefly routed through the model.
-    This class is why that cannot regress silently again.
+    THREE of its rows were REVERSED BY DECISION, not lost. The owner ruled: "Refuse
+    — spec or nothing", and separately "3.1.1 does not allow any basic
+    authentication ... Bearer is enough". A stored authentication block that does not
+    satisfy the pinned schema is not a delivery we should be making, so it refuses
+    and its owner re-registers. No migration is supplied; the refusal IS the
+    behaviour. The rows are rewritten to assert that refusal, with the reason inline,
+    so the record shows an obligation reversed deliberately rather than quietly
+    dropped.
+
+    TWO MORE were reversed the same way when the owner collapsed the vocabulary to
+    one — the pinned ``AuthenticationScheme``, case-sensitive, and nothing else:
+      - "lowercase scheme" (``hmac-sha256``): previously folded to the pinned member
+        before the enum saw it, on the reasoning that it IS the same scheme spelled
+        differently (RFC 7235 §2.1). Folding is gone; the row refuses.
+      - "unrecognised scheme" (``Basic``): previously survived by an explicit
+        widening kept so existing buyers kept working. The widening is gone.
+    Both are now MIGRATED rather than tolerated: the operator re-registers with a
+    scheme the spec defines, and until then the row does not deliver. The tolerance
+    argument is self-perpetuating — it can never expire, because rows always exist —
+    and what it produced was three spellings of one fact across three senders.
+
+    ONE row still delivers, and the reason is worth stating because it looks like an
+    exception to the rule above:
+      - "short token field": IS schema-invalid ("abc" against ``token`` minLength 16),
+        and survives because the field sits OUTSIDE the authentication block, which is
+        where the refusal rule is scoped. Without this sentence the next reader sees
+        "we refuse schema-invalid blocks, except this one".
     """
 
     @pytest.mark.parametrize(
-        ("label", "authentication", "extra", "expected_auth"),
+        ("label", "authentication", "extra", "expected_scheme"),
         [
-            ("sub-32 credential", {"schemes": ["Bearer"], "credentials": "short"}, {}, BearerToken),
-            ("lowercase scheme", {"schemes": ["hmac-sha256"], "credentials": "s" * 32}, {}, SignWithSecret),
-            ("unrecognised scheme", {"schemes": ["Basic"], "credentials": "s" * 32}, {}, BasicCredentials),
-            ("short token field", {"schemes": ["Bearer"], "credentials": "s" * 32}, {"token": "abc"}, BearerToken),
-            ("empty schemes list", {"schemes": [], "credentials": "x"}, {}, Unauthenticated),
-            ("scheme without credential", {"schemes": ["Bearer"]}, {}, Unauthenticated),
+            ("short token field", {"schemes": ["Bearer"], "credentials": "s" * 32}, {"token": "abc"}, "Bearer"),
         ],
     )
-    def test_a_legacy_row_still_resolves_the_auth_it_always_did(
-        self, label, authentication, extra, expected_auth
-    ):
+    def test_a_conforming_legacy_row_still_rehydrates(self, label, authentication, extra, expected_scheme):
         stashed = {"url": "https://buyer.example.com/hook", "authentication": authentication, **extra}
 
         rehydrated = ValidatedWebhookRegistration.from_stash(stashed)
 
-        assert isinstance(rehydrated.auth, expected_auth), (
-            f"{label}: a stored registration that delivered as {expected_auth.__name__} now "
-            f"resolves to {type(rehydrated.auth).__name__} — this row stops being delivered to, "
-            f"with no buyer left to fix it"
+        assert rehydrated.authentication_type == expected_scheme, (
+            f"{label}: a stored registration that delivered as {expected_scheme} now resolves to "
+            f"{rehydrated.authentication_type!r} — this row stops being delivered to, with no "
+            f"buyer left to fix it"
+        )
+
+    @pytest.mark.parametrize(
+        ("label", "authentication"),
+        [
+            ("sub-32 credential", {"schemes": ["Bearer"], "credentials": "short"}),
+            ("empty schemes list", {"schemes": [], "credentials": "x"}),
+            ("scheme without credential", {"schemes": ["Bearer"]}),
+            # Reversed by the one-vocabulary ruling: no case folding, no widening.
+            ("lowercase scheme", {"schemes": ["hmac-sha256"], "credentials": "s" * 32}),
+            ("unrecognised scheme", {"schemes": ["Basic"], "credentials": "s" * 32}),
+        ],
+    )
+    def test_a_non_conforming_legacy_row_now_refuses(self, label, authentication):
+        """REVERSED BY OWNER DECISION — see the class docstring.
+
+        Each of these delivered before Epic D lane C4. They refuse now because the
+        stored authentication block does not satisfy the pinned schema, and the owner
+        ruled that such a row "is not a delivery we should be making". The refusal is
+        fail-closed and names the scheme, which is the only surface the decision has:
+        there is no migration and no durable outcome record on this path.
+        """
+        stashed = {"url": "https://buyer.example.com/hook", "authentication": authentication}
+
+        with pytest.raises(AdCPValidationError) as refusal:
+            ValidatedWebhookRegistration.from_stash(stashed)
+
+        assert refusal.value.field.startswith("push_notification_config.authentication"), (
+            f"{label}: the refusal must name the authentication block (or a field inside it); "
+            f"got {refusal.value.field!r}"
         )
 
     def test_the_one_shape_that_never_delivered_still_refuses(self):

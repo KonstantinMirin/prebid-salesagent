@@ -64,7 +64,7 @@ BEARER_SCHEME = "Bearer"
 # resolver (salesagent-47n9.24) — it tested a column with no writers, so it had
 # never once fired, and re-pointing it at authentication_token would have taken
 # short-credential buyers from "delivered" to "not delivered at all".
-STRONG_SECRET = "buyer-shared-secret"
+STRONG_SECRET = "buyer-shared-secret-padded-to-the-pinned-32-char-min"
 
 
 def _assert_delivered_without_a_signature(env: CircuitBreakerEnv | ProtocolWebhookEnv) -> None:
@@ -201,7 +201,9 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
-            env.make_webhook_config(auth_type=BEARER_SCHEME, auth_token="buyer-bearer-token")
+            env.make_webhook_config(
+                auth_type=BEARER_SCHEME, auth_token="buyer-bearer-token-padded-to-the-pinned-32-char-min"
+            )
             env.set_http_response(200)
 
             env.call_send(tenant_id="t1", principal_id="p1")
@@ -221,31 +223,49 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
-            env.make_webhook_config(auth_type=BEARER_SCHEME, auth_token="buyer-bearer-token")
+            env.make_webhook_config(
+                auth_type=BEARER_SCHEME, auth_token="buyer-bearer-token-padded-to-the-pinned-32-char-min"
+            )
             env.set_http_response(200)
 
             env.call_send(tenant_id="t1", principal_id="p1")
 
             assert env.delivery_attempts == 1
-            assert env.last_delivery.headers["Authorization"] == "Bearer buyer-bearer-token"
+            assert (
+                env.last_delivery.headers["Authorization"]
+                == "Bearer buyer-bearer-token-padded-to-the-pinned-32-char-min"
+            )
 
-    def test_a_lowercase_scheme_still_authenticates(self, integration_db):
-        """Case-insensitivity is a property of the resolver, and must reach this sender.
+    def test_a_lowercase_scheme_refuses_instead_of_being_folded(self, integration_db):
+        """A ``bearer`` row does NOT authenticate as ``Bearer`` — it refuses.
 
-        The A2A ``setTaskPushNotificationConfig`` handler stores the scheme
-                verbatim from a free-form protobuf string with no enum guard, so
-                lowercase rows exist in production. Both spellings must authenticate.
+        This asserted the opposite until the owner collapsed the vocabulary to the
+        pinned, case-sensitive ``AuthenticationScheme``. The A2A
+        ``setTaskPushNotificationConfig`` handler stores the scheme verbatim from a
+        free-form protobuf string with no enum guard, so lowercase rows do exist in
+        production — they are now MIGRATED (re-registered by their owner) rather
+        than folded on the way out.
 
-                This case passed BEFORE the fix too, and that is the point: it is what a
-                "just fix the casing to Bearer" repair would have broken, which is why
-                the fix is the resolver and not a re-spelling.
+        Kept as a case rather than deleted because the folding repair is the
+        tempting one: it is invisible, it makes the row work, and RFC 7235 §2.1
+        even licenses it for HTTP. What it costs is a single answer to "which
+        scheme is this row?" — the divergence that had three senders comparing
+        three spellings of one fact.
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()
-            env.make_webhook_config(auth_type="bearer", auth_token="buyer-bearer-token")
+            env.make_webhook_config(
+                auth_type="bearer", auth_token="buyer-bearer-token-padded-to-the-pinned-32-char-min"
+            )
             env.set_http_response(200)
 
-            env.call_send(tenant_id="t1", principal_id="p1")
+            delivered = env.call_send(tenant_id="t1", principal_id="p1")
 
-            assert env.delivery_attempts == 1
-            assert env.last_delivery.headers["Authorization"] == "Bearer buyer-bearer-token"
+            assert delivered is False, (
+                "a stored 'bearer' row reported delivery success — the pinned enum is "
+                "case-sensitive, so this scheme is not a member and must refuse"
+            )
+            assert env.delivery_attempts == 0, (
+                f"the refusal dialled anyway ({env.delivery_attempts} attempt(s)) — the scheme "
+                f"decision is pre-flight, so no socket should have been opened"
+            )

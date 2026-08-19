@@ -62,7 +62,7 @@ class TestWebhookDeliveryWithRetrySignedBodyIntegrity:
         order) and byte encoding (escaped \\uXXXX vs. literal UTF-8), not a
         coincidental agreement.
         """
-        secret = "shared-webhook-secret"
+        secret = "shared-webhook-secret-thirty-two-plus"
         payload = {"zebra_field": "café ✓ 日本語", "apple_field": 1}
 
         with WebhookEnv() as env:
@@ -103,7 +103,7 @@ class TestWebhookDeliveryServiceSignedBodyIntegrity:
         # No length requirement: the 32-char minimum this line used to cite was
         # deleted with the inline resolver (salesagent-47n9.24, GH #1894) -- it
         # tested a column with no writers and had never once fired.
-        secret = "buyer-shared-secret"
+        secret = "buyer-shared-secret-padded-to-32ch"
 
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()

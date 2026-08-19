@@ -2,9 +2,8 @@
 
 Core Invariant (Epic D, lane C1): there is no callable path that runs the URL
 half of a push-notification registration without also running the credential
-half, and :class:`~src.core.security.webhook_egress.HmacSecretMissing` exists
-only between the resolver and the refusal -- never inside a value that outlives
-the call.
+half, and a registration that cannot be delivered is refused rather than
+silently downgraded to a plain send.
 
 Before this module, "this registration is valid" was a *remembered call* over
 primitives: ``reject_unsafe_webhook_registration_url`` (URL half) and
@@ -17,11 +16,10 @@ deliver was reachable because the wrong thing required importing nothing and
 the right thing required a type that did not exist.
 
 The type is that missing thing. :attr:`ValidatedWebhookRegistration.auth` is
-annotated ``DeliverableWebhookAuth`` -- the ``WebhookAuth`` union MINUS
-``HmacSecretMissing`` -- so mypy refuses a laundered value, and
-``__post_init__`` refuses one at runtime. The invariant is enforced by the
-type rather than by each constructor remembering to raise, because "the
-constructor remembers" is the very shape this lane deletes.
+validated against :class:`~adcp.types.PushNotificationConfig` ``Authentication`` -- the pinned
+``Authentication`` widened by exactly the legacy schemes this seller still
+honours -- so what "deliverable" means is stated once, by a type derived from the
+spec, instead of by a hand-rolled union each caller had to destructure.
 
 Spec grounding: pinned AdCP 3.1.1,
 ``dist/schemas/3.1.1/core/push-notification-config.json`` -- ``url`` is
@@ -43,16 +41,15 @@ import logging
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from adcp.types import AuthenticationScheme, ContextObject, PushNotificationConfig
+from adcp.types import ContextObject, PushNotificationConfig
 from adcp.types.generated_poc.core.push_notification_config import Authentication
+from adcp.types.generated_poc.core.push_notification_config import (
+    Authentication as LibraryAuthentication,
+)
+from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schema_helpers import to_push_notification_config
-from src.core.security.webhook_egress import (
-    DeliverableWebhookAuth,
-    HmacSecretMissing,
-    webhook_auth_for,
-)
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url
 
 logger = logging.getLogger(__name__)
@@ -101,8 +98,7 @@ class ValidatedWebhookRegistration:
     Holding one of these is the receipt: the URL cleared the registration SSRF
     gate and the credential half resolved to something a sender can actually
     apply. :attr:`auth` is what the senders consume -- resolved once, here, by
-    the same :func:`~src.core.security.webhook_egress.webhook_auth_for` the
-    senders use, so ingest and delivery cannot answer "is this signed?"
+    the same pinned type the egress seam validates against, so ingest and delivery cannot answer "is this signed?"
     differently.
 
     It HOLDS the library ``PushNotificationConfig`` rather than re-declaring a
@@ -119,13 +115,22 @@ class ValidatedWebhookRegistration:
     that is the same defect this package exists to remove, one level up.
 
     Composition rather than inheritance because this is a RECEIPT wrapping a
-    validated document plus the auth resolved from it, not a new kind of config:
-    the library model stays exactly the library model, and no field of it can be
-    lost without deleting it from the SDK.
+    validated document, not a new kind of config: the library model stays exactly
+    the library model, and no field of it can be lost without deleting it from
+    the SDK.
+
+    It holds NO resolved-auth field. An earlier version carried one, typed to a
+    hand-rolled union, so that an unservable variant was unholdable. The union is
+    gone: what a deliverable registration is, is now stated by
+    :class:`~adcp.types.PushNotificationConfig` ``Authentication`` — the pinned type widened by
+    exactly the legacy schemes this seller still honours — and the delivery
+    decision is made once, at the egress seam, from the stored primitives.
+    The invariant therefore holds by TWO routes, both required:
+    :func:`accept_push_notification_config` validates against the pinned model,
+    and :meth:`from_stash` validates the stored authentication block explicitly.
     """
 
     config: PushNotificationConfig
-    auth: DeliverableWebhookAuth
 
     @property
     def url(self) -> str:
@@ -200,14 +205,14 @@ class ValidatedWebhookRegistration:
 
         What IS still enforced is the one thing that was never deliverable:
         ``HMAC-SHA256`` with no usable secret resolves to
-        :class:`HmacSecretMissing`, and a value can never hold that — such a row
+        an authentication block the pinned type refuses — such a row
         refused before this package existed and must keep refusing, by name.
 
         The stored document is carried in the library type via ``model_construct``
         (no validation) rather than a hand-rolled shape, so nothing is dropped and
         the value still holds exactly one representation of a registration.
         """
-        document = _normalize_legacy_stash(stashed)
+        document = stashed
         if not isinstance(document, dict):
             raise AdCPValidationError(
                 f"Invalid {field_prefix}: stored registration is not an object.",
@@ -225,24 +230,49 @@ class ValidatedWebhookRegistration:
                 context=context,
             )
 
+        # The authentication block IS validated here, through the SAME type the
+        # seam constructs, even though the rest of the stored document is not.
+        # Deleting the resolved-auth field removed the type-level guarantee that a
+        # held value is deliverable, so this gate is what replaces it — the two
+        # changes are one requirement and neither is safe without the other.
+        # Using LibraryAuthentication rather than a hand-written re-check keeps
+        # ingest, the seam and rehydration from holding three definitions of what
+        # a valid block is.
         auth_block = document.get("authentication")
-        schemes = auth_block.get("schemes") if isinstance(auth_block, dict) else None
-        scheme = str(schemes[0]) if isinstance(schemes, list) and schemes else None
-        credentials = auth_block.get("credentials") if isinstance(auth_block, dict) else None
+        if auth_block is not None:
+            try:
+                # The VALIDATED block replaces the stored one below, so the
+                # canonical spelling survives into the value. Validating and then
+                # building from the raw document would discard the case-folding and
+                # leave `hmac-sha256` in a value whose whole job is to be the one
+                # answer to "what was registered".
+                validated = LibraryAuthentication.model_validate(auth_block)
+            except ValidationError as exc:
+                # Name the SPECIFIC sub-field pydantic objected to, not just the
+                # block: "…authentication.credentials" tells the owner what to fix,
+                # and it is the same path the ingest refusal envelope is graded on,
+                # so the two surfaces cannot drift into naming different things for
+                # the same defect.
+                first = exc.errors()[0].get("loc") or ()
+                sub = ".".join(str(part) for part in first if isinstance(part, str | int))
+                field = f"{field_prefix}.authentication" + (f".{sub}" if sub else "")
+                # NAME THE SCHEME. With no outcome record and no migration for the
+                # rows this affects, this message is the only surface the refusal
+                # has, and an operator has to be able to tell WHICH registrations
+                # stopped delivering — "2 problems" is not enumerable.
+                stored_schemes = auth_block.get("schemes") if isinstance(auth_block, dict) else None
+                named = ", ".join(repr(str(entry)) for entry in stored_schemes) if stored_schemes else "no scheme"
+                raise AdCPValidationError(
+                    f"Invalid {field}: the stored registration ({named}) cannot be delivered as "
+                    f"written. Its owner must re-register with a supported scheme and a "
+                    f"conforming credential.",
+                    field=field,
+                    suggestion="Re-register the webhook with a supported authentication block.",
+                    context=context,
+                ) from exc
+            document = {**document, "authentication": validated.model_dump(mode="json")}
 
-        resolved = webhook_auth_for(scheme, credentials)
-        if isinstance(resolved, HmacSecretMissing):
-            field = f"{field_prefix}.authentication.credentials"
-            raise AdCPValidationError(
-                f"Invalid {field}: the stored registration asks for {scheme!r} but holds no "
-                f"shared secret, so it can never be delivered — the receiver would reject "
-                f"every unsigned request.",
-                field=field,
-                suggestion="Re-register the webhook supplying authentication.credentials.",
-                context=context,
-            )
-
-        return cls(config=_construct_stored_config(document), auth=resolved)
+        return cls(config=_construct_stored_config(document))
 
     def to_columns(self) -> WebhookConfigColumns:
         """The persistable projection: exactly the columns a config row stores.
@@ -294,16 +324,6 @@ class ValidatedWebhookRegistration:
         """
         return self.config.model_dump(mode="json", exclude_none=True)
 
-    def __post_init__(self) -> None:
-        # Belt to the annotation's braces: mypy already refuses HmacSecretMissing
-        # here, and this stops a dynamically-built value from laundering one past
-        # a constructor at runtime.
-        if isinstance(self.auth, HmacSecretMissing):
-            raise AssertionError(
-                "ValidatedWebhookRegistration cannot hold HmacSecretMissing -- "
-                "the accept_* constructors raise AdCPValidationError instead."
-            )
-
 
 def _accept(
     *,
@@ -322,25 +342,18 @@ def _accept(
     url = str(config.url) if config.url is not None else None
     reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
 
-    auth_block = config.authentication
-    scheme = str(auth_block.schemes[0]) if auth_block is not None and auth_block.schemes else None
-    credentials = str(auth_block.credentials) if auth_block is not None and auth_block.credentials is not None else None
-    resolved = webhook_auth_for(scheme, credentials)
-    if isinstance(resolved, HmacSecretMissing):
-        field = f"{field_prefix}.authentication.credentials"
-        raise AdCPValidationError(
-            f"Invalid {field}: authentication scheme {scheme!r} requires a shared secret, "
-            f"but no credentials were supplied. A webhook registered for HMAC-SHA256 with no "
-            f"secret can never be delivered -- the receiver would reject every unsigned request.",
-            field=field,
-            suggestion=(
-                "Supply the shared secret in authentication.credentials, or remove the "
-                "authentication block to receive unsigned webhooks."
-            ),
-            context=context,
-        )
-
-    return ValidatedWebhookRegistration(config=config, auth=resolved)
+    # No credential check here any more, and its absence is the DELETION of dead
+    # code rather than of a safeguard. The config reaching this function has
+    # already been validated against the pinned model by
+    # to_push_notification_config, which requires `credentials` whenever an
+    # `authentication` block is present and enforces minLength 32 — so a
+    # credential-less HMAC registration is refused BEFORE it arrives, with the
+    # identical wire answer this branch used to produce (measured:
+    # field="push_notification_config.authentication.credentials",
+    # recovery="correctable", i.e. exactly what
+    # tests/helpers/webhook_credential_refusal.py grades). Keeping a second copy
+    # of the rule here would be a place for the two to drift apart.
+    return ValidatedWebhookRegistration(config=config)
 
 
 def accept_push_notification_primitives(
@@ -367,7 +380,7 @@ def accept_push_notification_primitives(
     The scheme is normalized to its canonical enum spelling when it matches
     case-insensitively. That preserves what this path accepts today — the A2A
     push-config endpoint stores a free-form protobuf string, so lowercase rows
-    exist in production and ``webhook_auth_for`` has always compared
+    exist in production and the scheme comparison has always been
     case-insensitively — while still producing a schema-valid library model. It
     also improves what gets STORED, since the row now carries the pinned spelling.
     """
@@ -375,7 +388,10 @@ def accept_push_notification_primitives(
 
     authentication: dict[str, Any] | None = None
     if scheme is not None or credentials is not None:
-        authentication = {"schemes": [_canonical_scheme(scheme)], "credentials": credentials}
+        # No folding here. LibraryAuthentication's before-validator canonicalises the
+        # spelling, and a second folder in this module would be a competing authority
+        # answering the same question — the divergence this package exists to delete.
+        authentication = {"schemes": [scheme], "credentials": credentials}
 
     return _accept(
         config=_coerce_primitives_to_config(
@@ -387,16 +403,6 @@ def accept_push_notification_primitives(
     )
 
 
-def _canonical_scheme(scheme: str | None) -> str | None:
-    """The pinned enum spelling for a free-form protobuf scheme, if one matches."""
-    if scheme is None:
-        return None
-    for member in AuthenticationScheme:
-        if str(member).lower() == scheme.strip().lower():
-            return str(member)
-    return scheme
-
-
 def _coerce_primitives_to_config(
     document: dict[str, Any],
     *,
@@ -405,97 +411,74 @@ def _coerce_primitives_to_config(
     """Build the library model from the A2A protobuf primitives.
 
     Uses the same funnel the transport wrappers use, so this path cannot drift
-    into its own validation dialect, and a refusal names the same field path.
+    into its own validation dialect, and a refusal names the same field path --
+    with ONE rule deliberately not applied, below.
     """
-    coerced = to_push_notification_config(
-        {key: value for key, value in document.items() if value is not None},
-        field_prefix=field_prefix,
-    )
+    payload = {key: value for key, value in document.items() if value is not None}
+    try:
+        coerced = to_push_notification_config(payload, field_prefix=field_prefix)
+    except AdCPValidationError as exc:
+        if not _only_complaint_is_credential_length(exc):
+            raise
+        # gh-#1299: on the A2A path the push config rides in ``params.configuration``
+        # (SendMessageConfiguration) -- a TRANSPORT-layer parameter, never folded
+        # into request-body validation -- so the pinned ``credentials`` minLength 32
+        # must not divert the CREATE. Lane 3 routed this path through full model
+        # validation and broke that; this restores the recorded decision.
+        #
+        # Narrow on purpose, and nothing is waved through. Only a credential that is
+        # PRESENT but short takes this branch: a missing or blank one still fails
+        # above, so an HMAC registration with no secret is still refused here naming
+        # its field. The short credential is then STORED and refused at the egress
+        # seam as ``credentials_too_short`` -- the buyer's create succeeds while the
+        # webhook does not deliver until its owner re-registers. Accepting the create
+        # and refusing the delivery are the same answer, given at the two different
+        # moments each surface owns.
+        # Validate EVERYTHING ELSE rather than skipping validation wholesale: the
+        # document is re-validated with the credential padded to the minimum, so
+        # the url still becomes a real ``AnyUrl``, the scheme is still checked
+        # against the pinned enum, and ``maxItems`` still applies. Only the length
+        # rule is then undone, by putting the buyer's actual credential back with
+        # ``model_copy(update=...)``. Constructing the whole model unvalidated
+        # would have exempted every rule at once, and left ``authentication`` a
+        # raw dict for every reader downstream.
+        auth_block = payload["authentication"]
+        padded = {**payload, "authentication": {**auth_block, "credentials": "0" * _PINNED_CREDENTIAL_MIN}}
+        validated = to_push_notification_config(padded, field_prefix=field_prefix)
+        assert validated is not None and validated.authentication is not None
+        coerced = validated.model_copy(
+            update={
+                "authentication": validated.authentication.model_copy(update={"credentials": auth_block["credentials"]})
+            }
+        )
     assert coerced is not None  # a non-empty dict always coerces or raises
     return coerced
 
 
-def _normalize_legacy_stash(stashed: Any) -> Any:
-    """Reduce a legacy multi-scheme stash to what it ALREADY delivered as.
+# The pinned ``Authentication.credentials`` minLength, read off the schema rather
+# than retyped, so it follows the pin.
+_PINNED_CREDENTIAL_MIN: int = Authentication.model_json_schema()["properties"]["credentials"].get("minLength") or 32
 
-    Strict at ingest, tolerant at rehydration -- and the asymmetry is principled,
-    not a loophole. At ingest there is a buyer holding a request who can be told
-    to pick one scheme, and refusing prevents an undeliverable registration from
-    being stored. At rehydration there is no buyer left: the row was accepted
-    long ago, a refusal surfaces to nobody, and the only effect would be to stop
-    a webhook that delivers today. That is accept-then-never-deliver arriving
-    from the other end -- the exact failure this epic exists to remove.
 
-    Crucially this changes NOTHING about what such a row delivers. Before this
-    lane the gate resolved auth with ``webhook_auth_for(schemes[0], creds)``;
-    narrowing here reproduces that byte for byte. Only CARDINALITY is tolerated:
-    the credential precondition still runs on the surviving scheme, so a
-    credential-less HMAC row is still refused. And it warns, so the operator
-    sees it.
+def _only_complaint_is_credential_length(exc: AdCPValidationError) -> bool:
+    """True when the ONLY thing pydantic objected to is a short ``credentials``.
 
-    Such rows can exist: only the untyped A2A tool path could have written one,
-    and lane 2 proved that path live. New rows cannot -- ``to_stash`` emits a
-    single-element list and ingest now refuses multi-scheme outright.
+    Read off the original ``ValidationError``, which the boundary preserves as
+    ``__cause__`` (``raise ... from e``), rather than off the rendered message:
+    matching prose would re-decide the taxonomy in a second place and break the
+    day the wording changes.
+
+    ``all`` over a non-empty list, so a document with a short credential AND any
+    other defect still refuses -- the exemption covers exactly one rule.
     """
-    if not isinstance(stashed, dict):
-        return stashed
-    auth = stashed.get("authentication")
-    if not isinstance(auth, dict):
-        return stashed
-    schemes = auth.get("schemes")
-    if not isinstance(schemes, list) or len(schemes) <= 1:
-        return _drop_undeliverable_auth_block(stashed)
-
-    logger.warning(
-        "Legacy stashed webhook registration requested %d authentication schemes (%s); "
-        "delivering with %r, exactly as this registration has always been delivered. "
-        "Multi-scheme registrations are refused at ingest (pinned AdCP 3.1.1 allows one).",
-        len(schemes),
-        ", ".join(repr(str(s)) for s in schemes),
-        str(schemes[0]),
+    cause = exc.__cause__
+    if not isinstance(cause, ValidationError):
+        return False
+    errors = cause.errors()
+    return bool(errors) and all(
+        error.get("type") == "string_too_short" and tuple(error.get("loc") or ())[-1] == "credentials"
+        for error in errors
     )
-    normalized = {**stashed, "authentication": {**auth, "schemes": [schemes[0]]}}
-    return _drop_undeliverable_auth_block(normalized)
-
-
-def _drop_undeliverable_auth_block(stashed: Any) -> Any:
-    """Drop a legacy auth block that carries no usable credential, when — and ONLY
-    when — that block already resolved to ``Unauthenticated`` before this lane.
-
-    The pinned schema requires ``credentials`` whenever ``authentication`` is
-    present, so a legacy row like ``{"schemes": ["Bearer"]}`` with no credential is
-    schema-INVALID and the model refuses it. At ingest that refusal is right: the
-    buyer is there to fix it. At rehydration it is not — such a row DELIVERED
-    before, unauthenticated, because ``webhook_auth_for("Bearer", None)`` resolves
-    to :class:`Unauthenticated`. Refusing it now would convert "delivered" into
-    "never delivered at all" for a registration the seller already accepted, which
-    is accept-then-never-deliver arriving from the other end.
-
-    So the block is dropped, reproducing that exact outcome — and ONLY for schemes
-    that resolved to ``Unauthenticated``. An ``HMAC-SHA256`` row with no secret is
-    NOT dropped: it resolved to :class:`HmacSecretMissing`, i.e. it never delivered,
-    and it must keep refusing with the same field it always did.
-    """
-    if not isinstance(stashed, dict):
-        return stashed
-    auth = stashed.get("authentication")
-    if not isinstance(auth, dict) or auth.get("credentials"):
-        return stashed
-
-    schemes = auth.get("schemes") or []
-    scheme = str(schemes[0]) if schemes else None
-    if isinstance(webhook_auth_for(scheme, None), HmacSecretMissing):
-        # Undeliverable and always was — leave it to be refused by name.
-        return stashed
-
-    logger.warning(
-        "Legacy stashed webhook registration carries scheme %r with no credentials; "
-        "delivering UNAUTHENTICATED, exactly as this registration has always been "
-        "delivered. The pinned schema requires credentials alongside a scheme, so new "
-        "registrations in this shape are refused at ingest.",
-        scheme,
-    )
-    return {key: value for key, value in stashed.items() if key != "authentication"}
 
 
 def accept_push_notification_config(
