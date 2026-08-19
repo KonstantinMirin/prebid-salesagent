@@ -64,7 +64,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import require_payload
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.harness.transport import Transport
 from tests.helpers.pinned_schema import validate_against_pinned_schema
@@ -209,9 +209,9 @@ def _serialized_response(ctx: dict) -> dict[str, Any]:
     is not a valid array/object/boolean).
 
     The 4-transport parametrization still exercises each dispatch path end to end:
-    a broken transport surfaces as a missing/errored ``ctx["response"]`` here.
+    a broken transport surfaces as a missing/errored dispatch payload here.
     """
-    return _require_response(ctx).model_dump(mode="json", exclude_none=True)
+    return require_payload(ctx).model_dump(mode="json", exclude_none=True)
 
 
 @then(parsers.parse("the response should be schema-valid against {schema_file}"))

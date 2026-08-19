@@ -15,6 +15,7 @@ import uuid
 
 from pytest_bdd import given, then
 
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -100,7 +101,7 @@ def then_no_adapter_calls(ctx: dict) -> None:
 def then_error_minimum_spend(ctx: dict) -> None:
     """Assert the error message mentions minimum spend enforcement."""
     error = ctx.get("error")
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
 
     error_str = ""
     if error is not None:
@@ -143,7 +144,7 @@ def then_auth_before_business_logic(ctx: dict) -> None:
     env = ctx["env"]
 
     # First, verify the original request (with valid creds) succeeded
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     error = ctx.get("error")
     if error is not None:
         assert not isinstance(error, AdCPAuthenticationError), (
@@ -201,8 +202,7 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
     from src.core.schemas import CreateMediaBuyRequest
 
     # The original request already succeeded (from the When step).
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a successful response from the original request"
+    resp = require_payload(ctx)
 
     # Make a rapid follow-up call THROUGH THE WIRE to trigger rate limiting.
     # The follow-up needs a FRESH idempotency_key — reusing the original's
@@ -367,8 +367,7 @@ def then_response_within_sla(ctx: dict) -> None:
     # --- Part 1: Verify the original request completed successfully ---
     error = ctx.get("error")
     assert error is None, f"Expected a successful response to verify SLA, got error: {error}"
-    result = ctx.get("response")
-    assert result is not None, "No response recorded — the request did not complete"
+    result = require_payload(ctx)
     assert result.status == "success", f"Expected status='success' (full pipeline completed), got '{result.status}'"
     assert isinstance(result.response, CreateMediaBuySuccess), (
         f"Expected CreateMediaBuySuccess, got {type(result.response).__name__}"
@@ -439,7 +438,7 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
     )
 
     # Step 1: Original request should have succeeded (budget >= min)
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     error = ctx.get("error")
     assert resp is not None and error is None, (
         f"Expected the original request to succeed (budget >= min_package_budget), but got error: {error}"

@@ -54,7 +54,7 @@ from urllib.parse import urlparse
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require
+from tests.bdd.steps._outcome_helpers import _require, payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 # The list_id is irrelevant to a refusal — the seam refuses before a connection
@@ -109,7 +109,7 @@ def _wire_error_envelope(ctx: dict) -> dict:
     envelope = ctx.get("wire_error_envelope")
     assert isinstance(envelope, dict), (
         "Expected a wire error envelope — the request was supposed to be refused. "
-        f"Got {envelope!r}; recorded error={ctx.get('error')!r}, response={ctx.get('response')!r}"
+        f"Got {envelope!r}; recorded error={ctx.get('error')!r}, response={payload_or_none(ctx)!r}"
     )
     return envelope
 
@@ -460,7 +460,7 @@ def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
     the destination (L1 point 6), so it is the only channel that can tell a
     buyer WHICH of up to 100 creatives to fix.
     """
-    response = _require(ctx, "response")
+    response = require_payload(ctx)
     creatives = response["creatives"] if isinstance(response, dict) else response.creatives
     assert creatives, f"expected a per-creative result, got {response!r}"
     entry = creatives[0]

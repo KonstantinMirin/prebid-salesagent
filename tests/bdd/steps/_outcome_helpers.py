@@ -74,9 +74,9 @@ def wire_field(ctx: dict, field: str) -> Any:
     if wire is not None:
         return wire[field]
     # IMPL has no wire — serialize the typed payload through the production
-    # serializer. _require_response preserves the diagnostic if a (reused) sibling
-    # scenario hit an error path, instead of a bare ctx["response"] KeyError.
-    return _require_response(ctx).model_dump(mode="json")[field]
+    # serializer. require_payload preserves the diagnostic if a (reused) sibling
+    # scenario hit an error path, instead of a bare KeyError.
+    return require_payload(ctx).model_dump(mode="json")[field]
 
 
 def wire_dict(ctx: dict) -> dict:
@@ -90,7 +90,7 @@ def wire_dict(ctx: dict) -> dict:
     wire = _wire_or_none(ctx)
     if wire is not None:
         return wire
-    return _require_response(ctx).model_dump(mode="json")
+    return require_payload(ctx).model_dump(mode="json")
 
 
 def assert_wire_rejection(ctx: dict, code: str, *, recovery: str, field: str) -> None:
@@ -129,16 +129,60 @@ def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     return val
 
 
-def _require_response(ctx: dict) -> object:
-    """Return ctx["response"], failing with a diagnostic if it is absent.
+def payload_or_none(ctx: dict) -> object | None:
+    """The dispatch's typed payload, or ``None`` when it produced an error.
 
-    Then steps assert on the response produced by a prior When step. Reading
-    ``ctx["response"]`` by subscript raises a bare ``KeyError`` when the
-    operation errored (only ``ctx["error"]`` was set) — giving no hint why.
-    This helper raises an ``AssertionError`` that names the missing response
-    and surfaces any recorded error instead.
+    For steps that BRANCH on which path ran ("success response must not contain
+    X; error response must not contain Y") rather than reading a value. Those
+    steps used ``ctx.get("response")`` as the selector, and they need a selector
+    that still works now the dispatch seams stop writing that copy.
+
+    Returns None both when no dispatch happened and when the dispatch errored —
+    a branch selector does not care which, and the error branch it falls into
+    reports the difference. A step that genuinely REQUIRES a payload calls
+    :func:`require_payload`, which raises instead.
     """
-    return _require(ctx, "response", hint="The operation may have errored instead of returning.")
+    result = ctx.get("result")
+    if not isinstance(result, TransportResult):
+        return ctx.get("self_dispatched_response")
+    return result.payload
+
+
+def require_payload(ctx: dict) -> object:
+    """Return the typed payload of the dispatch that just ran.
+
+    Reads the ``TransportResult`` the dispatch seams stash under
+    ``ctx["result"]``, so the value arrives WITH its provenance rather than as a
+    detached copy. Fails loudly when no dispatch happened, and separately when
+    the dispatch recorded an error — a Then that asks for a payload after an
+    error path is asking the wrong question, and a bare ``KeyError`` would not
+    say so.
+    """
+    result = ctx.get("result")
+    if not isinstance(result, TransportResult):
+        # Second NAMED source: modules whose When still calls production directly
+        # (uc011's _list_accounts_impl) stash under ctx["self_dispatched_response"],
+        # and the GENERIC Then steps are shared with them. Both sources are explicit
+        # keys, which is the point — the removed ctx["response"] was written by
+        # dispatch AND by self-dispatching modules AND (in one case) held a REQUEST,
+        # so a reader could not tell what it had. These two can always be told apart,
+        # and when the pinned modules migrate the branch simply disappears.
+        self_dispatched = ctx.get("self_dispatched_response")
+        if self_dispatched is not None:
+            return self_dispatched
+        failure = ctx.get("error")
+        if failure is not None:
+            raise AssertionError(
+                f"no TransportResult in ctx because the dispatch RAISED: {failure!r} — "
+                "there is no payload; assert on the error instead"
+            )
+        raise AssertionError(
+            "no TransportResult in ctx — the When step did not dispatch through "
+            "dispatch_request/_call_via, so there is no payload to read"
+        )
+    if result.payload is None:
+        raise AssertionError(f"the dispatch produced no payload — it errored instead. Recorded error: {result.error!r}")
+    return result.payload
 
 
 def _require_error(ctx: dict) -> object:
@@ -184,7 +228,7 @@ def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> obje
     env = ctx["env"]
 
     if media_buy_id is None:
-        resp = ctx.get("response")
+        resp = payload_or_none(ctx)
         if resp is not None:
             media_buy_id = _get_response_field(resp, "media_buy_id")
 

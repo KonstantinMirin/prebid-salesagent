@@ -18,7 +18,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response, assert_wire_rejection
+from tests.bdd.steps._outcome_helpers import assert_wire_rejection, require_payload
 from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import (
@@ -201,7 +201,7 @@ def when_request_products_with_brand(ctx: dict, brand: str) -> None:
 def then_has_products(ctx: dict) -> None:
     """Assert the response has exactly the product created in the Given step."""
     assert "error" not in ctx, f"Request failed: {ctx.get('error')}"
-    response = _require_response(ctx)
+    response = require_payload(ctx)
     expected = ctx["product"]
     assert response.products is not None, "Response has no products"
     assert len(response.products) == 1, f"Expected 1 product, got {len(response.products)}"

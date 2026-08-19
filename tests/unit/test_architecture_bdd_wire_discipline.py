@@ -248,3 +248,141 @@ def test_no_private_circuit_breaker_state_in_steps() -> None:
             "reached the origin), not the state enum alone. The allowlist is permanently empty."
         ),
     )
+
+
+# ── Check D: no step reads the provenance-stripped ctx["response"] ────────────
+#
+# The dispatch seams stopped writing that key: a copy of the payload cannot tell
+# a Then whether it holds a wire fact or an in-process reconstruction, which is
+# how a self-grading transport stayed green. Worse, the key had THREE writers
+# with three meanings — dispatch, modules calling production directly, and one
+# step stashing a REQUEST under it — so a reader could not know what it had.
+#
+# Steps read the dispatch's own TransportResult via require_payload /
+# payload_or_none. Modules that still call production directly stash under the
+# explicitly-named ctx["self_dispatched_response"], which the shared accessors
+# know about by name.
+_CTX_RESPONSE_KEY = "response"
+
+# Shrink-only. Every entry is a module whose When calls production DIRECTLY
+# rather than dispatching, with the GitHub issue tracking its migration. When a
+# module migrates its entry goes; nothing may be added.
+# EMPTY, and it stays that way. Every module migrated; the two that still call
+# production directly (uc011's _list_accounts_impl, FIXME(#1880)) stash under the
+# explicitly-named ctx["self_dispatched_response"], which the shared accessors
+# know by name — so they need no exemption from this check at all.
+_CTX_RESPONSE_ALLOWLIST: set[str] = set()
+
+
+def _ctx_response_hits(tree: ast.AST) -> dict[str, list[int]]:
+    """Subscript AND .get access to ctx["response"], per enclosing function.
+
+    ALL FIVE access forms condition C2 made binding — subscript, ``ctx.get``,
+    ``_require*(ctx, "response")``, ``"response" in ctx`` and ``ctx.pop``.
+    Covering only the first two would leave a future step able to re-open the
+    retired key through the shared accessor, which is exactly the escape the
+    design review named.
+
+    Subscript and ``ctx.get`` deliberately: a subscript-only check would miss the ~218
+    ``ctx.get("response")`` reads this lane migrated and would pass on an almost
+    entirely unmigrated tree. A string mentioning the key in a docstring parses
+    to ast.Constant and is invisible to both, which is what makes the pinned set
+    achievable.
+    """
+    hits: dict[str, list[int]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        lines: list[int] = []
+        for child in ast.walk(node):
+            # ctx["response"]
+            if (
+                isinstance(child, ast.Subscript)
+                and isinstance(child.value, ast.Name)
+                and child.value.id == "ctx"
+                and isinstance(child.slice, ast.Constant)
+                and child.slice.value == _CTX_RESPONSE_KEY
+            ):
+                lines.append(child.lineno)
+            # _require(ctx, "response") / any _require*(ctx, "response") helper —
+            # the escape route pass 2 named: a future step could re-open the key
+            # through the shared accessor rather than by subscript.
+            elif (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id.startswith("_require")
+                and len(child.args) >= 2
+                and isinstance(child.args[0], ast.Name)
+                and child.args[0].id == "ctx"
+                and isinstance(child.args[1], ast.Constant)
+                and child.args[1].value == _CTX_RESPONSE_KEY
+            ):
+                lines.append(child.lineno)
+            # "response" in ctx — a membership test is a read of the same key
+            elif (
+                isinstance(child, ast.Compare)
+                and isinstance(child.left, ast.Constant)
+                and child.left.value == _CTX_RESPONSE_KEY
+                and any(isinstance(op, ast.In) for op in child.ops)
+                and any(isinstance(c, ast.Name) and c.id == "ctx" for c in child.comparators)
+            ):
+                lines.append(child.lineno)
+            # ctx.pop("response") — a clear of a key nothing writes any more is
+            # dead code that reads as live state management
+            elif (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "pop"
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "ctx"
+                and child.args
+                and isinstance(child.args[0], ast.Constant)
+                and child.args[0].value == _CTX_RESPONSE_KEY
+            ):
+                lines.append(child.lineno)
+            # ctx.get("response")
+            elif (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "get"
+                and isinstance(child.func.value, ast.Name)
+                and child.func.value.id == "ctx"
+                and child.args
+                and isinstance(child.args[0], ast.Constant)
+                and child.args[0].value == _CTX_RESPONSE_KEY
+            ):
+                lines.append(child.lineno)
+        if lines:
+            hits[node.name] = sorted(set(lines))
+    return hits
+
+
+def _find_ctx_response_access() -> set[str]:
+    found: set[str] = set()
+    steps_root = _STEPS_DIR
+    for path in sorted(steps_root.rglob("*.py")):
+        rel = path.relative_to(steps_root).as_posix()
+        if rel == "_outcome_helpers.py":
+            continue  # the accessors themselves; they are the sanctioned readers
+        if _ctx_response_hits(ast.parse(path.read_text())):
+            found.add(rel)
+    return found
+
+
+class TestNoProvenanceStrippedResponseCopy:
+    def test_steps_read_the_dispatch_result_not_a_payload_copy(self):
+        offenders = sorted(_find_ctx_response_access() - _CTX_RESPONSE_ALLOWLIST)
+        assert not offenders, (
+            "BDD step modules still read ctx['response'], a provenance-stripped copy of the "
+            f"payload: {offenders}. A Then reading it cannot tell a wire fact from an "
+            "in-process reconstruction. Read the dispatch's TransportResult instead — "
+            "require_payload(ctx) when a payload is required, payload_or_none(ctx) when the "
+            "step branches on which path ran. Modules whose When calls production directly "
+            "stash under ctx['self_dispatched_response'], which those accessors know by name."
+        )
+
+    def test_ctx_response_allowlist_has_no_stale_entries(self):
+        stale = sorted(_CTX_RESPONSE_ALLOWLIST - _find_ctx_response_access())
+        assert not stale, (
+            f"These modules no longer read ctx['response'] and must leave the allowlist: {stale}. It is shrink-only."
+        )

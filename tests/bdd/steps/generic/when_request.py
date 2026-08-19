@@ -3,7 +3,7 @@
 Every step calls production code directly. No stub mode.
 
 Steps store results in ctx:
-    ctx["response"] — ListCreativeFormatsResponse on success
+    ctx["result"] — the TransportResult; read its payload via require_payload
     ctx["error"] — Exception on failure
 """
 
@@ -69,7 +69,7 @@ def _call_via(
         if result.is_error:
             ctx["error"] = result.error
         else:
-            ctx["response"] = result.payload
+            # NO ctx["response"] — see _dispatch.py. Steps read ctx["result"].
             # Real serialized wire (REST/A2A/MCP); None on IMPL — surfaced for
             # success-path wire-shape steps (e.g. format_id federation contract).
             ctx["wire_response"] = result.wire_response

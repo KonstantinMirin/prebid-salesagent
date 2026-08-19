@@ -14,7 +14,7 @@ _SENTINEL = object()
 def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> None:
     """Dispatch a request through ctx['transport'] via call_via, or direct call_impl.
 
-    Stores result in ctx["response"] on success, ctx["error"] on failure.
+    Stores the TransportResult in ctx["result"]; ctx["error"] on failure.
     If ctx["transport"] is a Transport enum, uses call_via directly.
     If it's a string, maps to Transport enum first.
     If absent, falls back to call_impl.
@@ -69,7 +69,11 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
             ctx["wire_error_envelope"] = result.wire_error_envelope
             ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
         else:
-            ctx["response"] = result.payload
+            # NO ctx["response"]. A provenance-stripped copy of the payload cannot
+            # tell a Then whether it is reading a wire fact or an in-process
+            # reconstruction — which is how a self-grading transport stayed green.
+            # Steps read ctx["result"] (the TransportResult, stashed above) through
+            # the guarded accessors instead.
             # Propagate the real serialized success-path wire body so Then steps
             # can assert on what the buyer actually receives (ctx["wire_response"]),
             # not the reconstructed typed payload (REST HTTP body; A2A/MCP artifact

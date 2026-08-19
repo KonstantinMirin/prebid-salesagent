@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then
 
+from tests.bdd.steps._outcome_helpers import payload_or_none
+
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
@@ -193,7 +195,7 @@ def then_operation_fails(ctx: dict) -> None:
     if error is not None:
         _assert_meaningful_error(error)
         return
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     if resp is not None and hasattr(resp, "errors") and resp.errors:
         # Promote the first response error to ctx["error"] so downstream
         # Then steps (error_code, error_message) can find it.
@@ -204,7 +206,7 @@ def then_operation_fails(ctx: dict) -> None:
         return
     raise AssertionError(
         "Expected the operation to fail but no error was recorded. "
-        f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
+        f"ctx keys: {list(ctx.keys())}, response: {payload_or_none(ctx)!r}"
     )
 
 
@@ -225,7 +227,7 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
     """
     # ── Resolve the error object ────────────────────────────────────
     error = ctx.get("error")
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
 
     # Promote response.errors if no top-level error was captured
     if error is None and resp is not None and hasattr(resp, "errors") and resp.errors:
@@ -858,7 +860,7 @@ def then_terminal_failure(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is not None, (
         "Expected a terminal failure but no error was recorded. "
-        f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
+        f"ctx keys: {list(ctx.keys())}, response: {payload_or_none(ctx)!r}"
     )
     _assert_meaningful_error(error)
     from src.core.exceptions import AdCPError
@@ -1047,7 +1049,7 @@ def _assert_no_new_media_buy(ctx: dict) -> None:
     3. Fallback: verify the operation errored (no response = no creation).
     """
     env = ctx["env"]
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
 
     # Strategy 1: if we got a response with media_buy_id, it should not be in DB
     if resp is not None:

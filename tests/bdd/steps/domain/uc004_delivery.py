@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -1230,8 +1231,7 @@ def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id1>[^"]+)" and "(?P<mb_id2>[^"]+)"'))
 def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Assert response includes delivery data for both media buys."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     mb_ids = [d.media_buy_id for d in deliveries]
     assert mb_id1 in mb_ids, f"Expected delivery data for '{mb_id1}', got: {mb_ids}"
@@ -1241,8 +1241,7 @@ def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> Non
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id>[^"]+)"$'))
 def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for the given media buy."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     mb_ids = [d.media_buy_id for d in deliveries]
     assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
@@ -1251,8 +1250,7 @@ def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
 @then(parsers.parse('the response should include delivery data for "{mb_id}" only'))
 def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for ONLY the given media buy."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     mb_ids = [d.media_buy_id for d in deliveries]
     assert mb_ids == [mb_id], f"Expected only '{mb_id}', got: {mb_ids}"
@@ -1261,7 +1259,7 @@ def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
 @then(parsers.parse('the response should NOT include delivery data for "{mb_id}"'))
 def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response does NOT include delivery data for the media buy."""
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     if resp is None:
         return  # No response at all = not included
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -1272,7 +1270,7 @@ def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
 @then(parsers.parse('the response should not include delivery data for "{mb_id}"'))
 def then_no_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response does not include delivery data for the media buy."""
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     if resp is None:
         return
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -1283,8 +1281,7 @@ def then_no_delivery_data(ctx: dict, mb_id: str) -> None:
 @then("the response should have an empty media_buy_deliveries array")
 def then_empty_deliveries(ctx: dict) -> None:
     """Assert response has empty media_buy_deliveries."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     assert len(deliveries) == 0, f"Expected empty deliveries, got {len(deliveries)}"
 
@@ -1296,8 +1293,7 @@ def then_has_metrics(ctx: dict) -> None:
     Asserts type correctness and cross-field consistency rather than
     hardcoded mock-adapter values.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     d = resp.media_buy_deliveries[0]
     totals = d.totals
     # Type correctness: impressions and spend must be numeric
@@ -1327,8 +1323,7 @@ def then_has_packages(ctx: dict) -> None:
     Verifies structural correctness: packages exist, have distinct IDs,
     and their impressions roll up to the media-buy totals.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     d = resp.media_buy_deliveries[0]
     packages = d.by_package
     assert isinstance(packages, list), f"by_package must be a list, got {type(packages).__name__}"
@@ -1353,8 +1348,7 @@ def then_has_reporting_period(ctx: dict) -> None:
     reporting_period is on the response object (GetMediaBuyDeliveryResponse),
     not on individual MediaBuyDeliveryData entries.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     period = getattr(resp, "reporting_period", None)
     assert period is not None, "Response missing reporting_period"
     assert period.start is not None, "Reporting period start is None"
@@ -1364,8 +1358,7 @@ def then_has_reporting_period(ctx: dict) -> None:
 @then(parsers.parse('the response should include the media buy status "{status}"'))
 def then_has_mb_status(ctx: dict, status: str) -> None:
     """Assert response includes the expected media buy status."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     d = resp.media_buy_deliveries[0]
     assert d.status == status, f"Expected status '{status}', got '{d.status}'"
 
@@ -1373,8 +1366,7 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
 @then("the response should include aggregated totals across both media buys")
 def then_has_aggregated_totals(ctx: dict) -> None:
     """Assert aggregated totals equal the sum of per-delivery totals."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     agg = resp.aggregated_totals
     deliveries = resp.media_buy_deliveries
     # Aggregated impressions must equal the sum of individual delivery impressions
@@ -1400,8 +1392,7 @@ def then_aggregated_roas(ctx: dict) -> None:
     from production's own per-delivery output) means a same-source extraction
     bug cannot self-validate (PR #1430 review).
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     agg = resp.aggregated_totals
     roas = getattr(agg, "roas", None)
     assert roas is not None, "aggregated_totals.roas is missing — production does not compute roas"
@@ -1424,8 +1415,7 @@ def then_aggregated_cost_per_acquisition(ctx: dict) -> None:
     each, so cpa = 500 / 20 = 25.0. Literal assertion for the same
     same-source-extraction reason as the roas step above.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     agg = resp.aggregated_totals
     cpa = getattr(agg, "cost_per_acquisition", None)
     assert cpa is not None, (
@@ -1443,8 +1433,7 @@ def then_aggregated_cost_per_acquisition(ctx: dict) -> None:
 @then(parsers.parse('the aggregated_totals should include "media_buy_count" equal to {count:d}'))
 def then_aggregated_media_buy_count(ctx: dict, count: int) -> None:
     """Assert aggregated_totals.media_buy_count matches the scenario's buy count."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     agg = resp.aggregated_totals
     assert agg.media_buy_count == count, (
         f"aggregated_totals.media_buy_count ({agg.media_buy_count}) != expected ({count})"
@@ -1454,8 +1443,7 @@ def then_aggregated_media_buy_count(ctx: dict, count: int) -> None:
 @then("the aggregated impressions should equal the sum of individual impressions")
 def then_aggregated_impressions(ctx: dict) -> None:
     """Assert aggregated impressions equal sum of individual values."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     individual_sum = sum(getattr(getattr(d, "totals", None), "impressions", 0.0) for d in deliveries)
     agg = getattr(resp, "aggregated_totals", None)
@@ -1467,8 +1455,7 @@ def then_aggregated_impressions(ctx: dict) -> None:
 @then("the aggregated spend should equal the sum of individual spend")
 def then_aggregated_spend(ctx: dict) -> None:
     """Assert aggregated spend equals sum of individual values."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     individual_sum = sum(getattr(getattr(d, "totals", None), "spend", 0.0) for d in deliveries)
     agg = getattr(resp, "aggregated_totals", None)
@@ -1481,7 +1468,7 @@ def then_aggregated_spend(ctx: dict) -> None:
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
     """Assert no error for a specific media buy — checks both global ctx and per-delivery errors."""
     assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     if resp is not None:
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         for d in deliveries:
@@ -1507,8 +1494,7 @@ def then_only_status(ctx: dict, status: str) -> None:
     MediaBuyDeliveryStatus is an Enum (not a str-enum), so identity-compares
     against the plain wire string would otherwise fail.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     assert deliveries, (
         f"Filter '{status}' returned no media buys — the scenario must seed a buy "
@@ -1526,8 +1512,7 @@ def then_only_status(ctx: dict, status: str) -> None:
 @then(parsers.parse('the response reporting_period start should be "{date}"'))
 def then_period_start(ctx: dict, date: str) -> None:
     """Assert reporting period start date (response-level, not per-delivery)."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     period = getattr(resp, "reporting_period", None)
     assert period is not None, "Response missing reporting_period"
     actual = str(period.start)[:10]
@@ -1537,8 +1522,7 @@ def then_period_start(ctx: dict, date: str) -> None:
 @then(parsers.parse('the response reporting_period end should be "{date}"'))
 def then_period_end(ctx: dict, date: str) -> None:
     """Assert reporting period end date (response-level, not per-delivery)."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     period = getattr(resp, "reporting_period", None)
     assert period is not None, "Response missing reporting_period"
     actual = str(period.end)[:10]
@@ -1550,8 +1534,7 @@ def then_period_end_today(ctx: dict) -> None:
     """Assert reporting period end is today (response-level)."""
     from datetime import UTC, datetime
 
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     period = getattr(resp, "reporting_period", None)
     assert period is not None, "Response missing reporting_period"
@@ -2138,8 +2121,7 @@ def then_has_deliveries_field(ctx: dict) -> None:
     request included specific media_buy_ids, verifies that every returned
     delivery corresponds to a requested ID (filtering correctness).
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     deliveries = resp.media_buy_deliveries
     assert isinstance(deliveries, list), f"Expected media_buy_deliveries to be a list, got {type(deliveries).__name__}"
     # Every delivery item must carry a non-empty media_buy_id
@@ -2161,7 +2143,7 @@ def then_has_deliveries_field(ctx: dict) -> None:
 def then_no_errors_field(ctx: dict) -> None:
     """Assert response errors list is empty and no exception was raised."""
     assert "error" not in ctx, f"Unexpected error: {ctx.get('error')}"
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     if resp is not None:
         errors = getattr(resp, "errors", None) or []
         assert not errors, f"Unexpected errors in response: {errors}"
@@ -2177,7 +2159,7 @@ def then_has_errors_field(ctx: dict) -> None:
     present, not just that some field exists.
     """
     error_exc = ctx.get("error")
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     assert resp is not None or error_exc is not None, (
         "Expected either a response with errors or an exception, got neither"
     )
@@ -2198,7 +2180,7 @@ def then_has_errors_field(ctx: dict) -> None:
 @then('the response should not contain "media_buy_deliveries" field')
 def then_no_deliveries_field(ctx: dict) -> None:
     """Assert media_buy_deliveries is absent or empty in the serialized response."""
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     if resp is not None:
         # Check serialized form — field should not be present or should be empty
         dumped = resp.model_dump() if hasattr(resp, "model_dump") else {}
@@ -2265,8 +2247,7 @@ def then_packages_include_breakdown(ctx: dict, field: str) -> None:
     has impressions), and dimensional segmentation (each entry carries the
     dimension identifier, e.g. "device_type" for "by_device_type").
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     packages = _collect_all_packages(resp)
     checked = 0
     # Derive the dimension identifier from the field name: "by_device_type" -> "device_type"
@@ -2315,8 +2296,7 @@ def then_packages_exclude_breakdown(ctx: dict, field: str) -> None:
     which PackageDelivery never defines — a ``getattr`` check would always pass
     vacuously).
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", []) or []
     packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
     for pkg in packages:
@@ -2333,8 +2313,7 @@ def then_packages_limited(ctx: dict, field: str, n: int) -> None:
     Verifies the count constraint and that entries are properly typed (list
     of dicts/objects with at least one field populated).
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     packages = _collect_all_packages(resp)
     checked = 0
     for pkg in packages:
@@ -2358,8 +2337,7 @@ def then_field_true(ctx: dict, field: str) -> None:
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
     PackageDelivery, not on the top-level response object.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     packages = _collect_all_packages(resp)
     assert packages, "Response has no packages to check"
     for pkg in packages:
@@ -2374,8 +2352,7 @@ def then_field_false(ctx: dict, field: str) -> None:
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
     PackageDelivery, not on the top-level response object.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     packages = _collect_all_packages(resp)
     assert packages, "Response has no packages to check"
     for pkg in packages:
@@ -2390,8 +2367,7 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
     Verifies the field is non-None and, for numeric fields, is a proper
     numeric type. For string fields, verifies non-empty.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     packages = _collect_all_packages(resp)
     checked = 0
     for pkg in packages:
@@ -2410,8 +2386,7 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
 def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
     """Assert every package has both named breakdown fields as non-empty lists."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     packages = _collect_all_packages(resp)
     checked = 0
     for pkg in packages:
@@ -2431,8 +2406,7 @@ def then_packages_exclude_field(ctx: dict, field: str) -> None:
     are absent from the model (e.g. 'by_audience' which PackageDelivery never
     defines — a ``getattr`` check would always pass vacuously).
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", []) or []
     packages = [pkg for d in deliveries for pkg in (getattr(d, "by_package", None) or [])]
     for pkg in packages:
@@ -2449,8 +2423,7 @@ def then_geo_system(ctx: dict, system: str) -> None:
     then xfails on the specific missing field (by_geo with system).
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period"
 
@@ -2479,8 +2452,7 @@ def then_placement_sorted_fallback(ctx: dict, metric: str) -> None:
     then verifies sort order if by_placement is populated.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period"
 
@@ -2496,8 +2468,7 @@ def then_placement_sorted(ctx: dict, metric: str) -> None:
     then verifies sort order if by_placement is populated with the metric.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period"
 
@@ -2516,8 +2487,7 @@ def then_attribution_model(ctx: dict, model: str) -> None:
     equals the expected model string.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period"
 
@@ -2537,8 +2507,7 @@ def then_attribution_echo(ctx: dict) -> None:
     match the request — not merely that they are non-None.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
 
     aw = getattr(resp, "attribution_window", None)
@@ -2575,8 +2544,7 @@ def then_attribution_default(ctx: dict) -> None:
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period in response"
 
@@ -2633,8 +2601,7 @@ def then_attribution_has_model(ctx: dict) -> None:
     from adcp.types.generated_poc.enums.attribution_model import AttributionModel
 
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
 
     aw = getattr(resp, "attribution_window", None)
@@ -2659,8 +2626,7 @@ def then_attribution_default_model(ctx: dict) -> None:
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period in response"
 
@@ -2690,8 +2656,7 @@ def then_attribution_campaign_length(ctx: dict) -> None:
     unit is 'days' and interval >= 1.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
 
     # Response-level structural assertions
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
@@ -2725,8 +2690,7 @@ def then_attribution_campaign_length(ctx: dict) -> None:
 @then(parsers.parse('the response should indicate "{mb_id}" has partial_data or delayed metrics'))
 def then_partial_data(ctx: dict, mb_id: str) -> None:
     """Assert the named media buy has reporting_delayed status."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     deliveries = getattr(resp, "media_buy_deliveries", []) or []
     target = next((d for d in deliveries if d.media_buy_id == mb_id), None)
     assert target is not None, f"No delivery found for {mb_id!r}"
@@ -2742,8 +2706,7 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
     Verifies ID mapping (the requested media buy is found in deliveries)
     and exact metric values (both must be zero, not just non-negative).
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
     deliveries = resp.media_buy_deliveries
     target = next((d for d in deliveries if d.media_buy_id == mb_id), None)
     assert target is not None, f"No delivery found for '{mb_id}' in {[d.media_buy_id for d in deliveries]}"
@@ -2754,8 +2717,7 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
 @then("no real billing records should have been created")
 def then_no_billing(ctx: dict) -> None:
     """Assert sandbox mode — verify via response flag and absence of billing adapter calls."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    resp = require_payload(ctx)
     sandbox = getattr(resp, "sandbox", None)
     assert sandbox is True, (
         f"Expected sandbox=True in response indicating no real billing records were created, got sandbox={sandbox!r}"
@@ -2799,7 +2761,7 @@ def _delivery_boundary_handler(ctx: dict, field: str, expected: str) -> bool:
     fall back to other domains (e.g. UC-005 creative formats). Behavior matches
     the delivery branch previously embedded in generic/then_payload.
     """
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     is_delivery = field.strip().lower().replace(" ", "_") in _DELIVERY_BOUNDARY_FIELDS or (
         resp is not None and hasattr(resp, "media_buy_deliveries")
     )
@@ -2826,8 +2788,7 @@ def _delivery_boundary_handler(ctx: dict, field: str, expected: str) -> bool:
 
 def _assert_valid_content(ctx: dict, field: str) -> None:
     """Per-field content assertion for 'valid' partition/boundary outcomes."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
+    resp = require_payload(ctx)
 
     if field in ("status_filter", "filter"):
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2979,7 +2940,14 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
 
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid {field} result but got error: {ctx.get('error')}"
-        assert "response" in ctx, f"Expected response for valid {field} but none found"
+        # Two kinds of When feed this assertion. Most DISPATCH and are graded on
+        # the payload that came back. The webhook-credentials scenarios instead
+        # CONSTRUCT a CreateMediaBuyRequest locally and are graded on whether
+        # construction raised — there is no dispatch and so no payload, and
+        # demanding one would fail them for the wrong reason.
+        if ctx.get("constructed_request") is not None:
+            return
+        require_payload(ctx)  # raises if the dispatch produced no payload for this field
         _assert_valid_content(ctx, field)
         return
     if expected == "invalid":
@@ -3040,9 +3008,8 @@ def then_filter_result(ctx: dict, expected: str) -> None:
 
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid status_filter result but got error: {ctx.get('error')}"
-        assert "response" in ctx, "Expected response for valid status_filter but none found"
-        resp = ctx.get("response")
-        assert resp is not None, "Expected a response but none found"
+        require_payload(ctx)  # raises if the dispatch produced no payload
+        resp = require_payload(ctx)
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
 
         # Determine what filter was requested by inspecting the When step's kwargs.
@@ -3208,7 +3175,10 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
     }
     ctx.pop("error", None)
     try:
-        ctx["response"] = CreateMediaBuyRequest(
+        # NOT ctx["response"]: this is the constructed REQUEST, not a response.
+        # It shared the key with dispatch responses, so a Then could read a
+        # request believing it had a response — the ambiguity lane gra7.5 removes.
+        ctx["constructed_request"] = CreateMediaBuyRequest(
             brand={"domain": "buyer.example.com"},
             start_time=datetime(2025, 1, 1, tzinfo=UTC),
             end_time=datetime(2025, 2, 1, tzinfo=UTC),
@@ -3535,7 +3505,7 @@ def _assert_no_error_for_mb(ctx: dict, mb_id: str) -> None:
     3. Per-delivery error field for this real_id must be None
     """
     real_id = _resolve_media_buy_id(ctx, mb_id)
-    resp = ctx.get("response")
+    resp = payload_or_none(ctx)
     error = ctx.get("error")
     assert resp is not None or error is not None, "Neither error nor response in ctx — test setup failed"
     # If a general error occurred, check it's not about this specific mb_id
@@ -3600,8 +3570,8 @@ def _find_field_in_response(resp: object, field: str) -> tuple[object, str]:
 
 def _assert_placement_sorted_by(ctx: dict, metric: str) -> None:
     """Assert by_placement in at least one package is sorted descending by *metric*."""
-    resp = ctx.get("response") or ctx.get("result")
-    assert resp is not None, "No response in ctx — When step must store ctx['response']"
+    resp = payload_or_none(ctx)
+    assert resp is not None, "No response in ctx — When step must dispatch so a payload exists"
     deliveries = getattr(resp, "media_buy_deliveries", None) or []
     assert deliveries, "No deliveries in response"
     found_placement = False
