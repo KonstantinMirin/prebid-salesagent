@@ -371,18 +371,15 @@ def _find_ctx_response_access() -> set[str]:
 
 class TestNoProvenanceStrippedResponseCopy:
     def test_steps_read_the_dispatch_result_not_a_payload_copy(self):
-        offenders = sorted(_find_ctx_response_access() - _CTX_RESPONSE_ALLOWLIST)
-        assert not offenders, (
-            "BDD step modules still read ctx['response'], a provenance-stripped copy of the "
-            f"payload: {offenders}. A Then reading it cannot tell a wire fact from an "
-            "in-process reconstruction. Read the dispatch's TransportResult instead — "
-            "require_payload(ctx) when a payload is required, payload_or_none(ctx) when the "
-            "step branches on which path ran. Modules whose When calls production directly "
-            "stash under ctx['self_dispatched_response'], which those accessors know by name."
-        )
-
-    def test_ctx_response_allowlist_has_no_stale_entries(self):
-        stale = sorted(_CTX_RESPONSE_ALLOWLIST - _find_ctx_response_access())
-        assert not stale, (
-            f"These modules no longer read ctx['response'] and must leave the allowlist: {stale}. It is shrink-only."
+        """No step module reads ctx["response"] in any of its five access forms."""
+        assert_violations_match_allowlist(
+            {(module,) for module in _find_ctx_response_access()},
+            {(module,) for module in _CTX_RESPONSE_ALLOWLIST},
+            fix_hint=(
+                "A Then reading ctx['response'] cannot tell a wire fact from an in-process "
+                "reconstruction. Read the dispatch's TransportResult instead — require_payload(ctx) "
+                "when a payload is required, payload_or_none(ctx) when the step branches on which "
+                "path ran. Modules whose When calls production directly stash under "
+                "ctx['self_dispatched_response'], which those accessors know by name."
+            ),
         )

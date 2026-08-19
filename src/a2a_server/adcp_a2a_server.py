@@ -49,7 +49,7 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
-from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
+from adcp.types import ContextObject, GeneratedTaskStatus
 from adcp.types.base import AdCPBaseModel
 from google.protobuf import json_format, struct_pb2
 
@@ -1742,23 +1742,26 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion="Required: ['creatives']",
             )
 
-        # Construct typed models at the A2A boundary (Pydantic validation at entry).
-        # Pre-process format_id: upgrade legacy strings to FormatId models.
-        from src.core.format_cache import upgrade_legacy_format_id
-
+        # The creatives array goes through UNCONSTRUCTED. sync_creatives_raw's
+        # declared contract is list[CreativeAsset] | list[dict[str, Any]] because
+        # _sync_creatives_impl validates each entry INDIVIDUALLY — the pinned
+        # sync-creatives-response schema calls a synchronous sync "best-effort
+        # processing with per-item status/failures", and says action="failed"
+        # items are per-item validation failures, NOT operation-level ones.
+        #
+        # Constructing the whole array here inverted that: one item missing a
+        # CreativeAsset-required field raised a request-level VALIDATION_ERROR and
+        # failed the entire batch, on A2A alone. MCP and REST always passed dicts
+        # through. The legacy format_id upgrade is gone with it — CreativeAsset's
+        # own validator performs exactly that upgrade, so doing it here only
+        # produced a LOCAL subclass instance that no other transport creates.
         with adcp_validation_boundary(context="sync_creatives request"):
-            creatives = []
-            for c in parameters["creatives"]:
-                if isinstance(c, dict) and "format_id" in c:
-                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
-
             ctx_param = parameters.get("context")
             context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
         # Call core function with spec-compliant parameters (AdCP v2.5)
         response = core_sync_creatives_tool(
-            creatives=creatives,
+            creatives=parameters["creatives"],
             # AdCP 2.5: Full upsert semantics (patch parameter removed)
             creative_ids=parameters.get("creative_ids"),
             assignments=parameters.get("assignments"),

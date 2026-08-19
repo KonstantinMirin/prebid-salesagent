@@ -55,6 +55,11 @@ from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness.egress import EgressHatchMixin
 
+# Kwargs ``IntegrationEnv._run_a2a_handler`` consumes itself (identity mock, protocol-level
+# push config, request model) rather than forwarding as skill parameters — see
+# tests/harness/_base.py. They must reach it untouched.
+_A2A_RESERVED_KWARGS = frozenset({"identity", "a2a_push_notification_config", "req"})
+
 
 class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _sync_creatives_impl.
@@ -191,19 +196,25 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         return _sync_creatives_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
-        """Call sync_creatives_raw (A2A wrapper) with real DB.
+        """Dispatch sync_creatives through the real A2A ``on_message_send`` pipeline.
 
-        Note: uses _raw() path instead of _run_a2a_handler because the real
-        A2A handler's _handle_sync_creatives_skill constructs CreativeAsset
-        from raw dicts, which fails validation (assets field required).
-        That handler bug needs a separate fix.
+        Delegates to the base ``_run_a2a_handler`` (message parse → skill
+        routing → ``_handle_sync_creatives_skill`` → ``_serialize_for_a2a`` →
+        Task/Artifact DataPart), so the a2a seat grades the real handler
+        rather than standing in for it with an in-process ``_raw`` call.
+
+        Outbound kwargs go through :meth:`_wire_value` first — everything but
+        the three keys ``_run_a2a_handler`` consumes itself becomes a skill
+        parameter and is JSON-serialized by ``_dict_to_value``, which would
+        turn a typed Pydantic model into a repr string instead of a document a
+        buyer could actually send.
         """
-        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
-
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
-        return sync_creatives_raw(**kwargs)
+        return self._run_a2a_handler(
+            "sync_creatives",
+            SyncCreativesResponse,
+            **{k: v if k in _A2A_RESERVED_KWARGS else self._wire_value(v) for k, v in kwargs.items()},
+        )
 
     def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
         """Call sync_creatives via Client(mcp) — full pipeline dispatch.
@@ -213,36 +224,34 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         kwargs.setdefault("creatives", [])
         return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
 
+    @classmethod
+    def _wire_value(cls, value: Any) -> Any:
+        """Convert a Pydantic model (or a list of them) to its wire dict form.
+
+        Anything else passes through unchanged. Conversion only: no key
+        filtering, no ``exclude_none`` — the REST seat's existing semantics.
+        """
+        if isinstance(value, list):
+            return [cls._wire_value(item) for item in value]
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        return value
+
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""
-        # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody
+        # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody.
+        # 'push_notification_config' and 'account' are declared by SyncCreativesBody and
+        # forwarded by the route to sync_creatives_raw — dropping either here would make
+        # any REST test of that behavior silently vacuous.
         body: dict[str, Any] = {}
         if "creatives" in kwargs:
-            creatives = kwargs["creatives"]
-            # Convert Pydantic models to dicts if needed
-            body["creatives"] = [c.model_dump(mode="json") if hasattr(c, "model_dump") else c for c in creatives]
-        if "assignments" in kwargs and kwargs["assignments"] is not None:
-            body["assignments"] = kwargs["assignments"]
-        if "creative_ids" in kwargs and kwargs["creative_ids"] is not None:
-            body["creative_ids"] = kwargs["creative_ids"]
-        if "delete_missing" in kwargs:
-            body["delete_missing"] = kwargs["delete_missing"]
-        if "dry_run" in kwargs:
-            body["dry_run"] = kwargs["dry_run"]
-        if "validation_mode" in kwargs:
-            body["validation_mode"] = kwargs["validation_mode"]
-        if "push_notification_config" in kwargs and kwargs["push_notification_config"] is not None:
-            # SyncCreativesBody declares it and the route forwards it to
-            # sync_creatives_raw — dropping it here would make any REST test of
-            # push_notification_config behavior silently vacuous.
-            pnc = kwargs["push_notification_config"]
-            body["push_notification_config"] = pnc.model_dump(mode="json") if hasattr(pnc, "model_dump") else pnc
-        if "account" in kwargs and kwargs["account"] is not None:
-            account = kwargs["account"]
-            body["account"] = account.model_dump(mode="json") if hasattr(account, "model_dump") else account
-        if "push_notification_config" in kwargs and kwargs["push_notification_config"] is not None:
-            pnc = kwargs["push_notification_config"]
-            body["push_notification_config"] = pnc.model_dump(mode="json") if hasattr(pnc, "model_dump") else pnc
+            body["creatives"] = self._wire_value(kwargs["creatives"])
+        for key in ("assignments", "creative_ids", "push_notification_config", "account"):
+            if kwargs.get(key) is not None:
+                body[key] = self._wire_value(kwargs[key])
+        for key in ("delete_missing", "dry_run", "validation_mode"):
+            if key in kwargs:
+                body[key] = self._wire_value(kwargs[key])
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:
