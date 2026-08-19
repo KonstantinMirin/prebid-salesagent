@@ -1588,7 +1588,14 @@ def verify_features(adcp_req_path: Path) -> bool:
 
     recorded_commit = traceability.get("source", {}).get("commit")
     if recorded_commit != commit_sha:
-        print(f"STALE: traceability records commit {recorded_commit or 'null'}, but adcp-req HEAD is {commit_sha[:10]}")
+        # Bookkeeping only: this compares SHAs, not content, and returns before
+        # a single file is examined. An adcp-req commit touching no feature file
+        # lands here too, so this says nothing about whether the features are current.
+        print(
+            f"STALE: traceability records commit {recorded_commit or 'null'}, "
+            f"but adcp-req HEAD is {commit_sha[:10]} "
+            f"(sha bookkeeping only — no feature file was compared)"
+        )
         return False
 
     feature_files = _find_feature_files(adcp_req_path)
@@ -1624,7 +1631,17 @@ def verify_features(adcp_req_path: Path) -> bool:
         print(f"STALE compiled files: {', '.join(stale)}")
 
     if missing or stale:
-        print("\nRe-run: python scripts/compile_bdd.py --all")
+        # NOT "--all". That path never reaches the LEGACY-PRESERVE branch, so it
+        # discards every @hand-edited scenario. A merge-mode file ALWAYS reports
+        # stale here (see the limitation in this function's docstring), so a stale
+        # line is not by itself evidence that anything needs regenerating.
+        print(
+            "\nTo check a merge-mode file, re-run the merge for that UC and diff:"
+            "\n    python scripts/compile_bdd.py --uc <NNN> --merge"
+            "\na no-op leaves only the generation stamp and whitespace."
+            "\nDo NOT run --all to clear this: it discards locally-preserved"
+            " (@hand-edited) scenarios."
+        )
         return False
 
     print(f"All {len(feature_files)} compiled feature files are up-to-date.")
