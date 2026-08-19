@@ -302,10 +302,15 @@ async def untyped_exception_handler(request: Request, exc: Exception) -> JSONRes
     traceback in the response body — worse than the leak prkv.8 fixes in
     ``normalize_to_adcp_error``.
 
-    Registered last so FastAPI's most-specific-handler-wins matching still
-    routes ``AdCPError``/``ValueError``/``RequestValidationError``/
-    ``PermissionError``/``ToolError`` to their own handlers above; this is
-    the fallback for everything else.
+    Registration ORDER is irrelevant here, and it is worth being precise about
+    why: Starlette stores handlers in a dict keyed by exception CLASS and
+    resolves by walking ``type(exc).__mro__`` for the nearest registered
+    ancestor. So ``AdCPError``/``ValueError``/``RequestValidationError``/
+    ``PermissionError``/``ToolError`` keep their own handlers no matter where
+    this one sits (``ToolError``'s is in fact registered below it), and this
+    catches only what has no more specific handler. Do not "fix" this by moving
+    it last — that would imply an ordering guarantee that does not exist.
+    Verified: RuntimeError/KeyError resolve here; the five typed ones do not.
     """
     return _envelope_response(request, normalize_to_adcp_error(exc), log_as=exc)
 
