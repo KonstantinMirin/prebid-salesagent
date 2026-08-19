@@ -375,12 +375,29 @@ elif ! command -v uvx >/dev/null 2>&1; then
     [ "$RC" -eq 0 ] && RC=1
 else
     echo "Running security audit (uv-secure)..."
-    if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+    # stderr is KEPT. It used to go to /dev/null, which made this step the only
+    # one in the script that can fail the whole run while destroying the reason:
+    # three consecutive in-network runs exited 1 here with a green suite and left
+    # nothing to diagnose, and the same lockfile audits clean (243 deps, no
+    # vulnerabilities) in every isolated reproduction — the VM host, the tests
+    # image, and the supervisor image. Whatever differs is visible only in the
+    # stream that was being discarded. A failure loud enough to fail the run must
+    # be loud enough to explain itself.
+    audit_log=$(mktemp)
+    if ./scripts/security-audit.sh --no-check-uv-tool >"$audit_log" 2>&1; then
         echo "Security audit passed"
     else
-        echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+        # FIRST statement in this branch: $? is still the audit's status here.
+        # One echo earlier and it would report that echo instead — the same
+        # class of self-erasing diagnostic this change exists to remove.
+        audit_rc=$?
+        echo "Security audit FAILED (exit $audit_rc) — run: ./scripts/security-audit.sh"
+        echo "--- security audit output ---"
+        cat "$audit_log"
+        echo "--- end security audit output ---"
         [ "$RC" -eq 0 ] && RC=1
     fi
+    rm -f "$audit_log"
 fi
 
 exit $RC
