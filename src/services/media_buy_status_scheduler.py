@@ -130,7 +130,7 @@ class MediaBuyStatusScheduler:
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
 
-    def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> str | None:
+    def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> PersistedMediaBuyStatus | None:
         """The status this sweep should write, or ``None`` to leave the row alone.
 
         The flight-window rule itself lives in

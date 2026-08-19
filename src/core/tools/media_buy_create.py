@@ -1240,7 +1240,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # (UC-002:437 — "updates the media buy status to active")
         with MediaBuyUoW(tenant_id) as uow3:
             assert uow3.media_buys is not None
-            uow3.media_buys.update_status(media_buy_id, "active")
+            uow3.media_buys.update_status(media_buy_id, PersistedMediaBuyStatus.ACTIVE)
             logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
 
         return True, None
@@ -1623,6 +1623,7 @@ async def _validate_and_convert_format_ids(
     return validated_format_ids
 
 
+from src.core.database.models import PersistedMediaBuyStatus
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
 
@@ -2863,7 +2864,7 @@ async def _create_media_buy_impl(
                         currency=request_currency or "USD",
                         start_time=start_time,
                         end_time=end_time,
-                        status="pending_approval",
+                        status=PersistedMediaBuyStatus.PENDING_APPROVAL,
                         order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
                         package_id_map=package_id_map,
                         by_alias=True,
@@ -3650,7 +3651,7 @@ async def _create_media_buy_impl(
                     currency=request_currency,
                     start_time=start_time,
                     end_time=end_time,
-                    status=media_buy_status,
+                    status=PersistedMediaBuyStatus.parse(media_buy_status),
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
                     account_id=identity.account_id if identity else None,

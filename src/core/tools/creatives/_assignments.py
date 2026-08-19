@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
@@ -282,7 +283,7 @@ def _process_assignments(
             assert uow.media_buys is not None
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
-                    uow.media_buys.update_status(mb_id, "pending_creatives")
+                    uow.media_buys.update_status(mb_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
 
             # UoW auto-commits on clean exit

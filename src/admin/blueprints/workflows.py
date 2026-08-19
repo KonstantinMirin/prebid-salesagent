@@ -10,7 +10,7 @@ from sqlalchemy import select
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Context
+from src.core.database.models import Context, PersistedMediaBuyStatus
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -222,7 +222,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                                 f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
                                 "info",
                             )
-                            media_buy_repo.update_status(media_buy_id, "pending_creatives")
+                            media_buy_repo.update_status(media_buy_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                             db.commit()
                             return jsonify({"success": True}), 200
 
@@ -241,7 +241,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # revision bump and the write-once confirmed_at stamp.
                     media_buy_repo.update_status(
                         media_buy_id,
-                        "scheduled",
+                        PersistedMediaBuyStatus.SCHEDULED,
                         approved_at=datetime.now(UTC),
                         approved_by=user_email,
                     )

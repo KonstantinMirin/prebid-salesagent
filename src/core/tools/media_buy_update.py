@@ -68,6 +68,7 @@ from src.core.database.models import (
 from src.core.database.models import (
     MediaBuy,
     ObjectWorkflowMapping,
+    PersistedMediaBuyStatus,
 )
 from src.core.database.models import (
     Product as DBProduct,
@@ -947,7 +948,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            uow.media_buys.update_status(actual_media_buy_id, "pending_creatives")
+                            uow.media_buys.update_status(actual_media_buy_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_ids: {pkg_update.creative_ids})"
@@ -1183,7 +1184,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            uow.media_buys.update_status(actual_media_buy_id, "pending_creatives")
+                            uow.media_buys.update_status(actual_media_buy_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_assignments processed: {updated_assignments})"

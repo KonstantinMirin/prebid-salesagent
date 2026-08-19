@@ -56,7 +56,7 @@ class MediaBuyRepository:
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
 
     @staticmethod
-    def _validated_status(status: str | PersistedMediaBuyStatus) -> PersistedMediaBuyStatus:
+    def _validated_status(status: PersistedMediaBuyStatus) -> PersistedMediaBuyStatus:
         """The member ``status`` spells, or ``AdCPPersistedStateError``.
 
         Every door that writes the column goes through here. The vocabulary is
@@ -362,7 +362,7 @@ class MediaBuyRepository:
         currency: str,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-        status: str | PersistedMediaBuyStatus = PersistedMediaBuyStatus.DRAFT,
+        status: PersistedMediaBuyStatus = PersistedMediaBuyStatus.DRAFT,
         order_name: str | None = None,
         campaign_objective: str | None = None,
         kpi_goal: str | None = None,
@@ -465,7 +465,9 @@ class MediaBuyRepository:
                 f"Tenant mismatch: media_buy.tenant_id={media_buy.tenant_id!r} "
                 f"!= repository tenant_id={self._tenant_id!r}"
             )
-        media_buy.status = self._validated_status(media_buy.status)
+        # The caller built this row itself, so its status column is still a raw
+        # string; parse it at the door like any other untyped input.
+        media_buy.status = PersistedMediaBuyStatus.parse(media_buy.status, media_buy_id=media_buy.media_buy_id)
         self._stamp_confirmation_if_needed(media_buy)
         self._session.add(media_buy)
         self._session.flush()
@@ -505,7 +507,7 @@ class MediaBuyRepository:
     def update_status(
         self,
         media_buy_id: str,
-        status: str | PersistedMediaBuyStatus,
+        status: PersistedMediaBuyStatus,
         *,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,

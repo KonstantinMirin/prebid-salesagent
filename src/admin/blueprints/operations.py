@@ -456,7 +456,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # Adapter creation failed - update status and show error
                         with get_db_session() as error_session:
                             error_repo = MediaBuyRepository(error_session, tenant_id)
-                            error_buy = error_repo.update_status(media_buy_id, "failed")
+                            error_buy = error_repo.update_status(media_buy_id, PersistedMediaBuyStatus.FAILED)
                             if error_buy:
                                 error_session.commit()
 
@@ -567,7 +567,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # approve_repo is constructed before the action split, so it is the
                     # repository in scope here too — rejection moves the buy's revision
                     # like any other status change.
-                    approve_repo.update_status(media_buy_id, "rejected")
+                    approve_repo.update_status(media_buy_id, PersistedMediaBuyStatus.REJECTED)
 
                 db_session.commit()
 
