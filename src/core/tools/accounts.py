@@ -44,6 +44,7 @@ from src.core.schemas.account import (
     SyncAccountsResponse,
     SyncResponseAccount,
 )
+from src.core.spec_request_carrier import refuse_unsupported_fields
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import resolve_identity_from_context
@@ -110,6 +111,15 @@ def _apply_pagination(
     )
 
 
+# The one body-semantic field `list_accounts` ACCEPTS and cannot act on. Results
+# are scoped to the accounts the authenticated agent may reach (BR-RULE-054), so a
+# request narrowed to one account reference would silently return the agent's whole
+# accessible set instead.
+_UNSUPPORTED_LIST_ACCOUNTS_FIELDS = {
+    "account": "filtering by account reference is not implemented; results are scoped to the authenticated agent",
+}
+
+
 def _list_accounts_impl(
     req: ListAccountsRequest | None = None,
     identity: ResolvedIdentity | None = None,
@@ -128,6 +138,8 @@ def _list_accounts_impl(
     """
     if req is None:
         req = ListAccountsRequest()
+
+    refuse_unsupported_fields(req, tool="list_accounts", unsupported=_UNSUPPORTED_LIST_ACCOUNTS_FIELDS)
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
     principal_id = require_principal_id(identity, context=req.context)

@@ -276,13 +276,22 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
+    # Routed through the DECORATED raw wrapper, like every other /api/v1 route.
+    # This was the ONE route that hand-built a request and called `_impl`
+    # directly, and that made it the one transport where the acceptance seam was
+    # bypassed: `RestCompatMiddleware` publishes the wire body for `/products`,
+    # but only `@accepts_spec_request_fields` reads it onto `_spec_request`, so
+    # every field not named in these three arguments — `account`, `buying_mode`,
+    # `time_budget`, the whole pinned set — was silently dropped between the
+    # transport and the tool. MCP and A2A refused/honored them correctly while
+    # REST answered 200 and ignored them.
     with adcp_validation_boundary(context="get_products request"):
-        req = products_module.create_get_products_request(
+        response = await products_module.get_products_raw(
             brief=body.brief,
             brand=body.brand,
             filters=body.filters,
+            identity=identity,
         )
-    response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")
     return apply_version_compat("get_products", result, body.adcp_version)
 

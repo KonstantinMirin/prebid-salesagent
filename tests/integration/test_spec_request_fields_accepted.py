@@ -34,15 +34,15 @@ step ``get_products_brief``.
 from __future__ import annotations
 
 import asyncio
-import inspect
 from typing import Any
 
 import pytest
 
 from src.core.version_compat import accepts_spec_request_fields, spec_request_model
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.harness.product import ProductEnv
+from tests.harness.spec_field_consumption import UNDISPOSED_LEDGER, spec_tool_names, undisposed_fields
 from tests.harness.transport import Transport
+from tests.helpers import assert_envelope_shape
+from tests.helpers.sample_account import SAMPLE_ACCOUNT, spec_field_product_env
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -51,26 +51,14 @@ STORYBOARD_SAMPLE_REQUEST = {
     "buying_mode": "brief",
     "brief": "Display inventory on outdoor lifestyle content. Q3 flight.",
     "filters": {"is_fixed_price": True},
-    "account": {
-        "brand": {"domain": "acmeoutdoor.example"},
-        "operator": "pinnacle-agency.example",
-    },
+    "account": SAMPLE_ACCOUNT,
 }
 
 
 @pytest.fixture
 def product_env(integration_db):
-    with ProductEnv(tenant_id="spec-fields", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="spec-fields")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
-        # A product must carry at least one pricing option to serialize at all —
-        # without it get_products fails with SERVICE_UNAVAILABLE, which would
-        # make every case here fail for a reason that has nothing to do with
-        # request-field acceptance.
-        product = ProductFactory(tenant=tenant, delivery_type="guaranteed")
-        PricingOptionFactory(product=product, pricing_model="cpm", rate="15.00", is_fixed=True, currency="USD")
-        env.set_policy_approved()
-        env.set_ranking_disabled()
+    """The seeded world both spec-field graders need (see the helper for why)."""
+    with spec_field_product_env("spec-fields") as env:
         yield env
 
 
@@ -156,70 +144,12 @@ def test_unknown_arguments_are_still_rejected(product_env):
 # never sees at all.
 # ══════════════════════════════════════════════════════════════════════════
 
-# Plan step 1's accept-and-ignore class: the version/protocol envelope, which
-# a seller MUST tolerate without acting on (AdCP 3.1.1
-# building/by-layer/L1/security.mdx, "Server-side tool wrapper conformance";
-# mirrored by src.core.version_compat.SPEC_ENVELOPE_FIELDS). Everything else a
-# request schema defines carries body semantics and owes a disposition.
-ENVELOPE_FIELDS = frozenset(
-    {
-        "adcp_version",
-        "adcp_major_version",
-        "context",
-        "context_id",
-        "governance_context",
-    }
-)
-
-# `idempotency_key` is envelope-class on READS (nothing to de-duplicate) and
-# body-semantic on WRITES (dropping it silently re-executes a retried write —
-# the second live regression this lane exists to fix). Read-vs-write is taken
-# from the SDK's own `readOnlyHint`, never a hand-maintained list.
-IDEMPOTENCY_KEY = "idempotency_key"
-
-
-def _is_read_tool(tool_name: str) -> bool:
-    from src.core.main import ADCP_TOOL_DEFINITIONS
-
-    for definition in ADCP_TOOL_DEFINITIONS:
-        if definition["name"] == tool_name:
-            return bool((definition.get("annotations") or {}).get("readOnlyHint"))
-    raise AssertionError(f"{tool_name} has no SDK tool definition — cannot classify it as a read or a write")
-
-
-def _envelope_fields_for(tool_name: str) -> frozenset[str]:
-    """The accept-and-ignore class for one tool, read/write split applied."""
-    if _is_read_tool(tool_name):
-        return ENVELOPE_FIELDS | {IDEMPOTENCY_KEY}
-    return ENVELOPE_FIELDS
-
-
-def _published_input_fields(tool_name: str) -> frozenset[str]:
-    """The properties a tool actually ADVERTISES over MCP.
-
-    The registered tool's published input schema — what a buyer sees from
-    `tools/list` and what FastMCP validates against — not
-    `inspect.signature(main.<tool>)`, which is the UNDECORATED function
-    (acceptance is applied at registration, src/core/main.py:_register_tool).
-    Same derivation as tests/unit/test_architecture_spec_request_fields.py.
-    """
-    from src.core.main import mcp
-
-    tool = asyncio.run(mcp.get_tool(tool_name))
-    assert tool is not None, f"{tool_name} is no longer registered with the MCP server"
-    return frozenset(tool.parameters.get("properties", {}))
-
-
-def _declared_params(tool_name: str) -> frozenset[str]:
-    """Parameters the tool's own function signature declares.
-
-    These reach the tool body by construction, so they are honored whatever
-    the seam does.
-    """
-    import src.core.main as main_module
-
-    undecorated = getattr(main_module, tool_name)
-    return frozenset(inspect.signature(undecorated).parameters)
+# The accept-and-ignore class, the read/write idempotency split, the published
+# input schema and the declared-parameter set all live in
+# `tests/harness/spec_field_consumption.py` — one implementation, shared with the
+# unit guard `test_architecture_spec_field_disposition.py`. Two copies of "what
+# counts as honored" is how the first version of this grader drifted into
+# counting carrier DELIVERY as honoring.
 
 
 def _seam_delivered_request_model(tool_name: str, payload: dict[str, Any]) -> Any:
@@ -296,38 +226,35 @@ SEAM_PAYLOADS: dict[str, dict[str, Any]] = {
 }
 
 
-@pytest.mark.parametrize("tool_name", sorted(SEAM_PAYLOADS))
+@pytest.mark.parametrize("tool_name", spec_tool_names())
 def test_published_schema_minus_honored_is_empty_for_body_semantic_fields(tool_name):
     """Plan §5's grader: published MCP schema MINUS honored == empty (body-semantic).
 
-    Every field a tool advertises must be one of three things: envelope-class
-    (accept-and-ignore, plan step 1), declared on the tool's own signature (so
-    it reaches the body by construction), or delivered to the body by the seam
-    inside the pinned request model. A field in none of those is published to
-    buyers and silently dropped — accept-and-drop, the thing the Core Invariant
-    forbids. The remaining escape, refusing the field outright, removes it from
-    `accepted_names` and therefore from the published schema, so it never
-    reaches this subtraction at all.
+    Every field a tool advertises must be one of three things: accept-and-ignore
+    (the spec-prose envelope class), declared on the tool's own signature (so it
+    reaches the body by construction), or DISPOSED by the tool's code — read off
+    the request it acts on, or refused with an explicit `AdCPError`. A field in
+    none of those is published to buyers and silently dropped.
 
-    Note this also pins reviewer note 2: the seam's model carrier must be kept
-    OUT of the published MCP schema (`version_compat.py` builds
-    `decorated.__signature__` from the original parameters plus its additions),
-    or the carrier itself shows up here as an unhonored body-semantic field.
+    HONORED is measured from what the tool's code actually CONSUMES, never from
+    what the seam DELIVERS. The first version of this assertion computed
+    `honored = declared | type(delivered).model_fields`, so merely handing a tool
+    the pinned model marked every field of that model honored — it degenerated to
+    "published minus CARRIED", which is empty by construction, and passed
+    vacuously for the fourteen tools that never read the carrier at all.
+
+    This also still pins reviewer note 2: the seam's model carrier must be kept
+    OUT of the published MCP schema, or the carrier itself surfaces here as an
+    unhonored body-semantic field.
     """
-    published = _published_input_fields(tool_name)
-    delivered = _seam_delivered_request_model(tool_name, SEAM_PAYLOADS[tool_name])
-    honored = _declared_params(tool_name) | (
-        frozenset(type(delivered).model_fields) if delivered is not None else frozenset()
-    )
+    undisposed = undisposed_fields(tool_name)
+    ledgered = sorted(UNDISPOSED_LEDGER.get(tool_name, frozenset()))
 
-    unhonored = sorted(published - _envelope_fields_for(tool_name) - honored)
-
-    assert unhonored == [], (
-        f"{tool_name} advertises {len(unhonored)} body-semantic field(s) that never reach the tool "
-        f"body: {unhonored}. They are accepted on the wire and stripped before the body "
-        f"(version_compat.py _strip), so the buyer is told they were applied. Each owes a "
-        f"disposition: threaded into the pinned request model (honored, or refused there with an "
-        f"explicit AdCPError), or removed from accepted_names so the transport refuses it loudly."
+    assert undisposed == ledgered, (
+        f"{tool_name} advertises {len(undisposed)} body-semantic field(s) with no disposition: "
+        f"{undisposed}. They are accepted on the wire and never reach any line of the tool's code, "
+        f"so the buyer is told they were applied. Each owes a disposition: honored (read off the "
+        f"request the tool acts on), or refused with an explicit AdCPError."
     )
 
 
@@ -406,4 +333,50 @@ def test_canceled_true_on_a_live_buy_actually_cancels_it(live_media_buy_env):
     assert persisted.status == "canceled", (
         f"The seller reported success but the buy is still {persisted.status!r} — "
         "accepted-and-dropped on the money path."
+    )
+
+
+# ── Refuse side: a REFUSED field must say so on the wire ──────────────────
+#
+# The refuse arm's behavioral grader, and the counterpart to the honor arm
+# above. Until this existed the disposition rule was graded ONLY statically:
+# `test_every_published_body_semantic_field_has_a_disposition` reads the tool's
+# source and confirms a field is named somewhere, which says nothing about what
+# a buyer who sends it actually receives. A refusal that raised the wrong code,
+# or that a transport swallowed into a 500, would have been invisible.
+
+
+@pytest.mark.parametrize("transport", [Transport.MCP, Transport.A2A, Transport.REST])
+def test_a_refused_field_returns_unsupported_feature_on_the_wire(product_env, transport):
+    """`get_products` REFUSES `time_budget`, and the buyer is told so in AdCP terms.
+
+    Asserted on the wire envelope, not a reconstructed exception (tests/CLAUDE.md
+    "Error Verification Policy"): reconstruction is lossy, and the point here is
+    precisely what crosses the transport boundary. Run on MCP/A2A/REST because
+    only those observe real wire bytes — IMPL has none.
+
+    Contract: AdCP 3.1.1 UNSUPPORTED_FEATURE ("Requested feature not supported by
+    this seller"), recovery `correctable` — the buyer removes the field and
+    retries, which is why it must not surface as terminal or as a 500.
+    """
+    result = product_env.call_via(
+        transport,
+        brief="Display inventory on outdoor lifestyle content.",
+        # A schema-VALID Duration ({interval, unit}), not a bare int: an invalid
+        # value is rejected as VALIDATION_ERROR at the request boundary before
+        # the refusal can fire, which would grade schema validation instead of
+        # the disposition.
+        time_budget={"interval": 30, "unit": "seconds"},
+    )
+
+    assert result.is_error, (
+        f"get_products accepted `time_budget` on {transport.value} instead of refusing it. "
+        "Its _UNSUPPORTED_GET_PRODUCTS_FIELDS map declares the field unimplemented, so accepting "
+        "it silently is the accept-and-drop defect the disposition rule exists to prevent."
+    )
+    assert_envelope_shape(
+        result.wire_error_envelope,
+        "UNSUPPORTED_FEATURE",
+        recovery="correctable",
+        message_substr="time_budget",
     )

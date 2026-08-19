@@ -44,6 +44,7 @@ from src.core.schemas import (
 )
 from src.core.schemas.creative import ListCreativeFormatsResponse
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
+from src.core.schemas.task_management import ListTasksResponse
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_publisher_properties_by_tag
 
@@ -794,7 +795,8 @@ class _RegistryRow:
 # human_tasks-deprecated: CheckCreativeStatusResponse, CreateCreativeResponse,
 # AddCreativeAssetsResponse, GetCreativesResponse, GetPendingCreativesResponse,
 # ApproveCreativeResponse, AssignCreativeResponse, UpdatePerformanceIndexResponse,
-# CheckMediaBuyStatusResponse, *HumanTask*, *Task*, GetTargetingCapabilities,
+# CheckMediaBuyStatusResponse, *HumanTask*, the remaining *Task* models (ListTasksResponse is now spec-grounded and IS registered below),
+# GetTargetingCapabilities,
 # CheckAXERequirements, SimulationControl, ListAuthorizedProperties,
 # GetMediaBuysResponse, GetAllMediaBuyDelivery, Adapter*) are not spec-grounded
 # success arms and are excluded.
@@ -803,6 +805,15 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         schema_ref="media-buy/get-products-response.json",
         selector="products",
         model=GetProductsResponse,
+    ),
+    _RegistryRow(
+        # Registered by PR #1858 Lane A: `list_tasks` was the tool that surfaced
+        # the epic's central finding — nothing ever parsed a response against its
+        # pinned model, so omitted required fields were invisible. Binding it here
+        # is what makes `query_summary`/`pagination` graded rather than assumed.
+        schema_ref="protocol/list-tasks-response.json",
+        selector="tasks",
+        model=ListTasksResponse,
     ),
     _RegistryRow(
         schema_ref="media-buy/create-media-buy-response.json",

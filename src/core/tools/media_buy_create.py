@@ -156,6 +156,9 @@ from src.core.schemas import (
 from src.core.schemas import (
     url as make_url,
 )
+
+# Import get_product_catalog from main (after refactor)
+from src.core.spec_request_carrier import merge_spec_request, refuse_unsupported_fields
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -165,8 +168,6 @@ from src.core.tools.financial_validation import (
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
-
-# Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
 from src.core.version_compat import accepts_spec_request_fields
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
@@ -2000,6 +2001,31 @@ def _resolve_idempotency_race_or_raise(
     )
 
 
+# Body-semantic fields `create_media_buy` ACCEPTS on the wire (its pinned 3.1.1
+# request schema defines them) and this seller cannot act on. Every one of them is
+# on the MONEY path — a buy executed from a proposal the seller never read, or
+# invoiced to an entity it silently ignored, is exactly the "returns success while
+# the money moves somewhere else" failure this seam exists to prevent — so they are
+# REFUSED, loudly, rather than dropped.
+#
+# Named here, in the tool that owes the disposition: "what this seller implements"
+# exists nowhere else to derive it from. Every OTHER field of the pinned model
+# reaches `_impl` on the seam's carrier and is honored.
+_UNSUPPORTED_CREATE_MEDIA_BUY_FIELDS = {
+    "proposal_id": "executing a committed proposal from get_products is not implemented",
+    "total_budget": "proposal-derived package budgets are not implemented; set budget per package",
+    "io_acceptance": "insertion-order signature acceptance is not implemented",
+    "plan_id": "campaign governance plans are not implemented",
+    "invoice_recipient": (
+        "per-buy billing-entity override is not implemented, and the spec requires the seller to "
+        "validate the recipient is authorized for the account"
+    ),
+    "advertiser_industry": "per-buy industry classification is not recorded",
+    "agency_estimate_number": "agency estimate/authorization numbers are not recorded",
+    "artifact_webhook": "content-artifact delivery to governance agents is not implemented",
+}
+
+
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | None = None,
@@ -2023,6 +2049,8 @@ async def _create_media_buy_impl(
         CreateMediaBuyResult wrapping response and status
     """
     request_start_time = time.time()
+
+    refuse_unsupported_fields(req, tool="create_media_buy", unsupported=_UNSUPPORTED_CREATE_MEDIA_BUY_FIELDS)
 
     # Warn if unsupported reporting_webhook frequency is requested
     if req.reporting_webhook:
@@ -4332,6 +4360,7 @@ def _build_create_media_buy_request(
     account: AccountReference | None,
     idempotency_key: str | None,
     paused: bool | None,
+    spec_request: BaseModel | None = None,
 ) -> CreateMediaBuyRequest:
     """Shared boundary request construction for the MCP and A2A/REST wrappers.
 
@@ -4348,7 +4377,7 @@ def _build_create_media_buy_request(
     # it turns a Pydantic ValidationError into a typed AdCPValidationError
     # carrying the field path + suggestion.
     with adcp_validation_boundary(context="request"):
-        return CreateMediaBuyRequest(
+        req = CreateMediaBuyRequest(
             brand=to_brand_reference(brand),
             packages=packages,
             start_time=start_time,
@@ -4365,6 +4394,9 @@ def _build_create_media_buy_request(
             # None type error.
             **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
         )
+    # Body-semantic fields the flat parameters above never declared ride in on the
+    # seam's carrier — `_impl` then honors or refuses each one.
+    return merge_spec_request(req, spec_request)
 
 
 async def create_media_buy(
@@ -4464,6 +4496,7 @@ async def create_media_buy(
         account=account,
         idempotency_key=idempotency_key,
         paused=paused,
+        spec_request=_spec_request,
     )
 
     # Read identity, context_id, and the raw wire arguments pre-stashed by
@@ -4555,6 +4588,7 @@ async def create_media_buy_raw(
         account=account,
         idempotency_key=idempotency_key,
         paused=paused,
+        spec_request=_spec_request,
     )
 
     if identity is None:

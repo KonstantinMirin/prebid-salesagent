@@ -104,13 +104,24 @@ class ProductEnv(ProductMixin, IntegrationEnv):
             return asyncio.run(coro)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to GetProductsBody shape for REST POST.
+        """Everything the caller sent, on the wire, verbatim.
 
-        GetProductsBody (src/routes/api_v1.py) accepts:
-            brief, brand, filters, adcp_version
+        Deliberately NOT an allow-list. This used to forward only
+        ``(brief, brand, filters, adcp_version)`` — the fields
+        ``GetProductsBody`` happens to declare — which made the REST leg
+        structurally incapable of grading request-field acceptance: a test that
+        sent `account` or `time_budget` had it dropped HERE, inside the harness,
+        so REST always looked like it accepted every field cleanly no matter what
+        production did. That is the same "a per-transport allow-list decides
+        which fields exist" defect the acceptance seam exists to remove, one
+        layer out, in the tests that are supposed to catch it.
+
+        The seam is the authority: the middleware publishes the wire body and
+        `@accepts_spec_request_fields` carries it to the tool, which honors or
+        refuses each field. The harness's only job is to put the buyer's bytes on
+        the wire unaltered.
         """
-        _BODY_FIELDS = ("brief", "brand", "filters", "adcp_version")
-        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
+        return {k: v for k, v in kwargs.items() if v is not None}
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:
         """Parse REST JSON response into GetProductsResponse."""

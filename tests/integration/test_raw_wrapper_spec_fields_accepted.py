@@ -20,22 +20,16 @@ import pytest
 
 from src.core.schemas import GetProductsResponse
 from src.core.tools.products import get_products_raw
-from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.harness.product import ProductEnv
 from tests.harness.transport import Transport
+from tests.helpers.sample_account import SAMPLE_ACCOUNT, spec_field_product_env
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
 def product_env(integration_db):
-    with ProductEnv(tenant_id="raw-spec-fields", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="raw-spec-fields")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
-        product = ProductFactory(tenant=tenant, delivery_type="guaranteed")
-        PricingOptionFactory(product=product, pricing_model="cpm", rate="15.00", is_fixed=True, currency="USD")
-        env.set_policy_approved()
-        env.set_ranking_disabled()
+    """The seeded world both spec-field graders need (see the helper for why)."""
+    with spec_field_product_env("raw-spec-fields") as env:
         yield env
 
 
@@ -62,7 +56,7 @@ async def test_get_products_raw_accepts_account_on_a_real_call(product_env):
 
     response = await get_products_raw(
         brief="Display inventory on outdoor lifestyle content.",
-        account={"brand": {"domain": "acmeoutdoor.example"}, "operator": "pinnacle-agency.example"},
+        account=SAMPLE_ACCOUNT,
         identity=identity,
     )
 

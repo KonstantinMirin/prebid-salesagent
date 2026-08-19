@@ -12,6 +12,7 @@ import pytest
 from src.core.database.models import WorkflowStep
 from src.core.exceptions import AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas.task_management import ListTasksResponse
 
 
 class TestListTasksTool:
@@ -83,9 +84,15 @@ class TestListTasksTool:
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
             result = await list_tasks_fn(identity=identity)
 
-        assert "tasks" in result
-        assert "total" in result
-        assert result["total"] == 1
+        # list_tasks returns its DECLARED response model, not a hand-assembled
+        # dict — so the pinned-required query_summary/pagination are enforced by
+        # construction rather than asserted key by key.
+        assert isinstance(result, ListTasksResponse)
+        assert [task.task_id for task in result.tasks] == ["step_123"]
+        assert result.total == 1
+        assert result.query_summary.total_matching == 1
+        assert result.query_summary.returned == 1
+        assert result.pagination.has_more is False
 
     async def test_list_tasks_filters_by_status(
         self, mock_uow, mock_workflow_repo, sample_tenant, sample_workflow_step
@@ -102,7 +109,7 @@ class TestListTasksTool:
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
             result = await list_tasks_fn(status="requires_approval", identity=identity)
 
-        assert "tasks" in result
+        assert [task.task_id for task in result.tasks] == ["step_123"]
         mock_workflow_repo.count_by_tenant.assert_called_once_with(
             status="requires_approval",
             object_type=None,

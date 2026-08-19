@@ -17,6 +17,8 @@ from src.core.version_compat import (
     pinned_request_schema_fields,
     spec_request_model,
 )
+from tests.harness.spec_field_consumption import UNDISPOSED_LEDGER, undisposed_fields
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 _TOOLS = [
     "get_products",
@@ -111,39 +113,58 @@ def test_all_three_transports_publish_to_the_seam():
     )
 
 
-# Tools whose `_impl` actually READS the carrier the seam hands them. Everything
-# else declares `_spec_request` and discards it — which is still a drop, just one
-# frame further in than the transport binders this lane moved it from.
-#
-# The Core Invariant says a field is "honored or refused, NEVER SILENTLY dropped".
-# Per-field honoring is separate work the plan scopes out, so this list is not a
-# TODO to close in this lane. What it does is stop the drop being SILENT: adding a
-# tool without wiring its carrier is now visible here, and the list may only GROW.
-_CARRIER_CONSUMERS = frozenset({"media_buy_update"})
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("tool_name", _TOOLS)
+def test_every_published_body_semantic_field_has_a_disposition(tool_name: str):
+    """Published, body-semantic, and never mentioned by the tool's code == dropped.
+
+    The seam DELIVERS the pinned request model to all sixteen tools. Delivery is
+    not disposition: a tool that never reads the carrier drops the buyer's field
+    one frame further in than the transport binder it was moved from, and the
+    buyer still gets success. Consumption is therefore measured from the tool's
+    own source (`tests/harness/spec_field_consumption.py`) — a field is disposed
+    when the code READS it off the request or names it in an `_UNSUPPORTED_*` map
+    that `refuse_unsupported_fields` raises on.
+
+    Its predecessor, `test_carrier_consumers_only_grow`, ratcheted a hand-written
+    set of tools that "read the carrier at all" — it counted one of sixteen, and
+    its own detection pattern could not see `sync_creatives`' `getattr(
+    _spec_request, ...)` form. This grades the actual obligation instead.
+    """
+    undisposed = undisposed_fields(tool_name)
+    ledgered = sorted(UNDISPOSED_LEDGER.get(tool_name, frozenset()))
+
+    assert undisposed == ledgered, (
+        f"{tool_name}: published body-semantic fields with no disposition: "
+        f"{sorted(set(undisposed) - set(ledgered))} (unexpected), "
+        f"{sorted(set(ledgered) - set(undisposed))} (ledgered but now disposed — remove them from "
+        "UNDISPOSED_LEDGER, it only shrinks). Each field must be HONORED (read off the request) or "
+        "REFUSED (named in the tool's _UNSUPPORTED_* map). Accepting it and dropping it tells the "
+        "buyer it was applied."
+    )
 
 
 @pytest.mark.arch_guard
-def test_carrier_consumers_only_grow():
-    """The set of tools that actually read the carrier may not shrink.
-
-    Deliberately a ratchet, not a completeness demand. Requiring every tool to
-    consume the carrier today would either block the lane or invite a fake
-    consumption that reads the model and ignores it — worse than an honest gap.
-    What must not happen is a tool QUIETLY dropping out of the honored set.
-    """
-    consumers = set()
-    for path in pathlib.Path("src/core/tools").rglob("*.py"):
-        text = path.read_text()
-        if "spec_request=_spec_request" in text or "spec_request is not None" in text:
-            consumers.add(path.stem)
-
-    regressed = sorted(_CARRIER_CONSUMERS - consumers)
-    assert not regressed, (
-        f"{regressed} stopped consuming the seam's request model. The field is accepted on the "
-        "wire and now reaches nothing — accept-and-drop, restored."
+def test_the_undisposed_ledger_only_shrinks():
+    """The ledger may not grow, and may not keep entries for tools it no longer applies to."""
+    # Routed through the shared helper rather than a hand-rolled `set(A) - set(B)`
+    # assertion: `test_architecture_no_handrolled_allowlist_diff` forbids the
+    # hand-rolled form, because it reports only one of the two failure directions
+    # and each copy words its message differently. Expressing the stale keys as
+    # violations against an EMPTY allowlist says "no ledger key may name a
+    # non-tool" in the project's one sanctioned shape.
+    stale = {(tool,) for tool in UNDISPOSED_LEDGER if tool not in _TOOLS}
+    assert_violations_match_allowlist(
+        stale,
+        set(),
+        fix_hint=(
+            "UNDISPOSED_LEDGER names tools that are not spec tools. Remove them — the ledger keys "
+            "must be real AdCP task names, or the per-tool disposition check silently skips them."
+        ),
     )
-    if consumers - _CARRIER_CONSUMERS:
-        pytest.fail(
-            f"New carrier consumers {sorted(consumers - _CARRIER_CONSUMERS)} — good. "
-            "Add them to _CARRIER_CONSUMERS so the ratchet holds at the new level."
-        )
+
+    assert sum(len(fields) for fields in UNDISPOSED_LEDGER.values()) <= 1, (
+        "UNDISPOSED_LEDGER grew. It stood at exactly one field "
+        "(sync_accounts.idempotency_key, which needs the idempotency seam) when this guard was "
+        "written; a new entry means a field was accepted and dropped instead of disposed."
+    )

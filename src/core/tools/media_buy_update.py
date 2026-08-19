@@ -85,6 +85,7 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
+from src.core.spec_request_carrier import merge_spec_request, refuse_unsupported_fields
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._mcp import mcp_result
 from src.core.tools.creatives import _sync_creatives_impl
@@ -352,6 +353,22 @@ def _verify_principal(
         )
 
 
+# Body-semantic fields `update_media_buy` ACCEPTS on the wire (its pinned 3.1.1
+# request schema defines them) and this seller cannot act on. These are the fields
+# the seam carries all the way to the request model, where nothing reads them —
+# accept-and-drop one frame past the transport, which is the failure this lane
+# exists to close. Every one is on the money path.
+_UNSUPPORTED_UPDATE_MEDIA_BUY_FIELDS = {
+    "account": "re-billing a buy to a different account is not implemented",
+    "invoice_recipient": (
+        "per-buy billing-entity override is not implemented, and the spec requires the seller to "
+        "validate the recipient is authorized for the account"
+    ),
+    "new_packages": "adding packages to an existing buy is not implemented; use `packages` to update existing ones",
+    "revision": "revision-scoped updates are not implemented",
+}
+
+
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
@@ -374,6 +391,8 @@ def _update_media_buy_impl(
     """
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
+
+    refuse_unsupported_fields(req, tool="update_media_buy", unsupported=_UNSUPPORTED_UPDATE_MEDIA_BUY_FIELDS)
 
     identity = require_identity(identity, context=req.context)
 
@@ -752,6 +771,23 @@ def _update_media_buy_impl(
                 # flight dates: a canceled buy inside its flight window is canceled,
                 # per _media_buy_status.TERMINAL_STATUSES).
                 uow.media_buys.update_status(req.media_buy_id, "canceled")
+                # HONOR `cancellation_reason`. The pinned schema defines it beside
+                # `canceled` and nothing else in this system records why a buy
+                # stopped spending, so dropping it loses the only account of the
+                # decision. The audit trail is where it belongs — it is the
+                # persisted, queryable record of who did what to this buy.
+                get_audit_logger("AdCP", tenant["tenant_id"]).log_operation(
+                    operation="update_media_buy",
+                    principal_name=principal_id or "anonymous",
+                    principal_id=principal_id or "anonymous",
+                    adapter_id="mcp_server",
+                    success=True,
+                    details={
+                        "media_buy_id": req.media_buy_id,
+                        "action": "cancel_media_buy",
+                        "cancellation_reason": req.cancellation_reason,
+                    },
+                )
 
             if req.paused is not None:
                 # adcp 2.12.0+: paused=True means pause, paused=False means resume
@@ -1555,23 +1591,11 @@ def _build_update_request(
         req = UpdateMediaBuyRequest(**request_params)
 
     # Body-semantic fields ride in on the pinned request model the seam built
-    # from the wire, not as per-tool parameters. Copy the ones this tool honors
-    # off that carrier — they are already validated, and `spec_request` is None
-    # on call paths that predate the seam (direct `_impl` tests), so this is a
-    # no-op there rather than a new required argument.
-    if spec_request is not None:
-        # DERIVED, not a hand-list. Naming the fields here would be the same
-        # disease as naming them at a transport — one frame further in, and just
-        # as easy to forget: account, invoice_recipient, new_packages and revision
-        # were all arriving at the seam and stopping here for exactly that reason.
-        # Anything the flat path left unset is filled from the carrier, so a spec
-        # bump widens this automatically.
-        for _name in type(req).model_fields:
-            if getattr(req, _name, None) is not None:
-                continue
-            _value = getattr(spec_request, _name, None)
-            if _value is not None:
-                setattr(req, _name, _value)
+    # from the wire, not as per-tool parameters. One shared merge for every tool
+    # at the seam (src/core/spec_request_carrier.py) — a second copy of this loop
+    # is how `account`, `invoice_recipient`, `new_packages` and `revision` came to
+    # be dropped one frame past the seam in the first place.
+    merge_spec_request(req, spec_request)
 
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier).
     # This is a SEMANTIC rejection of a schema-valid request (update fields are all
@@ -1593,6 +1617,16 @@ def _build_update_request(
     return req
 
 
+# `targeting_overlay` and `creatives` are deliberately NOT parameters here.
+# They were declared, PUBLISHED on the MCP input schema, and read by nothing —
+# a buyer who sent either was told it applied while it was dropped at the
+# wrapper. Neither is a field of the pinned 3.1.1 update-media-buy-request.json
+# (targeting overlay is per-PACKAGE, `packages[].targeting_overlay`, which
+# `_impl` does honor), so removing them also stops the tool advertising
+# fields the spec does not define. Restoring one without a body that reads it
+# reintroduces the silent drop; `test_architecture_spec_field_disposition.py`
+# now catches that, because a declared parameter only counts as disposed if the
+# wrapper body actually references it.
 async def update_media_buy(
     media_buy_id: Annotated[str | None, Field(description="Publisher media buy ID to update")] = None,
     paused: Annotated[bool | None, Field(description="True to pause campaign delivery, False to resume")] = None,
@@ -1600,13 +1634,11 @@ async def update_media_buy(
     flight_end_date: Annotated[str | None, Field(description="New campaign end date in YYYY-MM-DD format")] = None,
     budget: Annotated[float | None, Field(description="New total campaign budget amount")] = None,
     currency: Annotated[str | None, Field(description="ISO 4217 currency code (e.g. 'USD')")] = None,
-    targeting_overlay: TargetingOverlay | None = None,
     start_time: Annotated[str | None, Field(description="New campaign start time in ISO 8601 format")] = None,
     end_time: Annotated[str | None, Field(description="New campaign end time in ISO 8601 format")] = None,
     pacing: Annotated[str | None, Field(description="Budget pacing strategy: 'even' or 'asap'")] = None,
     daily_budget: Annotated[float | None, Field(description="Maximum daily spend cap")] = None,
     packages: list[UpdatePackage] | None = None,
-    creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
@@ -1633,13 +1665,11 @@ async def update_media_buy(
         flight_end_date: Extend or shorten campaign
         budget: Update total budget
         currency: Update currency (ISO 4217)
-        targeting_overlay: Update global targeting
         start_time: Update start datetime
         end_time: Update end datetime
         pacing: Pacing strategy (even, asap, daily_budget)
         daily_budget: Daily spend cap across all packages
         packages: Package-specific updates
-        creatives: Add new creatives
         push_notification_config: Push notification config for async notifications (AdCP spec, optional)
         context: Application-level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)

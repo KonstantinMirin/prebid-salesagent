@@ -150,5 +150,9 @@ class TestListTasksContextEcho:
             baseline = env.call_impl()
             with_lookalike_context = env.call_impl(context=ContextObject.model_validate({"status": "completed"}))
 
-        assert with_lookalike_context["tasks"] == baseline["tasks"]
-        assert with_lookalike_context["total"] == baseline["total"]
+        # Attribute access, not subscripting: `list_tasks` returns the declared
+        # ListTasksResponse model since PR #1858 Lane A (it previously returned an
+        # untyped dict, which is what let pinned-required response fields go
+        # missing unnoticed). The obligation being graded is unchanged.
+        assert with_lookalike_context.tasks == baseline.tasks
+        assert with_lookalike_context.total == baseline.total

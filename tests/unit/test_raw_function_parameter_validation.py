@@ -168,7 +168,14 @@ class TestRawFunctionParameterValidation:
 
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
         # Note: promoted_offering removed per adcp v1.2.1 migration
-        expected_params = ["brief", "brand", "filters", "property_list", "context"]
+        # `spec_request` is the acceptance-seam CARRIER (PR #1858 Lane A,
+        # src/core/spec_request_carrier.py). It is deliberately part of this
+        # signature: the carrier has to reach the request builder for a
+        # body-semantic field to be HONORED at all. Before it, fields the pinned
+        # schema defines were accepted at the transport and then silently dropped
+        # one frame later — which is the defect that lane exists to close.
+        # Pinned here (not removed) so a future signature change is still caught.
+        expected_params = ["brief", "brand", "filters", "property_list", "context", "spec_request"]
 
         assert params == expected_params, (
             f"create_get_products_request signature changed!\n"
@@ -237,7 +244,9 @@ class TestHelperFunctionDocumentation:
         # Verify create_get_products_request (the one that caused the bug)
         assert "create_get_products_request" in signatures
         # adcp 3.6.0: brand_manifest removed, only brand (BrandReference) remains.
-        expected = ["brief", "brand", "filters", "property_list", "context"]
+        # `spec_request` is the Lane A acceptance-seam carrier — see the sibling
+        # test above for why it belongs in this signature.
+        expected = ["brief", "brand", "filters", "property_list", "context", "spec_request"]
         actual = signatures["create_get_products_request"]
         assert actual == expected, (
             f"create_get_products_request signature changed!\n"

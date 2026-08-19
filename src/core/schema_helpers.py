@@ -30,6 +30,7 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
+from src.core.spec_request_carrier import merge_spec_request
 from src.core.validation_helpers import adcp_validation_boundary
 
 
@@ -223,6 +224,7 @@ def create_get_products_request(
     filters: dict[str, Any] | ProductFilters | None = None,
     property_list: dict[str, Any] | PropertyListReference | None = None,
     context: dict[str, Any] | ContextObject | None = None,
+    spec_request: BaseModel | None = None,
 ) -> GetProductsRequest:
     """Create GetProductsRequest aligned with adcp v3.6.0 spec.
 
@@ -233,6 +235,11 @@ def create_get_products_request(
         filters: Structured filters for product discovery (dict or ProductFilters)
         property_list: Property list reference for filtering by buyer's property list
         context: Application-level context (dict or ContextObject)
+        spec_request: The acceptance seam's carrier — the wire request as its pinned
+            model. Every field the flat arguments above leave unset is filled from
+            it, so a body-semantic field the wrapper signature never declared
+            (`buying_mode`, `account`, `refine`, ...) reaches `_impl` instead of
+            being dropped between the transport and the tool.
 
     Returns:
         GetProductsRequest
@@ -251,13 +258,14 @@ def create_get_products_request(
         elif isinstance(filters, dict):
             filters_obj = ProductFilters(**filters)
 
-    return GetProductsRequest(  # type: ignore[call-arg]
+    req = GetProductsRequest(  # type: ignore[call-arg]
         brand=to_brand_reference(brand),
         brief=brief or None,
         filters=filters_obj,
         property_list=to_property_list_reference(property_list),
         context=to_context_object(context),
     )
+    return merge_spec_request(req, spec_request)
 
 
 # Re-export commonly used generated types for convenience

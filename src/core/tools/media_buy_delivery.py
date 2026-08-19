@@ -14,7 +14,7 @@ from math import floor
 from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
-from pydantic import Field, RootModel
+from pydantic import BaseModel, Field, RootModel
 from rich.console import Console
 
 from src.core.exceptions import (
@@ -109,6 +109,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     ReportingPeriod as MediaBuyReportingPeriod,
 )
+from src.core.spec_request_carrier import merge_spec_request, refuse_unsupported_fields
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.tools._mcp import mcp_result
 from src.core.tools._media_buy_status import (
@@ -116,6 +117,7 @@ from src.core.tools._media_buy_status import (
     NO_MORE_DATA_STATUSES,
     resolve_canonical_status,
 )
+from src.core.transport_helpers import honor_account_reference
 from src.core.utils import utc_flight_end, utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import accepts_spec_request_fields
@@ -176,6 +178,31 @@ def _is_circuit_breaker_open(tenant_id: str) -> bool:
     return webhook_delivery_service.has_open_circuit_breaker(tenant_id)
 
 
+# Body-semantic fields `get_media_buy_delivery` ACCEPTS on the wire (its pinned
+# 3.1.1 request schema defines them) and this seller cannot act on. A buyer that
+# asks for per-window slices and gets a single lifetime total, reported as
+# success, reads it as "this campaign delivered evenly" — the drop is invisible in
+# the response. They are REFUSED, loudly.
+#
+# `account` is here for the same reason it is on get_media_buys: this seller
+# infers the account from the auth token, so a request scoped to a DIFFERENT
+# account would be answered with the caller's own delivery data.
+_UNSUPPORTED_DELIVERY_FIELDS = {
+    # `account` is deliberately NOT here: it is HONORED below via
+    # `honor_account_reference`. It was briefly refused as "not implemented",
+    # which is false — account resolution is a real, shared capability
+    # (`enrich_identity_with_account`), it simply had not been wired to this
+    # tool. Refusing it made the whole @T-UC-004-partition-account /
+    # @T-UC-004-boundary-account storyboard family fail, and those scenarios
+    # grade a full resolution contract: natural-key and sandbox matching resolve,
+    # a missing account is ACCOUNT_NOT_FOUND, and account_id together with
+    # brand/operator is INVALID_REQUEST with a suggestion. UNSUPPORTED_FEATURE
+    # answers none of that.
+    "time_granularity": "per-window delivery slicing is not implemented",
+    "include_window_breakdown": "per-window delivery slicing is not implemented",
+}
+
+
 def _get_media_buy_delivery_impl(
     req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
 ) -> GetMediaBuyDeliveryResponse:
@@ -184,6 +211,14 @@ def _get_media_buy_delivery_impl(
     AdCP-compliant implementation that handles start_date/end_date parameters
     and returns spec-compliant response format.
     """
+
+    refuse_unsupported_fields(req, tool="get_media_buy_delivery", unsupported=_UNSUPPORTED_DELIVERY_FIELDS)
+
+    # HONOR `account`: resolve the reference the buyer sent so an account they
+    # cannot access, or one that does not exist, is rejected here with the code
+    # the storyboard grades — rather than silently ignored and answered with
+    # whatever the auth token happens to scope to.
+    identity = honor_account_reference(identity, req.account)
 
     # Validate identity is provided
     identity = require_identity(identity, context=req.context)
@@ -737,6 +772,8 @@ def _build_get_media_buy_delivery_request(
     attribution_window: AttributionWindow | None,
     include_package_daily_breakdown: bool | None,
     context: ContextObject | None,
+    account: LibraryAccountReference | None = None,
+    spec_request: BaseModel | None = None,
 ) -> GetMediaBuyDeliveryRequest:
     """Build a GetMediaBuyDeliveryRequest from individual wire params.
 
@@ -746,7 +783,7 @@ def _build_get_media_buy_delivery_request(
     ``ValidationError`` with no top-level suggestion (#1417).
     """
     with adcp_validation_boundary(context="get_media_buy_delivery request"):
-        return GetMediaBuyDeliveryRequest(
+        req = GetMediaBuyDeliveryRequest(
             media_buy_ids=media_buy_ids,
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             start_date=start_date,
@@ -755,7 +792,12 @@ def _build_get_media_buy_delivery_request(
             attribution_window=attribution_window,
             include_package_daily_breakdown=include_package_daily_breakdown,
             context=cast(ContextObject | None, context),
+            account=account,
         )
+    # Body-semantic fields the flat parameters above never declared
+    # (time_granularity, include_window_breakdown) ride in on the seam's carrier —
+    # `_impl` then honors or refuses each one instead of dropping it.
+    return merge_spec_request(req, spec_request)
 
 
 async def get_media_buy_delivery(
@@ -812,6 +854,8 @@ async def get_media_buy_delivery(
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
         context=context,
+        account=account,
+        spec_request=_spec_request,
     )
     response = _get_media_buy_delivery_impl(req, identity)
     return mcp_result(response)
@@ -877,6 +921,8 @@ def get_media_buy_delivery_raw(
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
         context=context,
+        account=account,
+        spec_request=_spec_request,
     )
     return _get_media_buy_delivery_impl(req, identity)
 
