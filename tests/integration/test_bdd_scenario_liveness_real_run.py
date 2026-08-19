@@ -140,6 +140,11 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_ar
     return json.loads(artifact.read_text(encoding="utf-8"))
 
 
+# Measured 65.17s on an idle 40-core box against CI's --timeout=60 (ci.yml
+# "Integration (other)"). Same class as test_liveness_artifact_is_identical_
+# under_xdist_and_serial below: a real nested-pytest-subprocess cost, not a
+# hang. Scoped rather than raising the job's CLI timeout, same reasoning.
+@pytest.mark.timeout(300)
 def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_path: Path) -> None:
     """The UC-006 storyboard-routing slice is measured in full, and its
     ``@storyboard-v3.1``-tagged members have real, bound step definitions
@@ -219,6 +224,9 @@ def test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live(tmp_path: 
         assert all(o["outcome"] == "passed" for o in record["observations"])
 
 
+# Measured 62.52s on an idle 40-core box against CI's --timeout=60. Same class
+# as the two siblings above/below: a real nested-pytest-subprocess cost.
+@pytest.mark.timeout(300)
 def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Path) -> None:
     """A ``@schema-v3.1`` retag must not delete a scenario from the measurement.
 
