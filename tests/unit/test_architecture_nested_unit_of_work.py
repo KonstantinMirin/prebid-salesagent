@@ -66,6 +66,11 @@ import pytest
 from tests.unit._architecture_helpers import (
     REPO_ROOT,
     assert_violations_match_allowlist,
+    collect_visitor_violations,
+    import_map,
+    module_name_for,
+    parse_sources,
+    read_source_roots,
     structural_guard_marker_re,
 )
 
@@ -208,44 +213,16 @@ class _Index:
     edges: dict[str, frozenset[str]]
 
 
-def _module_name(relpath: str) -> str:
-    return relpath[:-3].replace("/", ".").removesuffix(".__init__")
-
-
-def _import_map(relpath: str, tree: ast.Module) -> dict[str, tuple[str, str]]:
-    """Local name -> (module, original name), for ``from x import y`` including relative."""
-    package = _module_name(relpath) if relpath.endswith("__init__.py") else _module_name(relpath).rsplit(".", 1)[0]
-    mapping: dict[str, tuple[str, str]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ImportFrom):
-            continue
-        if node.level:
-            base = package.rsplit(".", node.level - 1)[0] if node.level > 1 else package
-            target = f"{base}.{node.module}" if node.module else base
-        else:
-            target = node.module or ""
-        for alias in node.names:
-            mapping[alias.asname or alias.name] = (target, alias.name)
-    return mapping
-
-
 def build_index(sources: dict[str, str]) -> _Index:
     """Index every module ONCE: what each function opens, receives, and calls."""
-    trees: dict[str, ast.Module] = {}
-    lines: dict[str, list[str]] = {}
-    for relpath, text in sources.items():
-        try:
-            trees[relpath] = ast.parse(text, filename=relpath)
-        except SyntaxError:
-            continue
-        lines[relpath] = text.splitlines()
+    trees, lines = parse_sources(sources)
 
     opens_own: dict[str, bool] = {}
     handles: dict[str, tuple[str, ...]] = {}
     imports: dict[str, dict[str, tuple[str, str]]] = {}
-    modules = {_module_name(relpath): relpath for relpath in trees}
+    modules = {module_name_for(relpath): relpath for relpath in trees}
     for relpath, tree in trees.items():
-        imports[relpath] = _import_map(relpath, tree)
+        imports[relpath] = import_map(relpath, tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 qualname = f"{relpath}::{node.name}"
@@ -444,22 +421,7 @@ class _NestedUnitTracker(ast.NodeVisitor):
 
 def find_violations(sources: dict[str, str]) -> list[Violation]:
     index = build_index(sources)
-    found: list[Violation] = []
-    for relpath, tree in index.trees.items():
-        tracker = _NestedUnitTracker(index, relpath)
-        tracker.visit(tree)
-        found.extend(tracker.violations)
-    return found
-
-
-def _read_scan_roots() -> dict[str, str]:
-    sources: dict[str, str] = {}
-    for root in SCAN_ROOTS:
-        for path in sorted((REPO_ROOT / root).rglob("*.py")):
-            if "__pycache__" in str(path):
-                continue
-            sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
-    return sources
+    return collect_visitor_violations(index.trees, lambda relpath: _NestedUnitTracker(index, relpath))
 
 
 # ---------------------------------------------------------------------------
@@ -472,7 +434,7 @@ def test_no_helper_opens_a_second_unit_of_work():
     outlived. The shared helper is the only form that reports a stale entry as
     loudly as a new one (test_architecture_no_handrolled_allowlist_diff.py)."""
     assert_violations_match_allowlist(
-        set(find_violations(_read_scan_roots())),
+        set(find_violations(read_source_roots(SCAN_ROOTS))),
         ALLOWLIST,
         fix_hint=(
             "get_db_session() hands back the THREAD-SCOPED session, with no nesting refcount. A "
@@ -758,7 +720,7 @@ class TestGuardIsNotVacuous:
         but the docstring's justification for the machinery needs revisiting.
         """
         nested = []
-        for relpath, text in _read_scan_roots().items():
+        for relpath, text in read_source_roots(SCAN_ROOTS).items():
             try:
                 tree = ast.parse(text, filename=relpath)
             except SyntaxError:
@@ -783,7 +745,7 @@ class TestGuardIsNotVacuous:
         """A guard whose detector reaches nothing real is the failure mode this
         one was written to avoid. The allowlist is the measured evidence that it
         does not: every entry is a site the detector found in ``src/``."""
-        found = set(find_violations(_read_scan_roots()))
+        found = set(find_violations(read_source_roots(SCAN_ROOTS)))
         assert found, (
             "The detector found ZERO sites in src/. Either every nested unit of work has been "
             "fixed — in which case empty the ALLOWLIST and delete this test's premise — or "

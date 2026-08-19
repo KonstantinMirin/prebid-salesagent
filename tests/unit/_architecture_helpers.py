@@ -292,6 +292,86 @@ def handles_integrity_error(handler: ast.ExceptHandler) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Whole-tree source indexing for import-resolving guards
+#
+# Guards that resolve a bare name to the function it refers to all need the same
+# three things: a repo-relative path -> dotted module name, a per-module
+# ``from x import y`` map, and one parse pass over a {relpath: source} dict.
+# They live here rather than in each guard so a resolution fix reaches every
+# guard at once (CLAUDE.md DRY invariant; pylint R0801 in
+# ``.pre-commit-hooks/check_code_duplication.py`` enforces it).
+# ---------------------------------------------------------------------------
+
+
+def module_name_for(relpath: str) -> str:
+    """``src/core/tools/creatives/_sync.py`` -> ``src.core.tools.creatives._sync``."""
+    return relpath[:-3].replace("/", ".").removesuffix(".__init__")
+
+
+def import_map(relpath: str, tree: ast.Module) -> dict[str, tuple[str, str]]:
+    """Local name -> (module, original name), for ``from x import y`` including relative."""
+    package = (
+        module_name_for(relpath) if relpath.endswith("__init__.py") else module_name_for(relpath).rsplit(".", 1)[0]
+    )
+    mapping: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level:
+            base = package.rsplit(".", node.level - 1)[0] if node.level > 1 else package
+            target = f"{base}.{node.module}" if node.module else base
+        else:
+            target = node.module or ""
+        for alias in node.names:
+            mapping[alias.asname or alias.name] = (target, alias.name)
+    return mapping
+
+
+def parse_sources(sources: dict[str, str]) -> tuple[dict[str, ast.Module], dict[str, list[str]]]:
+    """Parse a {relpath: source} dict once, returning (trees, split lines).
+
+    Unparseable modules are dropped from both, so a guard never has lines without
+    a tree or the reverse.
+    """
+    trees: dict[str, ast.Module] = {}
+    lines: dict[str, list[str]] = {}
+    for relpath, text in sources.items():
+        try:
+            trees[relpath] = ast.parse(text, filename=relpath)
+        except SyntaxError:
+            continue
+        lines[relpath] = text.splitlines()
+    return trees, lines
+
+
+def collect_visitor_violations(trees: dict[str, ast.Module], make_visitor: Callable[[str], Any]) -> list[Any]:
+    """Run a FRESH visitor over every tree and concatenate its ``violations`` list.
+
+    ``make_visitor(relpath)`` builds the per-module visitor; it must expose
+    ``visit(tree)`` and a ``violations`` list. Every import-resolving guard needs
+    this same loop, and a fresh visitor per module is the part that is easy to get
+    wrong by hoisting it out and leaking state between modules.
+    """
+    found: list[Any] = []
+    for relpath, tree in trees.items():
+        visitor = make_visitor(relpath)
+        visitor.visit(tree)
+        found.extend(visitor.violations)
+    return found
+
+
+def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
+    """{repo-relative path: source} for every ``.py`` under *roots*."""
+    sources: dict[str, str] = {}
+    for root in roots:
+        for path in sorted((REPO_ROOT / root).rglob("*.py")):
+            if "__pycache__" in str(path):
+                continue
+            sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
+    return sources
+
+
 def structural_guard_marker_re(guard_name: str) -> re.Pattern[str]:
     """Regex for this repo's per-site opt-out comment, ``# structural-guard: <name> - <why>``.
 
