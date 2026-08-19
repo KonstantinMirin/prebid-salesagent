@@ -56,9 +56,19 @@ class _Route:
 
 
 @requires_clone
-def test_no_artifact_publishes_zero_graded_and_zero_candidates(tmp_path: Path) -> None:
+def test_no_artifact_publishes_zero_graded_and_zero_candidates(monkeypatch, tmp_path: Path) -> None:
     """Baseline: with no BDD run this session, nothing can be claimed graded or a
-    graduation candidate -- missing measurement must render as a gap, not a guess."""
+    graduation candidate -- missing measurement must render as a gap, not a guess.
+
+    The absent artifact is pinned to a tmp path instead of being assumed. The
+    default location, ``test-results/bdd_scenario_liveness.json``, is gitignored,
+    so this test used to pass on a fresh clone and FAIL on any checkout where a
+    real BDD run had ever written one (observed: with_live_scenario == 89). That
+    made the result a function of ambient filesystem state rather than of the
+    behaviour under test -- the same defect shape as the storyboard grader that
+    collected a whole directory and inherited its npm state (salesagent-qbac1.7).
+    """
+    monkeypatch.setenv(storyboard_spec.ARTIFACT_ENV_VAR, str(tmp_path / "no-such-liveness-artifact.json"))
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
     assert result["totals"]["with_scenario"] > 0, "fixture broken: no on-path check is claimed by any scenario"
     assert result["totals"]["with_live_scenario"] == 0

@@ -32,10 +32,28 @@ makes that entry FAIL again, i.e. RESOLVE against the ledger, so the fitness
 test passes. The failing case is the opposite one: a ledger entry whose check no
 longer collects (graduated, or renamed) must FAIL.
 
-This module drives real ``pytest tests/storyboard`` sessions in a subprocess with
-the runner subprocess stubbed by an injected ``-p`` plugin, so the parametrized
-ids are produced by production's own ``pytest_generate_tests``/``LedgerCheckId``
-code path against a summary this test controls. No live agent, no npm deps.
+This module drives real ``pytest tests/storyboard/test_storyboard_conformance.py``
+sessions in a subprocess with the runner subprocess stubbed by an injected ``-p``
+plugin, so the parametrized ids are produced by production's own
+``pytest_generate_tests``/``LedgerCheckId`` code path against a summary this test
+controls. No live agent, no npm deps.
+
+**Why the nested session names the module and not the directory.** The three
+cases below grade EXACT outcome counts ("exactly 1 failed item"), so anything
+else the nested session happens to collect is counted as if it were the join's
+verdict. ``tests/storyboard/`` also holds ``test_runner_sdk_pin.py``, which
+asserts on the runner's INSTALLED ``@adcp/sdk`` and deliberately ``pytest.fail``s
+when ``npm ci`` has not been run in ``tests/storyboard/runner/`` — a real,
+correct failure everywhere except the one job that installs those deps. Pointing
+the nested session at the whole directory therefore added exactly one failing
+item to all three cases on every machine without the npm install (CI run
+32152198573's "Integration (other)": ``{'failed': 2, 'xfailed': 74}``,
+``{'failed': 1, 'xfailed': 75}``, ``{'failed': 1, 'skipped': 1}`` — each one more
+than expected), and passed only where a developer had happened to install them.
+The subject under measurement here is the conformance module's parametrization
+and ledger join, so that is what the session collects; the sdk pin guard is
+unweakened and still graded by the storyboard-conformance job that owns its
+precondition.
 """
 
 from __future__ import annotations
@@ -56,6 +74,14 @@ pytestmark = [pytest.mark.integration]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LEDGER = REPO_ROOT / "tests" / "storyboard" / "known_failures.txt"
+
+# The one module under measurement (see this module's docstring). Named
+# explicitly rather than by directory so the graded outcome counts stay a
+# function of the ledger join alone, not of which sibling guards the ambient
+# environment happens to satisfy. ``tests/storyboard/conftest.py`` — the ledger
+# xfail router this module is grading — still loads, it is the directory's
+# conftest.
+CONFORMANCE_MODULE = "tests/storyboard/test_storyboard_conformance.py"
 
 # Injected via ``-p`` into the nested session. Replaces the one function that
 # needs a live agent + npm deps; every other production code path
@@ -116,10 +142,10 @@ def _summaries(entries: list[ledger.LedgerCheckId]) -> dict[str, dict[str, Any]]
 def _run_storyboard_session(
     tmp_path: Path, entries: list[ledger.LedgerCheckId] | None
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``pytest tests/storyboard`` for real; ``entries=None`` leaves the env unconfigured."""
+    """Run ``pytest`` on the conformance module for real; ``entries=None`` leaves the env unconfigured."""
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join([str(tmp_path), str(REPO_ROOT), env.get("PYTHONPATH", "")])
-    args = [sys.executable, "-m", "pytest", "tests/storyboard", "-q", "-o", "addopts=", "-p", "no:randomly"]
+    args = [sys.executable, "-m", "pytest", CONFORMANCE_MODULE, "-q", "-o", "addopts=", "-p", "no:randomly"]
 
     if entries is not None:
         (tmp_path / "_stub_storyboard_runner.py").write_text(_STUB_PLUGIN, encoding="utf-8")
