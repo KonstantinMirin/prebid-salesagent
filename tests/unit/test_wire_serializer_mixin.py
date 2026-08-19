@@ -70,7 +70,18 @@ class TestOnlyNullValuesArePutBack:
     """
 
     def test_retained_values_are_json_encodable(self, unconfirmed_account: Account) -> None:
-        json.dumps(unconfirmed_account.model_dump(mode="json"))
+        encoded = json.dumps(unconfirmed_account.model_dump(mode="json"))
+        # Round-trip, not just "dumps did not raise": an empty document encodes fine, so
+        # a bare dumps() would pass even if retention put nothing back — the failure it
+        # is meant to catch (a live datetime reaching a JSON document) and the failure
+        # it must not mask (retention doing nothing) need two different assertions.
+        round_tripped = json.loads(encoded)
+        for field in NULLABLE_FIELDS:
+            assert field in round_tripped, f"{field} did not survive a JSON round-trip"
+            assert round_tripped[field] is None, (
+                f"{field} round-tripped as {round_tripped[field]!r}; retention must put back null, "
+                f"not a value that merely happens to encode"
+            )
 
     def test_a_populated_field_is_untouched_by_retention(self) -> None:
         account = Account(account_id="acct-2", name="Acme", status="active", payment_terms="net_30")
