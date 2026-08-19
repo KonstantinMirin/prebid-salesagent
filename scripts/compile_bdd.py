@@ -1570,6 +1570,18 @@ def verify_features(adcp_req_path: Path) -> bool:
     """Check if compiled feature files are up-to-date.
 
     Returns True if all files are current, False otherwise.
+
+    LIMITATION -- this cannot grade merge-mode output, and two things make that so:
+
+    1. The sha check below returns before a single file is compared. Any unrelated
+       adcp-req commit (a docs change, a beads tweak) reports STALE while telling
+       you nothing about content.
+    2. Past that check, ``_render_feature`` re-renders WITHOUT the merge, so every
+       file produced by ``--merge`` compares unequal. All 31 report stale.
+
+    To check a merged file, re-run ``--merge`` for that UC and diff: a no-op merge
+    leaves only the generation stamp. Do NOT "fix" a stale report with ``--all`` --
+    that discards every locally-preserved (``@hand-edited``) scenario.
     """
     commit_sha = _get_commit_sha(adcp_req_path)
     traceability = _load_traceability(TRACEABILITY_PATH)
