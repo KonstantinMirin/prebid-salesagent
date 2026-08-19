@@ -23,21 +23,21 @@ from tests.harness.transport import (
     Transport,
     TransportResult,
     _envelope_from_adcp_error,
-    _envelope_from_mcp_error,
-    _wire_envelope_from_exception,
-    derive_error_status,
 )
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
 
-# The three envelope-extraction helpers above (_envelope_from_adcp_error,
-# _envelope_from_mcp_error, _wire_envelope_from_exception) live in
-# transport.py, not here — both this module and client.py need them, and
-# housing them in either would recreate the mutual lazy-import cycle
-# untangled by salesagent-vuz9t.17 (client.py used to lazily import them
-# back from this module, while this module lazily imports dispatch-core
+# _envelope_from_adcp_error lives in transport.py, not here — both this module
+# and client.py need it, and housing it in either would recreate the mutual
+# lazy-import cycle untangled by salesagent-vuz9t.17 (client.py used to lazily
+# import it back from this module, while this module lazily imports dispatch
 # functions FROM client.py — the two together being the "mutual" part).
+#
+# The MCP/A2A/REST error-path unwraps themselves are NOT re-implemented here:
+# this module delegates to client.py's unwrap_mcp_error / unwrap_a2a_error /
+# unwrap_rest_error, so there is one error unwrap per transport family for both
+# dispatch paths (CLAUDE.md DRY invariant; Lane C remediation finding 1).
 
 
 class ImplDispatcher:
@@ -71,22 +71,21 @@ class A2ADispatcher:
     (message parsing → skill routing → handler dispatch → ``_serialize_for_a2a``
     → Task/Artifact framing). On a failed Task, the harness reconstructs the
     ``AdCPError`` from the artifact DataPart and stashes the real wire
-    envelope on the exception via ``_wire_error_envelope`` — captured here
-    by ``_wire_envelope_from_exception``.
+    envelope on the exception via ``_wire_error_envelope`` — read off it by
+    ``client.py``'s ``unwrap_a2a_error``, the one A2A error unwrap.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
             delivered = env.deliver_a2a(**kwargs)
         except Exception as exc:
-            wire = _wire_envelope_from_exception(exc)
-            return TransportResult(
-                error=exc,
-                # Derived per-transport status (Lane C, C4): the A2A evidence is
-                # whether a failed Task carried an AdCP envelope in its artifact.
-                envelope={"transport": "a2a", "status": derive_error_status(wire)},
-                wire_error_envelope=wire,
-            )
+            from tests.harness.client import unwrap_a2a_error
+
+            # ONE A2A error unwrap for both dispatch paths (client.py). This
+            # used to be a second copy of that body, which is how the derived
+            # status ended up on this path and not on AdCPTestClient.call — the
+            # path the graded storyboard scenarios actually take.
+            return unwrap_a2a_error(exc, Transport.A2A)
         # Real A2A wire: the artifact DataPart dict, carried back on the SAME
         # return value as the payload. It used to be read off env._last_wire_response
         # — one object reaching into another's private attribute, which is what
@@ -109,13 +108,16 @@ class RestDispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
-        from tests.harness.client import unwrap_rest_response
+        from tests.harness.client import unwrap_rest_error, unwrap_rest_response
 
         try:
             endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
             response = env._run_rest_request(endpoint, **kwargs)
         except Exception as exc:
-            return TransportResult(error=exc)
+            # ONE REST DELIVER-exception unwrap for both dispatch paths — it
+            # derives status=transport_fault, because an exception here means no
+            # HTTP body, hence no AdCP envelope, ever existed.
+            return unwrap_rest_error(exc, Transport.REST)
         # unwrap_rest_response (salesagent-vuz9t.8.2) owns the status-code
         # branching, envelope tag, and the #1417 pristine-wire deepcopy rule —
         # the same function RestE2EDispatcher and the generic client's
@@ -134,37 +136,13 @@ class McpDispatcher:
         try:
             delivered = env.deliver_mcp(**kwargs)
         except Exception as exc:
-            # REAL wire only: the raw MCP ToolError JSON when present, else
-            # the envelope the harness reconstruction stashed on the AdCPError
-            # as ``_wire_error_envelope`` (same stash A2A uses). NEVER the
-            # synthesized fallback — a dead MCP wire path must yield None here
-            # (failing assert_envelope_shape), not an envelope regenerated
-            # from the lossy reconstructed exception.
-            wire = _envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None)
-            # When a wire envelope came from the raw ToolError JSON, exc is an
-            # AdCPToolError carrying that envelope (an env that dispatched through
-            # the production with_error_logging boundary). Unwrap it so
-            # result.error is the typed AdCPError — error-code assertions resolve
-            # to the real wire code, not "AdCPToolError". Typed errors (raw JSON
-            # absent, the path taken by every _run_mcp_client-based env, which
-            # unwraps internally) pass through unchanged, so this is a no-op for
-            # them.
-            error = exc
-            if _envelope_from_mcp_error(exc) is not None:
-                from tests.harness._base import _unwrap_mcp_tool_error
+            from tests.harness.client import unwrap_mcp_error
 
-                error = _unwrap_mcp_tool_error(exc)
-            return TransportResult(
-                error=error,
-                # Derived per-transport status (Lane C, C4): the MCP evidence is
-                # whether a structured AdCP envelope was recoverable from the
-                # ToolError, rather than a fault with no envelope at all.
-                envelope={"transport": "mcp", "status": derive_error_status(wire)},
-                wire_error_envelope=wire,
-                # What production WOULD emit for the same exception — see the
-                # ImplDispatcher caveat; never a substitute for the wire field.
-                synthesized_error_envelope=_envelope_from_adcp_error(exc),
-            )
+            # ONE MCP error unwrap for both dispatch paths (client.py) — it owns
+            # the raw-ToolError unwrap, the REAL-wire-only envelope rule (never
+            # the synthesized fallback), and the derived status. See the A2A
+            # sibling above for why this is a delegation and not a copy.
+            return unwrap_mcp_error(exc, Transport.MCP)
         # Real MCP wire: the structured_content dict, carried back on the SAME
         # return value as the payload — see the A2A sibling above.
         return TransportResult(

@@ -85,17 +85,25 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     ("tests/harness/media_buy_create.py", "MediaBuyCreateEnv", "deliver_a2a"),
     # Supplies a required kwargs default (creatives=[]) before dispatch.
     ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_mcp"),
-    # Deliberate raw-wrapper bypass around the real A2A skill handler. LANE C
-    # owns replacing the bypass; Lane B only conformed its return type (R1).
+    # Commits factory data, defaults creatives=[], and JSON-normalizes kwargs
+    # through build_rest_body before dispatch, so it cannot delegate to the base.
+    # (The previous reason — "deliberate raw-wrapper bypass ... LANE C owns
+    # replacing the bypass" — is stale: Lane C DID replace it in dc280c5ee, and
+    # deliver_a2a now calls the real _run_a2a_handler. The entry stays because of
+    # the setup above, not because of a bypass that no longer exists; an allowlist
+    # whose recorded reasons drift false cannot be audited.)
     ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_a2a"),
     # Uses the legacy _run_mcp_wrapper mechanism (mock Context -> async wrapper),
     # not _run_mcp_client, and observes no structured_content wire.
     ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_mcp"),
-    # get_media_buys' wire omits the pinned-required confirmed_at + revision on
-    # every media_buys item (GH #1928), so the core's pinned parse fails.
+    # FIXME(#1928): get_media_buys' wire omits the pinned-required confirmed_at +
+    # revision on every media_buys item, so the core's pinned parse fails. This
+    # entry is removed — not re-justified — when #1928 lands; the override exists
+    # only to keep the gap attributable instead of hidden by loosening the core.
     ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_a2a"),
-    # by_package entries omit the pinned-required pricing_model/rate/currency
-    # (GH #2012), so the core's pinned parse fails on every delivery response.
+    # FIXME(#2012): by_package entries omit the pinned-required
+    # pricing_model/rate/currency, so the core's pinned parse fails on every
+    # delivery response. Both entries are removed when #2012 lands.
     ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_mcp"),
     ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_a2a"),
     # Their real wire does not satisfy the tool's PINNED response model, which

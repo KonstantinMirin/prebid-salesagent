@@ -694,7 +694,10 @@ def _dispatch_core(
         # error a test could mistake for a real AdCP rejection.
         raise
     except Exception as exc:
-        return UNWRAP_ERROR[transport](exc)
+        # *transport* is forwarded so the error envelope carries the same
+        # transport.value tag and derived status the dispatcher path produces —
+        # one error-unwrap implementation per transport family, not two.
+        return UNWRAP_ERROR[transport](exc, transport)
     return UNWRAP_SUCCESS[transport](env, raw, transport, tool_name)
 
 
@@ -727,50 +730,84 @@ class AdCPTestClient:
         return _dispatch_core(self._env, transport, tool, payload, identity)
 
 
-def _mcp_error_to_result(exc: Exception) -> TransportResult:
-    """Error-path ``TransportResult`` for MCP DELIVER failures.
+def unwrap_mcp_error(exc: Exception, transport: Transport = Transport.MCP) -> TransportResult:
+    """THE MCP error-path unwrap — one definition, both dispatch paths.
 
-    Composes the SAME module-level envelope-extraction helpers (imported
-    from ``tests/harness/transport.py``, not re-implemented) that
-    ``tests/harness/dispatchers.py``'s ``McpDispatcher`` uses, so a
-    wire-envelope regression is caught identically whether dispatch went
-    through an env's own ``call_mcp`` or through this generic client.
+    ``AdCPTestClient.call`` (via ``UNWRAP_ERROR`` below) and
+    ``tests/harness/dispatchers.py``'s ``McpDispatcher`` both delegate here.
+    They used to hold byte-equivalent copies of this body, which is exactly how
+    the derived status came to exist on one path and not the other: C4 wired
+    ``derive_error_status`` into the dispatcher copy, while the client copy —
+    the one every ``dispatch_via_client`` storyboard scenario actually takes —
+    kept returning ``envelope={}``, so ``then_response_not_500_or_non_adcp_shape``
+    read ``status=None`` and passed trivially on mcp and a2a. One definition
+    removes the class of defect, not just this instance (CLAUDE.md DRY
+    invariant).
+
+    *transport* supplies the envelope ``"transport"`` tag via
+    ``transport.value``, the same rule ``_unwrap_tool_success`` and
+    ``unwrap_rest_response`` follow, so an E2E dispatch is never mislabeled
+    in-process.
     """
     from tests.harness._base import _unwrap_mcp_tool_error
 
     # _run_mcp_client already unwraps ToolError -> AdCPError internally
-    # (stashing _wire_error_envelope when reconstruction succeeds); this
-    # mirrors McpDispatcher.dispatch's except block for the rare case where
-    # that internal unwrap left a raw ToolError untouched.
-    wire = _envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None)
-    error = _unwrap_mcp_tool_error(exc) if _envelope_from_mcp_error(exc) is not None else exc
+    # (stashing _wire_error_envelope when reconstruction succeeds); the
+    # raw-ToolError branch covers the rare case where that internal unwrap left
+    # a raw ToolError untouched (an env that dispatched through the production
+    # with_error_logging boundary). Unwrapping it means result.error is the
+    # typed AdCPError, so error-code assertions resolve to the real wire code
+    # rather than "AdCPToolError".
+    raw_tool_error_envelope = _envelope_from_mcp_error(exc)
+    wire = raw_tool_error_envelope or getattr(exc, "_wire_error_envelope", None)
+    error = _unwrap_mcp_tool_error(exc) if raw_tool_error_envelope is not None else exc
     return TransportResult(
         error=error,
+        # Derived per-transport status (Lane C, C4): MCP's authentic evidence is
+        # whether a structured AdCP envelope was recoverable from the ToolError,
+        # rather than a fault that produced no envelope at all.
+        envelope={"transport": transport.value, "status": derive_error_status(wire)},
         wire_error_envelope=wire,
+        # What production WOULD emit for the same exception — never a substitute
+        # for the wire field.
         synthesized_error_envelope=_envelope_from_adcp_error(exc),
     )
 
 
-def _a2a_error_to_result(exc: Exception) -> TransportResult:
-    """Error-path ``TransportResult`` for A2A DELIVER failures.
+def unwrap_a2a_error(exc: Exception, transport: Transport = Transport.A2A) -> TransportResult:
+    """THE A2A error-path unwrap — one definition, both dispatch paths.
 
     ``_run_a2a_handler`` already reconstructs ``AdCPError`` with
     ``_wire_error_envelope`` stashed (via ``_envelope_to_adcp_error``) before
-    raising, so ``_wire_envelope_from_exception``'s getattr fast-path covers
-    it — same helper ``A2ADispatcher.dispatch`` uses.
+    raising, so ``_wire_envelope_from_exception``'s getattr fast-path covers it.
+    See :func:`unwrap_mcp_error` for why this is one function rather than a copy
+    per dispatch path.
     """
-    return TransportResult(error=exc, wire_error_envelope=_wire_envelope_from_exception(exc))
+    wire = _wire_envelope_from_exception(exc)
+    return TransportResult(
+        error=exc,
+        # Derived per-transport status (Lane C, C4): the A2A evidence is whether
+        # a failed Task carried an AdCP envelope in its artifact DataPart.
+        envelope={"transport": transport.value, "status": derive_error_status(wire)},
+        wire_error_envelope=wire,
+    )
 
 
-def _rest_error_to_result(exc: Exception) -> TransportResult:
-    """Error-path ``TransportResult`` for REST DELIVER failures.
+def unwrap_rest_error(exc: Exception, transport: Transport = Transport.REST) -> TransportResult:
+    """THE REST DELIVER-exception unwrap — one definition, both dispatch paths.
 
     Genuine exceptions only (e.g. ``_prepare_rest_request`` failing before an
     HTTP call is even made) — ordinary 4xx/5xx responses do not raise and are
-    handled by ``_unwrap_rest`` instead, mirroring ``RestDispatcher``'s
-    outer catch-all (``dispatchers.py``, ``RestDispatcher.dispatch``).
+    handled by ``unwrap_rest_response`` instead, which derives the status from
+    the real HTTP body. An exception here means no HTTP response body existed at
+    all, so the derived status is a fault by construction: ``derive_error_status``
+    is called with ``None`` explicitly rather than the value being left absent,
+    because an ABSENT status is what let the storyboard Then pass on nothing.
     """
-    return TransportResult(error=exc)
+    return TransportResult(
+        error=exc,
+        envelope={"transport": transport.value, "status": derive_error_status(None)},
+    )
 
 
 UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport, str], TransportResult]] = {
@@ -782,11 +819,11 @@ UNWRAP_SUCCESS: dict[Transport, Callable[[BaseTestEnv, Any, Transport, str], Tra
     Transport.E2E_REST: _unwrap_rest,
 }
 
-UNWRAP_ERROR: dict[Transport, Callable[[Exception], TransportResult]] = {
-    Transport.MCP: _mcp_error_to_result,
-    Transport.E2E_MCP: _mcp_error_to_result,
-    Transport.A2A: _a2a_error_to_result,
-    Transport.E2E_A2A: _a2a_error_to_result,
-    Transport.REST: _rest_error_to_result,
-    Transport.E2E_REST: _rest_error_to_result,
+UNWRAP_ERROR: dict[Transport, Callable[[Exception, Transport], TransportResult]] = {
+    Transport.MCP: unwrap_mcp_error,
+    Transport.E2E_MCP: unwrap_mcp_error,
+    Transport.A2A: unwrap_a2a_error,
+    Transport.E2E_A2A: unwrap_a2a_error,
+    Transport.REST: unwrap_rest_error,
+    Transport.E2E_REST: unwrap_rest_error,
 }

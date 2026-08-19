@@ -48,14 +48,16 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     RESPONSE_MODEL = GetMediaBuyDeliveryResponse
 
-    # JUSTIFIED OVERRIDE — deliberately does NOT declare MCP_TOOL/A2A_SKILL, so it
-    # does not take the base's client-core delegation. The core's UNWRAP parses
-    # into the PINNED GetMediaBuyDeliveryResponse, whose by_package items REQUIRE
-    # pricing_model, rate and currency (get-media-buy-delivery-response.json);
-    # production emits none of the three, so every response fails that parse and
-    # 214 UC-004 scenarios go red. Parsing here with the LOCAL model keeps the env
-    # working while the gap is tracked as GH #2012 — a production schema defect,
-    # not a dispatch defect, and deliberately not hidden by loosening the core.
+    # FIXME(#2012): JUSTIFIED OVERRIDE — deliberately does NOT declare
+    # MCP_TOOL/A2A_SKILL, so it does not take the base's client-core delegation.
+    # The core's UNWRAP parses into the PINNED GetMediaBuyDeliveryResponse, whose
+    # by_package items REQUIRE pricing_model, rate and currency
+    # (get-media-buy-delivery-response.json); production emits none of the three,
+    # so every response fails that parse and 214 UC-004 scenarios go red. Parsing
+    # here with the LOCAL model keeps the env working while the gap stays
+    # attributable — a production schema defect, not a dispatch defect, and
+    # deliberately not hidden by loosening the core. Delete both overrides and
+    # their `_KNOWN_DELIVER_OVERRIDES` entries when #2012 lands.
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
         return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)

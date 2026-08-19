@@ -17,6 +17,7 @@ from pytest_bdd import given, then, when
 from tests.bdd.steps._outcome_helpers import wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_via_client
 from tests.bdd.steps.generic.then_error import then_error_recovery
+from tests.harness.transport import DERIVED_STATUS_ADCP_ERROR, DERIVED_STATUS_TRANSPORT_FAULT
 
 
 @given("the buyer fabricates a media_buy_id that does not exist in the seller catalog")
@@ -98,44 +99,67 @@ def then_response_echoes_correlation_id_unchanged(ctx: dict) -> None:
 
 @then("the response should NOT be a 500 or non-AdCP error shape")
 def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
-    """Assert the two-layer AdCP envelope shape via the single shape authority, and non-500 where a status exists.
+    """Assert the seller answered with a structured AdCP envelope, not a transport fault.
 
-    ``result.assert_wire_error`` is the harness's single shape authority for
-    verifying an error on the wire (see its docstring) — delegating to it here
-    (rather than re-implementing its checks inline) means a spec change to the
+    Order matters, and is the whole point of this step's shape. The DERIVED
+    status is read and asserted FIRST, before ``wire_error_dict(ctx)``. Written
+    the other way round the check was structurally unreachable: ``wire_error_dict``
+    raises loudly when no wire envelope was captured, and "no wire envelope
+    captured" is precisely the condition ``derive_error_status`` reports as
+    ``transport_fault`` — so the fault could never be observed at the assertion
+    point, on any transport or dispatch path. Reading the status first makes the
+    fault observable, and makes THIS obligation (not the accessor's generic
+    missing-wire guard) the thing that reports it.
+
+    The assertion is POSITIVE — ``status == adcp_error`` — not ``status !=
+    transport_fault``. A negative assertion also passes when the status is
+    ABSENT, which is how this half of the sentence graded nothing on mcp and a2a
+    while looking like a real check. Requiring the derived value to be present
+    and correct means a dispatch path that stops reporting it reddens here
+    instead of going quiet.
+
+    "Not a 500 or non-AdCP shape" is graded by the derived status (Lane C,
+    change-set C4) rather than by a synthesized ``status_code``: inventing an
+    integer for MCP/A2A and asserting it is != 500 would trade a silent no-op for
+    a loud tautology. Each transport reports its own evidence instead — REST's
+    real HTTP body, A2A's failed-Task artifact, MCP's ToolError. The REST
+    ``status_code`` check is kept where it genuinely exists.
+
+    The envelope SHAPE half delegates to ``result.assert_wire_error``, the
+    harness's single shape authority (see its docstring), so a spec change to the
     envelope shape only needs updating in one place. This step has no expected
-    code of its own (it is reused across scenarios with different codes), so
-    it reads the code the envelope itself reports and asserts against THAT —
-    which still exercises the real checks ``assert_wire_error`` performs: the
-    two-layer invariant (``adcp_error.code == errors[0].code``), that the code
-    is canonical (pinned ``error-code.json``), and that recovery matches the
-    pinned classification.
-
-    The "not a 500 or non-AdCP shape" half is graded by the DERIVED status
-    (Lane C, change-set C4). It used to be gated on ``status_code``, which only
-    REST populates — so on MCP and A2A, two of the three transports this
-    scenario claims to cover, that half of the sentence was a silent no-op. The
-    fix is NOT to synthesize an HTTP status for them: inventing a number and
-    then asserting it is != 500 would be a loud tautology. Instead each
-    transport reports whether the seller produced a structured AdCP envelope
-    (``adcp_error``) or died as a fault (``transport_fault``), read from its own
-    evidence — REST's HTTP body, A2A's failed-Task artifact, MCP's ToolError.
-    The REST status_code check is kept where it genuinely exists.
+    code of its own (it is reused across scenarios with different codes), so it
+    reads the code the envelope itself reports and asserts against THAT — which
+    still exercises the real checks ``assert_wire_error`` performs: the two-layer
+    invariant (``adcp_error.code == errors[0].code``), that the code is canonical
+    (pinned ``error-code.json``), and that recovery matches the pinned
+    classification.
     """
     result = ctx.get("result")
-    envelope = wire_error_dict(ctx)
-    code = (envelope.get("adcp_error") or {}).get("code")
-    assert code, f"Expected a non-empty adcp_error.code in the wire envelope, got {envelope}"
-    result.assert_wire_error(code)
+    assert result is not None, (
+        "No TransportResult on ctx — the When step must dispatch through "
+        "dispatch_request/dispatch_via_client so this step can read the transport's own evidence"
+    )
 
     transport_envelope = getattr(result, "envelope", None) or {}
     status = transport_envelope.get("status")
-    assert status != "transport_fault", (
-        "Expected a structured AdCP error envelope, but the transport reported a fault "
-        f"(status={status!r}, envelope={transport_envelope!r}) — this is the 'not a 500 or "
-        "non-AdCP error shape' obligation failing."
+    assert status == DERIVED_STATUS_ADCP_ERROR, (
+        f"Expected the seller to answer with a structured AdCP error envelope "
+        f"(status={DERIVED_STATUS_ADCP_ERROR!r}), got status={status!r} "
+        f"(envelope={transport_envelope!r}). "
+        + (
+            "The transport reported a fault instead of an AdCP envelope"
+            if status == DERIVED_STATUS_TRANSPORT_FAULT
+            else "This dispatch path reports no derived status at all, so it grades nothing here"
+        )
+        + " — this is the 'not a 500 or non-AdCP error shape' obligation failing."
     )
 
     status_code = transport_envelope.get("status_code")
     if status_code is not None:
         assert status_code != 500, f"Expected a non-500 status, got {status_code}"
+
+    envelope = wire_error_dict(ctx)
+    code = (envelope.get("adcp_error") or {}).get("code")
+    assert code, f"Expected a non-empty adcp_error.code in the wire envelope, got {envelope}"
+    result.assert_wire_error(code)

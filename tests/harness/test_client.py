@@ -828,7 +828,7 @@ class TestClientE2eA2aDelivery:
         calls ``response.raise_for_status()`` BEFORE ``response.json()``, so on
         any >=400 the JSON-RPC error body — the only place the AdCP two-layer
         envelope exists on this leg — is thrown away and the caller gets a bare
-        ``httpx.HTTPStatusError``. ``_a2a_error_to_result``
+        ``httpx.HTTPStatusError``. ``unwrap_a2a_error``
         (``tests/harness/client.py``) then has nothing to read, so
         ``wire_error_envelope`` is ``None`` and every error-path Then step that
         asserts on the wire (``tests/CLAUDE.md`` § Error Verification Policy —

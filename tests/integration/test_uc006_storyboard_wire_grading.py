@@ -60,7 +60,6 @@ byte-for-byte echo test would redden for a PRODUCTION normalization defect
 from __future__ import annotations
 
 import copy
-import json
 from dataclasses import replace
 from typing import Any
 
@@ -68,7 +67,12 @@ import pytest
 
 from tests.bdd.steps.domain import uc006_storyboard_creative_sync as steps
 from tests.bdd.steps.generic._dispatch import _populate_ctx_from_result
-from tests.harness.transport import Transport, TransportResult
+from tests.harness.transport import (
+    DERIVED_STATUS_ADCP_ERROR,
+    DERIVED_STATUS_TRANSPORT_FAULT,
+    Transport,
+    TransportResult,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -278,17 +282,53 @@ def test_format_id_roundtrip_then_reads_the_creative_back_over_the_wire(
     )
 
 
+#: A foreign value per half of the v3.1 ``format_id`` federation pair, for the
+#: "changed" corruption below.
+_FOREIGN_FORMAT_ID = {
+    "id": "format_id_from_another_seller",
+    "agent_url": "https://another-seller.example.com",
+}
+
+#: How a seller can break the roundtrip on each half. BOTH modes are graded on
+#: BOTH halves: ``agent_url`` used to be asserted only ``if wire_agent_url is not
+#: None``, which caught a CHANGED value but not a DROPPED one — the same
+#: grades-nothing-when-absent defect as C4's status check, one field over. A
+#: mutation that only substitutes values cannot tell the two forms apart, so the
+#: drop is a separate, named case.
+FORMAT_ID_CORRUPTIONS = ("changed", "dropped")
+
+
+def _corrupt_format_id_on_wire(wire: dict[str, Any], half: str, mode: str) -> dict[str, Any]:
+    """A copy of *wire* whose every creative's ``format_id`` *half* is broken.
+
+    Targets the ``format_id`` object specifically rather than string-replacing
+    across the whole body, so "dropped" is expressible at all and "changed"
+    cannot accidentally rewrite an unrelated field that happens to share a value.
+    """
+    corrupted = copy.deepcopy(wire)
+    for creative in corrupted.get("creatives") or []:
+        format_id = creative.get("format_id")
+        if not isinstance(format_id, dict):
+            continue
+        if mode == "dropped":
+            format_id.pop(half, None)
+        else:
+            format_id[half] = _FOREIGN_FORMAT_ID[half]
+    return corrupted
+
+
 @pytest.mark.parametrize("transport", WIRE_TRANSPORTS, ids=lambda t: t.value)
+@pytest.mark.parametrize("mode", FORMAT_ID_CORRUPTIONS)
+@pytest.mark.parametrize("half", sorted(_FOREIGN_FORMAT_ID))
 def test_format_id_roundtrip_then_fails_when_the_wire_contradicts_the_captured_id(
-    integration_db, monkeypatch: pytest.MonkeyPatch, transport: Transport
+    integration_db, monkeypatch: pytest.MonkeyPatch, transport: Transport, half: str, mode: str
 ) -> None:
-    """A wire that disagrees with the captured format_id must FAIL the Then.
+    """A wire that breaks EITHER half of the captured format_id, either way, must FAIL the Then.
 
     The complement of the spy test: proves the wire read is the PRIMARY assertion
     and not a decorative extra call. The DB row is left correct and only the
-    ``list_creatives`` wire is corrupted (every occurrence of the captured format
-    id replaced), so a Then that still grades the repository read passes green on
-    a wire that contradicts it.
+    ``list_creatives`` wire is corrupted, so a Then that still grades the
+    repository read passes green on a wire that contradicts it.
     """
     from tests.harness.client import AdCPTestClient
 
@@ -298,14 +338,10 @@ def test_format_id_roundtrip_then_fails_when_the_wire_contradicts_the_captured_i
         result = original(self, tool, payload, tr, **kwargs)
         if tool != "list_creatives" or result.wire_response is None:
             return result
-        corrupted = json.loads(
-            json.dumps(copy.deepcopy(result.wire_response)).replace(captured_id, "format_id_from_another_seller")
-        )
-        return replace(result, wire_response=corrupted)
+        return replace(result, wire_response=_corrupt_format_id_on_wire(result.wire_response, half, mode))
 
-    with _sync_env(f"wire-c3-lie-{transport.value}") as env:
+    with _sync_env(f"wire-c3-lie-{half}-{mode}-{transport.value}") as env:
         ctx = _live_scenario_ctx(env, transport)
-        captured_id = ctx["captured_format_id"]["id"]
         monkeypatch.setattr(AdCPTestClient, "call", _lying_call)
 
         with pytest.raises(AssertionError):
@@ -316,84 +352,181 @@ def test_format_id_roundtrip_then_fails_when_the_wire_contradicts_the_captured_i
 # C4 — a DERIVED status enum on the error envelope, never a fabricated code
 # ═══════════════════════════════════════════════════════════════════════
 
-#: The two members of C4's derived enum. Deliberately NOT an integer
-#: ``status_code``: synthesizing an HTTP status for MCP/A2A would turn today's
-#: silent no-op into a loud tautology — the harness asserting != 500 against a
-#: number the harness itself invented (pass-1 finding 4).
-DERIVED_STATUS_VALUES = ("adcp_error", "transport_fault")
+#: The two members of C4's derived enum, read off the harness constants rather
+#: than restated as literals here. Deliberately NOT an integer ``status_code``:
+#: synthesizing an HTTP status for MCP/A2A would turn a silent no-op into a loud
+#: tautology — the harness asserting != 500 against a number it invented.
+DERIVED_STATUS_VALUES = (DERIVED_STATUS_ADCP_ERROR, DERIVED_STATUS_TRANSPORT_FAULT)
 
 
-def _adcp_error_result(env: Any, transport: Transport) -> TransportResult:
-    """Dispatch an unauthenticated sync_creatives — a structured AdCP rejection, not a fault."""
-    return env.call_via(
-        transport,
-        identity=None,
-        creatives=[
+#: The C4 error payload: one creative, dispatched unauthenticated so the seller
+#: answers with a structured AdCP rejection rather than a fault.
+def _c4_payload(env: Any) -> dict[str, Any]:
+    return {
+        "creatives": [
             {
                 "creative_id": "creative-c4-001",
                 "name": "C4 Grader Creative",
                 "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
             }
-        ],
-    )
+        ]
+    }
+
+
+def _dispatch_call_via(env: Any, transport: Transport, payload: dict[str, Any]) -> TransportResult:
+    """``env.call_via`` — the dispatcher path (``tests/harness/dispatchers.py``)."""
+    return env.call_via(transport, identity=None, **payload)
+
+
+def _dispatch_client(env: Any, transport: Transport, payload: dict[str, Any]) -> TransportResult:
+    """``AdCPTestClient.call`` — the path ``dispatch_via_client`` takes.
+
+    THE path both UC-003 storyboard scenarios that bind
+    ``then_response_not_500_or_non_adcp_shape`` actually use
+    (``tests/bdd/steps/domain/uc003_storyboard_generic_client.py``'s When steps
+    call ``dispatch_via_client`` -> ``AdCPTestClient.call``). Grading only
+    ``call_via`` certified a mechanism the graded scenarios never reach — which
+    is how the derived status came to be wired on one path and absent on the
+    other while the grader stayed green.
+    """
+    from tests.harness.client import AdCPTestClient
+
+    return AdCPTestClient(env).call("sync_creatives", payload, transport, identity=None)
+
+
+#: Both dispatch paths a storyboard scenario can take to the seller. Every C4
+#: obligation below is parametrized over BOTH — a signal that exists on one path
+#: and not the other grades nothing on the scenarios that take the other one.
+DISPATCH_PATHS = {"call_via": _dispatch_call_via, "client": _dispatch_client}
+
+#: Where a genuine transport fault is injected, per transport: the env primitive
+#: that transport's DELIVER calls on BOTH dispatch paths (``_deliver_mcp`` /
+#: ``CreativeSyncEnv.deliver_mcp`` both reach ``_run_mcp_client``; the two REST
+#: legs both reach ``_prepare_rest_request``). Raising there reproduces the real
+#: failure mode the derived status names — the request died before any AdCP
+#: envelope existed — rather than hand-setting ``status`` on the result, which
+#: would grade the assertion against a value the test itself invented.
+_FAULT_INJECTION_POINT = {
+    Transport.MCP: "_run_mcp_client",
+    Transport.A2A: "_run_a2a_handler",
+    Transport.REST: "_prepare_rest_request",
+}
+
+_FAULT_MESSAGE = "simulated transport fault: the seller died before emitting an AdCP envelope"
+
+
+def _dispatch_with_transport_fault(
+    monkeypatch: pytest.MonkeyPatch, env: Any, transport: Transport, dispatch_path: str
+) -> TransportResult:
+    """Dispatch with *transport*'s delivery primitive faulted, via *dispatch_path*."""
+
+    def _fault(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError(_FAULT_MESSAGE)
+
+    monkeypatch.setattr(env, _FAULT_INJECTION_POINT[transport], _fault)
+    return DISPATCH_PATHS[dispatch_path](env, transport, _c4_payload(env))
 
 
 @pytest.mark.parametrize("transport", WIRE_TRANSPORTS, ids=lambda t: t.value)
-def test_error_envelope_carries_a_derived_status_on_every_transport(integration_db, transport: Transport) -> None:
-    """``TransportResult.envelope['status']`` must be derived on mcp/a2a/rest alike.
+@pytest.mark.parametrize("dispatch_path", sorted(DISPATCH_PATHS))
+def test_error_envelope_carries_a_derived_status_on_every_transport(
+    integration_db, transport: Transport, dispatch_path: str
+) -> None:
+    """``TransportResult.envelope['status']`` must be derived on mcp/a2a/rest, on BOTH paths.
 
-    Measured today: ``envelope`` is ``{}`` on mcp, ``{'transport': 'a2a'}`` on a2a,
-    and carries a real ``status_code`` only on rest — which is why
-    ``then_response_not_500_or_non_adcp_shape``'s status check is a silent no-op on
-    two of the three transports the storyboard scenario claims to cover.
+    Measured before Lane C: ``envelope`` was ``{}`` on mcp, ``{'transport':
+    'a2a'}`` on a2a, and carried a real ``status_code`` only on rest. Measured
+    after the first Lane C pass: derived on the ``call_via`` path only, still
+    ``{}`` on mcp and a2a through ``AdCPTestClient.call`` — the path the graded
+    storyboard scenarios take. Hence the ``dispatch_path`` parametrization: this
+    obligation is about the signal existing everywhere a scenario can observe it,
+    not about one dispatcher having it.
 
     The authentic per-transport sources are named by the design: REST's real HTTP
-    status, A2A's Task state (``_base.py``'s ``_last_a2a_task``), and MCP's
-    ``CallToolResult.is_error`` via ``raise_on_error=False``. A structured AdCP
+    body, A2A's failed-Task artifact DataPart, MCP's ToolError. A structured AdCP
     rejection must read ``adcp_error`` on all three.
     """
-    with _sync_env(f"wire-c4-{transport.value}") as env:
+    with _sync_env(f"wire-c4-{dispatch_path}-{transport.value}") as env:
         env.setup_default_data()
-        result = _adcp_error_result(env, transport)
+        result = DISPATCH_PATHS[dispatch_path](env, transport, _c4_payload(env))
 
-    assert result.is_error, f"{transport.value}: expected an AdCP rejection, got {result.payload!r}"
+    assert result.is_error, f"{transport.value}/{dispatch_path}: expected an AdCP rejection, got {result.payload!r}"
     status = result.envelope.get("status")
     assert status in DERIVED_STATUS_VALUES, (
-        f"{transport.value}: TransportResult.envelope carries no derived status "
+        f"{transport.value}/{dispatch_path}: TransportResult.envelope carries no derived status "
         f"(envelope={result.envelope!r}). Without it, 'the response should NOT be a 500 or "
         "non-AdCP error shape' grades nothing on this transport."
     )
-    assert status == "adcp_error", (
-        f"{transport.value}: a structured AdCP rejection must derive status='adcp_error', got {status!r}"
+    assert status == DERIVED_STATUS_ADCP_ERROR, (
+        f"{transport.value}/{dispatch_path}: a structured AdCP rejection must derive "
+        f"status={DERIVED_STATUS_ADCP_ERROR!r}, got {status!r}"
     )
 
 
 @pytest.mark.parametrize("transport", WIRE_TRANSPORTS, ids=lambda t: t.value)
-def test_not_500_then_fails_when_the_derived_status_reports_a_transport_fault(
-    integration_db, transport: Transport
+@pytest.mark.parametrize("dispatch_path", sorted(DISPATCH_PATHS))
+def test_a_real_transport_fault_derives_transport_fault_on_every_path(
+    integration_db, monkeypatch: pytest.MonkeyPatch, transport: Transport, dispatch_path: str
 ) -> None:
-    """``then_response_not_500_or_non_adcp_shape`` must FAIL on ``status='transport_fault'``.
+    """A delivery that dies before producing an envelope must derive ``transport_fault``.
 
-    The step's own docstring claims "a real check on every transport, not a
-    conditional no-op", but its status branch is gated on a ``status_code`` only
-    REST populates. This mutation states the obligation the Then's sentence
-    actually makes — *the seller returned a transport fault instead of a structured
-    AdCP envelope* — and requires the step to enforce it wherever the derived
-    status exists.
+    The complement of the test above, and the half that proves the enum is a
+    MEASUREMENT rather than a constant: with the transport's delivery primitive
+    raising, no AdCP envelope is recoverable on any path, so both the derived
+    status and ``wire_error_envelope`` must say so.
+    """
+    with _sync_env(f"wire-c4-fault-{dispatch_path}-{transport.value}") as env:
+        env.setup_default_data()
+        result = _dispatch_with_transport_fault(monkeypatch, env, transport, dispatch_path)
 
-    The error envelope itself is left untouched and valid, so the ONLY thing that
-    can redden this is the step reading the derived status.
+    assert result.is_error, f"{transport.value}/{dispatch_path}: the injected fault produced no error result"
+    assert result.wire_error_envelope is None, (
+        f"{transport.value}/{dispatch_path}: a faulted delivery recovered a wire envelope "
+        f"({result.wire_error_envelope!r}) — the fault injection is not reaching the transport"
+    )
+    assert result.envelope.get("status") == DERIVED_STATUS_TRANSPORT_FAULT, (
+        f"{transport.value}/{dispatch_path}: a delivery that produced no AdCP envelope must derive "
+        f"status={DERIVED_STATUS_TRANSPORT_FAULT!r}, got envelope={result.envelope!r}"
+    )
+
+
+@pytest.mark.parametrize("transport", WIRE_TRANSPORTS, ids=lambda t: t.value)
+@pytest.mark.parametrize("dispatch_path", sorted(DISPATCH_PATHS))
+def test_not_500_then_fails_on_a_real_transport_fault(
+    integration_db, monkeypatch: pytest.MonkeyPatch, transport: Transport, dispatch_path: str
+) -> None:
+    """``then_response_not_500_or_non_adcp_shape`` must REDDEN on a real transport fault.
+
+    The mutation is a genuine fault at the transport (see
+    ``_dispatch_with_transport_fault``), not a hand-set ``status`` key — an
+    assertion can only be trusted to observe a state if the state is produced the
+    way production produces it.
+
+    The failure must come from THIS step's own obligation, so the message is
+    pinned. Written with the wire read first, the step was structurally
+    unreachable: ``wire_error_dict``'s missing-wire guard fired before the status
+    was ever examined, so "the seller returned a transport fault" could not be
+    observed at the assertion point on ANY path — a grader that cannot see the
+    failure state is not a grader. Asserting on the message is what distinguishes
+    the fixed step from the broken one, since both raise ``AssertionError``.
     """
     from tests.bdd.steps.domain import uc003_storyboard_generic_client as uc003_steps
 
-    with _sync_env(f"wire-c4-fault-{transport.value}") as env:
+    with _sync_env(f"wire-c4-then-{dispatch_path}-{transport.value}") as env:
         env.setup_default_data()
-        result = _adcp_error_result(env, transport)
-        assert result.is_error, f"{transport.value}: expected an AdCP rejection, got {result.payload!r}"
+        result = _dispatch_with_transport_fault(monkeypatch, env, transport, dispatch_path)
 
-        faulted = replace(result, envelope={**result.envelope, "status": "transport_fault"})
         ctx: dict[str, Any] = {"env": env, "transport": transport}
-        _populate_ctx_from_result(ctx, faulted)
+        _populate_ctx_from_result(ctx, result)
 
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError) as excinfo:
             uc003_steps.then_response_not_500_or_non_adcp_shape(ctx)
+
+    message = str(excinfo.value)
+    assert "not a 500 or non-AdCP error shape" in message, (
+        f"{transport.value}/{dispatch_path}: the step failed, but not through its own "
+        f"not-a-500 obligation — the derived status is still unreachable behind another guard: {message!r}"
+    )
+    assert DERIVED_STATUS_TRANSPORT_FAULT in message, (
+        f"{transport.value}/{dispatch_path}: the failure did not report the derived transport fault: {message!r}"
+    )

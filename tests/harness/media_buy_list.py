@@ -49,14 +49,15 @@ class MediaBuyListEnv(IntegrationEnv):
     def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
         """Dispatch get_media_buys through the real A2A handler pipeline.
 
-        JUSTIFIED OVERRIDE — does NOT declare A2A_SKILL, so it does not take the
-        base's client-core delegation. The core's UNWRAP parses into the PINNED
-        GetMediaBuysResponse, whose media_buys items REQUIRE `confirmed_at` and
-        `revision` (get-media-buys-response.json); production emits neither, so
-        every response fails that parse. Parsing here with the LOCAL model keeps
-        this env working while the gap is tracked as GH #1928 — the gap
-        is a production schema defect, not a dispatch defect, and is deliberately
-        not hidden by loosening the core's parse.
+        FIXME(#1928): JUSTIFIED OVERRIDE — does NOT declare A2A_SKILL, so it does
+        not take the base's client-core delegation. The core's UNWRAP parses into
+        the PINNED GetMediaBuysResponse, whose media_buys items REQUIRE
+        `confirmed_at` and `revision` (get-media-buys-response.json); production
+        emits neither, so every response fails that parse. Parsing here with the
+        LOCAL model keeps this env working while the gap stays attributable — a
+        production schema defect, not a dispatch defect, and deliberately not
+        hidden by loosening the core's parse. Delete this override and its
+        `_KNOWN_DELIVER_OVERRIDES` entry when #1928 lands.
         """
         return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 

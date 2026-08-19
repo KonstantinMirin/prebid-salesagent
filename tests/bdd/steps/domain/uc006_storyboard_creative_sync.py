@@ -317,7 +317,12 @@ def _require_response(ctx: dict, expectation: str) -> object:
 
 
 def _first_creative_result(ctx: dict, expectation: str) -> object:
-    """Return the first per-creative result off ``ctx['response'].creatives``, or xfail."""
+    """Return the first per-creative result off ``ctx['response'].creatives``.
+
+    ASSERTS on absence rather than xfailing it (Lane C): an empty ``creatives``
+    list means the seller returned no per-creative result at all, which is a
+    failure of the obligation, not a known gap to be tolerated.
+    """
     resp = _require_response(ctx, expectation)
     results = resp.creatives
     assert results, f"Expected at least one per-creative result for {expectation}, got: {resp}"
@@ -564,17 +569,24 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
         f"wire listed {sorted(i for i in listed_ids if i)!r}"
     )
     entry = next(c for c in wire["creatives"] if c.get("creative_id") == first.creative_id)
+    # Both halves of the v3.1 federation pair are asserted UNCONDITIONALLY. The
+    # agent_url half used to be gated on `if wire_agent_url is not None`, so a wire
+    # that dropped agent_url — or flattened format_id back to a bare string —
+    # passed silently while the id half stayed strict: the same
+    # grades-nothing-when-absent defect as the C4 status check, one field over.
     wire_format = entry.get("format_id")
-    wire_id = wire_format.get("id") if isinstance(wire_format, dict) else wire_format
-    wire_agent_url = wire_format.get("agent_url") if isinstance(wire_format, dict) else None
-    assert wire_id == captured["id"], (
-        f"format_id.id did not roundtrip on the wire: expected {captured['id']!r}, wire carried {wire_id!r}"
+    assert isinstance(wire_format, dict), (
+        f"format_id did not roundtrip as the v3.1 {{agent_url, id}} pair on the wire: "
+        f"expected a mapping, wire carried {wire_format!r}"
     )
-    if wire_agent_url is not None:
-        assert wire_agent_url == captured["agent_url"], (
-            f"format_id.agent_url did not roundtrip on the wire: "
-            f"expected {captured['agent_url']!r}, wire carried {wire_agent_url!r}"
-        )
+    assert wire_format.get("id") == captured["id"], (
+        f"format_id.id did not roundtrip on the wire: expected {captured['id']!r}, "
+        f"wire carried {wire_format.get('id')!r}"
+    )
+    assert wire_format.get("agent_url") == captured["agent_url"], (
+        f"format_id.agent_url did not roundtrip on the wire: "
+        f"expected {captured['agent_url']!r}, wire carried {wire_format.get('agent_url')!r}"
+    )
 
     # ── REDUNDANT in-process check (localizes a wire/DB disagreement) ──────
     session = env.get_session()

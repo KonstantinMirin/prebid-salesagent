@@ -45,6 +45,15 @@ def _assert_error_equivalent(via, client_result, code: str) -> None:
     via.assert_wire_error(code)
     client_result.assert_wire_error(code)
     assert via.wire_error_envelope == client_result.wire_error_envelope
+    # The transport envelope too, not just the wire body: the two paths held
+    # SEPARATE copies of each transport's error unwrap, which is how the derived
+    # `status` came to exist on the dispatcher path and not on the client path
+    # while every wire_error_envelope assertion stayed green. Comparing the
+    # envelope makes that divergence observable here (Lane C remediation).
+    assert via.envelope == client_result.envelope, (
+        f"env.call_via and AdCPTestClient.call disagree on the error envelope: "
+        f"{via.envelope!r} vs {client_result.envelope!r}"
+    )
 
 
 def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool: str, **kwargs):
@@ -272,10 +281,10 @@ class TestEnvVsClientEquivalence:
     migration must not introduce.
 
     The error direction dispatches a REAL unauthenticated request (not a
-    mock) through each transport's error mapper — ``_mcp_error_to_result`` /
-    ``_a2a_error_to_result`` / ``_rest_error_to_result`` in
+    mock) through each transport's error mapper — ``unwrap_mcp_error`` /
+    ``unwrap_a2a_error`` / ``unwrap_rest_error`` in
     ``tests/harness/client.py`` — so it is deletion-sensitive: removing
-    ``wire_error_envelope=`` from ``_mcp_error_to_result`` makes
+    ``wire_error_envelope=`` from ``unwrap_mcp_error`` makes
     ``test_mcp_success_and_error_equivalence`` fail with "no
     wire_error_envelope was captured" (verified by hand during this change).
     """
