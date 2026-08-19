@@ -625,55 +625,36 @@ def given_webhook_unauthorized(ctx: dict, status_code: int) -> None:
 @given(parsers.parse("the webhook endpoint has failed {n:d} consecutive delivery attempts"))
 def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
     """Trigger n consecutive delivery failures on the circuit breaker."""
-    from src.services.webhook_delivery_service import CircuitBreaker
-
     env = ctx["env"]
-    service = env.get_service()
     webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _webhook_url(env))
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
-    if endpoint_key not in service._circuit_breakers:
-        service._circuit_breakers[endpoint_key] = CircuitBreaker()
-    cb = service._circuit_breakers[endpoint_key]
-    for _ in range(n):
-        cb.record_failure()
+    env.seed_breaker_failures(endpoint_key, n)
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
     ctx["webhook_failure_count"] = n
 
 
 @given(parsers.parse('a media buy "{mb_id}" with circuit breaker in "{state}" state'))
 def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
-    """Set circuit breaker to specific state by directly manipulating CB internals."""
-    from src.services.webhook_delivery_service import CircuitBreaker, CircuitState
-
+    """Start the scenario with the breaker already in *state* (a seed, not an effect)."""
     env = ctx["env"]
-    service = env.get_service()
     webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _webhook_url(env))
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
-    if endpoint_key not in service._circuit_breakers:
-        service._circuit_breakers[endpoint_key] = CircuitBreaker()
-    cb = service._circuit_breakers[endpoint_key]
-    state_map = {
-        "OPEN": CircuitState.OPEN,
-        "HALF_OPEN": CircuitState.HALF_OPEN,
-        "CLOSED": CircuitState.CLOSED,
-    }
-    cb.state = state_map[state.upper()]
+    env.set_breaker_state(endpoint_key, state)
     ctx["circuit_breaker_state"] = state
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
 
 
 @given("the circuit breaker timeout (60s) has elapsed")
 def given_circuit_breaker_timeout(ctx: dict) -> None:
-    """Set last_failure_time 61s in the past so the CB timeout has elapsed."""
-    from datetime import UTC, timedelta
-    from datetime import datetime as _dt
+    """Age the last failure past the breaker's recovery timeout.
 
+    Moves the clock, not the state: production decides that an elapsed timeout
+    means OPEN -> HALF_OPEN on the next ``can_attempt``, and setting the state
+    here would skip the very transition the scenario exercises.
+    """
     env = ctx["env"]
-    service = env.get_service()
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
-    cb = service._circuit_breakers.get(endpoint_key)
-    if cb is not None:
-        cb.last_failure_time = _dt.now(UTC) - timedelta(seconds=61)
+    env.elapse_breaker_timeout(endpoint_key)
     ctx["circuit_breaker_timeout_elapsed"] = True
 
 
@@ -979,11 +960,8 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     (OPEN → HALF_OPEN), then attempts delivery via call_send().
     """
     env = ctx["env"]
-    service = env.get_service()
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
-    cb = service._circuit_breakers.get(endpoint_key)
-    if cb is not None:
-        ctx["cb_can_attempt"] = cb.can_attempt()
+    ctx["cb_can_attempt"] = env.drive_breaker_transition(endpoint_key)
     try:
         ctx["circuit_result"] = env.call_send()
     except Exception as exc:
@@ -994,12 +972,8 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
 def when_deliver_probe_reports(ctx: dict, n: int) -> None:
     """Record n successful deliveries on the circuit breaker (simulates probe recovery)."""
     env = ctx["env"]
-    service = env.get_service()
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
-    cb = service._circuit_breakers.get(endpoint_key)
-    if cb is not None:
-        for _ in range(n):
-            cb.record_success()
+    env.record_breaker_successes(endpoint_key, n)
     ctx["probe_count"] = n
 
 
@@ -1885,8 +1859,15 @@ def then_webhook_skipped_no_post(ctx: dict) -> None:
 def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
     """Assert the send-time SSRF path called circuit_breaker.record_failure().
 
-    Process-local (``service._circuit_breakers``) — declared e2e-unsupported by
-    ``CircuitBreakerMixin.assert_circuit_breaker_failure_recorded``.
+    Read through the production public API (``get_circuit_breaker_state``, via
+    the env's ``breaker_snapshot``), never off service internals.
+
+    Declared e2e-unsupported by
+    ``CircuitBreakerMixin.assert_circuit_breaker_failure_recorded`` for a
+    TOPOLOGY reason that the public read does not change: under e2e_rest
+    ``get_service()`` builds a fresh in-process service that the live server's
+    deliveries never touch, so there is no breaker state to observe from here at
+    all.
     """
     env = ctx["env"]
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
@@ -1965,30 +1946,57 @@ def then_single_probe(ctx: dict) -> None:
 
 @then("normal scheduled deliveries should resume")
 def then_deliveries_resume(ctx: dict) -> None:
-    """Assert normal scheduled deliveries can resume after circuit breaker closure.
+    """Assert normal scheduled deliveries RESUME — by making one happen.
 
-    The preceding step already verified the breaker transitioned to closed.
-    This step verifies the behavioral claim: the circuit breaker allows new
-    delivery attempts (can_attempt returns True), proving the gate is open
-    for scheduled deliveries to flow through.
+    "Deliveries resume" is a claim about DELIVERIES, so it is graded on a
+    delivery: a report is sent and the endpoint must actually receive it. What
+    stood here before asserted ``cb.can_attempt() is True`` on the private
+    breaker object — a gate's internal opinion of itself, which stays true even
+    when nothing can get through, and which is unfalsifiable across any process
+    boundary.
+
+    This is gradeable because the scenario now registers a webhook (the
+    ``active reporting_webhook`` Given). Without it ``_send_webhook_enhanced``
+    finds no PushNotificationConfig and returns False before the breaker is ever
+    consulted, so every step in the scenario could only ever grade test doubles.
+
+    The CLOSED state is still asserted, because the scenario text names it — but
+    it is read through the production public API (``breaker_snapshot``) rather
+    than off the private dict, and it is now the SECONDARY claim. An attempt that
+    reached the origin is the primary one.
     """
     from src.services.webhook_delivery_service import CircuitState
 
     env = ctx["env"]
-    service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
-    cb = service._circuit_breakers.get(endpoint_key)
 
-    # The breaker must allow attempts (closed state permits delivery)
-    assert cb is not None, f"No circuit breaker found for endpoint key {endpoint_key!r}"
-    can_attempt = cb.can_attempt()
-    assert can_attempt is True, (
-        f"Circuit breaker should allow delivery attempts after closure, "
-        f"but can_attempt() returned {can_attempt!r} (state={cb.state})"
+    # No arrange here, deliberately: the scenario's own Given ("the webhook
+    # endpoint has recovered and returns 200") owns the endpoint. A Then that
+    # forced the endpoint healthy would grade a condition it created, and would
+    # silently mask a scenario that arranged a failing endpoint on purpose.
+    attempts_before = env.delivery_attempts
+    delivered = env.call_send()
+
+    assert delivered is True, (
+        "a delivery attempted after the breaker closed did not succeed — deliveries have not resumed"
     )
-    # Verify the breaker is in closed state (not just half_open allowing a probe)
-    assert cb.state == CircuitState.CLOSED, (
-        f"Expected circuit breaker in CLOSED state for resumed deliveries, got {cb.state}"
+    assert env.delivery_attempts == attempts_before + 1, (
+        f"the endpoint received {env.delivery_attempts - attempts_before} request(s) for one resumed "
+        "delivery — the breaker is still gating traffic, whatever its state says"
+    )
+
+    state, failure_count = env.breaker_snapshot()
+    assert state == CircuitState.CLOSED, (
+        f"Expected circuit breaker in CLOSED state for resumed deliveries, got {state} — a HALF_OPEN "
+        "breaker lets a single probe through, which is not resumed scheduled delivery"
+    )
+    # NOT claimed as an "effect of the probes": this scenario seeds a FRESH
+    # breaker at HALF_OPEN, which is born with failure_count 0 and never records
+    # a failure, so this cannot currently fail. It is kept as a pin — successful
+    # probes must not ADD failures — and it is deliberately the weakest of the
+    # four assertions here, not the grade.
+    assert failure_count == 0, (
+        f"the breaker carries {failure_count} recorded failure(s) after successful recovery "
+        "probes — successful probes must not add to the failure tally"
     )
 
 

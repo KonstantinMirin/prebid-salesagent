@@ -347,7 +347,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-webhook-circuit-recovery @async @extension @ext-g @webhook-reliability
   Scenario: Circuit breaker closes after successful recovery probes
-    Given a media buy "mb-001" with circuit breaker in "HALF_OPEN" state
+    Given a media buy "mb-001" with an active reporting_webhook
+    And a media buy "mb-001" with circuit breaker in "HALF_OPEN" state
     And the webhook endpoint has recovered and returns 200
     When the system delivers 2 successful probe reports
     Then the circuit breaker should transition to "CLOSED"

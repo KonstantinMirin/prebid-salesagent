@@ -1,6 +1,6 @@
 """Guard: BDD wire-discipline — error handling goes through the wire, not test-side.
 
-Two complementary checks, locking in the universal-wire-dispatch invariant after the
+Three complementary checks, locking in the universal-wire-dispatch invariant after the
 holdouts were migrated:
 
 A. **No test-side error construction** (dispatch-side). A step must NOT
@@ -19,7 +19,15 @@ B. **No reconstructed-only error assertion** (assertion-side). An error
    (yields ``RuntimeError`` for an unmapped code); the wire envelope is the buyer-facing
    contract.
 
-Both allowlists can only SHRINK. Each entry documents the production gap that keeps it.
+C. **No private circuit-breaker state reached from a step** (arrange/assert-side). A step must
+   not touch ``<service>._circuit_breakers``. Breaker state is process-local, so a step indexing
+   that dict is unfalsifiable across any process boundary (it grades a test double, not a
+   delivery). Seeding goes through the harness env's breaker accessors — the one place allowed to
+   touch the private dict — and every state READ an assertion depends on goes through the
+   production public API ``WebhookDeliveryService.get_circuit_breaker_state``. Allowlist is
+   permanently EMPTY.
+
+All allowlists can only SHRINK. Each entry documents the production gap that keeps it.
 """
 
 from __future__ import annotations
@@ -55,6 +63,19 @@ _ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
 
 # -- Check B: reconstructed-only error assertions -----------------------------
 _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
+
+# -- Check C: private circuit-breaker state in a step -------------------------
+# The private attribute a step may never reach for. Matched as an AST ``Attribute``,
+# never as a source token: a token scan also hits the DOCSTRING at
+# ``uc004_delivery.py`` that *describes* the process-local limitation, which would make
+# the zero allowlist unachievable and the guard unshippable (gra7.3 correction C3).
+_PRIVATE_BREAKER_ATTR = "_circuit_breakers"
+
+# ZERO entries, permanently. Every site migrates onto the harness env's breaker accessors
+# in the same change that lands this check, so a baseline here would be allowlist growth.
+# Keys carry line numbers (unlike checks A/B) precisely BECAUSE the allowlist is empty:
+# nothing is ever stored, so nothing can go stale, and the failure names the exact sites.
+_PRIVATE_BREAKER_ALLOWLIST: set[str] = set()
 
 
 def _iter_step_modules() -> list[tuple[str, ast.Module]]:
@@ -154,6 +175,35 @@ def _find_reconstructed_only_assertions() -> set[str]:
     return found
 
 
+def _private_breaker_hits(tree: ast.Module) -> dict[str, list[int]]:
+    """Map enclosing function name -> sorted line numbers of ``x._circuit_breakers`` access.
+
+    ``ast.Attribute`` only. A string mentioning ``_circuit_breakers`` — a docstring
+    explaining the process-local limitation, a comment, a log line — parses to a
+    ``Constant``, never an ``Attribute``, and is therefore invisible here. That is the
+    whole reason this check is structural rather than a token scan.
+    """
+    owner_of: dict[int, str] = {}
+    for func in _enclosing_functions(tree):
+        for node in _own_nodes(func):
+            owner_of[id(node)] = func.name
+
+    hits: dict[str, list[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == _PRIVATE_BREAKER_ATTR:
+            hits.setdefault(owner_of.get(id(node), "<module>"), []).append(node.lineno)
+    return {name: sorted(lines) for name, lines in hits.items()}
+
+
+def _find_private_breaker_access() -> set[str]:
+    """Find every step-side read/write of a service's private ``_circuit_breakers`` dict."""
+    found: set[str] = set()
+    for rel, tree in _iter_step_modules():
+        for func_name, lines in _private_breaker_hits(tree).items():
+            found.add(f"{rel} {func_name}:{','.join(str(n) for n in lines)}")
+    return found
+
+
 def test_no_test_side_error_construction() -> None:
     """0wby: steps must not fabricate ctx['error']; dispatch through the wire instead."""
     assert_violations_match_allowlist(
@@ -178,5 +228,23 @@ def test_no_reconstructed_only_error_assertion() -> None:
             "without reading the wire envelope. Make it wire-first: read _wire_code(ctx)/_wire_suggestion(ctx) "
             "or ctx['result'].assert_wire_error(...) and fall back to the reconstructed exception only for "
             "IMPL/no-wire. See then_error.py then_error_code / then_suggestion_contains."
+        ),
+    )
+
+
+def test_no_private_circuit_breaker_state_in_steps() -> None:
+    """gra7.3: steps must not index ``service._circuit_breakers``; go through the env accessors."""
+    assert_violations_match_allowlist(
+        _find_private_breaker_access(),
+        _PRIVATE_BREAKER_ALLOWLIST,
+        fix_hint=(
+            "A BDD step reaches into a service's private _circuit_breakers dict. Breaker state is "
+            "process-local, so that read is unfalsifiable across a process boundary — it grades a "
+            "test double, not a delivery. SEED through the harness env's breaker accessors "
+            "(tests/harness/_mixins.py circuit-breaker mixin — the only place allowed to touch the "
+            "private dict); READ through the production public API "
+            "WebhookDeliveryService.get_circuit_breaker_state (via the env's breaker_snapshot); and "
+            "where the scenario claims deliveries happen, assert the delivery EFFECT (an attempt "
+            "reached the origin), not the state enum alone. The allowlist is permanently empty."
         ),
     )

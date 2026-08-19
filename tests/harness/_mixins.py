@@ -11,7 +11,7 @@ Mixins may call ``self._commit_factory_data()`` which is a no-op in unit mode.
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Self
 from unittest.mock import MagicMock, patch
 
@@ -31,6 +31,7 @@ from src.core.tools.products import _get_products_impl
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
 from src.services.webhook_delivery_service import (
     CircuitBreaker,
+    CircuitState,
     WebhookDeliveryService,
 )
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -532,6 +533,94 @@ class CircuitBreakerMixin(LocalOriginMixin):
         """
         return f"{tenant_id or self._tenant_id}:{self.webhook_url}"  # type: ignore[attr-defined]
 
+    # -- Circuit-breaker seam ------------------------------------------------
+    #
+    # The harness owns exactly ONE private-state seam on the breaker, used for
+    # SEEDING and for driving the OPEN->HALF_OPEN transition. Production exposes
+    # a public READER (``get_circuit_breaker_state``) but no public setter, and
+    # a test must be able to start from a given breaker state without spending
+    # real failures to get there — so the write side lives here, in the harness,
+    # and NOWHERE else. Every state READ that an assertion depends on goes
+    # through :meth:`breaker_snapshot`, i.e. through the production public API.
+    #
+    # Enforced by tests/unit/test_architecture_bdd_wire_discipline.py's
+    # ``test_no_private_circuit_breaker_state_in_steps`` (permanently empty
+    # allowlist): no step under tests/bdd/steps/ may touch ``_circuit_breakers``.
+
+    def _breaker_for(self, endpoint_key: str) -> CircuitBreaker:
+        """The breaker production would use for *endpoint_key*, creating it if absent.
+
+        THE single private-state touch. Everything else in this seam goes
+        through it, so there is one line to audit rather than six.
+        """
+        service = self.get_service()
+        if endpoint_key not in service._circuit_breakers:
+            service._circuit_breakers[endpoint_key] = CircuitBreaker()
+        return service._circuit_breakers[endpoint_key]
+
+    def seed_breaker_failures(self, endpoint_key: str, n: int) -> None:
+        """Record *n* consecutive failures, as production's own arithmetic would.
+
+        Uses ``record_failure`` rather than assigning ``failure_count``: the
+        breaker decides what n failures MEAN (including whether they open it),
+        and a test that set the count directly would be asserting against its
+        own arithmetic instead of production's.
+        """
+        breaker = self._breaker_for(endpoint_key)
+        for _ in range(n):
+            breaker.record_failure()
+
+    def set_breaker_state(self, endpoint_key: str, state: str) -> None:
+        """Force the breaker into *state* ('OPEN' | 'HALF_OPEN' | 'CLOSED').
+
+        A Given that names a state is describing where the scenario STARTS, not
+        something production just did — so this is a seed, not an assertion, and
+        the state it sets is read back through :meth:`breaker_snapshot`.
+        """
+        self._breaker_for(endpoint_key).state = CircuitState[state.upper()]
+
+    def elapse_breaker_timeout(self, endpoint_key: str, seconds: int = 61) -> None:
+        """Age the last failure past the breaker's recovery timeout.
+
+        Moves the CLOCK rather than the state: production decides what an
+        elapsed timeout means (OPEN -> HALF_OPEN on the next ``can_attempt``),
+        and a test that set HALF_OPEN directly would skip the transition it
+        means to exercise.
+        """
+        self._breaker_for(endpoint_key).last_failure_time = datetime.now(UTC) - timedelta(seconds=seconds)
+
+    def record_breaker_successes(self, endpoint_key: str, n: int) -> None:
+        """Record *n* successful deliveries, as production's own arithmetic would."""
+        breaker = self._breaker_for(endpoint_key)
+        for _ in range(n):
+            breaker.record_success()
+
+    def drive_breaker_transition(self, endpoint_key: str) -> bool:
+        """Ask the breaker whether an attempt is allowed, driving OPEN -> HALF_OPEN.
+
+        ``can_attempt()`` is not a pure read: it is where an OPEN breaker whose
+        timeout has elapsed becomes HALF_OPEN, so a scenario that says "the
+        timeout elapsed, now evaluate" must call it to get the transition.
+
+        ACKNOWLEDGED RESIDUE: the bool is returned because one consumer,
+        ``then_single_probe`` (tests/bdd/steps/domain/uc004_delivery.py), still
+        asserts on it. That step is outside this lane's six migration sites, and
+        its assertion sits in a branch that immediately ``pytest.xfail``s on a
+        harness gap, so it grades nothing today. Observe the RESULTING STATE via
+        :meth:`breaker_snapshot`; do not add new assertions on this bool.
+        """
+        return self._breaker_for(endpoint_key).can_attempt()
+
+    def breaker_snapshot(self, endpoint_url: str | None = None) -> tuple[CircuitState, int]:
+        """(state, failure_count) for *endpoint_url*, via the PRODUCTION public API.
+
+        The ONLY read path. Delegates to
+        :meth:`WebhookDeliveryService.get_circuit_breaker_state` so that what a
+        test observes is what production exposes — a read of the private dict
+        could report state production has no way to surface.
+        """
+        return self.get_service().get_circuit_breaker_state(endpoint_url or self.webhook_url)  # type: ignore[attr-defined]
+
     def call_send(
         self,
         media_buy_id: str = "mb_001",
@@ -606,26 +695,33 @@ class CircuitBreakerMixin(LocalOriginMixin):
         return self.call_send(**kwargs)
 
     def get_breaker_state(self) -> str:
-        """Return circuit breaker state for this tenant's endpoints.
+        """Return the circuit-breaker state this env's tenant is in.
 
-        Scans all circuit breakers keyed to this tenant and returns the
-        worst observed state: 'open' > 'half_open' > 'closed'.
+        Reads through the production public API only, which shapes what it can
+        say: ``has_open_circuit_breaker`` answers "is ANY breaker under this
+        tenant OPEN", and ``get_circuit_breaker_state`` answers per-URL. So this
+        returns OPEN when any of the tenant's breakers is open, and otherwise the
+        state of THIS env's own ``webhook_url``.
+
+        That is narrower than the previous private-dict scan, which returned the
+        worst state across every key under the tenant prefix: a HALF_OPEN breaker
+        on some OTHER url now reads 'closed' here. Inert for every current caller
+        (these envs drive a single origin), and stated rather than left for a
+        reader to discover — production exposes no public "worst state for a
+        tenant" reader, and inventing one to preserve a test-only scan would put
+        test convenience into production.
+
+        Callers: then_circuit_breaker_state, then_circuit_breaker_transition,
+        then_circuit_healthy.
 
         Returns:
             State string: 'closed', 'open', or 'half_open'
         """
-        from src.services.webhook_delivery_service import CircuitState
-
         service = self.get_service()
-        tenant_prefix = f"{self._tenant_id}:"  # type: ignore[attr-defined]
-        worst = CircuitState.CLOSED
-        for key, cb in service._circuit_breakers.items():
-            if key.startswith(tenant_prefix):
-                if cb.state == CircuitState.OPEN:
-                    return CircuitState.OPEN.value
-                if cb.state == CircuitState.HALF_OPEN:
-                    worst = CircuitState.HALF_OPEN
-        return worst.value
+        if service.has_open_circuit_breaker(self._tenant_id):  # type: ignore[attr-defined]
+            return CircuitState.OPEN.value
+        state, _ = self.breaker_snapshot()
+        return state.value
 
     @realize_e2e(
         e2e_unsupported(
@@ -654,14 +750,18 @@ class CircuitBreakerMixin(LocalOriginMixin):
         """Prove the circuit breaker recorded a failure for *endpoint_key*.
 
         In-process only — declared e2e-unsupported (see the decorator).
+
+        Reads through the production public getter, which returns ``(CLOSED, 0)``
+        for an endpoint it has NO breaker for. So "no breaker was ever created"
+        and "a breaker exists with zero failures" are indistinguishable here,
+        where the previous private-dict read could tell them apart. The assertion
+        below is unaffected — it demands ``>= 1``, which both of those fail — but
+        the diagnostic can no longer say which one happened.
         """
-        service = self.get_service()
-        cb = service._circuit_breakers.get(endpoint_key)
-        assert cb is not None, (
-            f"Expected circuit breaker for {endpoint_key!r} after SSRF skip, found keys={list(service._circuit_breakers)}"
-        )
-        assert cb.failure_count >= 1, (
-            f"Expected failure_count >= 1 after SSRF rejection for {endpoint_key!r}, got {cb.failure_count}"
+        _state, failure_count = self.breaker_snapshot(endpoint_key)
+        assert failure_count >= 1, (
+            f"Expected failure_count >= 1 after SSRF rejection for {endpoint_key!r}, got {failure_count} — "
+            "the refusal did not reach the breaker, so a destination we cannot deliver to still looks healthy"
         )
 
 
