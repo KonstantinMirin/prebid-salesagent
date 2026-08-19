@@ -44,31 +44,35 @@ services:
 
   adcp-server:
     build: .
-    # Run as the SAME uid:gid as the `tests` service below (and as the host user
-    # that owns the checkout), not the image's baked uid 1001.
+    # NO `user:` directive, deliberately -- and this one is worth spelling out,
+    # because it used to carry the OPPOSITE fix.
     #
-    # Both services bind-mount the same /app. When they run as different uids,
-    # whichever one creates a path first owns it and the other cannot write it.
-    # That is not hypothetical: the launcher creates logs/audit.log as its own
-    # uid, adcp-server (1001) then cannot open it, and because
-    # src/core/audit_logger.py:33 builds that FileHandler at MODULE IMPORT time,
-    # the server dies before serving a single request -- surfacing as thousands
-    # of "Server not ready" errors across bdd_e2e/e2e/ui rather than one
-    # permission error. Making both sides one uid removes the class of bug
-    # instead of chmod-ing each new file that trips it.
+    # The problem it was solving is real: adcp-server and `tests` bind-mount the
+    # same /app, and whichever creates a path first owns it. The launcher created
+    # logs/audit.log as its own uid; adcp-server (image uid 1001) then could not
+    # open it; and because src/core/audit_logger.py:33 builds that FileHandler at
+    # MODULE IMPORT time, the server died before serving one request, surfacing
+    # as thousands of "Server not ready" errors instead of one permission error
+    # (cassini-w37, reproduced twice on this worktree).
     #
-    # Safe here specifically because this is the TEST stack: SKIP_NGINX and
-    # SKIP_CRON below mean /var/log/nginx and the cron paths (the other things
-    # Dockerfile:119 chowns to app:app) are never written, and /opt/venv only
-    # needs read+execute at runtime. Production uses docker-compose.yml, which
-    # has no such override and keeps the baked non-root uid 1001.
+    # The fix attempted here was to pin BOTH services to the same
+    # "${TEST_UID:-0}:${TEST_GID:-0}". That works on a ROOTFUL daemon, which is
+    # what its reasoning assumed ("no userns-remap on these hosts, so container
+    # root IS host root"). The run boxes are ROOTLESS, where it is wrong in both
+    # directions: with TEST_UID exported the container runs as that uid INSIDE
+    # the container and rootless maps it to a host SUBUID (~100000+uid), so /app
+    # collects files the run cannot write; without it -- a bare `docker compose
+    # up`, or cassini's supervisor invoking the stack -- the `:-0` default hits.
     #
-    # Derived, never hardcoded -- a literal uid here previously turned GitHub
-    # Actions red, because the Actions checkout is owned by a different uid than
-    # the CI box's. run_all_tests.sh exports TEST_UID/TEST_GID from `id -u`/`id -g`;
-    # the :-0 default only applies to a bare `docker compose up` and reproduces
-    # the old root behaviour rather than guessing.
-    user: "${TEST_UID:-0}:${TEST_GID:-0}"
+    # Under rootless, container root ALREADY maps to the invoking user. Both
+    # services unset therefore land on ONE identity, which is what "make both
+    # sides one uid" was reaching for, without any uid plumbing to get wrong.
+    # cassini deleted the identical workaround on its own side for the same
+    # reason (cassini/identity.py: "a workaround for a root daemon, and there is
+    # no longer a root daemon").
+    #
+    # HOME: /tmp below is kept: harmless once the baked uid 1001 (which does have
+    # a passwd entry) is back, and removing it is a separate change.
     environment:
       # A raw numeric uid has no /etc/passwd entry, so HOME would default to "/"
       # (unwritable). Same reason the `tests` service sets this.
@@ -150,23 +154,24 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
-    # Runs as the INVOKING host user, not the image's default root --
-    # Dockerfile.test has no USER directive, so without this the container
-    # writes test-results/.tox/schemas/logs into the bind-mounted /app as
-    # literal root (no userns-remap on these hosts, so container root IS host
-    # root), and the next run -- as an ordinary user -- dies on `mkdir:
-    # Permission denied` before a single suite starts.
-    #
-    # Derived, never hardcoded. run_all_tests.sh exports TEST_UID/TEST_GID from
-    # `id -u`/`id -g`; the defaults here are only for a bare `docker compose
-    # run tests` and reproduce the old root behaviour rather than guessing.
-    # A literal uid here was correct on exactly one machine: pinning the CI
-    # box's 1003:1001 turned GitHub Actions red with
-    # `PermissionError: '/app/.tox'`, because .tox lives on the bind mount
-    # (see the volumes block) and the Actions checkout is owned by a different
-    # uid. Nothing local can catch that -- `BDD In-Network (e2e_rest)` is the
-    # only job that runs the suite INSIDE this container.
-    user: "${TEST_UID:-0}:${TEST_GID:-0}"
+    # NO `user:` directive, deliberately. This used to pin
+    # user: "${TEST_UID:-0}:${TEST_GID:-0}", derived from `id -u`/`id -g` by
+    # run_all_tests.sh. The reasoning it carried assumed "no userns-remap on
+    # these hosts, so container root IS host root" -- false on the ROOTLESS
+    # daemon the run boxes use, and wrong in BOTH directions there:
+    #   - with TEST_UID exported, the container runs as that uid INSIDE the
+    #     container, which rootless maps to a host SUBUID (~100000+uid), so the
+    #     bind-mounted /app collects files the run itself cannot write;
+    #   - without it -- any path that does not source run_all_tests.sh, e.g.
+    #     cassini's supervisor calling `docker compose run tests`, or a plain
+    #     `docker compose up` for adcp-server -- the `:-0` default applies.
+    # Under rootless, container root ALREADY maps to the invoking user, which is
+    # exactly the outcome the pin was hand-building. Unset gets it for free.
+    # cassini removed the identical workaround on its own side for the same
+    # reason (cassini/identity.py: "a workaround for a root daemon, and there is
+    # no longer a root daemon"). Symptom this caused live: /app/logs/* created
+    # root-owned, adcp-server (uid 1001) dying at import on a module-level
+    # FileHandler, cascading into ~2100 test failures (cassini-w37).
     build:
       context: .
       dockerfile: Dockerfile.test
