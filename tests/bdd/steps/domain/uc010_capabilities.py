@@ -154,9 +154,20 @@ def _assert_capabilities_config_error(ctx: dict, message_substr: str | None = No
 @given("the tenant has full capabilities configured")
 @given("the tenant uses the mock adapter with full capabilities configured")
 def given_full_capabilities(ctx: dict) -> None:
-    """Declare the full-capability tenant. Production has no capability config
-    surface yet — this records intent; value asserts xfail until S1/S3 land."""
+    """Declare the full-capability tenant.
+
+    Most of "full capabilities" has no production capability-config surface yet —
+    that part records intent, and the value asserts xfail until S1/S3 land. The one
+    part that IS real is the adapter's pricing-model set: production derives
+    media_buy.supported_pricing_models from adapter.get_supported_pricing_models(),
+    so "the tenant uses the mock adapter with full capabilities configured" is
+    realized by having the adapter report the mock adapter's own set (@T-UC-010-pricing
+    grades it). The env's default adapter reports NO pricing models, because absence
+    is what production emits when nothing is determined — it is a declared state here,
+    never a harness default.
+    """
     _config(ctx)["full"] = True
+    ctx["env"].set_supported_pricing_models()
 
 
 @given("the tenant supports audience targeting")

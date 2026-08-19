@@ -32,6 +32,7 @@ beads: salesagent-4sn7 (#1592 / #1210)
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from enum import Enum
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -79,13 +80,24 @@ OMIT_IDENTITY = IdentityMode.OMIT
 #: refuses to sign with (previously masked by the bug that fix closed).
 _COMPOSE_SERVICE = "adcp-server"
 
-#: Default pricing models seeded on the adapter mock -- mirrors the REAL
-#: MockAdServerAdapter.get_supported_pricing_models() set (mock_ad_server.py),
-#: so the harness's MagicMock stand-in doesn't silently degrade to an empty
-#: iterator (MagicMock() auto-implements __iter__ -> iter([]) unless a
-#: return_value is set) for the one BDD scenario family (T-UC-010-pricing)
-#: that actually exercises this method.
-DEFAULT_ADAPTER_PRICING_MODELS = {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
+
+def mock_adapter_pricing_models() -> set[str]:
+    """The pricing-model set the REAL ``MockAdServer`` adapter reports.
+
+    Read off the production class rather than duplicated as a literal, because
+    the value is load-bearing on BOTH sides of the transport boundary: in-process
+    it is what :meth:`CapabilitiesEnv.set_supported_pricing_models` injects, and
+    over e2e_rest it is what the live server's own adapter already returns. A
+    literal here would let those two silently diverge.
+    """
+    from src.adapters.mock_ad_server import MockAdServer
+
+    return set(MockAdServer.get_supported_pricing_models())
+
+
+def _resolve_pricing_models(models: Collection[str] | None) -> set[str]:
+    """Normalize a pricing-model argument; ``None`` means the mock adapter's own set."""
+    return mock_adapter_pricing_models() if models is None else set(models)
 
 
 def _full_targeting_capabilities() -> TargetingCapabilities:
@@ -109,9 +121,14 @@ class CapabilitiesEnv(IntegrationEnv):
     - call_mcp(): real FastMCP in-memory Client (wire_response is real wire)
     - REST: /api/v1/capabilities is a GET route with no body — _run_rest_request
       is overridden to GET (the base implementation POSTs)
+
+    Capabilities assembly itself degrades gracefully (try/except around the
+    optional adapter lookup), so the adapter patch is here to make the reported
+    channels/targeting/pricing DETERMINISTIC and fault-injectable, not because
+    production needs a stand-in to run.
     """
 
-    EXTERNAL_PATCHES = {
+    EXTERNAL_PATCHES: dict[str, str] = {
         "adapter": "src.core.tools.capabilities.get_adapter_class_for_tenant",
         "audit_logger": "src.core.tools.capabilities.log_tool_activity",
     }
@@ -121,11 +138,25 @@ class CapabilitiesEnv(IntegrationEnv):
     REST_METHOD = "get"
 
     def _configure_mocks(self) -> None:
-        """Happy-path adapter: default channels + full targeting capabilities."""
+        """Happy-path adapter: default channels + full targeting capabilities.
+
+        ``supported_pricing_models`` is deliberately NOT among the defaults. It is the
+        one adapter-derived field production leaves UNSET when nothing is determined
+        (``resolved_models or None`` in capabilities.py -- honest absence, never an
+        invented default set), so pre-seeding it here would make the default env
+        incapable of grading the omit-don't-null contract
+        (tests/integration/test_wire_omission_matrix.py's ``get_adcp_capabilities``
+        row, which asserts ``media_buy.supported_pricing_models`` is ABSENT from the
+        wire). An empty ``return_value`` is required rather than left to the MagicMock
+        default: a bare attribute would auto-iterate to ``iter([])`` today but reads as
+        an accident, and the whole point is that emptiness here is a CHOICE. Scenarios
+        that need the field populated say so via
+        :meth:`set_supported_pricing_models`.
+        """
         adapter = MagicMock()
         adapter.default_channels = list(DEFAULT_ADAPTER_CHANNELS)
         adapter.get_targeting_capabilities.return_value = _full_targeting_capabilities()
-        adapter.get_supported_pricing_models.return_value = set(DEFAULT_ADAPTER_PRICING_MODELS)
+        adapter.get_supported_pricing_models.return_value = set()
         self.mock["adapter"].return_value = adapter
         self._adapter_mock = adapter
         self._capability_declarations: dict[str, Any] = {}
@@ -288,6 +319,37 @@ class CapabilitiesEnv(IntegrationEnv):
         """Configure the channel names the adapter reports."""
         self._adapter_mock.default_channels = list(channels)
 
+    def _realize_supported_pricing_models(self, models: Collection[str] | None = None) -> None:
+        """E2E realization: nothing to inject — assert the live server already agrees.
+
+        The e2e tenant runs the REAL ``MockAdServer`` adapter, so the set this Given
+        asks for is already the set the live server reports; the in-process branch
+        below only restores that parity for the MagicMock stand-in. Declaring this
+        ``e2e_unsupported`` would move @T-UC-010-pricing out of live grading for a
+        gap that does not exist (it is absent from
+        ``tests/bdd/e2e_rest_known_failures.txt`` precisely because it passes there).
+        The assert keeps that claim non-vacuous: a scenario asking for some OTHER set
+        would be silently unrealized over e2e, and fails loudly here instead.
+        """
+        requested = _resolve_pricing_models(models)
+        live = mock_adapter_pricing_models()
+        assert requested == live, (
+            "e2e realization only covers the live MockAdServer adapter's own pricing-model set "
+            f"({sorted(live)}); no server surface overrides it, so {sorted(requested)} cannot be realized."
+        )
+
+    @realize_e2e(_realize_supported_pricing_models)
+    def set_supported_pricing_models(self, models: Collection[str] | None = None) -> None:
+        """Configure the pricing-model set the adapter reports (default: the mock adapter's).
+
+        Production derives ``media_buy.supported_pricing_models`` from
+        ``adapter.get_supported_pricing_models()`` (capabilities.py, mirroring
+        products.py's per-product "supported" annotation), mapping an empty result to
+        an UNSET field. This is the ONLY way the env populates it — see
+        :meth:`_configure_mocks` for why the default is empty.
+        """
+        self._adapter_mock.get_supported_pricing_models.return_value = _resolve_pricing_models(models)
+
     def _realize_targeting_capabilities(self, **dims: bool) -> None:
         """E2E realization: persist targeting_capabilities into test_behavior."""
         from tests.factories.core import set_adapter_test_behavior
@@ -427,13 +489,20 @@ class CapabilitiesEnv(IntegrationEnv):
         return GetAdcpCapabilitiesRequest(**kwargs)
 
     def call_impl(self, **kwargs: Any) -> GetAdcpCapabilitiesResponse:
-        """Call _get_adcp_capabilities_impl directly (sync — no wrapper needed)."""
+        """Call _get_adcp_capabilities_impl directly (sync — no wrapper needed).
+
+        A caller may hand over an already-built ``req=`` (or ``req=None`` for the
+        parameterless read); otherwise the flat When-step kwargs are folded into a
+        typed ``GetAdcpCapabilitiesRequest`` by :meth:`_build_request`.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
-        req = self._build_request(**kwargs) if kwargs else None
-        return _get_adcp_capabilities_impl(req, identity)
+        req: GetAdcpCapabilitiesRequest | None = kwargs.pop("req", None)
+        if req is None and kwargs:
+            req = self._build_request(**kwargs)
+        return _get_adcp_capabilities_impl(req=req, identity=identity)
 
     def call_a2a(self, **kwargs: Any) -> GetAdcpCapabilitiesResponse:
         """Call get_adcp_capabilities via real AdCPRequestHandler — full A2A pipeline."""
@@ -456,11 +525,12 @@ class CapabilitiesEnv(IntegrationEnv):
         the parameterless happy-path route — both are real production routes
         (salesagent-5yik, owner decision 2026-07-24: POST, matching the
         codebase's RPC-over-REST convention).
+
+        The preamble (identity pop → factory commit → client → auth override) is
+        the shared ``_prepare_rest_request`` helper on IntegrationEnv, whose own
+        docstring names this env as the GET-route override precedent.
         """
-        identity = self._pop_rest_identity(kwargs)
-        self._commit_factory_data()
-        client = self.get_rest_client()
-        self._configure_rest_auth(identity)
+        client, _identity = self._prepare_rest_request(kwargs)
         if not kwargs:
             return client.get(endpoint)
         body = self.build_rest_body(**kwargs)

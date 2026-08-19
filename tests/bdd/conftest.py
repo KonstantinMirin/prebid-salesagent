@@ -1016,7 +1016,7 @@ _UC010_PARKED_ROWS: list[tuple[str, set[str], str]] = [
 # strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
 _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
     # Graduated (salesagent-rrz8): MCP ToolResult now pre-serializes via
-    # model_dump(mode="json") (src/core/tools/_mcp_boundary.py), so unset
+    # model_dump(mode="json") (src/core/tools/_mcp.py), so unset
     # fields are correctly omitted instead of serialized as JSON null.
     # Former entries: T-UC-010-ext-e-absent (context: null), T-UC-010-
     # degradation-account/no_tenant (account: null).
@@ -1566,25 +1566,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # boundary) and webhook-creds-short — so the routes are removed and the
         # scenarios grade live on all transports.
 
-        # UC-002 ext-g inline-creative missing URL (#1417): the inline
-        # creative carries a FormatId object on the wire. On a2a/rest the
-        # reference-creative URL validation rejects it with the AdCP CREATIVE_REJECTED
-        # envelope (message names the missing URL). On MCP the idempotency
-        # canonicalization (rfc8785) cannot serialize the FormatId object and raises a
-        # bare CanonicalizationError BEFORE the AdCP boundary translator runs — no
-        # two-layer envelope on MCP (same class of MCP serialization gap recorded for
-        # the oneOf-both account shape and the short webhook credential above). The
-        # a2a/rest rows assert the real wire CREATIVE_REJECTED with the URL message.
-        if is_mcp and "T-UC-002-ext-g" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="MCP rfc8785 canonicalization cannot serialize the inline creative's FormatId "
-                    "object (raises CanonicalizationError before the AdCP boundary translator) — no "
-                    "two-layer CREATIVE_REJECTED envelope on MCP (a2a/rest pass). Documented MCP "
-                    "serialization gap.",
-                    strict=True,
-                )
-            )
+        # GRADUATED (#1508 merge): T-UC-002-ext-g on MCP. The recorded gap was real
+        # and is now closed at its root. The MCP boundary stashes the idempotency
+        # payload-hash input as a SHALLOW copy — `dict(context.message.arguments)`
+        # (src/core/mcp_auth_middleware.py) — so the nested packages[].creatives[]
+        # dicts stay shared with what FastMCP hands the tool. `Creative.
+        # validate_format_id` was a mutate-in-place mode="before" validator, so it
+        # wrote a live FormatId object straight into that shared dict; by the time
+        # _create_media_buy_impl called canonical_payload_hash(raw_wire_payload) the
+        # payload was no longer JSON, and rfc8785 raised CanonicalizationError BEFORE
+        # the AdCP boundary translator ran. A2A (copy.deepcopy of parameters,
+        # adcp_a2a_server.py) and REST (raw immutable bytes, rest_compat_middleware.py)
+        # never shared the object graph — which is exactly why the xfail was MCP-only.
+        # `copy_before_mutating()` (src/core/schemas/_base.py, applied in
+        # Creative.validate_format_id) makes the validator non-mutating, so the raw
+        # wire payload stays pure JSON, the idempotency hash succeeds, and MCP now
+        # emits the same two-layer CREATIVE_REJECTED envelope a2a/rest already did.
+        # The strict=True marker fired as designed — deterministic XPASS on the merged
+        # in-network run — so the route is removed and the scenario grades live on all
+        # transports.
 
         # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
         _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}
@@ -4127,6 +4127,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # boundary/other filter siblings) have no step definitions yet, so xfail
         # fast at the fixture (mirrors UC-002/006/011) rather than spinning up a
         # DB per scenario only to auto-xfail at the first missing step.
+        #
+        # When the dormant all-fields boundary scenarios are wired, their Then must
+        # assert value-when-present, not key-presence-of-13: list_creatives drops a
+        # corrupt tags/assets blob to absent and collapses an empty stored tags list
+        # to omission (both conformant at 3.1.1) — see the #1508 reconciliation note
+        # in test_uc018_list_creatives.py's module docstring.
         #
         # BR-RULE-034 is unambiguous here: this branch only runs for T-UC-018-*
         # scenarios (see _detect_uc), so the tag never collides with the UC-006

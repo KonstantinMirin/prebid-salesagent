@@ -14,28 +14,43 @@ Usage::
 from __future__ import annotations
 
 import functools
-import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-_PINNED_ERROR_ENUM = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
-)
+from tests.helpers import pinned_schema
 
 
 @functools.lru_cache(maxsize=1)
 def _pinned_error_metadata() -> dict[str, dict[str, str]]:
-    """code -> {recovery, suggestion} from the pinned AdCP error-code enum.
+    """code -> {recovery, suggestion} from the installed SDK's error-code enum.
 
-    The pinned enum (@v3.1.1) is the authoritative recovery classification;
-    the installed SDK ships fewer codes and diverges on several recovery values,
-    so it is NOT used here (pin-wins).
+    Sourced through ``pinned_schema`` so there is exactly ONE upstream spec pin
+    in play — the installed SDK's own (guarded by
+    tests/unit/test_pinned_schema_single_source.py; see docs/adcp-spec-version.md
+    "Pinned schema sources").
+
+    This module reads only two things out of the returned dict: the KEY SET
+    (``is_pinned_error_code`` / the canonical-code assertion below) and
+    ``recovery`` (``assert_wire_error``'s default expected classification). It
+    never reads ``suggestion`` — ``extract_wire_suggestion`` below reads the
+    WIRE's own suggestion text, not this metadata.
+
+    Measured, not assumed: the SDK tree's enum and the SHA-pinned vendored
+    fixture (tests/fixtures/adcp_schemas_pinned/enums/error-code.json, re-vendored
+    verbatim from the v3.1.1 tag and hash-guarded by
+    tests/unit/test_guards_error_code_fixture_pin.py) now agree EXACTLY — same 92
+    codes, 0 ``recovery`` divergences, 0 ``suggestion`` divergences — so the two
+    possible sources are interchangeable here. The older, pre-re-vendor fixture
+    was the one that disagreed: 64 codes to the SDK's 92 (a strict subset, still
+    with 0 ``recovery`` divergences across the 64 shared codes, but 4
+    ``suggestion`` divergences). That is why consumers which grade ``suggestion``
+    CONTENT (test_architecture_error_suggestion_enum_conformance.py) read the
+    hash-pinned fixture directly rather than this helper.
     """
-    return json.loads(_PINNED_ERROR_ENUM.read_text())["enumMetadata"]
+    return pinned_schema.load("error-code.json")["enumMetadata"]
 
 
 def is_pinned_error_code(code: str | None) -> bool:
@@ -194,7 +209,7 @@ class TransportResult:
         meta = _pinned_error_metadata()
         spec = meta.get(code)
         assert spec is not None, (
-            f"{code!r} is not a canonical AdCP error code (pinned error-code.json @v3.1.1). "
+            f"{code!r} is not a canonical AdCP error code (pinned error-code.json). "
             "Reconcile the feature to a canonical code."
         )
         expected_recovery = recovery if recovery is not None else spec["recovery"]

@@ -2,7 +2,7 @@
 
 import adcp
 
-EXPECTED_SPEC_VERSION = "3.1.1"
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 
 
 def test_adcp_spec_version_matches_pin() -> None:

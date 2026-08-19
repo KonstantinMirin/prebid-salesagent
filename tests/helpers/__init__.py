@@ -84,6 +84,7 @@ from tests.helpers.idempotency_seeds import (
     seed_media_buy,
     seed_principal,
 )
+from tests.helpers.log_assertions import rendered_log_calls
 from tests.helpers.orm_constraints import (
     check_constraint_sql,
     check_constraint_values,
@@ -106,6 +107,8 @@ __all__ = [
     # Concurrency harness
     "concurrent_commit_in_write_window",
     "operator_answer",
+    # Log-call assertions
+    "rendered_log_calls",
     # Idempotency cache seeding
     "make_active_cached_success",
     "seed_cached_success",

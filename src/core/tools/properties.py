@@ -23,7 +23,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import safe_parse_json_field
 
@@ -221,7 +221,7 @@ async def list_authorized_properties(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_authorized_properties_impl(req, identity)
 
-    return build_tool_result(str(response), response)
+    return mcp_result(response)
 
 
 def list_authorized_properties_raw(

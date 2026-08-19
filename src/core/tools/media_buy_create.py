@@ -121,7 +121,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -4518,7 +4518,7 @@ async def create_media_buy(
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
     )
-    return build_tool_result(str(result), result)
+    return mcp_result(result)
 
 
 async def create_media_buy_raw(

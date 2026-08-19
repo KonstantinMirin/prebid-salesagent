@@ -64,7 +64,7 @@ from src.core.signing import (
     webhook_signing_posture,
 )
 from src.core.tool_context import ToolContext
-from src.core.tools._mcp_boundary import build_tool_result
+from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_negotiation import negotiate_adcp_version
@@ -741,8 +741,7 @@ async def get_adcp_capabilities(
 
     summary = "\n".join(summary_parts)
 
-    # Return ToolResult with human-readable text and structured data
-    return build_tool_result(summary, response)
+    return mcp_result(response, content=summary)
 
 
 async def get_adcp_capabilities_raw(

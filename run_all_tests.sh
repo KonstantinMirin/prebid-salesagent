@@ -324,14 +324,22 @@ chmod -R go-w .git 2>/dev/null || true
 
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -e "$SUITES" || RC=$?
 
-# tox writes per-suite JSON into /app/.tox, which is a plain bind-mounted dir
-# now (Aug 2026: the tox_data named volume it used to live on was removed --
-# a fresh named volume's mountpoint is always created root:root by the Docker
-# daemon regardless of the tests container's own `user:` override, which
-# permanently blocked the non-root test runner from `.tox/<env>` on every
-# single run). No throwaway extraction container needed any more -- .tox is
-# just a normal host directory, already right where $RESULTS_DIR is.
-echo "Collecting JSON reports..."
+# tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
+# (docker-compose.e2e.yml, restored along with the removal of the `tests.user`
+# pin -- as root the daemon-created root:root mountpoint is writable again, so
+# tox envs stay off the slow bind-mounted host tree). The HOST's ./.tox is
+# therefore empty, and the reports must be extracted FROM THE VOLUME with a
+# throwaway container before the cleanup trap's `down -v` destroys it.
+#
+# Do NOT "simplify" this back to `cp .tox/*.json` (Aug 2026): that host-side
+# form belongs to the no-volume shape and, paired with the volume, copies
+# NOTHING -- and if a previous run left stale JSON on the host it silently
+# copies THOSE, producing a fresh, plausible, timestamped results directory
+# holding an older run's green numbers. That exact substitution was observed
+# live: two runs that executed ZERO suites still emitted full six-suite
+# "passing" report directories. The pairing is load-bearing; the volume mount
+# and this extraction have to move together.
+echo "Extracting JSON reports from the tox_data volume..."
 # Loud, not silent (Aug 2026): this used to be `2>/dev/null || true`, which
 # once ate a real failure completely silently -- a full 23-minute run
 # finished clean (exit 0, all 7 suites really passed, .tox/*.json all
@@ -341,9 +349,13 @@ echo "Collecting JSON reports..."
 # any reason) and let a real failure actually say something instead of
 # vanishing 23 minutes of work without a trace.
 mkdir -p "$RESULTS_DIR"
-if ! cp .tox/*.json "$RESULTS_DIR/"; then
-    echo "WARNING: failed to copy JSON reports into $RESULTS_DIR/ -- see error above." >&2
-    echo "         Reports are still in .tox/*.json inside $(pwd) if you need them by hand." >&2
+if ! docker run --rm \
+    -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
+    -v "$(pwd)/${RESULTS_DIR}:/out" \
+    alpine sh -c 'cp /t/*.json /out/'; then
+    echo "WARNING: failed to extract JSON reports into $RESULTS_DIR/ -- see error above." >&2
+    echo "         They are in the ${COMPOSE_PROJECT_NAME}_tox_data volume until this run's" >&2
+    echo "         cleanup trap runs \`down -v\`; copy them out now if you need them." >&2
 fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"

@@ -1,25 +1,109 @@
 #!/usr/bin/env python3
-"""Refresh the pinned AdCP JSON-schema fixtures used by test_pydantic_schema_alignment.
+"""Refresh the pinned AdCP artifacts vendored under ``tests/fixtures/``.
 
-Also vendors the request-signing CONFORMANCE VECTORS (#1291 B3, salesagent-z6nr.14)
-into ``tests/fixtures/adcp_conformance_vectors/`` — see :func:`vendor_signing_vectors`.
-Deliberately the SAME mechanism (local clone -> GitHub raw, committed snapshot, offline
-reads) rather than a submodule or a fetch step; ``tests/`` runs offline by construction.
+Three root sets, three DIFFERENT reasons to exist. Everything else that used to
+be vendored here is gone: the general schema-SHAPE closure now comes from the
+installed adcp SDK's own tree (see below), so there is exactly ONE upstream pin
+for it — pyproject's ``adcp`` version.
 
+1. ``enums/error-code.json`` — the SHA-pinned enumMetadata survivor
+-------------------------------------------------------------------
 Source of truth: adcontextprotocol/adcp @ commit
     04f59d2d56d3d77033162c310e99a1188e4eb419  (tag v3.1-04f59d2d5, 2026-05-13)
 
-This commit is an INTENTIONAL, frozen reference point for AdCP 3.1 semantics. The
-upstream adcp repo ships constantly and `/schemas/latest` drifts; we deliberately do
-NOT track it. The commit is immutable on GitHub, so the schemas are vendored here
-(committed) — the alignment test reads them offline and never fetches `/schemas/latest`.
+This commit is an INTENTIONAL, frozen reference point, DELIBERATELY independent
+of the installed adcp SDK's own pin (see docs/adcp-spec-version.md "Pinned
+schema sources"). It exists ONLY for enums/error-code.json's ``enumMetadata``
+``suggestion`` text, read by
+tests/unit/test_architecture_error_suggestion_enum_conformance.py. The
+installed SDK's error-code enum has grown independently (92+ codes vs. this
+fixture's 64) and its ``suggestion`` wording diverges from this fixture's on
+4 codes (CREDENTIAL_IN_ARGS, MEDIA_BUY_NOT_FOUND, PACKAGE_NOT_FOUND,
+REQUOTE_REQUIRED, verified at migration time) — moving that reader onto the
+SDK tree requires first reconciling that divergence (tracked as
+github.com/prebid/salesagent/issues/1883; see docs/adcp-spec-version.md),
+not a mechanical resolver swap.
 
-Layout: schema `$id`/`$ref` namespace is `/schemas/<rest>`; each is written to
-`<this dir>/<rest>` (so `/schemas/core/account-ref.json` -> `core/account-ref.json`).
+Every OTHER pinned SCHEMA-SHAPE consumer — structural request/response shape,
+``$ref`` resolution, AND the ``recovery`` half of this same enumMetadata
+block (verified byte-identical across all 64 shared codes, so
+tests/harness/transport.py and
+tests/unit/test_architecture_error_recovery_enum_conformance.py both migrated)
+— reads through tests/helpers/pinned_schema.py, which resolves from the
+installed SDK's own tree. scripts/verify_feature_error_codes.py also
+migrated (it only reads the ``enum`` code list, not enumMetadata content).
+This directory no longer vendors that flat schema-shape closure at all.
 
-Only the transitive `$ref` closure of the request schemas the test maps is vendored.
+2. ``3.1.1/`` — the explicitly-versioned trust-root document set
+-----------------------------------------------------------------
+(#1291 A3, salesagent-z6nr.9 step 7.) The trust-root documents A3 publishes are
+graded against v3.1.1, NOT against ``PINNED_SHA``: ``adagents.json`` and
+``brand.json`` differ between the two revisions, and
+``core/authorized-agent-base.json`` — where ``signing_keys[]`` actually lives —
+does not exist at ``PINNED_SHA`` at all. Vendoring them from the old pin would
+grade the producer against a schema that predates the shape it must emit. They
+are equally NOT part of (1)'s retired schema-shape closure, which is why the
+SDK-tree migration left them here: they are a version-namespaced pin in their
+own right, consumed by tests/integration/test_trust_root_documents.py.
 
-To refresh (e.g. to advance the pinned commit — a deliberate, reviewed change):
+The ``PINNED_SHA`` pin is NOT moved to cover them — that would churn the frozen
+wording (1) exists to preserve. Two coexisting root sets instead.
+
+The ``$id`` namespace at this revision carries the version
+(``/schemas/3.1.1/...``), so these land under ``3.1.1/`` by the same layout rule
+as (1), and a resolver keyed on the VERSIONED URI needs no special case.
+``core/agent-signing-key.json`` is byte-identical to the ``PINNED_SHA`` copy
+except for that ``$id`` — the changed namespace is exactly why the versioned URI
+has to be the registry key.
+
+3. ``tests/fixtures/adcp_conformance_vectors/`` — the request-signing vectors
+------------------------------------------------------------------------------
+(#1291 B3, salesagent-z6nr.14 — see :func:`vendor_signing_vectors`.) NOT
+schemas: the graded conformance DATA for the RFC 9421 request-signing profile
+(12 positive + 28 negative request vectors, the runner keypairs, 31
+URL-canonicalization cases). Deliberately the SAME mechanism as the schema pins
+(local clone -> GitHub raw, committed snapshot, offline reads) rather than a
+submodule or a fetch step; ``tests/`` runs offline by construction. They live in
+their own fixture tree because they are loaded by a different loader
+(tests/helpers/signing_vectors.py) and pinned by a different guard
+(tests/unit/test_adcp_conformance_vectors_pin.py), but they are vendored by THIS
+script so there is one refresh command.
+
+Layout
+------
+A schema's ``$id``/``$ref`` namespace is ``/schemas/<rest>``; each is written to
+``<this dir>/<rest>`` (so ``/schemas/enums/error-code.json`` ->
+``enums/error-code.json`` and ``/schemas/3.1.1/brand.json`` ->
+``3.1.1/brand.json``). Only the transitive ``$ref`` closure of the listed roots
+is vendored.
+
+``$id`` convention (GH #1881)
+----------------------------
+Vendored files keep upstream's ``$id`` **verbatim**: the site-rooted form
+``/schemas/<category>/<name>.json`` at ``PINNED_SHA``, and the
+version-qualified ``/schemas/3.1.1/<category>/<name>.json`` that upstream's own
+``$id`` carries at tag ``v3.1.1``. :func:`check_id_convention` refuses to write
+a file whose fetched ``$id`` is anything other than the ref it was fetched as —
+which is what makes "verbatim" checkable rather than asserted in prose, and what
+keeps the layout rule above and the ``$id`` in agreement for BOTH schema root
+sets.
+
+Two reasons upstream's own ``$id`` is the rule, rather than a form of our choosing:
+
+- The point of this directory is to preserve frozen upstream artifacts for
+  byte-comparison. Any field _refresh.py rewrote would no longer be evidence of
+  what upstream said.
+- The pin for (1) is a SHA, not a spec version. Stamping a version into its
+  ``$id`` would assert a spec identity the commit does not carry — 04f59d2d5
+  predates 3.1.1, and the number would silently go stale the moment the SHA
+  advances. Conversely, STRIPPING the version from (2)'s ``$id`` would erase the
+  one thing that distinguishes those documents from their ``PINNED_SHA``
+  namesakes, and would collide (1)'s and (2)'s output paths.
+
+Enforced offline by tests/unit/test_pinned_fixture_id_convention.py.
+
+To refresh (e.g. to advance a pin — a deliberate, reviewed change that for (1)
+must also re-check the recovery/suggestion divergence against the SDK):
     uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
 
 It reads from a local clone at ~/projects/adcp if present (faster), else GitHub raw.
@@ -40,23 +124,16 @@ SRC_PREFIX = "static/schemas/source"  # repo path that backs the `/schemas/...` 
 LOCAL_CLONE = Path.home() / "projects" / "adcp"
 FIXTURE_DIR = Path(__file__).parent
 
-# Second, explicitly-versioned root set (#1291 A3, salesagent-z6nr.9 step 7).
-#
-# The trust-root documents A3 publishes are graded against v3.1.1, NOT against
-# PINNED_SHA: `adagents.json` and `brand.json` differ between the two revisions,
-# and `core/authorized-agent-base.json` — where `signing_keys[]` actually lives —
-# does not exist at PINNED_SHA at all. Vendoring them from the old pin would grade
-# the producer against a schema that predates the shape it must emit.
-#
-# The pin is NOT moved: that would churn every vendored file under this directory
-# and re-open `test_pydantic_schema_alignment`. Two coexisting root sets instead.
-#
-# The `$id` namespace at this revision carries the version (`/schemas/3.1.1/...`),
-# so these land under `3.1.1/` by the same layout rule and the `referencing`
-# registry built by `tests/helpers/pinned_schema.py` resolves the VERSIONED URIs
-# without a special case. `core/agent-signing-key.json` is byte-identical to the
-# PINNED_SHA copy except for that `$id` — the changed namespace is exactly why
-# the versioned URI has to be the registry key.
+# Root set 1: the sole surviving flat root — error-code enumMetadata (see module
+# docstring for why this is a deliberately independent pin, not part of the general
+# schema-shape closure, which the installed SDK's own tree now serves).
+ROOTS = [
+    "/schemas/enums/error-code.json",
+]
+
+# Root set 2: the explicitly-versioned trust-root documents (#1291 A3,
+# salesagent-z6nr.9 step 7). Not covered by the SDK-tree migration — see the
+# module docstring's section 2 for why these stay vendored and version-namespaced.
 V311_REV = "v3.1.1"
 V311_SRC_PREFIX = "dist/schemas"  # backs the `/schemas/...` namespace at this revision
 V311_ROOTS = [
@@ -65,47 +142,12 @@ V311_ROOTS = [
     "/schemas/3.1.1/core/agent-signing-key.json",
 ]
 
-# ---------------------------------------------------------------------------
-# Request-signing conformance vectors (#1291 B3, salesagent-z6nr.14)
-# ---------------------------------------------------------------------------
-#
-# These are NOT schemas — they are the graded conformance data for the RFC 9421
-# request-signing profile: 12 positive + 28 negative request vectors, the runner
-# keypairs, and 31 URL-canonicalization cases. They live in their own fixture
-# tree because they are loaded by a different loader and pinned by a different
-# guard, but they are vendored by THIS script so there is one refresh command.
+# Root set 3: request-signing conformance vectors (#1291 B3, salesagent-z6nr.14).
+# Not schemas and not $ref-walked — a whole upstream directory, byte-verbatim.
 VECTORS_REV = "v3.1.1"
 VECTORS_SPEC_VERSION = "3.1.1"
 VECTORS_SRC = "dist/compliance/3.1.1/test-vectors/request-signing"
 VECTORS_DIR = Path(__file__).parent.parent / "adcp_conformance_vectors" / "3.1.1" / "request-signing"
-
-
-# Request schemas the alignment test maps to Pydantic models, plus response schemas
-# whose contract individual tests assert against (the BFS roots).
-ROOTS = [
-    "/schemas/media-buy/get-products-request.json",
-    "/schemas/media-buy/update-media-buy-request.json",
-    "/schemas/media-buy/get-media-buy-delivery-request.json",
-    "/schemas/creative/sync-creatives-request.json",
-    "/schemas/creative/list-creatives-request.json",
-    # Response schemas grounding specific contract tests:
-    "/schemas/media-buy/create-media-buy-response.json",  # test_adcp_contract F4 (valid_actions/context)
-    "/schemas/account/sync-accounts-response.json",  # test_sync_response_account_contract F5 (required fields)
-    "/schemas/creative/sync-creatives-response.json",  # PR1399 R3-F2 (creatives required)
-    # PR1399 Plan-B: machine-complete RESPONSE_ALIGNMENTS over every implemented response model.
-    "/schemas/media-buy/get-products-response.json",
-    "/schemas/media-buy/update-media-buy-response.json",
-    "/schemas/media-buy/get-media-buy-delivery-response.json",
-    "/schemas/creative/get-creative-delivery-response.json",
-    "/schemas/creative/list-creatives-response.json",
-    "/schemas/creative/list-creative-formats-response.json",
-    "/schemas/account/list-accounts-response.json",
-    "/schemas/signals/get-signals-response.json",
-    "/schemas/signals/activate-signal-response.json",
-    # Standalone enum vendored for the BDD error-code guard (verify_feature_error_codes.py).
-    # Not in any request/response $ref closure, so it must be listed explicitly to stay pinned.
-    "/schemas/enums/error-code.json",
-]
 
 
 def _read_local(rev: str, src_prefix: str, rel: str) -> str | None:
@@ -128,12 +170,40 @@ def fetch(ref: str, *, rev: str = PINNED_SHA, src_prefix: str = SRC_PREFIX) -> s
     return _read_local(rev, src_prefix, rel) or _read_github(rev, src_prefix, rel)
 
 
+class IdConventionError(RuntimeError):
+    """A fetched schema's ``$id`` does not follow the vendoring convention."""
+
+
+def check_id_convention(ref: str, schema: dict) -> None:
+    """Raise unless *schema*'s ``$id`` is verbatim the ``ref`` it was fetched as.
+
+    See the module docstring's "$id convention" section. Applied to BOTH schema
+    root sets, not just the SHA-pinned one: the rule is "upstream's own ``$id``,
+    untouched", and it is the same ``$id`` the layout rule derives the output
+    path from, so a mismatch means the file would land somewhere its own ``$id``
+    does not name. Called before writing, so a refresh that would change a
+    vendored ``$id`` aborts loudly instead of silently regressing the file and
+    being caught (if at all) by a downstream reader much later.
+    """
+    actual = schema.get("$id")
+    if actual != ref:
+        raise IdConventionError(
+            f"{ref}: upstream $id is {actual!r}, expected {ref!r}. Vendored fixtures keep "
+            f"upstream's own /schemas/<category>/<name>.json form verbatim, version segment "
+            f"included or omitted exactly as upstream wrote it (GH #1881). If upstream "
+            f"deliberately changed its $id convention, update this script's docstring and "
+            f"tests/unit/test_pinned_fixture_id_convention.py in the same reviewed change — "
+            f"do not vendor the new form silently."
+        )
+
+
 def vendor(roots: list[str], *, rev: str, src_prefix: str) -> int:
     """Walk the transitive ``$ref`` closure of *roots* at *rev* and write it out.
 
     One BFS for every root set — the layout rule (``$id`` namespace path minus
-    the ``/schemas/`` prefix) is identical at both revisions, so a second copy
-    parameterised by revision would be pure duplication.
+    the ``/schemas/`` prefix) and the ``$id`` check are identical at both
+    revisions, so a second copy parameterised by revision would be pure
+    duplication.
     """
     seen: set[str] = set()
     stack = list(roots)
@@ -144,9 +214,11 @@ def vendor(roots: list[str], *, rev: str, src_prefix: str) -> int:
             continue
         seen.add(ref)
         body = fetch(ref, rev=rev, src_prefix=src_prefix)
+        schema = json.loads(body)
+        check_id_convention(ref, schema)
         out = FIXTURE_DIR / ref[len("/schemas/") :]
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(json.loads(body), indent=2) + "\n")
+        out.write_text(json.dumps(schema, indent=2) + "\n")
         written += 1
         stack.extend(re.findall(r'"\$ref"\s*:\s*"([^"]+)"', body))
     print(f"vendored {written} schema files from {REPO}@{rev[:9]} into {FIXTURE_DIR}")
@@ -188,7 +260,8 @@ def vendor_signing_vectors() -> int:
     ``adcp.get_adcp_spec_version()``, so a local edit to a vector — or an
     ``adcp`` pin bump without a re-vendor — is a loud failure.
 
-    Files are written BYTE-VERBATIM (no JSON re-indent): the vectors grade
+    Files are written BYTE-VERBATIM (no JSON re-indent, and no ``$id`` check —
+    these are vectors, not schemas, and carry no ``$id``): the vectors grade
     byte-level canonicalization, so reformatting them would be editing the
     evidence.
     """
