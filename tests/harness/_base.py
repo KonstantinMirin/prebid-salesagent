@@ -74,7 +74,6 @@ def _adcp_error_from_code(
         AdCPError,
         AdCPIdempotencyConflictError,
         AdCPIdempotencyExpiredError,
-        AdCPInternalError,
         AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
         AdCPPackageNotFoundError,
@@ -133,17 +132,28 @@ def _adcp_error_from_code(
     assert error_code not in INTERNAL_CODES, (
         f"INTERNAL code {error_code!r} reached harness reconstruction — production wire leaked an internal-only code"
     )
-    exc_cls = _CODE_TO_CLASS.get(error_code, AdCPInternalError)
-    reconstructed = exc_cls(
-        message=message,
+    # A reconstructed exception can no longer carry the wire's SENTENCE: ``message`` is
+    # derived from the code, so the only faithful source for text is the envelope itself.
+    # Assertions on message text therefore belong on ``wire_error_envelope`` (see
+    # tests/CLAUDE.md § Error Verification Policy), which is where they should always
+    # have been -- this reconstruction is lossy by construction.
+    exc_cls = _CODE_TO_CLASS.get(error_code)
+    if exc_cls is None:
+        # No typed class owns this code: name it on the base rather than routing through
+        # a stand-in class whose identity would contradict the code it carries.
+        return AdCPError(
+            error_code=error_code,
+            details=details,
+            recovery=recovery or "terminal",
+            suggestion=suggestion,
+            field=field,
+        )
+    return exc_cls(
         details=details,
         recovery=recovery or "terminal",
         suggestion=suggestion,
         field=field,
     )
-    if exc_cls is AdCPInternalError:
-        reconstructed.error_code = error_code
-    return reconstructed
 
 
 def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
@@ -303,9 +313,9 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     )
 
     if isinstance(exc, InvalidRequestError):
-        return AdCPAuthenticationError(message)
+        return AdCPAuthenticationError()
     if isinstance(exc, InvalidParamsError):
-        return AdCPValidationError(message)
+        return AdCPValidationError()
     if isinstance(exc, InternalError):
         return RuntimeError(message)
     return exc
@@ -817,7 +827,7 @@ class BaseTestEnv:
         # success response.
         from a2a.types import TaskState
 
-        from src.core.exceptions import AdCPInternalError
+        from src.core.errors.codes import AppErrorCode
 
         if task_result.status.state == TaskState.TASK_STATE_FAILED:
             if task_result.artifacts:
@@ -825,7 +835,10 @@ class BaseTestEnv:
                 reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
                 if reconstructed is not None:
                     raise reconstructed
-            raise AdCPInternalError(f"A2A task failed: {task_result.status}")
+            raise AdCPError(
+                error_code=AppErrorCode.INTERNAL_ERROR,
+                internal_detail=f"A2A task failed: {task_result.status}",
+            )
 
         if task_result.status.state == TaskState.TASK_STATE_SUBMITTED:
             # Async manual-approval path: the server returns a submitted Task with NO
@@ -1153,8 +1166,12 @@ class BaseTestEnv:
             429: AdCPRateLimitError,
             502: AdCPAdapterError,
         }
-        error_cls = STATUS_TO_ERROR.get(status_code, Exception)
-        return error_cls(message)
+        # A typed AdCPError derives its text from its code, so only the untyped
+        # fallback can carry the message. The wire envelope is the authority for text.
+        error_cls = STATUS_TO_ERROR.get(status_code)
+        if error_cls is None:
+            return Exception(message)
+        return error_cls()
 
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with auth dependency overridden.

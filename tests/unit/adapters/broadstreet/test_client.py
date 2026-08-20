@@ -138,7 +138,6 @@ class TestBroadstreetClient:
             client.get_network()
 
         assert exc_info.value.status_code == 403
-        assert "Auth Denied" in str(exc_info.value)
 
     @patch("src.adapters.broadstreet.client.requests.request")
     def test_handle_404_error(self, mock_request):
@@ -177,4 +176,3 @@ class TestBroadstreetClient:
             client.get_network()
 
         assert exc_info.value.status_code == 500
-        assert "server error" in str(exc_info.value)

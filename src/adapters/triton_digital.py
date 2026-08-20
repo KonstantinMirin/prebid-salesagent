@@ -5,7 +5,7 @@ from typing import Any
 import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
-from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.constants import require_supported_update_action
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -39,7 +39,7 @@ class TritonDigital(AdServerAdapter):
         self.advertiser_id = self._require_config(
             self.principal.get_adapter_id("triton"),
             field="advertiser_id",
-            message=f"Principal {principal.principal_id} does not have a Triton advertiser ID",
+            operator_detail=f"Principal {principal.principal_id} does not have a Triton advertiser ID",
         )
 
         # Get Triton configuration
@@ -52,7 +52,7 @@ class TritonDigital(AdServerAdapter):
             self.auth_token = self._require_config(
                 self.auth_token,
                 field="auth_token",
-                message="Triton Digital config is missing 'auth_token'",
+                operator_detail="Triton Digital config is missing 'auth_token'",
             )
             self.headers = {"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"}
 
@@ -161,7 +161,7 @@ class TritonDigital(AdServerAdapter):
         if unsupported_features:
             error_msg = f"Unsupported targeting features for Triton Digital: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
-            raise AdCPCapabilityNotSupportedError(error_msg, details={"features": unsupported_features})
+            raise AdCPCapabilityNotSupportedError(details={"features": unsupported_features})
 
         # Generate a media buy ID
         media_buy_id = (
@@ -549,10 +549,7 @@ class TritonDigital(AdServerAdapter):
         """Updates a media buy in Triton Digital using standardized actions."""
         self.log(f"TritonDigital.update_media_buy for {media_buy_id} with action {action}", dry_run_prefix=False)
 
-        if action not in REQUIRED_UPDATE_ACTIONS:
-            raise AdCPCapabilityNotSupportedError(
-                f"Action '{action}' not supported. Supported actions: {REQUIRED_UPDATE_ACTIONS}",
-            )
+        require_supported_update_action(action)
 
         if self.dry_run:
             campaign_id = media_buy_id.replace("triton_", "")
@@ -636,7 +633,7 @@ class TritonDigital(AdServerAdapter):
 
                     flight = next((f for f in flights if f["name"] == package_id), None)
                     if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+                        raise AdCPPackageNotFoundError(details={"package_id": package_id})
 
                     # Update flight status
                     is_resume = action == "resume_package"
@@ -674,7 +671,7 @@ class TritonDigital(AdServerAdapter):
 
                     flight = next((f for f in flights if f["name"] == package_id), None)
                     if not flight:
-                        raise AdCPPackageNotFoundError(f"Flight '{package_id}' not found")
+                        raise AdCPPackageNotFoundError(details={"package_id": package_id})
 
                     # Calculate impressions based on action
                     if action == "update_package_budget":
@@ -702,4 +699,4 @@ class TritonDigital(AdServerAdapter):
                 # an upstream API response from a seller-internal integration.
                 # AdCP 3.1.1 transport-errors.mdx § Security Considerations
                 # forbids it on the buyer wire; it goes to the log + slot.
-                raise AdCPAdapterError("Ad server rejected the media buy update", internal_detail=e) from e
+                raise AdCPAdapterError(internal_detail=e) from e

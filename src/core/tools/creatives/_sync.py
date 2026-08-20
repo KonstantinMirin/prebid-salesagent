@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPError, normalize_to_adcp_error
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -196,7 +196,16 @@ def _sync_creatives_impl(
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(_failed_sync_result(creative_id, error_msg))
+                    # normalize_to_adcp_error is the ONE type->code mapping: reusing it here
+                    # keeps the per-creative advisory identical to what the request-level
+                    # boundary would have produced, and it already derives field + details
+                    # from the pydantic error. The raw text rides internal_detail (server
+                    # log only) instead of details, so no arbitrary exception text reaches
+                    # the buyer.
+                    typed = normalize_to_adcp_error(validation_error)
+                    typed.internal_detail = validation_error
+                    typed.details = {**(typed.details or {}), "creative_id": creative_id}
+                    results.append(_failed_sync_result(creative_id, typed))
                     continue  # Skip to next creative
 
                 # Check provenance requirement (EU AI Act Article 50)
@@ -346,7 +355,7 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(_failed_sync_result(creative_id, error_msg))
+                results.append(_failed_sync_result(creative_id, e))
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
                 creative_id = _get_field(raw_creative, "creative_id", "unknown")
@@ -355,7 +364,14 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(_failed_sync_result(creative_id, error_msg))
+                # Same single mapping as the request-level boundary: a pydantic
+                # ValidationError becomes VALIDATION_ERROR with its field and details,
+                # anything else becomes INTERNAL_ERROR. Synthesizing a bare INTERNAL_ERROR
+                # here instead threw away the field the buyer needs.
+                typed = normalize_to_adcp_error(e)
+                typed.internal_detail = e
+                typed.details = {**(typed.details or {}), "creative_id": creative_id}
+                results.append(_failed_sync_result(creative_id, typed))
 
         # Archive creatives not in the sync payload when delete_missing=True
         if delete_missing:

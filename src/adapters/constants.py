@@ -28,3 +28,17 @@ from src.core.platform_mappings import (  # noqa: F401
     ADAPTER_PLATFORM_MAP,
     resolve_adapter_id,
 )
+
+
+def require_supported_update_action(action: str) -> None:
+    """Refuse an update action no adapter models, identically across adapters.
+
+    Three adapters had a byte-identical copy of this check. CLAUDE.md treats duplicated
+    logic as a defect, not a style preference: the next fix to one copy misses the others.
+    """
+    from src.core.exceptions import AdCPCapabilityNotSupportedError
+
+    if action not in REQUIRED_UPDATE_ACTIONS:
+        raise AdCPCapabilityNotSupportedError(
+            details={"action": action, "supported_actions": sorted(REQUIRED_UPDATE_ACTIONS)},
+        )

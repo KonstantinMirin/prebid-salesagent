@@ -101,7 +101,6 @@ def test_product_pricing_options_defaults_to_empty_list():
         )
 
     # Verify the error is about missing pricing_options
-    assert "pricing_options" in str(exc_info.value)
 
 
 def test_product_with_empty_pricing_options_serializes_as_empty_array():

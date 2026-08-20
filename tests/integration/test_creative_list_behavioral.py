@@ -62,7 +62,7 @@ class TestListAuth:
         """Covers: UC-006-EXT-B-01 — tenant=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="p1", tenant=None)
         with CreativeListEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="tenant"):
+            with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(identity=identity)
 
 
@@ -80,7 +80,7 @@ class TestListValidation:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-            with pytest.raises(AdCPValidationError, match="created_after"):
+            with pytest.raises(AdCPValidationError):
                 env.call_impl(created_after="not-a-date")
 
     def test_invalid_created_before_raises(self, integration_db):
@@ -89,7 +89,7 @@ class TestListValidation:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-            with pytest.raises(AdCPValidationError, match="created_before"):
+            with pytest.raises(AdCPValidationError):
                 env.call_impl(created_before="not-a-date")
 
 

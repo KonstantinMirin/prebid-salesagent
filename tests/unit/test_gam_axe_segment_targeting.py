@@ -218,8 +218,6 @@ def test_axe_include_segment_fails_if_key_not_configured(mock_adapter_config_no_
         with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             manager.build_targeting(targeting_overlay)
 
-        assert "axe_include_key not configured" in str(exc_info.value)
-
 
 def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_keys):
     """Test that axe_exclude_segment fails with clear error if axe_exclude_key not configured."""
@@ -237,5 +235,3 @@ def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_
 
         with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             manager.build_targeting(targeting_overlay)
-
-        assert "axe_exclude_key not configured" in str(exc_info.value)

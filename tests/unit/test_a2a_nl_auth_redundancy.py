@@ -153,6 +153,3 @@ async def test_nl_media_buy_raises_capability_not_supported():
         f"resolve_identity called {mock_resolve.call_count} times for media buy NL request. Expected 1."
     )
     # InternalError message names the original capability failure (sanity check).
-    assert "create_media_buy" in str(exc_info.value).lower() or "explicit" in str(exc_info.value).lower(), (
-        f"InternalError should reference the unsupported capability; got: {exc_info.value}"
-    )

@@ -671,25 +671,15 @@ class GAMTargetingManager:
 
         # City targeting removed in v3; check transient flag from normalizer
         if targeting_overlay.had_city_targeting:
-            raise AdCPCapabilityNotSupportedError(
-                "City targeting requested but not supported (removed in v3). "
-                "Use geo_metros for metropolitan area targeting instead."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"unsupported_capability": "geo_city"})
 
-        # Postal code targeting not implemented in static mapping - fail loudly
-        # PostalArea is a RootModel — render the wrapped values, not the model reprs;
-        # this text reaches the buyer inside the create-media-buy error message.
+        # Postal code targeting not implemented in static mapping - fail loudly.
+        # The capability NAME travels as structured detail; the buyer-facing sentence is
+        # the code's own.
         if targeting_overlay.geo_postal_areas:
-            raise AdCPCapabilityNotSupportedError(
-                f"Postal code targeting requested but not implemented in GAM static mapping. "
-                f"Cannot fulfill buyer contract for postal areas: {[a.root for a in targeting_overlay.geo_postal_areas]}."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"unsupported_capability": "geo_postal_areas"})
         if targeting_overlay.geo_postal_areas_exclude:
-            raise AdCPCapabilityNotSupportedError(
-                f"Postal code exclusion requested but not implemented in GAM static mapping. "
-                f"Cannot fulfill buyer contract for excluded postal areas: "
-                f"{[a.root for a in targeting_overlay.geo_postal_areas_exclude]}."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"unsupported_capability": "geo_postal_areas_exclude"})
 
         # Build targeted locations
         if any(
@@ -725,7 +715,7 @@ class GAMTargetingManager:
                 for metro in targeting_overlay.geo_metros:
                     if metro.system.value != "nielsen_dma":
                         raise AdCPCapabilityNotSupportedError(
-                            f"Unsupported metro system '{metro.system.value}'. GAM only supports nielsen_dma."
+                            details={"geo_system": metro.system.value, "supported_systems": ["nielsen_dma"]}
                         )
                     for dma_code in metro.values:
                         if dma_code in self.geo_metro_map:
@@ -763,7 +753,7 @@ class GAMTargetingManager:
                 for metro in targeting_overlay.geo_metros_exclude:
                     if metro.system.value != "nielsen_dma":
                         raise AdCPCapabilityNotSupportedError(
-                            f"Unsupported metro system '{metro.system.value}'. GAM only supports nielsen_dma."
+                            details={"geo_system": metro.system.value, "supported_systems": ["nielsen_dma"]}
                         )
                     for dma_code in metro.values:
                         if dma_code in self.geo_metro_map:
@@ -774,35 +764,20 @@ class GAMTargetingManager:
 
         # Technology/Device targeting - NOT SUPPORTED, MUST FAIL LOUDLY
         if targeting_overlay.device_type_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                f"Device targeting requested but not supported. "
-                f"Cannot fulfill buyer contract for device types: {targeting_overlay.device_type_any_of}."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"device_type_any_of": targeting_overlay.device_type_any_of})
 
         if targeting_overlay.os_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                f"OS targeting requested but not supported. "
-                f"Cannot fulfill buyer contract for OS types: {targeting_overlay.os_any_of}."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"os_any_of": targeting_overlay.os_any_of})
 
         if targeting_overlay.browser_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                f"Browser targeting requested but not supported. "
-                f"Cannot fulfill buyer contract for browsers: {targeting_overlay.browser_any_of}."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"browser_any_of": targeting_overlay.browser_any_of})
 
         # Content targeting - NOT SUPPORTED, MUST FAIL LOUDLY
         if targeting_overlay.content_cat_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                f"Content category targeting requested but not supported. "
-                f"Cannot fulfill buyer contract for categories: {targeting_overlay.content_cat_any_of}."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"content_cat_any_of": targeting_overlay.content_cat_any_of})
 
         if targeting_overlay.keywords_any_of:
-            raise AdCPCapabilityNotSupportedError(
-                f"Keyword targeting requested but not supported. "
-                f"Cannot fulfill buyer contract for keywords: {targeting_overlay.keywords_any_of}."
-            )
+            raise AdCPCapabilityNotSupportedError(details={"keywords_any_of": targeting_overlay.keywords_any_of})
 
         # Custom key-value targeting
         custom_targeting = {}
@@ -829,10 +804,7 @@ class GAMTargetingManager:
         # Per AdCP spec, three separate keys are required for include, exclude, and macro segments
         if targeting_overlay.axe_include_segment:
             if not self.axe_include_key:
-                raise AdCPCapabilityNotSupportedError(
-                    "AXE include segment targeting requested but axe_include_key not configured. "
-                    "Configure AXE keys in tenant adapter settings to support this targeting."
-                )
+                raise AdCPCapabilityNotSupportedError(details={"unsupported_capability": "axe_include_segment"})
             # Resolve key name to GAM key ID
             try:
                 key_id = self.resolve_custom_targeting_key_id(self.axe_include_key)
@@ -849,10 +821,7 @@ class GAMTargetingManager:
 
         if targeting_overlay.axe_exclude_segment:
             if not self.axe_exclude_key:
-                raise AdCPCapabilityNotSupportedError(
-                    "AXE exclude segment targeting requested but axe_exclude_key not configured. "
-                    "Configure AXE keys in tenant adapter settings to support this targeting."
-                )
+                raise AdCPCapabilityNotSupportedError(details={"unsupported_capability": "axe_exclude_segment"})
             # Resolve key name to GAM key ID
             try:
                 key_id = self.resolve_custom_targeting_key_id(self.axe_exclude_key)
@@ -887,9 +856,7 @@ class GAMTargetingManager:
                 audience_list.extend(targeting_overlay.signals)
 
             raise AdCPCapabilityNotSupportedError(
-                f"Audience/signal targeting requested but GAM audience segment mapping not configured. "
-                f"Cannot fulfill buyer contract for: {', '.join(audience_list)}. "
-                f"Configure audience segment ID mappings in tenant adapter config to support this targeting."
+                details={"unsupported_capability": "audiences", "requested": audience_list}
             )
 
         # Media type targeting - map to GAM environmentType
@@ -899,9 +866,7 @@ class GAMTargetingManager:
             # Validate only one media type (GAM line items have single environmentType)
             if len(targeting_overlay.media_type_any_of) > 1:
                 raise AdCPCapabilityNotSupportedError(
-                    f"Multiple media types requested but GAM supports only one environmentType per line item. "
-                    f"Requested: {targeting_overlay.media_type_any_of}. "
-                    f"Create separate packages for each media type."
+                    details={"media_type_any_of": targeting_overlay.media_type_any_of}
                 )
 
             media_type = targeting_overlay.media_type_any_of[0]
@@ -920,8 +885,11 @@ class GAMTargetingManager:
                 logger.info(f"Media type '{media_type}' mapped to GAM environmentType: {environment_type}")
             else:
                 raise AdCPCapabilityNotSupportedError(
-                    f"Media type '{media_type}' is not supported in GAM. "
-                    f"Supported types: {', '.join(media_type_map.keys())}"
+                    details={
+                        "unsupported_capability": "media_type",
+                        "media_type": media_type,
+                        "supported_media_types": sorted(media_type_map),
+                    }
                 )
 
         logger.info(f"Applying GAM targeting: {list(gam_targeting.keys())}")

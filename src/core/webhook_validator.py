@@ -113,7 +113,7 @@ def reject_unsafe_webhook_registration_url(
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
     if not is_valid:
         raise AdCPValidationError(
-            f"Invalid {field}: {error_msg}",
+            details={"field": field, "error_msg": error_msg},
             field=field,
             suggestion=webhook_ssrf_suggestion(),
             recovery="correctable",

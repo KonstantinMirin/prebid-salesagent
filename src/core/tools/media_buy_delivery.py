@@ -48,8 +48,6 @@ def _validate_attribution_window(attribution_window: "AttributionWindow | None")
         unit = enum_value(window.unit)
         if unit == "campaign" and window.interval != 1:
             raise AdCPValidationError(
-                "attribution_window: interval must be 1 when unit is 'campaign' "
-                "(the window spans the full campaign flight)",
                 field="attribution_window",
                 suggestion="interval must be 1 when unit is 'campaign'",
             )
@@ -198,7 +196,6 @@ def _get_media_buy_delivery_impl(
 
         if start_dt >= end_dt:
             raise AdCPValidationError(
-                "Start date must be before end date",
                 field="start_date",
                 suggestion="Set start_date to a date before end_date and resend.",
                 context=req.context,

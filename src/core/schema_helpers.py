@@ -119,14 +119,14 @@ def _coerce_domain_or_raise(raw: str) -> str:
     domain = brand_shorthand_to_domain(raw)
     if not domain:
         raise AdCPValidationError(
-            f"Invalid brand: could not derive domain from brand shorthand {raw!r}",
+            details={"brand": raw},
             field="brand",
         )
     try:
         BrandReference(domain=domain)
     except ValidationError as e:
         raise AdCPValidationError(
-            f"Invalid brand: domain {domain!r} is not a valid hostname",
+            details={"domain": domain},
             field="brand",
         ) from e
     return domain
@@ -163,7 +163,6 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
             domain_raw = brand.get("domain")
             if not isinstance(domain_raw, str):
                 raise AdCPValidationError(
-                    "Invalid brand: domain is required",
                     field="brand",
                 )
             allowed = BrandReference.model_fields.keys()
@@ -171,7 +170,7 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
             ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
             return BrandReference(**ref_data)
         raise AdCPValidationError(
-            f"Invalid brand: expected dict, string, or BrandReference, got {type(brand).__name__}",
+            details={"received_type": type(brand).__name__},
             field="brand",
         )
 

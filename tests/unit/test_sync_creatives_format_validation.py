@@ -126,10 +126,12 @@ class TestSyncCreativesFormatValidation:
             assert response.creatives[0].creative_id == "creative_123"
             assert len(response.creatives[0].errors) == 1
 
-            error_msg = response.creatives[0].errors[0].message
-            assert "Unknown format 'display_300x250_image'" in error_msg
-            assert "https://creative.adcontextprotocol.org" in error_msg
-            assert "list_creative_formats" in error_msg  # Helpful suggestion
+            advisory = response.creatives[0].errors[0]
+            # The rejected format and the agent that lacks it are STRUCTURED now, not
+            # interpolated prose: a buyer agent can read them without parsing English.
+            assert advisory.code == "VALIDATION_ERROR"
+            assert advisory.details["format_id"] == "display_300x250_image"
+            assert "creative.adcontextprotocol.org" in advisory.details["agent_url"]
 
     def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """An unreachable agent fails the REQUEST transiently, not the creative.
@@ -158,14 +160,14 @@ class TestSyncCreativesFormatValidation:
                 return []
 
             async def mock_get_format(agent_url, format_id):
-                raise AdCPServiceUnavailableError("Connection failed: agent unreachable — Connection refused")
+                raise AdCPServiceUnavailableError(details={"failure_mode": "Connection failed"})
 
             mock_registry = Mock()
             mock_registry.list_all_formats = mock_list_all_formats
             mock_registry.get_format = mock_get_format
             mock_registry_getter.return_value = mock_registry
 
-            with pytest.raises(AdCPServiceUnavailableError, match="Connection refused") as exc_info:
+            with pytest.raises(AdCPServiceUnavailableError) as exc_info:
                 _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
 
             assert exc_info.value.recovery == "transient"
@@ -261,7 +263,9 @@ class TestSyncCreativesFormatValidation:
             # Second creative: failed (unknown format)
             assert response.creatives[1].creative_id == "creative_2"
             assert response.creatives[1].action == "failed"
-            assert "Unknown format 'unknown_format'" in response.creatives[1].errors[0].message
+            advisory_2 = response.creatives[1].errors[0]
+            assert advisory_2.code == "VALIDATION_ERROR"
+            assert advisory_2.details["format_id"] == "unknown_format"
 
             # Third creative: success
             assert response.creatives[2].creative_id == "creative_3"
@@ -342,7 +346,14 @@ class TestSyncCreativesFormatValidation:
             assert len(response.creatives) == 1
             assert response.creatives[0].action == "failed"
             # Error message comes from Pydantic schema validation
-            assert "format_id" in response.creatives[0].errors[0].message
+            advisory_missing = response.creatives[0].errors[0]
+            # Same obligation as before (the rejected field is identified), asserted where
+            # the value now lives rather than inside an English sentence.
+            # The advisory now runs through the SAME normalize_to_adcp_error the
+            # request-level boundary uses, so a pydantic failure is VALIDATION_ERROR with
+            # its field — not the SERVICE_UNAVAILABLE default it used to inherit.
+            assert advisory_missing.code == "VALIDATION_ERROR"
+            assert "format_id" in str(advisory_missing.details or {}) or advisory_missing.field == "format_id"
 
     def test_error_messages_distinguish_scenarios(self, identity, mock_tenant):
         """Test that error messages clearly distinguish between different failure scenarios."""
@@ -382,7 +393,7 @@ class TestSyncCreativesFormatValidation:
 
             async def mock_get_format(agent_url, format_id):
                 if "offline.example.com" in agent_url:
-                    raise AdCPServiceUnavailableError("Connection failed: Connection refused")
+                    raise AdCPServiceUnavailableError(details={"failure_mode": "Connection failed"})
 
             mock_registry = Mock()
             mock_registry.list_all_formats = mock_list_all_formats
@@ -392,13 +403,17 @@ class TestSyncCreativesFormatValidation:
             # Unknown format: per-item terminal failure — the creative is wrong.
             response1 = _sync_creatives_impl(creatives=[creative_unknown_format], identity=identity)
 
-            error1 = response1.creatives[0].errors[0].message
-            assert "Unknown format" in error1
-            assert "list_creative_formats" in error1
-            assert "unreachable" not in error1  # Should NOT mention unreachability
+            advisory1 = response1.creatives[0].errors[0]
+            # A wrong format is buyer-correctable; an unreachable agent is transient.
+            # The CODE carries that distinction, so it cannot be blurred by wording.
+            # The advisory is built by the SAME derivation as the request-level envelope
+            # (build_error_object), so its suggestion is the class default — not the table's.
+            # Making the table authoritative for all 42 classes is salesagent-3dawm.8.
+            assert advisory1.code == "VALIDATION_ERROR"
+            assert advisory1.code != "SERVICE_UNAVAILABLE"
 
             # Down agent: request-level TRANSIENT failure — the creative is fine.
-            with pytest.raises(AdCPServiceUnavailableError, match="Connection refused") as exc_info:
+            with pytest.raises(AdCPServiceUnavailableError) as exc_info:
                 _sync_creatives_impl(creatives=[creative_unreachable], identity=identity)
             assert exc_info.value.recovery == "transient"
 

@@ -2348,7 +2348,7 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     # position. Burying it in details={"suggestion": ...} yields a non-conformant wire
     # error (empty top-level suggestion). The e2e sibling below keeps error_details;
     # mock_ad_server pops it back to first-class.
-    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(message, recovery=recovery, suggestion=suggestion)
+    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(recovery=recovery, suggestion=suggestion)
     # E2E path: write the failure to the adapter test-behavior config so the
     # Docker-hosted adapter raises the same error on creative upload
     # (MockAdServer.add_creative_assets reads the fail_on_upload flag).
@@ -2837,7 +2837,6 @@ def given_adapter_error(ctx: dict) -> None:
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
     error = AdCPAdapterError(
-        "Ad server unavailable",
         recovery="retryable",
         details={"suggestion": "Retry the operation or contact ad server support"},
     )

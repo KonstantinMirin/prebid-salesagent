@@ -362,6 +362,16 @@ def _serialize_context(
     return context.model_dump(mode="json", exclude_none=True)
 
 
+def _rebuild_error(cls: type[AdCPError], code: ErrorCodeT) -> AdCPError:
+    """Reconstruct a pickled or copied error.
+
+    The ``hasattr`` branch is load-bearing: a class-coded subclass IS its code, so
+    naming it again would trip ``AdCPError.__new__``'s "already names a code" refusal.
+    ``__dict__`` restoration then repopulates ``_error_code`` and the rest.
+    """
+    return cls() if hasattr(cls, "_code") else cls(error_code=code)
+
+
 class AdCPError(Exception):
     """Base exception for all AdCP errors.
 
@@ -370,7 +380,7 @@ class AdCPError(Exception):
     typed subclass overrides the ``_default_*`` slot, not the public name.
     The public ``error_code``/``status_code``/``recovery`` are instance
     attributes set in ``__init__`` from the class-level default unless the
-    caller overrides via kwargs (only ``synthesize()`` is sanctioned).
+    caller overrides via kwargs (``error_code=`` on the base, refused on a coded subclass).
 
     Code that needs class-level identity (e.g. ``_build_error_code_to_status``
     walking ``__subclasses__()`` to build the wire-code → HTTP-status table)
@@ -434,29 +444,41 @@ class AdCPError(Exception):
     _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
-    error_code: ErrorCodeT
+    # ``error_code`` and ``message`` are NOT here: they are read-only properties over
+    # ``_error_code``, so neither slot can be written after construction.
+    _error_code: ErrorCodeT
     status_code: int
     recovery: RecoveryHint
     internal_detail: BaseException | str | None
 
     def __new__(cls, *args: Any, **kwargs: Any) -> AdCPError:
-        """Refuse to build an error that has no code.
+        """Refuse to build an error whose code is absent, or doubly named.
+
+        The invariant is: an error names a code, by its class OR explicitly. Both
+        halves are refused here, so neither can be expressed.
 
         ``_code`` is annotation-only on the base, so ``hasattr`` is False here and
         True on every subclass that declares one. This is the check
         ``object.__new__`` performs for an abstract class and that
         ``BaseException.__new__`` does not: ABC is a runtime no-op for exception
-        classes, so without this a bare ``AdCPError(...)`` would construct and put
-        a null code on the buyer's wire. Nothing scans for the violation; it
-        cannot be constructed.
+        classes, so without this a bare ``AdCPError()`` would construct and put a
+        null code on the buyer's wire.
+
+        The second branch is why there is no ``synthesize()``: a boundary that needs
+        a code the class hierarchy does not model names it on the base, and a class
+        that already IS a code cannot be overridden into disagreeing with itself.
+        Nothing scans for either violation; neither can be constructed.
         """
-        if not hasattr(cls, "_code"):
-            raise TypeError(f"{cls.__name__} declares no _code; raise a subclass that does")
+        has_class_code = hasattr(cls, "_code")
+        named = kwargs.get("error_code") is not None
+        if has_class_code and named:
+            raise TypeError(f"{cls.__name__} already names a code; do not override it")
+        if not has_class_code and not named:
+            raise TypeError(f"{cls.__name__} declares no _code and none was named")
         return cast("AdCPError", super().__new__(cls, *args, **kwargs))
 
     def __init__(
         self,
-        message: str | None = None,
         *,
         error_code: ErrorCodeT | None = None,
         status_code: int | None = None,
@@ -468,29 +490,28 @@ class AdCPError(Exception):
         context: ContextObject | dict[str, Any] | None = None,
         internal_detail: BaseException | str | None = None,
     ) -> None:
-        # ``error_code`` and ``status_code`` kwargs are only used by the
-        # sanctioned ``synthesize()`` classmethod for boundary fallback paths
-        # that need a wire code the typed class hierarchy doesn't model.
-        # Direct raises use a typed subclass and inherit its ``_default_*``.
+        # There is no ``message`` parameter. Buyer-facing text comes from CODE_TABLE
+        # via the read-only ``message`` property, so no raise site can author it and
+        # no caught exception's text can reach the wire. Provenance-bearing text goes
+        # to ``internal_detail`` (server log only); values go to ``field``/``details``.
         #
-        # error_code is assigned FIRST because the message resolution keys on it.
-        # Keying on ``type(self)._code`` instead would resolve every synthesized
-        # error against its CLASS's code rather than the code it actually carries.
-        self.error_code = error_code if error_code is not None else type(self)._code
-        # Resolve ONCE, then hand the SAME value to both readers. ``args`` and
-        # ``.message`` therefore cannot disagree — a raise site that has nothing to
-        # add passes nothing and gets the table's text.
-        #
-        # ``is not None``, never ``or``: an OMITTED message and an EMPTY one are
-        # different. Boundary paths do pass '' (a text-less ValueError, a
-        # text-less ToolError), and '' must stay '' rather than acquire a sentence
-        # the caller did not choose.
-        resolved_message = message if message is not None else CODE_TABLE[self.error_code].message
-        super().__init__(resolved_message)
-        self.message = resolved_message
+        # Assigned FIRST: the message property and the entry lookup both key on it.
+        self._error_code = error_code if error_code is not None else type(self)._code
+        # A NAMED code is the authority for its own entry. A CLASS-CODED error keeps
+        # its class defaults: making the table authoritative for all 42 subclasses is
+        # a wire change (42/42 suggestion, 2/42 recovery) and belongs to its own step.
+        default_recovery: RecoveryHint
+        default_suggestion: str | None
+        if error_code is not None:
+            entry = CODE_TABLE[error_code]
+            default_recovery = cast("RecoveryHint", entry.recovery.value)
+            default_suggestion = entry.suggestion
+        else:
+            default_recovery = type(self)._default_recovery
+            default_suggestion = type(self)._default_suggestion
         self.details = details
         self.field = field
-        self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
+        self.suggestion = suggestion if suggestion is not None else default_suggestion
         self.retry_after = retry_after
         self.context = context
         # NON-WIRE. Deliberately absent from to_dict()/to_adcp_error()/
@@ -498,7 +519,34 @@ class AdCPError(Exception):
         # by normalize_to_adcp_error(). Never add it to a serializer.
         self.internal_detail = internal_detail
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
-        self.recovery = recovery if recovery is not None else type(self)._default_recovery
+        self.recovery = recovery if recovery is not None else default_recovery
+        # args stays EMPTY: BaseException.__reduce__ replays ``cls(*args)``, and this
+        # constructor takes none. ``__reduce__`` below replays the keyword form instead,
+        # and ``__str__`` reads the property, so str(e) and .message cannot diverge.
+        super().__init__()
+
+    @property
+    def error_code(self) -> ErrorCodeT:
+        """The code this error carries. Read-only: a code cannot be swapped after the
+        fact, so ``str(e)``, ``.message``, ``recovery`` and ``status_code`` cannot drift
+        apart from it, and an out-of-table value cannot be introduced post-construction.
+        """
+        return self._error_code
+
+    @property
+    def message(self) -> str:
+        """Buyer-facing text, derived from the code. There is no setter and no
+        parameter: the text is a function of the code, not of the raise site.
+        """
+        return CODE_TABLE[self._error_code].message
+
+    def __str__(self) -> str:
+        return self.message
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # ``BaseException.__reduce__`` would replay ``cls(*args)``; args is empty and
+        # this constructor is keyword-only, so the default breaks pickle and copy.
+        return (_rebuild_error, (type(self), self._error_code), self.__dict__)
 
     @property
     def wire_error_code(self) -> str:
@@ -511,45 +559,6 @@ class AdCPError(Exception):
         a response.
         """
         return translate_error_code(self.error_code)
-
-    @classmethod
-    def synthesize(
-        cls,
-        message: str,
-        *,
-        error_code: ErrorCodeT,
-        status_code: int | None = None,
-        recovery: RecoveryHint | None = None,
-        details: dict[str, Any] | None = None,
-        field: str | None = None,
-        suggestion: str | None = None,
-        context: ContextObject | dict[str, Any] | None = None,
-    ) -> AdCPError:
-        """Sanctioned entry point for synthesizing an AdCPError with overridden code/status.
-
-        Typed subclasses (``AdCPValidationError``, etc.) carry
-        ``error_code``/``status_code`` as class attributes. Two boundary
-        callers — ``handle_tool_error``'s plain-``ToolError`` fallback and
-        ``ContextManager.audit_workflow_step_failure``'s wire-code
-        sanitization — need to construct an ``AdCPError`` with a code/status
-        the typed class hierarchy doesn't model.
-
-        Prefer this classmethod over passing ``error_code=``/``status_code=``
-        kwargs to ``__init__`` directly. Constructor kwargs that mutate class
-        attributes are a footgun the public API should not invite; this method
-        documents the synthesis intent explicitly so reviewers can audit
-        every site that bypasses the typed class hierarchy.
-        """
-        return AdCPInternalError(
-            message,
-            error_code=error_code,
-            status_code=status_code,
-            recovery=recovery,
-            details=details,
-            field=field,
-            suggestion=suggestion,
-            context=context,
-        )
 
     @classmethod
     def iter_concrete_subclasses(cls) -> Iterator[type[AdCPError]]:
@@ -637,20 +646,6 @@ class AdCPError(Exception):
             retry_after=self.retry_after,
             details=merged_details or None,
         )
-
-
-class AdCPInternalError(AdCPError):
-    """An unclassified server-side failure.
-
-    Exists because the base declares no ``_code`` and therefore cannot be
-    constructed. Every path that previously fell through to the base's
-    ``INTERNAL_ERROR`` default now names this class explicitly: the
-    ``normalize_to_adcp_error`` terminal fallback and ``synthesize``. Status and
-    recovery are inherited from the base (500 / transient), which is exactly what
-    those paths produced before, so the wire is unchanged.
-    """
-
-    _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
 
 
 class AdCPValidationError(AdCPError):
@@ -1242,6 +1237,17 @@ class AdCPInventoryUnavailableError(AdCPError):
 # runner to synthesize "MCP_ERROR" and erase the real code.
 
 
+def build_error_object(exc: AdCPError) -> dict[str, Any]:
+    """The single per-error object for an advisory list (``errors[]`` entries).
+
+    Same derivation as ``build_two_layer_error_envelope``, which is the point: a second
+    place that turns a code into buyer-facing text will disagree with this one, and did —
+    a tools-layer copy keyed the message off the WIRE code while this keys it off the RAW
+    code, so 10 of 41 subclasses produced two different sentences for one failure.
+    """
+    return dict(build_two_layer_error_envelope(exc)["errors"][0])
+
+
 def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     """Build the AdCP spec-compliant two-layer error envelope from an exception.
 
@@ -1359,7 +1365,14 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
     ``AdCPValidationError``; other ``ValueError`` instances map to the plain
     validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
-    anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    anything else names INTERNAL_ERROR on the base.
+
+    Every branch keeps its type mapping and carries NO text: an untyped exception's
+    string has no provenance guarantee (it may be a DB DSN, a stack fragment, or an
+    upstream response body -- AdCP 3.1.1 transport-errors.mdx Security Considerations
+    MUST-NOT list), and the code's own table sentence is what the buyer sees. The
+    original exception is still logged in full server-side by the transport
+    boundary's record_boundary_error() / audit logger.
     """
     if isinstance(exc, AdCPError):
         _log_internal_detail(exc)
@@ -1367,22 +1380,12 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     if isinstance(exc, ValidationError):
         errors = exc.errors()
         return AdCPValidationError(
-            errors[0].get("msg") if errors else "Request failed schema validation",
             field=first_validation_error_field(exc),
             suggestion=VALIDATION_ERROR_SUGGESTION,
             details=build_validation_error_details(errors),
         )
     if isinstance(exc, ValueError):
-        return AdCPValidationError(str(exc))
+        return AdCPValidationError()
     if isinstance(exc, PermissionError):
-        return AdCPAuthorizationError(str(exc))
-    # Deliberately NOT str(exc): an arbitrary/untyped exception's text has no
-    # provenance guarantee -- it may be a DB DSN, a stack fragment, or an
-    # upstream response body (AdCP 3.1.1 transport-errors.mdx Security
-    # Considerations MUST-NOT list). type(exc).__name__ was already this
-    # function's safe fallback for the empty-str(exc) case; using it
-    # unconditionally keeps some buyer-visible failure differentiation
-    # without carrying instance-specific internal detail onto the wire.
-    # The original exception is still logged in full server-side by the
-    # transport boundary's record_boundary_error() / audit logger.
-    return AdCPInternalError(type(exc).__name__)
+        return AdCPAuthorizationError()
+    return AdCPError(error_code=AppErrorCode.INTERNAL_ERROR)

@@ -220,7 +220,7 @@ class TestRequireAuthDepBehavior:
         from src.core.exceptions import AdCPAuthenticationError
 
         auth_ctx = AuthContext.unauthenticated()
-        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+        with pytest.raises(AdCPAuthenticationError):
             _require_auth_dep(auth_ctx)
 
     def test_returns_identity_with_valid_token(self):

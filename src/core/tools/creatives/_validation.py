@@ -92,17 +92,17 @@ def _validate_creative_input(
 
     # Additional business logic validation
     if not creative.name or str(creative.name).strip() == "":
-        raise AdCPValidationError("Creative name cannot be empty", field="name")
+        raise AdCPValidationError(field="name")
 
     if not creative.format_id:
-        raise AdCPValidationError("Creative format is required", field="format_id")
+        raise AdCPValidationError(field="format_id")
 
     # Use validated format (auto-upgraded from string if needed)
     format_value = validated_creative.format
 
     if format_value is None:
         raise AdCPValidationError(
-            f"Creative format '{creative.format_id}' could not be resolved",
+            details={"format_id": creative.format_id},
             field="format_id",
         )
 
@@ -128,9 +128,7 @@ def _validate_creative_input(
         format_spec = fetch_format_spec(agent_url, format_id)
         if not format_spec:
             raise AdCPValidationError(
-                f"Unknown format '{format_id}' from agent {agent_url}. "
-                f"Format must be registered with the creative agent. "
-                f"Use list_creative_formats to see available formats.",
+                details={"format_id": format_id, "agent_url": agent_url},
                 field="format_id",
             )
         # TODO(#767): Call validate_creative when available in creative agent spec

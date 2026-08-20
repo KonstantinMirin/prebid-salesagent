@@ -39,7 +39,7 @@ def _make_format(format_id: str) -> Format:
 
 
 def _make_error(message: str) -> AdCPResponseError:
-    return AdCPResponseError(code="AGENT_UNREACHABLE", message=message)
+    return AdCPResponseError(code="AGENT_UNREACHABLE")
 
 
 @pytest.fixture

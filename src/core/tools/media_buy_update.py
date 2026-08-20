@@ -231,7 +231,6 @@ def _validate_creatives_for_assignment(
         # CREATIVE_NOT_FOUND uniformity MUST — the BR-UC-003 ext-i storyboard
         # cell grades CREATIVE_REJECTED; deferred pending upstream reconciliation.
         raise AdCPCreativeRejectedError(
-            f"Creative IDs not found: {', '.join(missing_ids)}",
             suggestion=(
                 "Sync the creative(s) via sync_creatives (or pick an existing "
                 "creative from list_creatives) before assigning them."
@@ -243,14 +242,13 @@ def _validate_creatives_for_assignment(
     # (b) Status — terminal-state creatives are not assignable.
     bad_state = [c for c in creatives_list if c.status in ("error", "rejected")]
     if bad_state:
-        offenders = ", ".join(f"{c.creative_id} (status={c.status})" for c in bad_state)
         raise AdCPCreativeRejectedError(
-            f"Creative(s) cannot be assigned in their current state: {offenders}",
             suggestion=(
                 "Resolve the creative's errors and re-sync it so it returns to an "
                 "approved/active state before assigning it."
             ),
-            details={"creative_ids": [c.creative_id for c in bad_state]},
+            # The STATE per creative, not a joined sentence duplicating creative_ids.
+            details={"creatives": [{"creative_id": c.creative_id, "status": c.status} for c in bad_state]},
             context=context,
         )
 
@@ -285,13 +283,11 @@ def _validate_creatives_for_assignment(
             f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in sorted(supported_formats, key=lambda p: p[1])
         )
         raise AdCPCreativeRejectedError(
-            f"Creative format(s) not supported by product '{display_name}': {', '.join(incompatible)}. "
-            f"Supported formats: {supported_display}",
             suggestion=(
                 "Assign a creative whose format matches one of the product's supported "
                 f"formats ({supported_display}), or convert the creative to a supported format."
             ),
-            details={"supported_formats": supported_display},
+            details={"supported_formats": supported_display, "product": display_name},
             context=context,
         )
 
@@ -335,7 +331,7 @@ def _verify_principal(
             reason=f"Principal does not own media buy (owner: {media_buy.principal_id})",
         )
         raise AdCPAuthorizationError(
-            f"Principal '{principal_id}' does not own media buy '{media_buy_id}'.",
+            details={"principal_id": principal_id, "media_buy_id": media_buy_id},
             suggestion=(
                 "Verify your x-adcp-auth token identifies the principal that owns this media buy; "
                 "contact the seller if the token should be authorized."
@@ -397,7 +393,7 @@ def _update_media_buy_impl(
             media_buy_id_to_use = req.media_buy_id
 
             if not media_buy_id_to_use:
-                raise AdCPValidationError("media_buy_id is required")
+                raise AdCPValidationError()
 
             # Verify principal owns this media buy
             _verify_principal(media_buy_id_to_use, identity, uow.media_buys, context=req.context)
@@ -411,7 +407,7 @@ def _update_media_buy_impl(
             _current_status = _current_mb.status if _current_mb else ""
             if is_terminal_status(_current_status):
                 raise AdCPGoneError(
-                    f"Cannot update media buy in terminal state: {_current_status}",
+                    details={"current_status": _current_status},
                     field="media_buy_id",
                     suggestion=(
                         f"Media buy is {_current_status} and cannot be modified. "
@@ -428,7 +424,7 @@ def _update_media_buy_impl(
                 _disallowed = [a for a in _requested if a not in _allowed]
                 if _requested and _disallowed:
                     raise AdCPGoneError(
-                        f"Action(s) {_disallowed} not allowed in status '{_current_status}'",
+                        details={"disallowed_actions": _disallowed, "current_status": _current_status},
                         field="media_buy_id",
                         suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
                     )
@@ -455,7 +451,7 @@ def _update_media_buy_impl(
                 # a not-found condition, not a transient adapter outage.
                 if persistent_ctx is None:
                     raise AdCPContextNotFoundError(
-                        f"Context not found: {ctx_id}", field="context_id", context=req.context
+                        details={"context_id": ctx_id}, field="context_id", context=req.context
                     )
 
                 # Create workflow step for this tool call
@@ -498,7 +494,6 @@ def _update_media_buy_impl(
                     # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
                     # converges with the create path (#1417).
                     raise AdCPInvalidRequestError(
-                        f"Targeting validation failed: {'; '.join(overlay_violations)}",
                         suggestion="Check targeting constraints.",
                         field="targeting_overlay",
                     )
@@ -640,7 +635,7 @@ def _update_media_buy_impl(
 
                     if not currency_limit:
                         raise AdCPCapabilityNotSupportedError(
-                            f"Currency {request_currency} is not supported by this publisher.",
+                            details={"request_currency": request_currency},
                             context=req.context,
                         )
 
@@ -791,7 +786,6 @@ def _update_media_buy_impl(
                         # Validate package_id is provided (required for budget updates)
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                "package_id is required when updating package budget",
                                 field=package_field_path("package_id"),
                                 context=req.context,
                             )
@@ -872,7 +866,6 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                "package_id is required when updating creative_ids",
                                 field=package_field_path("package_id"),
                                 context=req.context,
                             )
@@ -973,7 +966,6 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                "package_id is required when uploading creatives",
                                 field=package_field_path("package_id"),
                                 context=req.context,
                             )
@@ -990,13 +982,17 @@ def _update_media_buy_impl(
                         # Check for sync errors
                         failed_creatives = [r for r in sync_response.creatives if r.action == "failed"]
                         if failed_creatives:
-                            error_msgs = [
-                                f"{r.creative_id}: {', '.join(e.message for e in (r.errors or []))}"
-                                for r in failed_creatives
-                            ]
                             raise AdCPAdapterError(
-                                f"Failed to sync creatives: {'; '.join(error_msgs)}",
                                 context=req.context,
+                                details={
+                                    "failed_creatives": [
+                                        {
+                                            "creative_id": r.creative_id,
+                                            "errors": [e.message for e in (r.errors or [])],
+                                        }
+                                        for r in failed_creatives
+                                    ]
+                                },
                                 suggestion=(
                                     "The creative upload/sync did not complete; this is typically transient. "
                                     "Retry the update_media_buy request; if it persists, re-sync the creative(s) "
@@ -1022,7 +1018,6 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                "package_id is required when updating creative_assignments",
                                 field=package_field_path("package_id"),
                                 context=req.context,
                             )
@@ -1086,8 +1081,6 @@ def _update_media_buy_impl(
                                     invalid_ids = all_requested_placement_ids - available_placement_ids
                                     if invalid_ids:
                                         raise AdCPValidationError(
-                                            f"Invalid placement_ids: {sorted(invalid_ids)}. "
-                                            f"Available: {sorted(available_placement_ids)}",
                                             field="creative_assignments[].placement_ids",
                                             context=req.context,
                                             suggestion=(
@@ -1098,8 +1091,7 @@ def _update_media_buy_impl(
                                 elif product_obj and not product_obj.placements:
                                     # Product doesn't define placements, so placement targeting not supported
                                     raise AdCPCapabilityNotSupportedError(
-                                        f"Product '{product_id}' does not support placement targeting "
-                                        f"(no placements defined)",
+                                        details={"product_id": product_id},
                                         context=req.context,
                                         suggestion=(
                                             "Remove placement_ids from creative_assignments, or choose a "
@@ -1203,7 +1195,6 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                "package_id is required when updating targeting_overlay",
                                 field=package_field_path("package_id"),
                                 context=req.context,
                             )
@@ -1257,7 +1248,6 @@ def _update_media_buy_impl(
                 budget_positive_err = validate_budget_positive(Decimal(str(total_budget)), field="budget")
                 if budget_positive_err:
                     raise AdCPBudgetTooLowError(
-                        budget_positive_err,
                         suggestion="Set the budget to a positive amount.",
                         field="budget",
                         context=req.context,
@@ -1353,8 +1343,6 @@ def _update_media_buy_impl(
 
                     if final_start_time and final_end_time and final_end_time <= final_start_time:
                         raise AdCPValidationError(
-                            f"Invalid date range: end_time ({final_end_time.isoformat()}) "
-                            f"must be after start_time ({final_start_time.isoformat()})",
                             field="end_time",
                             context=req.context,
                         )
@@ -1502,9 +1490,6 @@ def _build_update_request(
     # for schema-validation failures: missing required fields / bad types / range).
     if not req.has_updatable_fields():
         raise AdCPInvalidRequestError(
-            "Update request must include at least one updatable field "
-            "(paused, start_time, end_time, packages, budget, "
-            "push_notification_config, reporting_webhook, context, ext)",
             suggestion=(
                 "Include at least one updatable field in the request: paused, "
                 "start_time, end_time, packages, budget, push_notification_config, "

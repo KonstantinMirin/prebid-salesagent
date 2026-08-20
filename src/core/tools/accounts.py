@@ -1070,8 +1070,6 @@ def _extract_natural_key(entry: SyncEntry) -> NaturalKey:
     operator = entry.operator
     if brand is None or operator is None:
         raise AdCPValidationError(
-            "Each provisioning account entry must include 'brand', 'operator', and 'billing' "
-            "(or 'account' for a settings-update entry).",
             recovery="correctable",
         )
     brand_domain, brand_id = brand_key_parts(brand)
@@ -1262,7 +1260,6 @@ def _process_settings_update_entry(
     """
     if entry.account is None:
         raise AdCPConfigurationError(
-            "Internal dispatch error: a settings-update entry reached the handler without an account reference.",
             recovery="terminal",
         )
     ref = entry.account.root
@@ -1285,8 +1282,7 @@ def _process_settings_update_entry(
         # Whatever the seller does about its own inconsistent row, the RESPONSE
         # must still be a conformant error object.
         raise AdCPConfigurationError(
-            f"Account '{existing.account_id}' has no brand recorded, so its settings cannot be "
-            "echoed back. This is a seller-side data inconsistency.",
+            details={"account_id": existing.account_id},
             recovery="terminal",
         )
 
@@ -1516,7 +1512,6 @@ def _build_update_result(
     """
     if entry.brand is None:
         raise AdCPConfigurationError(
-            "Internal dispatch error: a provisioning result was built for an entry with no brand.",
             recovery="terminal",
         )
     return _build_sync_result(
@@ -1615,7 +1610,7 @@ async def _sync_accounts_impl(
 
     # Validate non-empty accounts array
     if not req.accounts:
-        raise AdCPValidationError("accounts array must not be empty — at least one account is required.")
+        raise AdCPValidationError()
     dry_run = bool(req.dry_run)
     delete_missing = bool(req.delete_missing)
 
@@ -1649,8 +1644,7 @@ async def _sync_accounts_impl(
                 entry.brand is not None or entry.operator is not None or entry.billing is not None
             ):
                 raise AdCPValidationError(
-                    f"accounts[{index}] carries both an account reference (settings-update) and "
-                    "provisioning fields (brand/operator/billing) -- these are mutually exclusive.",
+                    details={"index": index},
                     field=f"accounts[{index}]",
                     recovery="correctable",
                 )
@@ -1805,8 +1799,7 @@ async def _sync_accounts_impl(
                         # Same seller-side inconsistency as the settings-update
                         # arm: a NULLABLE column the buyer cannot fix.
                         raise AdCPConfigurationError(
-                            f"Account '{db_acct.account_id}' has no brand recorded, so it cannot be "
-                            "reported as deactivated. This is a seller-side data inconsistency.",
+                            details={"account_id": db_acct.account_id},
                             recovery="terminal",
                         )
                     results.append(

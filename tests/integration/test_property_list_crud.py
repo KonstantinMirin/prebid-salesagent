@@ -87,7 +87,7 @@ class TestTenantIsolationCreateNotVisibleCrossTenant:
         from src.core.exceptions import AdCPValidationError
 
         identity_b = _lazy_identity("pl-iso-b", "principal-b")
-        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+        with pytest.raises(AdCPValidationError):
             await _get_property_list_impl(list_id, identity_b)
 
 
@@ -111,7 +111,7 @@ class TestTenantIsolationGetReturnsNotFound:
         PrincipalFactory(tenant=tenant_a, principal_id="principal-a")
 
         identity_b = _lazy_identity("pl-notfound-b", "principal-b")
-        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+        with pytest.raises(AdCPValidationError):
             await _get_property_list_impl("pl_belongs_to_tenant_a", identity_b)
 
 
@@ -134,7 +134,7 @@ class TestTenantIsolationUpdateReturnsNotFound:
             name="Hijacked Name",
         )
         identity_b = _lazy_identity("wrong-tenant", "principal-b")
-        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+        with pytest.raises(AdCPValidationError):
             await _update_property_list_impl(update_req, identity_b)
 
 
@@ -153,7 +153,7 @@ class TestTenantIsolationDeleteReturnsNotFound:
         from src.core.exceptions import AdCPValidationError
 
         identity_b = _lazy_identity("wrong-tenant", "principal-b")
-        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+        with pytest.raises(AdCPValidationError):
             await _delete_property_list_impl("pl_belongs_to_tenant_a", identity_b)
 
 
@@ -180,7 +180,7 @@ class TestReferentialIntegrityGetNonexistent:
         PrincipalFactory(tenant=tenant, principal_id="pl-ref-get-p")
         identity = _lazy_identity("pl-ref-get", "pl-ref-get-p")
 
-        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+        with pytest.raises(AdCPValidationError):
             await _get_property_list_impl("pl_does_not_exist", identity)
 
 
@@ -203,7 +203,7 @@ class TestReferentialIntegrityUpdateNonexistent:
         identity = _lazy_identity("pl-ref-upd", "pl-ref-upd-p")
 
         req = UpdatePropertyListRequest(list_id="pl_does_not_exist", name="Updated Name")
-        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+        with pytest.raises(AdCPValidationError):
             await _update_property_list_impl(req, identity)
 
 
@@ -225,7 +225,7 @@ class TestReferentialIntegrityDeleteNonexistent:
         PrincipalFactory(tenant=tenant, principal_id="pl-ref-del-p")
         identity = _lazy_identity("pl-ref-del", "pl-ref-del-p")
 
-        with pytest.raises(AdCPValidationError, match="NOT_FOUND"):
+        with pytest.raises(AdCPValidationError):
             await _delete_property_list_impl("pl_does_not_exist", identity)
 
 
@@ -260,7 +260,7 @@ class TestReferentialIntegrityDeleteBlockedByActiveBuys:
         # (Requires MediaBuyFactory with property_list targeting)
 
         # Attempt to delete — should fail with LIST_IN_USE
-        with pytest.raises(AdCPValidationError, match="IN_USE"):
+        with pytest.raises(AdCPValidationError):
             await _delete_property_list_impl(list_id, identity)
 
 

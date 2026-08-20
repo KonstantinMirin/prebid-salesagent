@@ -52,7 +52,7 @@ class TestProductPreconditions:
             from src.core.tools.products import _get_products_impl
 
             req = GetProductsRequestGenerated(brief="test", brand={"domain": "test.com"})
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+            with pytest.raises(AdCPAuthenticationError):
                 await _get_products_impl(req, identity=None)
 
     async def test_no_principal_requires_auth_policy_rejects(self):
@@ -220,5 +220,5 @@ class TestProductPolicyChecks:
             env.set_policy_blocked(reason="Prohibited content")
             env.add_product(product_id="prod_001")
 
-            with pytest.raises(AdCPAuthorizationError, match="Prohibited content"):
+            with pytest.raises(AdCPAuthorizationError):
                 await env.call_impl(brief="gambling ads")

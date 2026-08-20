@@ -89,13 +89,17 @@ def get_format(
             if fmt.format_id == format_id:
                 return fmt
 
-    # Not found anywhere
-    error_msg = f"Unknown format_id '{format_id}'"
-    if agent_url:
-        error_msg += f" from agent {agent_url}"
-    if tenant_id:
-        error_msg += f" for tenant {tenant_id}"
-    raise AdCPFormatNotFoundError(error_msg)
+    # Not found anywhere. The identifiers travel as structured detail rather than
+    # interpolated prose: the buyer needs to know WHICH format_id was rejected, and
+    # ``details`` is where a machine can read it.
+    raise AdCPFormatNotFoundError(
+        field="format_id",
+        details={
+            "format_id": format_id,
+            **({"agent_url": agent_url} if agent_url else {}),
+            **({"tenant_id": tenant_id} if tenant_id else {}),
+        },
+    )
 
 
 def _get_product_format_override(

@@ -47,8 +47,11 @@ def negotiate_adcp_version(adcp_version: str | None, adcp_major_version: int | N
     # use it for negotiation (v3.1.1 error-details/version-unsupported.json).
     # The actual negotiation outcome above depends solely on SUPPORTED_ADCP_VERSIONS.
     raise AdCPVersionUnsupportedError(
-        f"adcp_version={adcp_version!r} / adcp_major_version={adcp_major_version!r} "
-        f"is not supported; this seller speaks {SUPPORTED_ADCP_VERSIONS}",
-        details={"supported_versions": list(SUPPORTED_ADCP_VERSIONS), "build_version": get_version()},
+        details={
+            "supported_versions": list(SUPPORTED_ADCP_VERSIONS),
+            "build_version": get_version(),
+            "adcp_version": adcp_version,
+            "adcp_major_version": adcp_major_version,
+        },
         suggestion=f"Re-pin adcp_version to one of {SUPPORTED_ADCP_VERSIONS} and retry",
     )

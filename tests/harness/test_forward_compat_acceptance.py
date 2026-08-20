@@ -651,13 +651,14 @@ class TestErrorPropagation:
                             raise_on_error=False,
                         )
                         assert result.is_error, "Empty get_products should return an error, not succeed silently"
-                        # The error should mention what's missing
+                        # The CODE is the obligation, not the wording: a validation
+                        # rejection must reach the buyer as VALIDATION_ERROR through the
+                        # middleware. Which fields were missing is structured detail, and
+                        # the sentence is the code's own.
                         error_text = str(result.content) if result.content else ""
-                        assert (
-                            "brief" in error_text.lower()
-                            or "brand" in error_text.lower()
-                            or "filter" in error_text.lower()
-                        ), f"Error should mention missing brief/brand/filters, got: {error_text[:200]}"
+                        assert "VALIDATION_ERROR" in error_text, (
+                            f"Empty get_products must surface VALIDATION_ERROR, got: {error_text[:200]}"
+                        )
                 finally:
                     for p in patches:
                         p.stop()
@@ -746,11 +747,13 @@ class TestErrorPropagation:
 
         middleware = RequestCompatMiddleware()
 
-        call_next = AsyncMock(side_effect=AdCPValidationError("budget must be positive"))
+        call_next = AsyncMock(side_effect=AdCPValidationError())
         ctx = _make_mcp_context("create_media_buy", {"po_number": "ref-1"})
 
         async def _call():
-            with pytest.raises(AdCPValidationError, match="budget must be positive"):
+            # The error is constructed with no text; its sentence comes from the code.
+            # Asserting the CLASS is the whole obligation — that retry does not swallow it.
+            with pytest.raises(AdCPValidationError):
                 await middleware.on_call_tool(ctx, call_next)
             assert call_next.call_count == 1
 

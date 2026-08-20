@@ -47,7 +47,6 @@ def _validate_agent_url(agent_url: str) -> None:
         # covers the closed set of causes (scheme / hostname / blocked host /
         # private range / unresolvable); the reason goes to the log only.
         raise AdCPAdapterError(
-            "Property list agent_url rejected",
             suggestion="Provide an https:// agent_url that resolves to a publicly routable host",
             internal_detail=error,
         )
@@ -104,13 +103,13 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
     # logged anything before, so the slot is also their only operator coverage.
     except httpx.HTTPStatusError as exc:
         raise AdCPAdapterError(
-            f"Failed to fetch property list from {url}: HTTP {exc.response.status_code}",
+            details={"url": url},
             internal_detail=exc,
         ) from exc
     except httpx.TimeoutException as exc:
-        raise AdCPAdapterError(f"Request to property list service timed out: {url}", internal_detail=exc) from exc
+        raise AdCPAdapterError(details={"url": url}, internal_detail=exc) from exc
     except httpx.RequestError as exc:
-        raise AdCPAdapterError(f"Failed to connect to property list service: {url}", internal_detail=exc) from exc
+        raise AdCPAdapterError(details={"url": url}, internal_detail=exc) from exc
 
     # Parse response
     parsed = GetPropertyListResponse.model_validate(response.json())

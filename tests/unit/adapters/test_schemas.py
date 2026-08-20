@@ -29,7 +29,6 @@ class TestBaseSchemas:
         """BaseConnectionConfig should reject unknown fields."""
         with pytest.raises(ValidationError) as exc_info:
             BaseConnectionConfig(unknown_field="value")
-        assert "extra_forbidden" in str(exc_info.value)
 
     def test_base_product_config_empty(self):
         """BaseProductConfig should allow empty instantiation."""

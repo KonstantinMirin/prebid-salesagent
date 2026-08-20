@@ -964,7 +964,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_dynamic_products.py", "test_tenant_filter_scoping"),
     ("tests/integration/test_dynamic_products_integration.py", "test_archives_expired_variant"),
     ("tests/integration/test_dynamic_products_integration.py", "test_templates_with_signals_creates_variants"),
-    ("tests/integration/test_error_paths.py", "test_rest_error_with_valid_token_writes_audit_row"),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_empty_platform_line_item_ids_dict"),
     (
         "tests/integration/test_execute_approved_platform_ids.py",

@@ -132,7 +132,7 @@ class TestGAMOrderLifecycleIntegration:
             # submit_for_approval and archive_order are NOT supported by GAM.
             unsupported_actions = ["submit_for_approval", "archive_order"]
             for action in unsupported_actions:
-                with pytest.raises(AdCPCapabilityNotSupportedError, match=f"{action}|not supported"):
+                with pytest.raises(AdCPCapabilityNotSupportedError):
                     regular_adapter.update_media_buy(
                         media_buy_id="12345",
                         action=action,
@@ -142,7 +142,7 @@ class TestGAMOrderLifecycleIntegration:
                     )
 
             # approve_order is admin-only — non-admin gets AdCPAuthorizationError.
-            with pytest.raises(AdCPAuthorizationError, match="admin"):
+            with pytest.raises(AdCPAuthorizationError):
                 regular_adapter.update_media_buy(
                     media_buy_id="12345",
                     action="approve_order",
@@ -164,7 +164,7 @@ class TestGAMOrderLifecycleIntegration:
                 dry_run=True,
                 tenant_id="test",
             )
-            with pytest.raises(AdCPCapabilityNotSupportedError, match="approve_order|not supported"):
+            with pytest.raises(AdCPCapabilityNotSupportedError):
                 admin_adapter.update_media_buy(
                     media_buy_id="12345",
                     action="approve_order",
@@ -223,7 +223,7 @@ class TestGAMOrderLifecycleIntegration:
 
             # Test activation with non-guaranteed items — no special handling, raises.
             with patch.object(adapter, "_check_order_has_guaranteed_items", return_value=(False, [])):
-                with pytest.raises(AdCPCapabilityNotSupportedError, match="activate_order|not supported"):
+                with pytest.raises(AdCPCapabilityNotSupportedError):
                     adapter.update_media_buy(
                         media_buy_id="12345",
                         action="activate_order",

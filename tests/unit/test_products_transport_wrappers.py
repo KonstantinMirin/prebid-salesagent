@@ -86,7 +86,7 @@ def test_mcp_get_products_malformed_brand_raises_validation_error():
     mock_ctx.get_state = AsyncMock(return_value=None)
     from src.core.tools.products import get_products
 
-    with pytest.raises(AdCPValidationError, match="Invalid brand"):
+    with pytest.raises(AdCPValidationError):
         asyncio.run(get_products(brand="https://[", brief="ads", ctx=mock_ctx))
 
 
@@ -151,7 +151,7 @@ class TestMcpGetProductsWrapper:
         ):
             from src.core.tools.products import get_products
 
-            with pytest.raises(AdCPValidationError, match="Invalid get_products request"):
+            with pytest.raises(AdCPValidationError):
                 asyncio.run(get_products(brief="ads", ctx=mock_ctx))
 
     def test_mcp_wrapper_no_version_compat(self):

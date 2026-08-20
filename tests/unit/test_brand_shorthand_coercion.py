@@ -72,7 +72,7 @@ def test_brand_shorthand_to_domain_malformed_url_non_raising(malformed_url: str)
 
 
 def test_to_brand_reference_malformed_url_raises_validation_error() -> None:
-    with pytest.raises(AdCPValidationError, match="Invalid brand") as exc_info:
+    with pytest.raises(AdCPValidationError) as exc_info:
         to_brand_reference("https://[")
     assert exc_info.value.field == "brand"
 

@@ -90,8 +90,6 @@ class TestBroadstreetAdapterInit:
         with pytest.raises(AdCPConfigurationError) as exc_info:
             BroadstreetAdapter(config=config, principal=principal, dry_run=False, tenant_id="test_tenant")
 
-        assert "does not have a Broadstreet advertiser ID" in str(exc_info.value)
-
 
 class TestBroadstreetAdapterCapabilities:
     """Tests for adapter capability methods."""

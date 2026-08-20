@@ -301,8 +301,11 @@ class RestE2EDispatcher:
                 # server crash apart from a real validation rejection (#1420).
 
                 body_text = response.text or "(empty body)"
-                error = AdCPInternalError(
-                    f"HTTP {response.status_code}: {body_text}",
+                from src.core.errors.codes import AppErrorCode
+                from src.core.exceptions import AdCPError
+
+                error = AdCPError(
+                    error_code=AppErrorCode.INTERNAL_ERROR,
                     details={"status_code": response.status_code, "raw_body": body_text},
                 )
                 error.status_code = response.status_code

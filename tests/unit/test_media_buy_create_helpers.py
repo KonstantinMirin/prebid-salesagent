@@ -74,6 +74,6 @@ class TestFormatSpecTransientErrors:
     def test_transient_registry_error_propagates_not_rejected(self):
         from src.core.exceptions import AdCPServiceUnavailableError
 
-        with _patched_registry(side_effect=AdCPServiceUnavailableError("Creative agent rate limited (429)")):
+        with _patched_registry(side_effect=AdCPServiceUnavailableError()):
             with pytest.raises(AdCPServiceUnavailableError):
                 _get_format_spec_sync(_AGENT_URL, "display_300x250_image")

@@ -379,7 +379,6 @@ def _validate_creatives_before_adapter_call(
         # BR-UC-003 ext-i storyboard cell grades it) — deferred pending
         # upstream reconciliation.
         raise AdCPCreativeRejectedError(
-            error_msg,
             suggestion=(
                 "Sync the creative(s) via sync_creatives (or pick an existing "
                 "creative from list_creatives) before referencing them in a media buy."
@@ -495,7 +494,6 @@ def _validate_creatives_before_adapter_call(
         )
         logger.error(f"[PRE-VALIDATION] {error_msg}")
         raise AdCPCreativeRejectedError(
-            error_msg,
             suggestion=(
                 "Reference creatives must have dimensions (width/height) and a content URL "
                 "matching their format specification, and their format must match the product's "
@@ -1409,7 +1407,7 @@ def _validate_pricing_model_selection(
     # All products must have pricing_options
     if not product.pricing_options or len(product.pricing_options) == 0:
         raise AdCPValidationError(
-            f"Product {product.product_id} has no pricing_options configured. This is a data integrity error.",
+            details={"product_id": product.product_id},
             recovery="terminal",
         )
 
@@ -1461,16 +1459,18 @@ def _validate_pricing_model_selection(
             f"{unwrap_option(opt).pricing_model}_{unwrap_option(opt).currency.lower()}_{'fixed' if unwrap_option(opt).is_fixed else 'auction'} ({unwrap_option(opt).pricing_model} - {unwrap_option(opt).currency})"
             for opt in product.pricing_options
         ]
-        error_msg = f"Product {product.product_id} does not offer "
-        if pricing_option_id:
-            error_msg += f"pricing_option_id '{pricing_option_id}'"
-        elif pricing_model_fallback:
-            error_msg += f"pricing model '{pricing_model_fallback}'"
-            if campaign_currency:
-                error_msg += f" in currency {campaign_currency}"
-        error_msg += f". Available options: {', '.join(available_options)}"
+        # The four accumulated branches used to build a sentence; each branch's VALUE is
+        # what the buyer needs, so they travel as structured detail instead. The sibling
+        # below (bid_price/floor_price) already relocates the same way.
         raise AdCPValidationError(
-            error_msg,
+            field="pricing_option_id" if pricing_option_id else "pricing_model",
+            details={
+                "product_id": product.product_id,
+                "available_pricing_options": available_options,
+                **({"requested_pricing_option_id": pricing_option_id} if pricing_option_id else {}),
+                **({"requested_pricing_model": str(pricing_model_fallback)} if pricing_model_fallback else {}),
+                **({"requested_currency": campaign_currency} if campaign_currency else {}),
+            },
             suggestion="Select a pricing_option_id offered by the product (see the product's pricing_options) and resend.",
         )
 
@@ -1478,8 +1478,14 @@ def _validate_pricing_model_selection(
     if not selected_option.is_fixed:
         if not package.bid_price:
             raise AdCPValidationError(
-                f"Package requires bid_price for auction-based {selected_option.pricing_model} pricing. "
-                f"Floor price: {selected_option.price_guidance.get('floor') if selected_option.price_guidance else 'N/A'}",
+                field="bid_price",
+                details={
+                    "product_id": product.product_id,
+                    "pricing_model": str(selected_option.pricing_model),
+                    "floor_price": (
+                        str(selected_option.price_guidance.get("floor")) if selected_option.price_guidance else None
+                    ),
+                },
                 suggestion="Provide a bid_price at or above the floor price for this auction pricing option and resend.",
             )
 
@@ -1492,14 +1498,18 @@ def _validate_pricing_model_selection(
 
         if bid_decimal < floor_price:
             raise AdCPValidationError(
-                f"Bid price {package.bid_price} is below floor price {floor_price} for {selected_option.pricing_model} pricing",
+                details={
+                    "bid_price": str(package.bid_price),
+                    "floor_price": str(floor_price),
+                    "pricing_model": str(selected_option.pricing_model),
+                },
                 suggestion=f"Increase bid_price to at least the floor price ({floor_price}) and resend.",
             )
 
     # Validate fixed pricing has rate
     if selected_option.is_fixed and not selected_option.rate:
         raise AdCPValidationError(
-            f"Product {product.product_id} pricing option has is_fixed=true but no rate specified",
+            details={"product_id": product.product_id},
             recovery="terminal",
         )
 
@@ -1512,8 +1522,12 @@ def _validate_pricing_model_selection(
 
         if package_budget and package_budget < Decimal(str(selected_option.min_spend_per_package)):
             raise AdCPValidationError(
-                f"Package budget {package_budget} {selected_option.currency} is below minimum spend "
-                f"{selected_option.min_spend_per_package} {selected_option.currency} for {selected_option.pricing_model}",
+                details={
+                    "package_budget": package_budget,
+                    "currency": selected_option.currency,
+                    "min_spend_per_package": selected_option.min_spend_per_package,
+                    "pricing_model": selected_option.pricing_model,
+                },
             )
 
     # Return validated pricing information
@@ -1566,57 +1580,46 @@ async def _validate_and_convert_format_ids(
     registered_agent_urls = {normalize_agent_url(agent.agent_url) for agent in registered_agents}
 
     for idx, fmt_id in enumerate(format_ids):
+        # Every rejection here is per-package AND per-format, so the position and the
+        # offending identifiers travel as structured detail. Without them the buyer gets
+        # a bare VALIDATION_ERROR and cannot tell WHICH format in WHICH package failed.
+        where = {"package_index": package_idx, "format_index": idx}
+        field = f"packages[{package_idx}].format_ids[{idx}]"
+
         # STRICT ENFORCEMENT: Reject plain strings
         if isinstance(fmt_id, str):
-            raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Plain string format IDs are not supported. "
-                f"Per AdCP spec, format_ids must be FormatId objects with {{agent_url, id}}. "
-                f'Example: {{"agent_url": "https://creative.adcontextprotocol.org", "id": "{fmt_id}"}}. '
-                f"Use list_creative_formats to discover available formats.",
-            )
+            raise AdCPValidationError(field=field, details={**where, "received": fmt_id, "expected": "FormatId object"})
 
         # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
         try:
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
-            raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
-            ) from e
+            raise AdCPValidationError(field=field, details=dict(where), internal_detail=e) from e
         agent_url = str(validated_fmt.agent_url).rstrip("/")
         format_id = validated_fmt.id
 
         if not agent_url or not format_id:
-            raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: FormatId object missing required fields. "
-                f"Both agent_url and id are required. Got: agent_url={agent_url!r}, id={format_id!r}",
-            )
+            raise AdCPValidationError(field=field, details={**where, "agent_url": agent_url, "format_id": format_id})
 
         # VALIDATION: Check agent is registered
         # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
         normalized_agent_url = normalize_agent_url(agent_url)
         if normalized_agent_url not in registered_agent_urls:
-            raise AdCPAuthorizationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Creative agent not registered: {agent_url}. "
-                f"Registered agents: {', '.join(sorted(registered_agent_urls))}. "
-                f"Contact your administrator to register this creative agent.",
-            )
+            raise AdCPAuthorizationError(field=field, details={**where, "agent_url": agent_url})
 
         # VALIDATION: Verify format exists on agent
         try:
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
                 raise AdCPFormatNotFoundError(
-                    f"Package {package_idx + 1}, format_ids[{idx}]: Format not found on agent. "
-                    f"agent_url={agent_url}, format_id={format_id!r}. "
-                    f"Use list_creative_formats to discover available formats.",
+                    field=field, details={**where, "agent_url": agent_url, "format_id": format_id}
                 )
         except AdCPError:
             raise
         except Exception as e:
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
             raise AdCPAdapterError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
-                f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
+                field=field, details={**where, "agent_url": agent_url, "format_id": format_id}, internal_detail=e
             )
 
         # Format validated - add to results
@@ -1669,7 +1672,7 @@ def _raise_degraded_replay_outcome(
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
             raise AdCPValidationError(
-                f"Idempotency key {idempotency_key} not found after race resolution",
+                details={"idempotency_key": idempotency_key},
                 recovery="terminal",
             )
 
@@ -1689,8 +1692,6 @@ def _raise_degraded_replay_outcome(
         )
         if window_expired:
             raise AdCPIdempotencyExpiredError(
-                "idempotency_key was seen before, but its replay window "
-                f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired",
                 suggestion=(
                     "Perform a natural-key existence check (e.g. get_media_buys by "
                     "context.internal_campaign_id) to determine whether the original "
@@ -1705,8 +1706,6 @@ def _raise_degraded_replay_outcome(
         _raise_on_payload_conflict(existing.payload_hash, request_hash)
 
     raise AdCPServiceUnavailableError(
-        "the verbatim replay for this idempotency_key is not yet available — "
-        "the original response is still being committed; retry shortly",
         retry_after=1,
     )
 
@@ -1720,7 +1719,7 @@ def _raise_on_payload_conflict(stored_hash: str | None, request_hash: str | None
     without one carries no conflict signal, so it never conflicts (legacy tolerance).
     """
     if stored_hash is not None and stored_hash != request_hash:
-        raise AdCPIdempotencyConflictError("idempotency_key was reused with a different request payload")
+        raise AdCPIdempotencyConflictError()
 
 
 def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | None:
@@ -2080,7 +2079,7 @@ async def _create_media_buy_impl(
                 f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
                 f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
             )
-            raise AdCPValidationError(error_msg, recovery="terminal")
+            raise AdCPValidationError(recovery="terminal")
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.
@@ -2196,7 +2195,6 @@ async def _create_media_buy_impl(
         budget_err = validate_budget_positive(total_budget, field=package_field_path("budget"))
         if budget_err:
             raise AdCPBudgetTooLowError(
-                budget_err,
                 suggestion="Set each package budget to a positive amount.",
                 field=package_field_path("budget"),
                 context=req.context,
@@ -2208,7 +2206,7 @@ async def _create_media_buy_impl(
         # Validate start_time
         if req.start_time is None:
             error_msg = "start_time is required"
-            raise AdCPValidationError(error_msg)
+            raise AdCPValidationError()
 
         # Handle 'asap' start_time (AdCP v1.7.0)
         # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
@@ -2225,7 +2223,7 @@ async def _create_media_buy_impl(
             else:
                 # StartTiming that wasn't unwrapped - this shouldn't happen but handle gracefully
                 raise AdCPValidationError(
-                    f"Unexpected start_time type: {type(raw_start_time).__name__}",
+                    details={"received_type": type(raw_start_time).__name__},
                     field="start_time",
                 )
             if computed_start_time.tzinfo is None:
@@ -2236,7 +2234,6 @@ async def _create_media_buy_impl(
                 # the repr (root=...); the buyer must see the value.
                 error_msg = f"Invalid start time: {computed_start_time}. Start time cannot be in the past."
                 raise AdCPInvalidRequestError(
-                    error_msg,
                     suggestion="Use a future datetime or 'asap' for immediate start.",
                     field="start_time",
                 )
@@ -2244,7 +2241,7 @@ async def _create_media_buy_impl(
         # Validate end_time
         if req.end_time is None:
             error_msg = "end_time is required"
-            raise AdCPValidationError(error_msg)
+            raise AdCPValidationError()
 
         # Ensure end_time is timezone-aware for comparison
         computed_end_time: datetime = req.end_time
@@ -2258,7 +2255,6 @@ async def _create_media_buy_impl(
                 f"Invalid time range: end time ({computed_end_time}) must be after start time ({computed_start_time})."
             )
             raise AdCPInvalidRequestError(
-                error_msg,
                 suggestion="Set end_time to a datetime after start_time.",
                 field="end_time",
             )
@@ -2280,14 +2276,14 @@ async def _create_media_buy_impl(
         )
         if not product_ids:
             error_msg = "At least one product is required."
-            raise AdCPValidationError(error_msg)
+            raise AdCPValidationError()
 
         if req.packages:
             for package in req.packages:
                 # Check product_id field per AdCP spec
                 if not package.product_id:
                     error_msg = "Package must specify product_id."
-                    raise AdCPValidationError(error_msg)
+                    raise AdCPValidationError()
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}
@@ -2299,7 +2295,6 @@ async def _create_media_buy_impl(
             if duplicate_products:
                 error_msg = f"Duplicate product_id(s) found in packages: {', '.join(duplicate_products)}. Each product can only be used once per media buy."
                 raise AdCPValidationError(
-                    error_msg,
                     suggestion="Each package must reference a distinct product_id; remove the duplicate package or change its product_id.",
                 )
 
@@ -2328,7 +2323,6 @@ async def _create_media_buy_impl(
             if missing_product_ids:
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
                 raise AdCPProductNotFoundError(
-                    error_msg,
                     suggestion="Check available products with get_products.",
                     field=package_field_path("product_id"),
                 )
@@ -2436,7 +2430,7 @@ async def _create_media_buy_impl(
                 # Currency support is a seller capability, not a malformed request:
                 # emit UNSUPPORTED_FEATURE (matches the update path and UC-002 ext-d).
                 raise AdCPCapabilityNotSupportedError(
-                    f"Currency {request_currency} is not supported by this publisher.",
+                    details={"request_currency": request_currency},
                     suggestion="Contact the publisher to add support for this currency, or use a supported currency.",
                     context=req.context,
                 )
@@ -2454,8 +2448,6 @@ async def _create_media_buy_impl(
                 if request_currency not in supported_currencies:
                     # Same seller-capability gap as above, scoped to the GAM network.
                     raise AdCPCapabilityNotSupportedError(
-                        f"Currency {request_currency} is not supported by the GAM network. "
-                        f"Supported currencies: {', '.join(sorted(supported_currencies))}.",
                         suggestion="Contact the publisher to enable this currency in GAM, or use a supported currency.",
                         context=req.context,
                     )
@@ -2649,7 +2641,6 @@ async def _create_media_buy_impl(
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise AdCPInvalidRequestError(
-                            error_msg,
                             suggestion="Check targeting constraints.",
                             field="targeting_overlay",
                         )
@@ -3171,7 +3162,6 @@ async def _create_media_buy_impl(
                     f"  • {err}" for err in config_errors
                 )
                 raise AdCPValidationError(
-                    error_detail,
                     details={"config_errors": config_errors},
                     context=req.context,
                 )
@@ -3264,7 +3254,7 @@ async def _create_media_buy_impl(
 
             if not pkg_product_id:
                 error_msg = f"Package {idx} has no product_id field set"
-                raise AdCPValidationError(error_msg)
+                raise AdCPValidationError()
 
             pkg_product: Product | None = None
             for p in products_in_buy:
@@ -3277,7 +3267,7 @@ async def _create_media_buy_impl(
                 # Defensive: the primary product-existence check above
                 # (AdCPProductNotFoundError) catches missing products first, so this
                 # per-package branch is suite-invisible — typed for guard parity.
-                raise AdCPProductNotFoundError(error_msg)
+                raise AdCPProductNotFoundError()
 
             # Determine format_ids to use
             format_ids_to_use: list[FormatId] = []
@@ -3357,7 +3347,7 @@ async def _create_media_buy_impl(
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
                             f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
                         )
-                    raise AdCPValidationError(error_msg)
+                    raise AdCPValidationError()
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
@@ -3520,7 +3510,6 @@ async def _create_media_buy_impl(
         # Defensive null check: ensure start_time and end_time are set
         if not req.start_time or not req.end_time:
             raise AdCPValidationError(
-                "start_time and end_time are required but were not properly set",
                 context=req.context,
             )
 
@@ -3539,9 +3528,9 @@ async def _create_media_buy_impl(
                 ctx_manager.update_workflow_step(
                     step.step_id, status="failed", error_message="Adapter validation failed"
                 )
-            raise AdCPValidationError(
-                "; ".join(pre_creation_errors),
-            )
+            # The adapter's own constraint list is machine-readable buyer detail — the
+            # sibling at the config-error branch already relocates its list the same way.
+            raise AdCPValidationError(details={"adapter_errors": pre_creation_errors})
 
         # Dry-run mode: skip adapter call entirely, return simulated response
         # All validation (products, pricing, budgets, creatives) has passed above.
@@ -3697,7 +3686,7 @@ async def _create_media_buy_impl(
                             f"Adapter did not return package_id for package {i}. This is a critical bug in the adapter."
                         )
                         logger.error(error_msg)
-                        raise AdCPAdapterError(error_msg)
+                        raise AdCPAdapterError()
 
                     # Store full package config as JSON
                     # Get paused state from adapter response (adcp 2.12.0: replaced status enum with paused bool)
@@ -3809,7 +3798,6 @@ async def _create_media_buy_impl(
                         # CREATIVE_NOT_FOUND uniformity MUST — deferred pending
                         # upstream reconciliation.
                         raise AdCPCreativeRejectedError(
-                            error_msg,
                             suggestion=(
                                 "Sync the creative(s) via sync_creatives (or pick an existing "
                                 "creative from list_creatives) before referencing them in a media buy."
@@ -3871,8 +3859,6 @@ async def _create_media_buy_impl(
                                             # validation failure — matching the sibling pre-adapter
                                             # validation raise. Carry a remediation suggestion (POST-F3).
                                             raise AdCPCreativeRejectedError(
-                                                format_error
-                                                or "Creative format does not match the product's accepted formats",
                                                 suggestion=(
                                                     "Assign a creative whose format matches one of the product's "
                                                     "accepted formats, or re-sync the creative with a compatible "
@@ -3903,7 +3889,7 @@ async def _create_media_buy_impl(
                         if not response_package_id:
                             error_msg = f"Cannot assign creatives: Adapter did not return package_id for package {i}"
                             logger.error(error_msg)
-                            raise AdCPAdapterError(error_msg)
+                            raise AdCPAdapterError()
 
                         # Get platform_line_item_id from response if available
                         platform_line_item_id = None
@@ -3946,7 +3932,6 @@ async def _create_media_buy_impl(
                                     )
                                     if build_err:
                                         raise AdCPValidationError(
-                                            build_err,
                                             details={
                                                 "creative_errors": [build_err],
                                             },
@@ -3981,7 +3966,6 @@ async def _create_media_buy_impl(
                                         log_safe(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
                                     )
                                     raise AdCPAdapterError(
-                                        f"Failed to upload creative {creative_id} to GAM: {str(upload_error)}",
                                         suggestion=(
                                             "The ad server rejected the creative upload. Retry the request, or "
                                             "verify the creative meets the ad server's technical requirements "
@@ -4076,7 +4060,7 @@ async def _create_media_buy_impl(
             if not adapter_package_id:
                 error_msg = f"Adapter did not return package_id for package {i}. Cannot build response."
                 logger.error(error_msg)
-                raise AdCPAdapterError(error_msg)
+                raise AdCPAdapterError()
 
             # Ensure paused is a boolean
             if not isinstance(adapter_paused, bool):
@@ -4333,7 +4317,7 @@ async def _create_media_buy_impl(
             # Audit logging failure is non-critical, but we should log it
             logger.warning(f"Failed to log failed media buy creation to audit: {audit_error}")
 
-        raise AdCPAdapterError(f"Failed to create media buy: {str(e)}")
+        raise AdCPAdapterError()
 
 
 def _build_create_media_buy_request(

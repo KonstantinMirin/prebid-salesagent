@@ -87,7 +87,6 @@ def enforce_insert_ceiling(
         # The wait can never logically exceed the window itself; the bound
         # also absorbs DB-vs-app clock skew on created_at (server_default).
         raise AdCPRateLimitError(
-            "idempotency cache insert rate exceeded for this account — retry shortly",
             retry_after=min(_clamp_retry_after(raw_wait), window_seconds),
         )
 
@@ -99,6 +98,5 @@ def enforce_insert_ceiling(
 
     raw_wait = (oldest_expiry - current).total_seconds() if oldest_expiry else 1
     raise AdCPRateLimitError(
-        "too many active idempotency keys for this account — retry after the oldest replay window expires",
         retry_after=_clamp_retry_after(raw_wait),
     )

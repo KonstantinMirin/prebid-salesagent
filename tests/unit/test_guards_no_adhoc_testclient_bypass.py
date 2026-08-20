@@ -29,7 +29,6 @@ TESTS_DIR = REPO_ROOT / "tests"
 # proving real-HTTP wiring distinct from the harness's in-process capture
 # (test_a2a_wire_integer_serialization.py).
 ALLOWLIST: set[tuple[str, int]] = {
-    ("tests/unit/test_error_envelope.py", 370),
     ("tests/integration/test_a2a_wire_integer_serialization.py", 41),
 }
 
@@ -74,8 +73,15 @@ def _scan() -> list[tuple[str, int]]:
 
 class TestNoAdhocTestClientBypassGuard:
     def test_scope_is_nonempty(self):
-        """The rglob must keep matching real test files (guard not vacuous)."""
-        assert any(p.name == "test_error_envelope.py" for p in TESTS_DIR.rglob("*.py"))
+        """The rglob must keep matching real test files (guard not vacuous).
+
+        Anchored to the POPULATION, not to one filename: it used to name
+        ``test_error_envelope.py``, which made a guard's non-vacuity depend on one
+        file continuing to exist. Deleting that file broke the proof without
+        breaking the scan.
+        """
+        matched = [p for p in TESTS_DIR.rglob("*.py") if p.name.startswith("test_")]
+        assert len(matched) > 100, f"scan scope collapsed to {len(matched)} files"
 
     def test_no_adhoc_testclient_bypassing_harness(self):
         violations = [v for v in _scan() if v not in ALLOWLIST]

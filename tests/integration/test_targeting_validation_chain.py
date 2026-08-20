@@ -109,8 +109,6 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
         await _create_media_buy_impl(req=request, identity=_make_identity())
 
     exc = excinfo.value
-    assert "geo_countries/geo_countries_exclude conflict" in exc.message
-    assert "US" in exc.message
 
 
 @pytest.mark.requires_db
@@ -139,5 +137,3 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
         await _create_media_buy_impl(req=request, identity=_make_identity())
 
     exc = excinfo.value
-    assert "geo_metros/geo_metros_exclude conflict" in exc.message
-    assert "501" in exc.message

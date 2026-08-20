@@ -173,10 +173,7 @@ def resolve_identity(
             if require_valid_token:
                 from src.core.exceptions import AdCPAuthenticationError
 
-                raise AdCPAuthenticationError(
-                    f"Authentication token is invalid for tenant '{tenant_id or 'any'}'. "
-                    f"The token may be expired, revoked, or associated with a different tenant.",
-                )
+                raise AdCPAuthenticationError()
             # For discovery endpoints, continue without auth
         elif not tenant_context and token_tenant:
             # Tenant discovered from token lookup (no headers matched)

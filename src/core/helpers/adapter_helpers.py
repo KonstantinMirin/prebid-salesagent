@@ -94,20 +94,35 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
     # (SDK exception, internal class, buyer-facing sentence + log label). One
     # table + one raise, rather than four copies of "log raw / raise typed"
     # differing only in the label and the class (CLAUDE.md DRY invariant).
-    mapping: tuple[tuple[type[Exception], type[AdCPError], str], ...] = (
+    mapping: tuple[tuple[type[Exception], type[AdCPError], str], ...] = (  # (sdk, internal, mode label)
         (ADCPAuthenticationError, AdCPAuthenticationError, "Authentication failed"),
         (ADCPTimeoutError, AdCPServiceUnavailableError, "Request timed out"),
         (ADCPConnectionError, AdCPServiceUnavailableError, "Connection failed"),
     )
     error_class: type[AdCPError] = AdCPAdapterError
-    message = "AdCP agent request failed"
-    for sdk_class, internal_class, buyer_message in mapping:
+    # ONE CODE, MANY SENTENCES — resolved as an ACCEPTED MERGE, recorded not defaulted.
+    # ADCPTimeoutError and ADCPConnectionError both map to AdCPServiceUnavailableError,
+    # and they used to carry different buyer sentences ("Request timed out" /
+    # "Connection failed"). Both are SERVICE_UNAVAILABLE/transient on the wire and the
+    # buyer's action is identical (retry), so the distinction is diagnostic rather than
+    # buyer-actionable: the two now share the code's table sentence, and the mode is
+    # preserved under ``details`` so nothing is lost. A mode that ever needs its OWN
+    # buyer sentence needs its own AppErrorCode, not a message argument.
+    failure_mode = "AdCP agent request failed"
+    for sdk_class, internal_class, mode_label in mapping:
         if isinstance(exc, sdk_class):
-            error_class, message = internal_class, buyer_message
+            error_class, failure_mode = internal_class, mode_label
             break
 
-    logger.error(f"{message} for {agent_label}: {exc.message}")
-    raise error_class(message, internal_detail=exc) from exc
+    logger.error("%s for %s: %s", failure_mode, agent_label, exc.message)
+    # The mode is an operator label, i.e. prose — it belongs in the log and on
+    # internal_detail, not in details. Four lines above, this file's own comment says a
+    # mode needing its own buyer sentence needs its own AppErrorCode, "not a message
+    # argument"; parking the sentence in details would be the same thing by another route.
+    raise error_class(
+        details={"agent": agent_label},
+        internal_detail=f"{failure_mode}: {exc.message}",
+    ) from exc
 
 
 from src.adapters.google_ad_manager import GoogleAdManager
@@ -278,7 +293,6 @@ def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdap
         from src.core.exceptions import AdCPAdapterError
 
         raise AdCPAdapterError(
-            test_behavior.error_message or "Adapter unavailable (test fault injection)",
             recovery=test_behavior.recovery,
             suggestion="Retry the operation or contact ad server support",
         )

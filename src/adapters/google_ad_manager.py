@@ -142,7 +142,7 @@ class GoogleAdManager(AdServerAdapter):
         self.network_code = self._require_config(
             self.network_code,
             field="network_code",
-            message="GAM config is missing 'network_code'",
+            operator_detail="GAM config is missing 'network_code'",
         )
 
         # Validate advertiser_id is numeric if provided (GAM expects integer company IDs)
@@ -153,8 +153,7 @@ class GoogleAdManager(AdServerAdapter):
                 int(advertiser_id)
             except (ValueError, TypeError) as e:
                 raise AdCPConfigurationError(
-                    f"GAM advertiser_id must be numeric (got: '{advertiser_id}'). "
-                    f"Check principal platform_mappings configuration.",
+                    details={"advertiser_id": advertiser_id},
                     field="advertiser_id",
                 ) from e
 
@@ -170,8 +169,6 @@ class GoogleAdManager(AdServerAdapter):
         if not self.dry_run:
             if not self.key_file and not self.service_account_json and not self.refresh_token:
                 raise AdCPConfigurationError(
-                    "GAM config is missing an authentication credential: set one of "
-                    "'service_account_key_file', 'service_account_json', or 'refresh_token'",
                     field="authentication",
                 )
 
@@ -309,16 +306,14 @@ class GoogleAdManager(AdServerAdapter):
         """Return the creatives manager, or raise if the adapter is not configured for it."""
         manager = self.creatives_manager
         if not manager:
-            raise AdCPConfigurationError(
-                "GAM adapter not configured for creative operations", field="creatives_manager"
-            )
+            raise AdCPConfigurationError(field="creatives_manager")
         return manager
 
     def _require_orders_manager(self) -> GAMOrdersManager:
         """Return the orders manager, or raise if the adapter is not configured for it."""
         manager = self.orders_manager
         if not manager:
-            raise AdCPConfigurationError("GAM adapter not configured for order operations", field="orders_manager")
+            raise AdCPConfigurationError(field="orders_manager")
         return manager
 
     def _validate_creative_for_gam(self, asset):
@@ -431,7 +426,7 @@ class GoogleAdManager(AdServerAdapter):
                         f"Please choose a product with compatible pricing."
                     )
                     self.log(f"[red]Error: {error_msg}[/red]")
-                    raise AdCPCapabilityNotSupportedError(error_msg) from None
+                    raise AdCPCapabilityNotSupportedError() from None
 
                 self.log(
                     f"📊 Package {pkg_id} pricing: {pricing_model} → GAM {gam_cost_type} "
@@ -449,7 +444,7 @@ class GoogleAdManager(AdServerAdapter):
             error_msg += ", ".join(missing)
 
             self.log(f"[red]Error: {error_msg}[/red]")
-            raise AdCPConfigurationError(error_msg, field=", ".join(missing))
+            raise AdCPConfigurationError(field=", ".join(missing))
 
         # Get products to access implementation_config
 
@@ -548,7 +543,7 @@ class GoogleAdManager(AdServerAdapter):
                     f"Product must exist in database with valid configuration before media buy creation."
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
-                raise AdCPProductUnavailableError(error_msg)
+                raise AdCPProductUnavailableError()
 
             # Cast to dict to satisfy mypy (products_map values are dict[str, Any])
             product_impl_config = cast(dict[str, Any], product_config.get("implementation_config", {}))
@@ -569,7 +564,7 @@ class GoogleAdManager(AdServerAdapter):
                     f"\n\nAlternatively, for testing you can use Mock adapter instead of GAM (set ad_server='mock' on tenant)."
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
-                raise AdCPProductUnavailableError(error_msg)
+                raise AdCPProductUnavailableError()
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
@@ -582,7 +577,7 @@ class GoogleAdManager(AdServerAdapter):
         if unsupported_features:
             error_msg = f"Unsupported targeting features: {', '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
-            raise AdCPCapabilityNotSupportedError(error_msg)
+            raise AdCPCapabilityNotSupportedError()
 
         # Check if manual approval is required for media buy creation
         # Skip approval workflow if this media buy was already manually approved
@@ -614,7 +609,7 @@ class GoogleAdManager(AdServerAdapter):
                 )
             else:
                 error_msg = "Failed to create manual order workflow step"
-                raise AdCPWorkflowError(error_msg)
+                raise AdCPWorkflowError()
 
         # Automatic mode - create order directly
         # Use pre-loaded naming template, or fallback to default
@@ -784,7 +779,7 @@ class GoogleAdManager(AdServerAdapter):
             # CRITICAL: Return media_buy_id=None to indicate failure
             # Even though order was created, line items failed, so media buy is not functional
             # Per AdCP spec: errors present → media_buy_id must be None
-            raise AdCPLineItemError(error_msg)
+            raise AdCPLineItemError()
 
         # Check if activation approval is needed (guaranteed line items require human approval)
         has_guaranteed, item_types = self._check_order_has_guaranteed_items(order_id)
@@ -1141,7 +1136,7 @@ class GoogleAdManager(AdServerAdapter):
         is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
 
         if not is_fresh:
-            raise AdCPAdapterError(f"GAM data is not fresh enough for media buy {media_buy_id}")
+            raise AdCPAdapterError(details={"media_buy_id": media_buy_id})
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
@@ -1332,7 +1327,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Check if action requires admin privileges
         if action in admin_only_actions and not self._is_admin_principal():
-            raise AdCPAuthorizationError("Only admin users can approve orders")
+            raise AdCPAuthorizationError()
 
         # Check if manual approval is required for media buy updates
         if self._requires_manual_approval("update_media_buy"):
@@ -1349,7 +1344,7 @@ class GoogleAdManager(AdServerAdapter):
                     implementation_date=today,
                 )
             else:
-                raise AdCPWorkflowError("Failed to create approval workflow step")
+                raise AdCPWorkflowError()
 
         # Check for activate_order action with guaranteed items
         if action == "activate_order":
@@ -1370,9 +1365,7 @@ class GoogleAdManager(AdServerAdapter):
                         workflow_step_id=step_id,
                     )
                 else:
-                    raise AdCPActivationWorkflowError(
-                        f"Cannot auto-activate order with guaranteed line items: {', '.join(item_types)}"
-                    )
+                    raise AdCPActivationWorkflowError()
 
         # Handle package budget updates
         if action == "update_package_budget" and package_id and budget is not None:
@@ -1385,7 +1378,6 @@ class GoogleAdManager(AdServerAdapter):
             if budget <= 0:
                 self.log(f"[red]Invalid budget value: {budget} (must be positive)[/red]")
                 raise AdCPValidationError(
-                    f"Budget must be positive, got {budget}",
                     field="budget",
                     details={"budget": budget},
                 )
@@ -1400,7 +1392,7 @@ class GoogleAdManager(AdServerAdapter):
 
                 if not media_package:
                     self.log(f"[red]Package {package_id} not found for media buy {media_buy_id}[/red]")
-                    raise AdCPPackageNotFoundError(f"Package {package_id} not found for media buy {media_buy_id}")
+                    raise AdCPPackageNotFoundError(details={"package_id": package_id, "media_buy_id": media_buy_id})
 
                 # Validate budget isn't less than delivery to date
                 delivery_metrics = media_package.package_config.get("delivery_metrics", {})
@@ -1412,11 +1404,11 @@ class GoogleAdManager(AdServerAdapter):
                         f"for package {package_id}[/red]"
                     )
                     raise AdCPBudgetExceededError(
-                        f"Cannot set budget ${budget} below current spend ${current_spend}",
                         details={
                             "requested_budget": budget,
                             "current_spend": current_spend,
                             "package_id": package_id,
+                            "budget": budget,
                         },
                     )
 
@@ -1425,7 +1417,6 @@ class GoogleAdManager(AdServerAdapter):
                 if not platform_line_item_id:
                     self.log(f"[red]Package {package_id} has no platform_line_item_id - cannot sync to GAM[/red]")
                     raise AdCPValidationError(
-                        f"Package {package_id} has no GAM line item ID",
                         details={"package_id": package_id},
                     )
 
@@ -1446,7 +1437,6 @@ class GoogleAdManager(AdServerAdapter):
                 if not success:
                     self.log(f"[red]Failed to update GAM line item {platform_line_item_id} budget[/red]")
                     raise AdCPGamUpdateError(
-                        "Failed to update budget in Google Ad Manager",
                         details={
                             "package_id": package_id,
                             "line_item_id": platform_line_item_id,
@@ -1482,7 +1472,6 @@ class GoogleAdManager(AdServerAdapter):
             if action in ["pause_package", "resume_package"]:
                 if not package_id:
                     raise AdCPValidationError(
-                        f"package_id required for {action}",
                         field="package_id",
                         details={"action": action},
                     )
@@ -1492,15 +1481,12 @@ class GoogleAdManager(AdServerAdapter):
                     media_package = repo.get_package(media_buy_id, package_id)
 
                     if not media_package:
-                        raise AdCPPackageNotFoundError(
-                            f"Package {package_id} not found", details={"package_id": package_id}
-                        )
+                        raise AdCPPackageNotFoundError(details={"package_id": package_id})
 
                     # Get platform line item ID
                     platform_line_item_id = media_package.package_config.get("platform_line_item_id")
                     if not platform_line_item_id:
                         raise AdCPValidationError(
-                            f"Package {package_id} has no GAM line item ID",
                             details={"package_id": package_id},
                         )
 
@@ -1513,7 +1499,6 @@ class GoogleAdManager(AdServerAdapter):
 
                     if not success:
                         raise AdCPGamUpdateError(
-                            f"Failed to {action_verb.lower()} line item in GAM",
                             details={
                                 "package_id": package_id,
                                 "line_item_id": platform_line_item_id,
@@ -1544,7 +1529,6 @@ class GoogleAdManager(AdServerAdapter):
 
                     if not packages:
                         raise AdCPPackageNotFoundError(
-                            f"No packages found for media buy {media_buy_id}",
                             details={"media_buy_id": media_buy_id},
                         )
 
@@ -1569,7 +1553,6 @@ class GoogleAdManager(AdServerAdapter):
 
                     if failed_items:
                         raise AdCPBulkUpdateError(
-                            f"Failed to {action_verb.lower()} some packages in GAM",
                             details={"failed_items": failed_items},
                         )
 
@@ -1602,7 +1585,6 @@ class GoogleAdManager(AdServerAdapter):
         # Explicit failure for unsupported actions (no silent success)
         self.log(f"[red]Unsupported action '{action}' for GAM adapter[/red]")
         raise AdCPCapabilityNotSupportedError(
-            f"Action '{action}' is not supported by the Google Ad Manager adapter",
             details={
                 "action": action,
                 "supported_actions": ["approve_order", "activate_order", "update_package_budget"],

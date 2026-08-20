@@ -331,7 +331,6 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
     """
     if violations:
         raise AdCPValidationError(
-            f"Targeting validation failed: {'; '.join(violations)}",
             field=package_field_path("targeting_overlay.property_list"),
             details={"violations": violations},
         )

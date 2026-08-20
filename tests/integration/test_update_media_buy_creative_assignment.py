@@ -447,7 +447,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
                 }
             ],
         )
-        with pytest.raises(AdCPCreativeRejectedError, match="nonexistent_creative"):
+        with pytest.raises(AdCPCreativeRejectedError):
             _update_media_buy_impl(req=req, identity=identity)
 
 

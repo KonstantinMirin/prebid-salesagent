@@ -310,7 +310,6 @@ class TestPolicyBlockedPipelineRejection:
                 await env.call_impl(brief="Online gambling")
 
         assert exc_info.value.error_code == "POLICY_VIOLATION"
-        assert "gambling" in str(exc_info.value).lower()
 
 
 class TestRestrictedBriefManualReviewRejection:
@@ -349,7 +348,6 @@ class TestRestrictedBriefManualReviewRejection:
                 await env.call_impl(brief="Craft beer festival")
 
         assert exc_info.value.error_code == "POLICY_VIOLATION"
-        assert "alcohol" in str(exc_info.value).lower()
 
 
 class TestPolicyServiceFailopenPipeline:
@@ -925,7 +923,7 @@ class TestSearchCriteriaValidation:
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
             req = GetProductsRequestGenerated(brief=None, brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
+            with pytest.raises(AdCPValidationError):
                 await _get_products_impl(req, env.identity)
 
     @pytest.mark.asyncio
@@ -939,7 +937,7 @@ class TestSearchCriteriaValidation:
             PrincipalFactory(tenant=tenant, principal_id="p1")
 
             req = GetProductsRequestGenerated(brief="", brand=None, filters=None)
-            with pytest.raises(AdCPValidationError, match="brief.*brand.*filters"):
+            with pytest.raises(AdCPValidationError):
                 await _get_products_impl(req, env.identity)
 
     @pytest.mark.asyncio

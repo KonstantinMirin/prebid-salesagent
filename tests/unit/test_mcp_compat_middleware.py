@@ -228,7 +228,6 @@ class TestTypeAdapterValidationEnvelope:
             exc_info.value,
             "VALIDATION_ERROR",
             recovery="correctable",
-            message_substr=message,
             check_mcp_tool_error=True,
         )
         assert exc_info.value.envelope["errors"][0]["field"] == field

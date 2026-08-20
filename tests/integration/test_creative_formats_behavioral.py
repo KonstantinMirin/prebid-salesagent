@@ -61,7 +61,7 @@ class TestFormatsAuth:
         """Covers: UC-005-EXT-A-01 — tenant=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="p1", tenant=None)
         with CreativeFormatsEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="tenant"):
+            with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(identity=identity)
 
 

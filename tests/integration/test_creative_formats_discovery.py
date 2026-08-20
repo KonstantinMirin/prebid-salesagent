@@ -264,5 +264,4 @@ class TestTenantResolutionFailure:
             result.wire_error_envelope,
             "AUTH_MISSING",
             recovery="correctable",
-            message_substr="tenant",
         )

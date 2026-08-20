@@ -743,9 +743,7 @@ class TestFormatValidationUnreachable:
             # Override: get_format raises the typed error the registry actually
             # raises for network failures (side_effect on the env's existing
             # AsyncMock — mock-cap guard).
-            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError(
-                "Connection failed: agent unreachable"
-            )
+            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError()
 
             result = env.call_via(
                 transport,
@@ -758,7 +756,6 @@ class TestFormatValidationUnreachable:
                 envelope,
                 "SERVICE_UNAVAILABLE",
                 recovery="transient",
-                message_substr="unreachable",
             )
 
 

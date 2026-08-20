@@ -283,7 +283,7 @@ class TestStrictAssignmentAbort:
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
             mock_uow_cls.return_value.__enter__.return_value = mock_uow
 
-            with pytest.raises(AdCPNotFoundError, match="Package not found"):
+            with pytest.raises(AdCPNotFoundError):
                 _process_assignments(
                     assignments={"c1": ["nonexistent_pkg"]},
                     results=results,

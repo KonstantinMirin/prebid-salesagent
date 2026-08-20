@@ -59,14 +59,14 @@ class IdempotencyPosture(BaseModel):
             _MIN_REPLAY_TTL_SECONDS <= self.replay_ttl_seconds <= _MAX_REPLAY_TTL_SECONDS
         ):
             raise AdCPConfigurationError(
-                f"idempotency.replay_ttl_seconds {self.replay_ttl_seconds!r} is outside the required "
-                f"[{_MIN_REPLAY_TTL_SECONDS}, {_MAX_REPLAY_TTL_SECONDS}] bounds",
-                details={"replay_ttl_seconds": self.replay_ttl_seconds},
+                details={
+                    "replay_ttl_seconds": self.replay_ttl_seconds,
+                    "min_replay_ttl_seconds": _MIN_REPLAY_TTL_SECONDS,
+                    "max_replay_ttl_seconds": _MAX_REPLAY_TTL_SECONDS,
+                },
             )
         if self.in_flight_max_seconds is not None and self.in_flight_max_seconds > self.replay_ttl_seconds:
             raise AdCPConfigurationError(
-                f"idempotency.in_flight_max_seconds {self.in_flight_max_seconds!r} exceeds "
-                f"replay_ttl_seconds {self.replay_ttl_seconds!r}",
                 details={
                     "in_flight_max_seconds": self.in_flight_max_seconds,
                     "replay_ttl_seconds": self.replay_ttl_seconds,

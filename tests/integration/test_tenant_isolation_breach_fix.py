@@ -187,6 +187,3 @@ def test_no_fallback_to_first_tenant(integration_db):
     # Should raise RuntimeError, not return tenant_first
     with pytest.raises(RuntimeError) as exc_info:
         get_current_tenant()
-
-    assert "No tenant context set" in str(exc_info.value)
-    assert "security error" in str(exc_info.value).lower()

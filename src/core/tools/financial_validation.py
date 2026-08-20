@@ -15,21 +15,25 @@ if TYPE_CHECKING:
 
 
 def raise_if_validation_failed(
-    message: str | None,
+    reason: str | None,
     *,
     exc_type: type[AdCPError] = AdCPValidationError,
     context: "ContextObject | None" = None,
 ) -> None:
-    """Raise ``exc_type(message, context=context)`` when ``message`` is non-empty.
+    """Raise ``exc_type`` when ``reason`` is non-empty.
 
     Shared one-liner so the budget ``validate_*`` call sites in the create and
     update media-buy paths express their failure path uniformly. Each site
     selects the spec-specific subclass — ``AdCPBudgetTooLowError`` for
     minimum-spend shortfalls, ``AdCPBudgetExceededError`` for daily-spend
     ceilings — so the wire code reflects the failure kind.
+
+    ``reason`` is the validator's first-party diagnostic, not wire text: the
+    buyer-facing sentence comes from the code's table entry, and the diagnostic
+    travels under ``details`` where it is machine-readable.
     """
-    if message:
-        raise exc_type(message, context=context)
+    if reason:
+        raise exc_type(details={"reason": reason}, context=context)
 
 
 def validate_budget_positive(

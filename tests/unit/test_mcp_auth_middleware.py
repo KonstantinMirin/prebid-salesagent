@@ -154,7 +154,7 @@ class TestMCPAuthMiddlewareBehavior:
 
         with patch(
             "src.core.mcp_auth_middleware.resolve_identity_from_context",
-            side_effect=AdCPAuthenticationError("Invalid token"),
+            side_effect=AdCPAuthenticationError(),
         ):
             with pytest.raises(AdCPAuthenticationError):
                 await middleware.on_call_tool(mock_context, call_next)

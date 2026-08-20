@@ -81,18 +81,17 @@ def _check_account_status(account_id: str, status: str | None) -> None:
         # details payload carrying the setup instructions (POST-F2).
         setup_instructions = "Complete billing configuration before use."
         raise AdCPAccountSetupRequiredError(
-            f"Account '{account_id}' requires setup.",
             suggestion=setup_instructions,
-            details={"setup_instructions": setup_instructions},
+            details={"setup_instructions": setup_instructions, "account_id": account_id},
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(
-            f"Account '{account_id}' is suspended.",
+            details={"account_id": account_id},
             suggestion="Contact your account manager.",
         )
     if status == "payment_required":
         raise AdCPAccountPaymentRequiredError(
-            f"Account '{account_id}' has outstanding payment.",
+            details={"account_id": account_id},
             suggestion="Resolve payment before use.",
         )
 
@@ -109,7 +108,7 @@ def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: A
     principal_id = require_principal_id(identity)
     if not repo.has_access(principal_id, account_id):
         raise AdCPAuthorizationError(
-            f"Agent '{principal_id}' does not have access to account '{account_id}'.",
+            details={"principal_id": principal_id, "account_id": account_id},
             suggestion="Use list_accounts to find accounts accessible to this agent.",
         )
 
@@ -123,7 +122,7 @@ def _resolve_by_id(
     account = repo.get_by_id(account_id)
     if account is None:
         raise AdCPAccountNotFoundError(
-            f"Account '{account_id}' not found.",
+            details={"account_id": account_id},
             suggestion="Use list_accounts to find valid account IDs.",
         )
 
@@ -167,14 +166,14 @@ def _resolve_by_natural_key(
             principal_id=principal_id,
         )
         raise AdCPAccountAmbiguousError(
-            f"Natural key matches {total} accounts for brand '{brand_domain}', operator '{ref.operator}'.",
+            details={"match_count": total, "brand_domain": brand_domain, "operator": ref.operator},
             suggestion="Use explicit account_id instead of brand+operator to avoid ambiguity.",
         )
 
     account = matches[0] if matches else None
     if account is None:
         raise AdCPAccountNotFoundError(
-            f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
+            details={"brand_domain": brand_domain, "operator": ref.operator},
             suggestion="Use list_accounts to find valid accounts.",
         )
 

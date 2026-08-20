@@ -173,7 +173,7 @@ async def _get_products_impl(
 
     # Require at least one search criterion (brief, brand, or filters)
     if not req.brief and not req.brand and not req.filters:
-        raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
+        raise AdCPValidationError()
 
     # Extract identity fields
     identity = require_identity(identity, context=req.context)
@@ -199,11 +199,11 @@ async def _get_products_impl(
 
     # Enforce policy-based validation
     if brand_manifest_policy == "require_brand" and not offering:
-        raise AdCPAuthorizationError("Brand manifest required by tenant policy", recovery="correctable")
+        raise AdCPAuthorizationError(recovery="correctable")
     elif brand_manifest_policy == "require_auth" and not principal_id:
         # No credential presented at all -> AUTH_MISSING per v3.1.1
         # error-code.json.
-        raise AdCPAuthRequiredError("Authentication required by tenant policy")
+        raise AdCPAuthRequiredError()
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching
@@ -310,7 +310,7 @@ async def _get_products_impl(
         # Always block if policy says blocked
         logger.warning(f"Brief blocked by policy: {policy_result.reason}")
         # Raise ToolError to properly signal failure to client
-        raise AdCPPolicyViolationError(policy_result.reason or "Blocked by policy")
+        raise AdCPPolicyViolationError()
 
     # If restricted and manual review is required, create a task
     if (
@@ -337,9 +337,8 @@ async def _get_products_impl(
         )
 
         # Raise error for policy violations - explicit failure, not silent return
-        restrictions_list = policy_result.restrictions if policy_result.restrictions else []
         raise AdCPPolicyViolationError(
-            f"Request violates content policy: {policy_result.reason}. Restrictions: {', '.join(restrictions_list)}"
+            details={"restrictions": policy_result.restrictions if policy_result.restrictions else []}
         )
 
     # Resolve adapter type for delivery_measurement defaults
@@ -370,7 +369,7 @@ async def _get_products_impl(
                     f"This indicates data corruption or migration issue. Error: {e}"
                 )
                 logger.error(error_msg)
-                raise AdCPAdapterError(error_msg) from e
+                raise AdCPAdapterError() from e
 
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant['tenant_id']}")
 
@@ -866,7 +865,7 @@ async def get_products(
     except ValueError as e:
         # Helper raises ValueError for semantic (non-Pydantic) input problems.
         raise AdCPValidationError(
-            f"Invalid get_products request: {e}",
+            internal_detail=e,
             suggestion="Correct the get_products request per the AdCP specification and resend.",
         ) from e
 

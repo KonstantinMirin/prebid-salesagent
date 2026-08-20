@@ -151,9 +151,7 @@ class AIServiceFactory:
             # Google requires explicit api_key via GoogleProvider; other providers may
             # fall back to string-format and pydantic-ai env-var resolution.
             if not api_key:
-                raise AdCPConfigurationError(
-                    f"No API key available for provider '{provider}'. Set a tenant api_key or platform GEMINI_API_KEY."
-                )
+                raise AdCPConfigurationError(details={"provider": provider})
             return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
 
         elif provider == "anthropic":

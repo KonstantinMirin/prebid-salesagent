@@ -1995,15 +1995,13 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
 
             if not data.get("package_id"):
                 raise AdCPInvalidRequestError(
-                    "package_id is required to identify the package being updated.",
                     field=package_field_path("package_id"),
                     suggestion="Include the package_id of the package you want to update.",
                 )
             present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
             if present:
-                fields = ", ".join(present)
                 raise AdCPInvalidRequestError(
-                    f"Package field(s) {fields} are immutable after a media buy is created and cannot be updated.",
+                    details={"immutable_fields": present},
                     field=package_field_path(present[0]),
                     suggestion="Remove the immutable field(s) from the package update, or create a new media buy to change product, formats, or pricing.",
                 )
@@ -2030,19 +2028,16 @@ def validate_idempotency_key_shape(key: str | None) -> None:
         return
     if len(key) < _IDEMPOTENCY_KEY_MIN:
         raise AdCPValidationError(
-            f"idempotency_key is too short ({len(key)} characters).",
             field="idempotency_key",
             suggestion=f"Use an idempotency_key of at least {_IDEMPOTENCY_KEY_MIN} characters.",
         )
     if len(key) > _IDEMPOTENCY_KEY_MAX:
         raise AdCPValidationError(
-            f"idempotency_key is too long ({len(key)} characters).",
             field="idempotency_key",
             suggestion=f"Use an idempotency_key of at most {_IDEMPOTENCY_KEY_MAX} characters.",
         )
     if not _IDEMPOTENCY_KEY_CHARSET.match(key):
         raise AdCPValidationError(
-            "idempotency_key contains characters outside [A-Za-z0-9_.:-].",
             field="idempotency_key",
             suggestion="Use only letters, digits, and the characters _ . : -",
         )

@@ -42,7 +42,7 @@ def _create_sync_workflow_steps(
     # No principal_id at all -> AUTH_MISSING per v3.1.1 error-code.json
     # (absent credential, not presented-but-rejected).
     if principal_id is None:
-        raise AdCPAuthRequiredError("Principal ID required for workflow creation")
+        raise AdCPAuthRequiredError()
 
     assert uow.workflows is not None
     # Context creation joins the caller's transaction too. The repository
@@ -51,7 +51,7 @@ def _create_sync_workflow_steps(
     persistent_ctx = uow.workflows.create_context(principal_id=principal_id)
 
     if persistent_ctx is None:
-        raise AdCPAdapterError("Failed to create workflow context")
+        raise AdCPAdapterError()
 
     for creative_info in creatives_needing_approval:
         # Build appropriate comment based on status

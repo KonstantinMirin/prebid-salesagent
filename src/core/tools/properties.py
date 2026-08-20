@@ -188,9 +188,7 @@ def _list_authorized_properties_impl(
             error=str(e),
         )
 
-        raise AdCPAdapterError(
-            f"Failed to list authorized properties: {str(e)}",
-        )
+        raise AdCPAdapterError()
 
 
 async def list_authorized_properties(

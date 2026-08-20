@@ -622,7 +622,6 @@ class TestSetupValidation:
             # Check error details
             error = exc_info.value
             assert len(error.missing_tasks) > 0
-            assert "Complete required setup tasks" in error.message
 
     def test_validate_setup_complete_passes_for_complete(self, integration_db, setup_complete_tenant, test_tenant_id):
         """Test that validation passes for complete setup."""

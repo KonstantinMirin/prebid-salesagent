@@ -64,7 +64,7 @@ class TestBrandManifestPolicyRequireAuth:
 
             env._identity = _lazy_identity("bmp-auth-anon", principal_id=None)
 
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+            with pytest.raises(AdCPAuthenticationError):
                 await env.call_impl(brief="campaign")
 
     @pytest.mark.asyncio
@@ -126,7 +126,7 @@ class TestBrandManifestPolicyRequireBrand:
                 brand=None,
                 filters={"delivery_type": "guaranteed"},
             )
-            with pytest.raises(AdCPAuthorizationError, match="Brand manifest required"):
+            with pytest.raises(AdCPAuthorizationError):
                 await _get_products_impl(req, env.identity)
 
     @pytest.mark.asyncio
@@ -206,7 +206,7 @@ class TestBrandManifestPolicyDefault:
 
             env._identity = _lazy_identity("bmp-def-anon", principal_id=None)
 
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+            with pytest.raises(AdCPAuthenticationError):
                 await env.call_impl(brief="campaign")
 
 

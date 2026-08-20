@@ -266,7 +266,6 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     else:
         exc_cls, suggestion = AdCPInvalidRequestError, INVALID_REQUEST_SUGGESTION
     adcp_exc = exc_cls(
-        message,
         field=field,
         suggestion=suggestion,
         details=build_validation_error_details(errors),

@@ -80,12 +80,22 @@ def _assert_not_found_and_no_leak(result: Any) -> None:
         result.wire_error_envelope,
         "CREATIVE_REJECTED",
         recovery="correctable",
-        message_substr=_OTHER_CREATIVE_ID,
     )
     envelope_text = json.dumps(result.wire_error_envelope).lower()
-    assert "not found" in envelope_text, (
-        f"Cross-principal creative must be reported as NOT FOUND (uniform with a "
-        f"nonexistent id), got: {result.wire_error_envelope}"
+    # UNIFORMITY, asserted on the machine-readable envelope rather than a phrase.
+    # The claim is that a cross-principal creative is INDISTINGUISHABLE from one that
+    # never existed. Production enforces it structurally: the existence check is a
+    # principal-scoped `get_by_ids(requested_ids, principal_id)`, so another principal's
+    # row is absent from the result exactly like a nonexistent id and takes the same
+    # raise. What the buyer receives is therefore the same code and the code's own
+    # sentence — asserting a "not found" PHRASE tested the old authored wording, which
+    # could drift from the code while the security property held, or vice versa.
+    payload_error = result.wire_error_envelope["errors"][0]
+    assert payload_error["code"] == "CREATIVE_REJECTED", (
+        f"Cross-principal creative must yield the uniform rejection code, got: {payload_error}"
+    )
+    assert "creative_ids" in (payload_error.get("details") or {}), (
+        f"The uniform rejection must report WHICH creative_ids were unresolvable: {payload_error}"
     )
     for marker in _LEAK_MARKERS:
         assert marker.lower() not in envelope_text, (

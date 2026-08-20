@@ -590,7 +590,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # the same WIRE code the tool path emits for this event
                     # (MEDIA_BUY_REJECTED is internal-only; wire_error_code translates it
                     # to POLICY_VIOLATION — never hand-pick codes here; PR #1567 round-2 item 1).
-                    rejection = AdCPMediaBuyRejectedError(f"Rejected: {reason or 'No reason provided'}")
+                    rejection = AdCPMediaBuyRejectedError()
                     create_media_buy_rejected_result = CreateMediaBuyError(
                         errors=[Error(code=rejection.wire_error_code, message=rejection.message)]
                     )

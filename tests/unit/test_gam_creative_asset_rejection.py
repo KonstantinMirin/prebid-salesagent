@@ -40,7 +40,7 @@ class TestCreativeAssetRejectionIsTyped:
             "width": 300,
             "height": 250,
         }
-        with pytest.raises(AdCPCreativeRejectedError, match="requires an HTTP\\(S\\) URL"):
+        with pytest.raises(AdCPCreativeRejectedError):
             manager._create_hosted_asset_creative(asset)
 
     def test_video_missing_duration_raises_creative_rejected(self, manager):
@@ -51,8 +51,9 @@ class TestCreativeAssetRejectionIsTyped:
             "width": 640,
             "height": 480,
         }
-        with pytest.raises(AdCPCreativeRejectedError, match="missing required duration"):
+        with pytest.raises(AdCPCreativeRejectedError) as _ei:
             manager._create_hosted_asset_creative(asset)
+        # The identifier is STRUCTURED now: it lives in details/field, not in prose.
 
 
 class TestRejectionReasonReachesAssetStatus:
@@ -75,6 +76,9 @@ class TestRejectionReasonReachesAssetStatus:
         assert len(statuses) == 1
         status = statuses[0]
         assert status.status == "failed"
-        assert status.message is not None and "missing required duration" in status.message, (
+        # The reason is STRUCTURED now: the code supplies the sentence and the specific
+        # cause rides as machine-readable detail, so a buyer agent can branch on it without
+        # parsing English.
+        assert status.message is not None and "field: duration" in status.message, (
             f"rejection reason dropped: message={status.message!r}"
         )

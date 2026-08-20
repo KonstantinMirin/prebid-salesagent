@@ -17,6 +17,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
+from src.core.errors.codes import AppErrorCode
 from tests.bdd.steps._outcome_helpers import (
     _require_response,
     wire_absent,
@@ -1125,10 +1126,9 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
 
     # Handle forced internal error
     if ctx.get("force_internal_error"):
-        from src.core.exceptions import AdCPInternalError
+        from src.core.exceptions import AdCPError
 
-        err = AdCPInternalError("Internal server error")
-        err.error_code = "INTERNAL_ERROR"
+        err = AdCPError(error_code=AppErrorCode.INTERNAL_ERROR)
         ctx["error"] = err
         return
 

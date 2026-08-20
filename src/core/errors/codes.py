@@ -308,8 +308,10 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
             ),
         )
 
-    for app_code, app_entry in _APP_CODES.items():
-        table[app_code] = app_entry
+    # Iterate the ENUM, not the entries: a member without an entry then fails HERE,
+    # at import, rather than as a KeyError on the error path at a transport boundary.
+    for app_code in AppErrorCode:
+        table[app_code] = _APP_CODES[app_code]
 
     return table
 

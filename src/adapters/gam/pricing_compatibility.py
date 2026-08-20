@@ -148,7 +148,7 @@ class PricingCompatibility:
         """
         cost_type = cls.ADCP_TO_GAM_COST_TYPE.get(pricing_model)
         if not cost_type:
-            raise AdCPCapabilityNotSupportedError(f"Pricing model '{pricing_model}' not supported by GAM adapter")
+            raise AdCPCapabilityNotSupportedError(details={"pricing_model": pricing_model})
         return cost_type
 
     @classmethod

@@ -294,11 +294,11 @@ async def _activate_signal_impl(
 
         if requires_approval:
             raise AdCPValidationError(
-                f"Signal {signal_agent_segment_id} requires manual approval before activation",
+                details={"signal_agent_segment_id": signal_agent_segment_id},
                 context=context,
             )
         if not activation_success:
-            raise AdCPServiceUnavailableError("Signal provider unavailable", context=context)
+            raise AdCPServiceUnavailableError(context=context)
 
         decisioning_platform_segment_id = f"seg_{signal_agent_segment_id}_{uuid.uuid4().hex[:8]}"
         return ActivateSignalResponse(
@@ -320,7 +320,7 @@ async def _activate_signal_impl(
         # has no provenance guarantee and this raise site sits directly on the
         # buyer wire (a typed AdCPError passes through normalize_to_adcp_error
         # unchanged). AdCP 3.1.1 transport-errors.mdx § Security Considerations.
-        raise AdCPAdapterError("Signal activation failed", context=context, internal_detail=e) from e
+        raise AdCPAdapterError(context=context, internal_detail=e) from e
 
 
 async def activate_signal(

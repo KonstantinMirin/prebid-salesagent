@@ -254,9 +254,25 @@ class GAMCreativesManager:
                 # Typed rejection (e.g. CREATIVE_REJECTED): this surface reports
                 # per-asset partial success, so the buyer-correctable reason
                 # must ride the status — a bare "failed" is unactionable.
-                logger.error(f"Creative {asset['creative_id']} rejected: {e.message}")
+                logger.error(
+                    "Creative %s rejected: %s field=%s details=%s",
+                    asset["creative_id"],
+                    e.message,
+                    e.field,
+                    e.details or {},
+                    exc_info=True,
+                )
+                # AssetStatus has no structured slot, and this surface reports per-asset
+                # partial success, so the offending FIELD rides the status line — read from
+                # the typed ``field`` attribute, never by stringifying ``details``: that
+                # would put every key on the wire, including ones named after local
+                # variables, and hand-roll a serializer in the adapter layer.
                 created_asset_statuses.append(
-                    AssetStatus(creative_id=asset["creative_id"], status="failed", message=e.message)
+                    AssetStatus(
+                        creative_id=asset["creative_id"],
+                        status="failed",
+                        message=f"{e.message} (field: {e.field})" if e.field else e.message,
+                    )
                 )
             except Exception as e:
                 logger.error(f"Error creating creative {asset['creative_id']}: {str(e)}")
@@ -690,7 +706,8 @@ class GAMCreativesManager:
         url = asset.get("url")
         if not url:
             raise AdCPCreativeRejectedError(
-                f"Creative {asset.get('creative_id')} has no URL for its hosted asset. Provide the asset's HTTP(S) URL."
+                field="url",
+                details={"creative_id": asset.get("creative_id"), "missing_field": "url"},
             )
 
         # Determine asset type
@@ -706,15 +723,15 @@ class GAMCreativesManager:
             # Using asset URL as fallback for click_url (see TODO above)
             if not click_url:
                 raise AdCPCreativeRejectedError(
-                    f"Image creative {asset.get('creative_id')} missing required click_url. "
-                    f"GAM ImageRedirectCreative requires a destination URL."
+                    field="click_url",
+                    details={"creative_id": asset.get("creative_id"), "missing_field": "click_url"},
                 )
 
             # Validate that image URL is an actual URL, not binary data
             if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
                 raise AdCPCreativeRejectedError(
-                    f"Image creative {asset.get('creative_id')} has invalid URL: {url}. "
-                    f"GAM ImageRedirectCreative requires an HTTP(S) URL, not binary data."
+                    field="url",
+                    details={"creative_id": asset.get("creative_id"), "invalid_field": "url"},
                 )
 
             creative = {
@@ -732,7 +749,8 @@ class GAMCreativesManager:
             duration = asset.get("duration")
             if not duration:
                 raise AdCPCreativeRejectedError(
-                    f"Video creative {asset.get('creative_id')} missing required duration field"
+                    field="duration",
+                    details={"creative_id": asset.get("creative_id"), "missing_field": "duration"},
                 )
 
             creative = {
@@ -824,9 +842,7 @@ class GAMCreativesManager:
         if url:
             return f'<iframe src="{url}" width="100%" height="100%" frameborder="0"></iframe>'
 
-        raise AdCPCreativeRejectedError(
-            "No HTML5 source content found in asset. Provide media_data, media_url, or url."
-        )
+        raise AdCPCreativeRejectedError()
 
     def _upload_binary_asset(self, asset: dict[str, Any]) -> dict[str, Any] | None:
         """Upload binary asset to GAM and return asset info."""

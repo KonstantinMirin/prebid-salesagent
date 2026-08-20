@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core.context_manager import ContextManager
-from src.core.exceptions import AdCPInternalError, AdCPValidationError
+from src.core.exceptions import AdCPError, AdCPValidationError
 
 
 def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
@@ -35,21 +35,28 @@ def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
     return cm, cm.update_workflow_step
 
 
-def _expected_response_data(
-    code: str, message: str, *, recovery: str, field: str | None = None, details: dict | None = None
-) -> dict:
+def _expected_response_data(exc: AdCPError) -> dict:
     """Build the two-layer wire-shape ``response_data`` the helper must emit.
 
-    Constructs a temporary ``AdCPError`` and calls
-    ``build_two_layer_error_envelope`` — the same function the production code
-    now uses — so the test asserts on EXACTLY the dict shape
-    ``update_workflow_step`` will receive.
+    Built from the SAME exception the test raises, through the same
+    ``build_two_layer_error_envelope`` production calls — so the assertion is on the
+    dict ``update_workflow_step`` receives, with nothing reconstructed.
+
+    Reconstructing an equivalent error here would not be equivalent: a NAMED-code
+    ``AdCPError`` resolves recovery and suggestion from CODE_TABLE, while a class-coded
+    subclass keeps its class defaults. Passing the real exception sidesteps that
+    asymmetry instead of encoding it.
     """
     from src.core.exceptions import build_two_layer_error_envelope
 
-    exc = AdCPInternalError(message, field=field, details=details, recovery=recovery)
-    exc.error_code = code
     return build_two_layer_error_envelope(exc)
+
+
+def _normalized_for(exc: Exception) -> AdCPError:
+    """The typed error production derives from an untyped one, via the same helper."""
+    from src.core.exceptions import normalize_to_adcp_error
+
+    return normalize_to_adcp_error(exc)
 
 
 class TestFailWorkflowStepForExceptionWebhookPayload:
@@ -58,7 +65,6 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
     def test_adcp_error_threads_envelope_into_response_data(self):
         cm, mock_update = _new_ctx_manager_with_mocked_update()
         exc = AdCPValidationError(
-            "bad budget",
             field="packages[].budget",
             details={"violations": ["below minimum"]},
         )
@@ -72,14 +78,8 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="bad budget",
-            response_data=_expected_response_data(
-                "VALIDATION_ERROR",
-                "bad budget",
-                recovery="correctable",
-                field="packages[].budget",
-                details={"violations": ["below minimum"]},
-            ),
+            error_message=exc.message,
+            response_data=_expected_response_data(exc),
         )
 
     def test_untyped_exception_wrapped_with_wire_safe_code(self):
@@ -106,25 +106,33 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
 
         cm.audit_workflow_step_failure("step_abc", RuntimeError("postgres://admin:s3cr3t@10.0.0.5/prod"))
 
+        # The raw DSN must not reach the payload: the helper normalizes to a typed error
+        # whose text comes from the code, so the expected envelope is built the same way.
+        expected = _normalized_for(RuntimeError("postgres://admin:s3cr3t@10.0.0.5/prod"))
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="RuntimeError",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="transient"),
+            error_message=expected.message,
+            response_data=_expected_response_data(expected),
         )
+        assert "s3cr3t" not in str(mock_update.call_args)
 
-    def test_empty_exception_message_falls_back_to_type_name(self):
+    def test_untyped_exception_with_no_text_is_indistinguishable(self):
+        """A text-less untyped exception yields the same payload as any other.
+
+        Its wording used to be the exception's type name; the sentence is now the
+        code's, so an empty ``str(exc)`` is no longer a distinct case at all.
+        """
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
         cm.audit_workflow_step_failure("step_abc", RuntimeError())
 
-        # Empty message is replaced with type name so the wire envelope and
-        # error_message never carry blank strings.
+        expected = _normalized_for(RuntimeError())
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="RuntimeError",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="transient"),
+            error_message=expected.message,
+            response_data=_expected_response_data(expected),
         )
 
 
@@ -141,7 +149,7 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
         """
         cm = ContextManager.__new__(ContextManager)
         cm.update_workflow_step = MagicMock(side_effect=RuntimeError("DB went away"))  # type: ignore[method-assign]
-        original = AdCPValidationError("real error the buyer should see")
+        original = AdCPValidationError()
 
         # Helper must return normally so the caller's `raise` propagates `original`.
         cm.audit_workflow_step_failure("step_abc", original)
@@ -156,7 +164,7 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
         """
         cm = ContextManager.__new__(ContextManager)
         cm.update_workflow_step = MagicMock(side_effect=RuntimeError("DB went away"))  # type: ignore[method-assign]
-        original = AdCPValidationError("real error")
+        original = AdCPValidationError()
 
         def caller_pattern():
             try:
@@ -170,4 +178,3 @@ class TestFailWorkflowStepForExceptionAuditFailureNonFatal:
             caller_pattern()
         # The buyer sees the real error, not the audit failure.
         assert excinfo.value is original
-        assert "real error" in excinfo.value.message

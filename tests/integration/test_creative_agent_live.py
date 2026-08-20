@@ -377,7 +377,3 @@ class TestFormatResolverIntegration:
                 tenant_id=None,
                 product_id=None,
             )
-
-        error_msg = str(exc_info.value)
-        assert "Unknown format_id" in error_msg
-        assert "nonexistent_format_xyz" in error_msg

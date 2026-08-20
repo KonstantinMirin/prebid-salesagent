@@ -38,7 +38,6 @@ class TestMediaBuyOrRaise:
         with pytest.raises(AdCPMediaBuyNotFoundError) as exc:
             repo.get_by_id_or_raise("mb-missing")
         assert exc.value.error_code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb-missing" in str(exc.value)
 
     def test_get_by_id_or_raise_echoes_context_into_envelope(self):
         """context= is carried onto the raised error AND echoed into the wire envelope.
@@ -68,7 +67,6 @@ class TestMediaBuyOrRaise:
         with pytest.raises(AdCPPackageNotFoundError) as exc:
             repo.get_package_or_raise("mb-1", "pkg-missing")
         assert exc.value.error_code == "PACKAGE_NOT_FOUND"
-        assert "pkg-missing" in str(exc.value)
 
 
 class TestWorkflowOrRaise:
@@ -82,4 +80,3 @@ class TestWorkflowOrRaise:
         with pytest.raises(AdCPTaskNotFoundError) as exc:
             repo.get_by_step_id_or_raise("step-missing")
         assert exc.value.error_code == "TASK_NOT_FOUND"
-        assert "step-missing" in str(exc.value)

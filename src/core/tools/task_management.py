@@ -208,7 +208,7 @@ async def complete_task(
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(
-            f"Invalid status '{status}'. Must be 'completed' or 'failed'",
+            details={"status": status},
             field="status",
         )
 
@@ -218,7 +218,7 @@ async def complete_task(
         task = uow.workflows.get_by_step_id_or_raise(task_id)
 
         if task.status not in ["pending", "in_progress", "requires_approval"]:
-            raise AdCPConflictError(f"Task {task_id} is already {task.status} and cannot be completed")
+            raise AdCPConflictError(details={"task_id": task_id, "status": task.status})
 
         completed_time = datetime.now(UTC)
 

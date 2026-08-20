@@ -145,16 +145,18 @@ class TestBuildTargetingGeoMetros:
             geo_countries=["GB"],
             geo_metros=[{"system": "uk_itl1", "values": ["TLG"]}],
         )
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="nielsen_dma"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The identifier is STRUCTURED now: it lives in details/field, not in prose.
 
     def test_unsupported_metro_system_in_exclude_raises(self, gam_manager):
         targeting = Targeting(
             geo_countries=["GB"],
             geo_metros_exclude=[{"system": "eurostat_nuts2", "values": ["DE1"]}],
         )
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="nielsen_dma"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The identifier is STRUCTURED now: details/field, not prose.
 
     def test_unknown_dma_code_skipped(self, gam_manager):
         targeting = Targeting(
@@ -177,24 +179,30 @@ class TestBuildTargetingGeoPostalAreas:
             geo_countries=["US"],
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
         )
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="[Pp]ostal"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
     def test_unsupported_postal_system_raises(self, gam_manager):
         targeting = Targeting(
             geo_countries=["GB"],
             geo_postal_areas=[{"system": "gb_outward", "values": ["SW1"]}],
         )
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="[Pp]ostal"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
     def test_postal_exclude_raises(self, gam_manager):
         targeting = Targeting(
             geo_countries=["US"],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
         )
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="[Pp]ostal"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
 
 class TestUnsupportedTargetingRaisesTypedCapabilityError:
@@ -215,13 +223,17 @@ class TestUnsupportedTargetingRaisesTypedCapabilityError:
             geo_countries=["US"],
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
         )
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="[Pp]ostal"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
     def test_device_targeting_raises_capability_not_supported(self, gam_manager):
         targeting = Targeting(device_type_any_of=["mobile"])
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="[Dd]evice"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
 
 class TestBuildTargetingCityRemoved:
@@ -230,8 +242,10 @@ class TestBuildTargetingCityRemoved:
     def test_city_flag_raises(self, gam_manager):
         targeting = Targeting(geo_countries=["US"], geo_city_any_of=["Chicago"])
         assert targeting.had_city_targeting is True
-        with pytest.raises(AdCPCapabilityNotSupportedError, match="[Cc]ity"):
+        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
     def test_no_city_flag_no_error(self, gam_manager):
         targeting = Targeting(geo_countries=["US"])

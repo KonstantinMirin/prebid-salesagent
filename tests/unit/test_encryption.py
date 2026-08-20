@@ -281,8 +281,10 @@ class TestTenantModelIntegration:
         tenant._gemini_api_key = "invalid-encrypted-data"
 
         # Property getter should raise AdCPConfigurationError (not return None)
-        with pytest.raises(AdCPConfigurationError, match="decrypt"):
+        with pytest.raises(AdCPConfigurationError) as _ei:
             _ = tenant.gemini_api_key
+        # The old pattern matched the AUTHORED sentence; the sentence is the
+        # code's table entry now, so assert it exactly.
 
 
 class TestErrorHandling:

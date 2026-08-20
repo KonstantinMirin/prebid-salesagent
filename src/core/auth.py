@@ -263,10 +263,7 @@ def get_principal_from_context(
         if require_valid_token:
             from src.core.exceptions import AdCPAuthenticationError
 
-            raise AdCPAuthenticationError(
-                f"Authentication token is invalid for tenant '{requested_tenant_id or 'any'}'. "
-                f"The token may be expired, revoked, or associated with a different tenant.",
-            )
+            raise AdCPAuthenticationError()
         else:
             # For discovery endpoints, treat invalid token like missing token
             logger.debug(
@@ -330,7 +327,7 @@ def resolve_principal_or_raise(
 
     principal = get_principal_object(principal_id, tenant_id=tenant_id)
     if principal is None:
-        raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=context)
+        raise AdCPAuthenticationError(details={"principal_id": principal_id}, context=context)
     return principal
 
 
@@ -358,7 +355,6 @@ def require_principal_id(
         # per salesagent-mkso consistency-lens finding, while keeping the
         # "Principal ID not found in identity" substring existing tests match on.
         raise AdCPAuthRequiredError(
-            "Authentication required: Principal ID not found in identity. No x-adcp-auth token was presented.",
             context=context,
             suggestion=AUTH_MISSING_SUGGESTION,
         )
@@ -394,11 +390,9 @@ def require_tenant(
         # credential-presence split — remains tracked separately.
         if not identity or not identity.auth_token:
             raise AdCPAuthRequiredError(
-                "No tenant context available. Check x-adcp-auth token and host headers.",
                 context=context,
             )
         raise AdCPAuthenticationError(
-            "No tenant context available. Check x-adcp-auth token and host headers.",
             context=context,
         )
     return tenant
@@ -420,7 +414,6 @@ def require_identity(
 
     if identity is None:
         raise AdCPAuthRequiredError(
-            "Authentication required: no identity in request.",
             context=context,
             suggestion=AUTH_MISSING_SUGGESTION,
         )

@@ -143,14 +143,12 @@ def _reject_unbacked[Declared: (SupportedProtocol, AdcpSpecialism)](
     unbacked = sorted({v.value for v in claimed if v not in backed})
     if not unbacked:
         return
-    backed_values = sorted(b.value for b in backed)
-    tracked_suffix = f" {tracked_by}" if tracked_by else ""
     raise AdCPConfigurationError(
-        f"capability_declarations.{field} cannot claim {', '.join(unbacked)}: this "
-        f"deployment does not implement the {noun}, and advertising it would promise "
-        f"buyers behavior that does not exist.{tracked_suffix} Backed {field}: "
-        f"{', '.join(backed_values)}.",
-        details={f"unbacked_{field}": unbacked, f"backed_{field}": backed_values},
+        details={
+            f"unbacked_{field}": unbacked,
+            f"backed_{field}": sorted(b.value for b in backed),
+            **({"tracked_by": tracked_by} if tracked_by else {}),
+        },
     )
 
 
@@ -252,8 +250,7 @@ class CapabilityDeclarations(BaseModel):
             return cls()
         if not isinstance(declared, dict):
             raise AdCPConfigurationError(
-                f"capability_declarations must be a JSON object, got {type(declared).__name__}",
-                details={"capability_declarations": repr(declared)},
+                details={"received_type": type(declared).__name__},
             )
 
         # Name unbacked blocks explicitly, before pydantic's generic extra-field
@@ -262,9 +259,6 @@ class CapabilityDeclarations(BaseModel):
         for block in sorted(_UNBACKED_BLOCKS):
             if block in declared:
                 raise AdCPConfigurationError(
-                    f"capability_declarations.{block} cannot be declared: this deployment does not "
-                    f"implement it, and advertising it would promise buyers behavior that does not "
-                    f"exist. Tracked by {_UNBACKED_BLOCKS[block]}.",
                     details={"block": block, "tracked_by": _UNBACKED_BLOCKS[block]},
                 )
 
@@ -276,7 +270,7 @@ class CapabilityDeclarations(BaseModel):
             parsed = cls.model_validate(declared)
         except ValidationError as exc:
             raise AdCPConfigurationError(
-                f"capability_declarations is not a valid declaration document: {exc}",
+                internal_detail=exc,
                 details={"capability_declarations": sorted(declared)},
             ) from exc
 
@@ -325,9 +319,6 @@ class CapabilityDeclarations(BaseModel):
         )
         if orphaned:
             raise AdCPConfigurationError(
-                f"capability_declarations.specialisms claims {', '.join(orphaned)} but the parent "
-                f"protocol is not in supported_protocols. Declare the parent protocol alongside "
-                f"the specialism, or drop the claim.",
                 details={
                     "orphaned_specialisms": orphaned,
                     "emitted_protocols": sorted(p.value for p in emitted_protocols),

@@ -76,5 +76,5 @@ class TestListAccountsUnauthenticated:
         from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.accounts import _list_accounts_impl
 
-        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+        with pytest.raises(AdCPAuthenticationError):
             _list_accounts_impl(identity=None)

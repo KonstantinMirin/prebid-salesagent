@@ -28,10 +28,9 @@ from src.adapters.broadstreet.managers import (
     BroadstreetWorkflowManager,
 )
 from src.adapters.broadstreet.schemas import BroadstreetConnectionConfig, BroadstreetProductConfig
-from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.constants import require_supported_update_action
 from src.core.exceptions import (
     AdCPBulkUpdateError,
-    AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -109,7 +108,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 self.advertiser_id = self._require_config(
                     self.advertiser_id,
                     field="advertiser_id",
-                    message=(
+                    operator_detail=(
                         f"Principal {principal.principal_id} does not have a Broadstreet advertiser ID "
                         "and no default_advertiser_id configured"
                     ),
@@ -127,12 +126,12 @@ class BroadstreetAdapter(AdServerAdapter):
             self.network_id = self._require_config(
                 self.network_id,
                 field="network_id",
-                message="Broadstreet config is missing 'network_id'",
+                operator_detail="Broadstreet config is missing 'network_id'",
             )
             self.api_key = self._require_config(
                 self.api_key,
                 field="api_key",
-                message="Broadstreet config is missing 'api_key'",
+                operator_detail="Broadstreet config is missing 'api_key'",
             )
             self.client = BroadstreetClient(access_token=self.api_key, network_id=self.network_id)
 
@@ -166,7 +165,7 @@ class BroadstreetAdapter(AdServerAdapter):
             AdCPValidationError: If media_buy_id is empty.
         """
         if not media_buy_id:
-            raise AdCPValidationError("media_buy_id cannot be empty")
+            raise AdCPValidationError()
 
         if media_buy_id.startswith("bs_"):
             return media_buy_id[3:]  # Remove "bs_" prefix
@@ -348,7 +347,6 @@ class BroadstreetAdapter(AdServerAdapter):
             zone_ids = impl_config.get_zone_ids()
             if not zone_ids:
                 raise AdCPValidationError(
-                    f"Product {product_id} has no zones configured",
                     details={"product_id": product_id},
                 )
             all_zone_ids.update(zone_ids)
@@ -637,10 +635,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
         self.log(f"Broadstreet.update_media_buy for '{media_buy_id}' with action '{action}'", dry_run_prefix=False)
 
-        if action not in REQUIRED_UPDATE_ACTIONS:
-            raise AdCPCapabilityNotSupportedError(
-                f"Action '{action}' not supported. Supported: {REQUIRED_UPDATE_ACTIONS}",
-            )
+        require_supported_update_action(action)
 
         assert self.tenant_id is not None, "tenant_id required for DB operations"
 
@@ -656,7 +651,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 db_packages = repo.get_packages(media_buy_id)
 
                 if not db_packages:
-                    raise AdCPPackageNotFoundError(f"No packages found for media buy {media_buy_id}")
+                    raise AdCPPackageNotFoundError(details={"media_buy_id": media_buy_id})
 
                 # Collect all advertisement IDs across packages
                 all_ad_ids: list[str] = []
@@ -676,7 +671,6 @@ class BroadstreetAdapter(AdServerAdapter):
                         if failed:
                             failed_items = [{"id": ad_id, "reason": "update failed"} for ad_id in failed]
                             raise AdCPBulkUpdateError(
-                                f"Failed to update {len(failed)} advertisements",
                                 details={"failed_items": failed_items},
                             )
                 else:
@@ -696,7 +690,7 @@ class BroadstreetAdapter(AdServerAdapter):
         # Package-level pause/resume
         if action in ("pause_package", "resume_package"):
             if not package_id:
-                raise AdCPValidationError(f"package_id is required for {action} action", field="package_id")
+                raise AdCPValidationError(details={"action": action}, field="package_id")
 
             action_verb = "Pausing" if is_pause else "Resuming"
 
@@ -705,7 +699,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
-                    raise AdCPPackageNotFoundError(f"Package {package_id} not found in media buy {media_buy_id}")
+                    raise AdCPPackageNotFoundError(details={"package_id": package_id, "media_buy_id": media_buy_id})
 
                 ad_ids = db_package.package_config.get("broadstreet_advertisement_ids", [])
 
@@ -718,7 +712,6 @@ class BroadstreetAdapter(AdServerAdapter):
                         if failed:
                             failed_items = [{"id": ad_id, "reason": "update failed"} for ad_id in failed]
                             raise AdCPBulkUpdateError(
-                                f"Failed to update {len(failed)} advertisements",
                                 details={"failed_items": failed_items},
                             )
                 else:
@@ -737,16 +730,16 @@ class BroadstreetAdapter(AdServerAdapter):
         # Budget update: persist to database (Broadstreet has no budget API)
         if action == "update_package_budget":
             if not package_id:
-                raise AdCPValidationError("package_id is required for update_package_budget action", field="package_id")
+                raise AdCPValidationError(field="package_id")
             if budget is None:
-                raise AdCPValidationError("budget is required for update_package_budget action", field="budget")
+                raise AdCPValidationError(field="budget")
 
             with get_db_session() as session:
                 repo = MediaBuyRepository(session, self.tenant_id)
                 db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
-                    raise AdCPPackageNotFoundError(f"Package {package_id} not found")
+                    raise AdCPPackageNotFoundError(details={"package_id": package_id})
 
                 db_package.package_config["budget"] = float(budget)
                 attributes.flag_modified(db_package, "package_config")
@@ -765,12 +758,9 @@ class BroadstreetAdapter(AdServerAdapter):
         # Impressions update: persist to database (Broadstreet has no impressions API)
         if action == "update_package_impressions":
             if not package_id:
-                raise AdCPValidationError(
-                    "package_id is required for update_package_impressions action", field="package_id"
-                )
+                raise AdCPValidationError(field="package_id")
             if budget is None:
                 raise AdCPValidationError(
-                    "budget (impressions) is required for update_package_impressions action",
                     field="budget",
                 )
 
@@ -779,7 +769,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
-                    raise AdCPPackageNotFoundError(f"Package {package_id} not found")
+                    raise AdCPPackageNotFoundError(details={"package_id": package_id})
 
                 db_package.package_config["impressions"] = budget
                 attributes.flag_modified(db_package, "package_config")

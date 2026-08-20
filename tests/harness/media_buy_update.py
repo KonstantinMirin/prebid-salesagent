@@ -142,7 +142,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
             if media_buy is None:
                 from src.core.exceptions import AdCPMediaBuyNotFoundError
 
-                raise AdCPMediaBuyNotFoundError(f"Media buy '{media_buy_id}' not found", context=context)
+                raise AdCPMediaBuyNotFoundError(details={"media_buy_id": media_buy_id}, context=context)
             return media_buy
 
         def _get_package_or_raise(media_buy_id: str, package_id: str, *, context: Any = None) -> Any:
@@ -151,7 +151,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
                 from src.core.exceptions import AdCPPackageNotFoundError
 
                 raise AdCPPackageNotFoundError(
-                    f"Package '{package_id}' not found for media buy '{media_buy_id}'", context=context
+                    details={"package_id": package_id, "media_buy_id": media_buy_id}, context=context
                 )
             return package
 

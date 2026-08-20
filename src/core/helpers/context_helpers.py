@@ -77,5 +77,5 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
     # credential-presence split remain tracked under TENANT_REQUIRED
     # (salesagent-40kk).
     if not identity or not identity.auth_token:
-        raise AdCPAuthRequiredError("No tenant context available")
-    raise AdCPAuthenticationError("No tenant context available")
+        raise AdCPAuthRequiredError()
+    raise AdCPAuthenticationError()

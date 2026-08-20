@@ -93,7 +93,6 @@ def _as_format_dict(fmt: Any) -> dict[str, Any]:
     if callable(model_dump):
         return model_dump(mode="json")
     raise AdCPAdapterError(
-        f"Unexpected format item type from creative agent: {type(fmt)!r}",
         recovery="terminal",
     )
 
@@ -431,7 +430,6 @@ class CreativeAgentRegistry:
                 formats_data = result.data
                 if formats_data is None:
                     raise AdCPAdapterError(
-                        "Completed status but no data in response",
                         recovery="terminal",
                     )
 
@@ -453,7 +451,7 @@ class CreativeAgentRegistry:
 
             elif result.status == "submitted":
                 raise AdCPAdapterError(
-                    f"Unexpected submitted status for list_creative_formats from {agent.name}",
+                    details={"agent_name": agent.name},
                     recovery="terminal",
                 )
 
@@ -497,11 +495,11 @@ class CreativeAgentRegistry:
                 # upstream API response, which AdCP 3.1.1 transport-errors.mdx
                 # § Security Considerations forbids on a buyer-facing message.
                 # It stays in the log line above and in ``internal_detail``.
-                raise AdCPAdapterError("Creative agent format fetch failed", internal_detail=error_text)
+                raise AdCPAdapterError(internal_detail=error_text)
 
             else:
                 raise AdCPAdapterError(
-                    f"Unexpected result status from {agent.name}: {result.status}",
+                    details={"agent_name": agent.name, "status": result.status},
                     recovery="terminal",
                 )
 
@@ -573,19 +571,19 @@ class CreativeAgentRegistry:
                 # already captured server-side by the logger.error above.
                 if exc.response.status_code == 429:
                     raise AdCPRateLimitError(
-                        "Creative agent rate-limited",
                         details={"retry_after": exc.response.headers.get("Retry-After")},
                     ) from exc
                 if exc.response.status_code >= 500:
                     raise AdCPServiceUnavailableError(
-                        f"Creative agent unavailable (HTTP {exc.response.status_code})"
+                        details={"status_code": exc.response.status_code}, internal_detail=exc
                     ) from exc
                 # 4xx non-429 from an external agent is a buyer-side error
                 # (bad request, unauthorized, not found, etc.); retrying the
                 # same request won't help, so override the class default
                 # ``transient`` with ``terminal``.
                 raise AdCPAdapterError(
-                    f"Creative agent HTTP error: {exc.response.status_code}",
+                    details={"status_code": exc.response.status_code},
+                    internal_detail=exc,
                     recovery="terminal",
                 ) from exc
             except httpx.TimeoutException as exc:
@@ -596,7 +594,7 @@ class CreativeAgentRegistry:
                     continue
                 logger.error(f"Creative agent fallback timed out: {mcp_url}")
                 # Same rule as the sibling arms: the endpoint is server-side detail.
-                raise AdCPServiceUnavailableError("Request timed out", internal_detail=exc) from exc
+                raise AdCPServiceUnavailableError(internal_detail=exc) from exc
             except httpx.RequestError as exc:
                 last_exc = exc
                 logger.error(f"Creative agent fallback connection failed: {mcp_url} — {exc}")
@@ -607,9 +605,9 @@ class CreativeAgentRegistry:
                 # declarations. AdCP 3.1.1 transport-errors.mdx § Security
                 # Considerations bans both ("internal service names, hostnames,
                 # or IP addresses"; "upstream API responses").
-                raise AdCPServiceUnavailableError("Connection failed", internal_detail=exc) from exc
+                raise AdCPServiceUnavailableError(internal_detail=exc) from exc
         else:
-            raise AdCPServiceUnavailableError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
+            raise AdCPServiceUnavailableError(details={"max_retries": max_retries}) from last_exc
 
         # Parse SSE or JSON response
         content_type = response.headers.get("content-type", "")
@@ -625,7 +623,7 @@ class CreativeAgentRegistry:
                 return self._parse_mcp_tool_result(data["result"], logger)
 
         raise AdCPAdapterError(
-            f"No parseable result in MCP response from {agent.agent_url}",
+            details={"agent_url": agent.agent_url},
             recovery="terminal",
         )
 
@@ -642,7 +640,6 @@ class CreativeAgentRegistry:
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
         raise AdCPAdapterError(
-            "No text content in MCP tool result",
             recovery="terminal",
         )
 

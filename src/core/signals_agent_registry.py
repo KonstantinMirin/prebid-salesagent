@@ -176,7 +176,6 @@ class SignalsAgentRegistry:
                 # Synchronous completion
                 if result.data is None:
                     raise AdCPAdapterError(
-                        "Completed status but no data in signals response",
                         recovery="terminal",
                     )
                 signals = result.data.signals
@@ -200,7 +199,6 @@ class SignalsAgentRegistry:
                 total_duration = time.time() - start_time
                 if result.submitted is None:
                     raise AdCPAdapterError(
-                        "Submitted status but no submitted info in signals response",
                         recovery="terminal",
                     )
                 logger.info(
@@ -212,7 +210,7 @@ class SignalsAgentRegistry:
 
             else:
                 raise AdCPAdapterError(
-                    f"Unexpected result status from {agent.name}: {result.status}",
+                    details={"agent_name": agent.name, "status": result.status},
                     recovery="terminal",
                 )
 

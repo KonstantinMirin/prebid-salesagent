@@ -382,7 +382,7 @@ class TestWorkflowStatusBranches:
         from src.core.exceptions import AdCPAuthenticationError
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        with pytest.raises(AdCPAuthenticationError, match="Principal ID required"):
+        with pytest.raises(AdCPAuthenticationError):
             _create_sync_workflow_steps(
                 creatives_needing_approval=[{"creative_id": "c1", "name": "Test", "format": "f1"}],
                 principal_id=None,
@@ -406,7 +406,7 @@ class TestWorkflowStatusBranches:
         uow = _uow_stub()
         uow.workflows.create_context.return_value = None
 
-        with pytest.raises(AdCPAdapterError, match="Failed to create workflow context"):
+        with pytest.raises(AdCPAdapterError):
             _create_sync_workflow_steps(
                 creatives_needing_approval=[{"creative_id": "c1", "name": "Test", "format": "f1"}],
                 principal_id="p1",

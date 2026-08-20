@@ -161,7 +161,6 @@ def test_raise_if_validation_failed_raises_default_validation_error() -> None:
         raise_if_validation_failed("budget below minimum")
 
     assert exc_info.value.error_code == "VALIDATION_ERROR"
-    assert "budget below minimum" in str(exc_info.value)
 
 
 def test_raise_if_validation_failed_raises_selected_subclass() -> None:

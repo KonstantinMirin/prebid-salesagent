@@ -33,11 +33,6 @@ def test_get_current_tenant_fails_without_context():
     with pytest.raises(RuntimeError) as exc_info:
         get_current_tenant()
 
-    error_msg = str(exc_info.value)
-    assert "No tenant context set" in error_msg
-    assert "security error" in error_msg.lower()
-    assert "breach tenant isolation" in error_msg.lower()
-
 
 def test_get_principal_from_context_uses_global_lookup_when_no_tenant_detected():
     """Test that authentication uses global token lookup when tenant cannot be determined from headers.

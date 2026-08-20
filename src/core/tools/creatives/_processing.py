@@ -19,7 +19,13 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from adcp.types import CreativeAsset
 from pydantic import BaseModel
 
-from src.core.exceptions import AdCPConfigurationError
+from src.core.exceptions import (
+    AdCPConfigurationError,
+    AdCPCreativeRejectedError,
+    AdCPError,
+    AdCPServiceUnavailableError,
+    build_error_object,
+)
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.schemas import Error as AdCPErrorDetail
@@ -125,29 +131,23 @@ def build_update_sync_result(
     )
 
 
-def _failed_sync_result(
-    creative_id: str, error_msg: str, *, recovery: str | None = None, code: str = "SERVICE_UNAVAILABLE"
-) -> SyncCreativeResult:
+def _failed_sync_result(creative_id: str, source: AdCPError) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
-    ``recovery`` distinguishes a transient failure (creative agent down — a retry
-    may help) from a terminal one (server misconfiguration — retrying cannot fix
-    it). The wire code defaults to the standard ``SERVICE_UNAVAILABLE``
-    (``CONFIGURATION_ERROR`` is internal-only and would leak verbatim in an
-    advisory); ``recovery`` is the structured retry signal. Buyer-correctable
-    per-item failures pass the condition-specific code: ``CREATIVE_NOT_FOUND``
-    for an assignment referencing an unknown creative_id (matching the
-    strict-mode ``AdCPCreativeNotFoundError`` raise since 287c93099),
-    ``VALIDATION_ERROR`` for other correctable causes.
+    Takes the TYPED error and nothing else. The advisory's code, sentence, recovery,
+    suggestion, field and details all come from ``build_error_object`` — the same
+    derivation the transport envelope uses — so a per-creative advisory and the
+    request-level envelope cannot disagree about the same failure.
+
+    Provenance-bearing text belongs on ``internal_detail`` at the RAISE site (server log
+    only), never in ``details``: a diagnostic in ``details`` is on the buyer's wire, which
+    is the forward ``normalize_to_adcp_error`` exists to prevent.
     """
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
-        errors=[
-            AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-                code=code, message=error_msg, recovery=recovery
-            )
-        ],
+        # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
+        errors=[AdCPErrorDetail(**build_error_object(source))],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,
@@ -341,7 +341,7 @@ def _update_existing_creative(
                             f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
                         )
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                        raise AdCPConfigurationError()
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -555,31 +555,60 @@ def _update_existing_creative(
                     # Continue with update - preview is optional for static creatives
                 else:
                     # Creative agent should have generated previews but didn't
-                    error_msg = f"Preview generation failed for {existing_creative.creative_id}: no previews returned and no media_url provided"
-                    logger.error(f"[sync_creatives] {error_msg}")
-                    return (_failed_sync_result(existing_creative.creative_id, error_msg), False)
+                    logger.error(
+                        "[sync_creatives] Preview generation returned nothing for %s and no media_url",
+                        existing_creative.creative_id,
+                    )
+                    return (
+                        _failed_sync_result(
+                            existing_creative.creative_id,
+                            AdCPCreativeRejectedError(
+                                field="media_url",
+                                details={"creative_id": existing_creative.creative_id, "cause": "no_previews"},
+                            ),
+                        ),
+                        False,
+                    )
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
             # honestly so the buyer does not retry a misconfiguration.
-            error_msg = str(config_error)
             logger.error(
-                "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
+                "[sync_creatives] configuration error for update of %s",
+                existing_creative.creative_id,
+                exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="terminal"), False)
+            return (
+                _failed_sync_result(
+                    existing_creative.creative_id,
+                    AdCPConfigurationError(
+                        recovery="terminal",
+                        details={"creative_id": existing_creative.creative_id},
+                        internal_detail=config_error,
+                    ),
+                ),
+                False,
+            )
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
             # Do NOT update the creative - it needs validation before acceptance
-            error_msg = (
-                f"Creative agent unreachable or validation error: {str(validation_error)}. "
-                f"Retry recommended - creative agent may be temporarily unavailable."
-            )
             logger.error(
-                f"[sync_creatives] {error_msg} for update of {existing_creative.creative_id}",
+                "[sync_creatives] creative agent unreachable or validation error for update of %s",
+                existing_creative.creative_id,
                 exc_info=True,
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="transient"), False)
+            return (
+                _failed_sync_result(
+                    existing_creative.creative_id,
+                    AdCPServiceUnavailableError(
+                        recovery="transient",
+                        details={"creative_id": existing_creative.creative_id},
+                        internal_detail=validation_error,
+                    ),
+                ),
+                False,
+            )
 
     creative_repo.update_data(existing_creative, data)
 
@@ -666,7 +695,7 @@ def _create_new_creative(
                     if not gemini_api_key:
                         error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
                         logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError(error_msg)
+                        raise AdCPConfigurationError()
 
                     # Extract message/brief from assets or inputs
                     message = _extract_message_from_assets(creative)
@@ -867,29 +896,56 @@ def _create_new_creative(
                         # Continue with creative creation - preview is optional for static creatives
                     else:
                         # Creative agent should have generated previews but didn't
-                        error_msg = f"Preview generation failed for {creative_id}: no previews returned and no media_url provided"
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        return (_failed_sync_result(creative_id, error_msg), False)
+                        logger.error(
+                            "[sync_creatives] Preview generation returned nothing for %s and no media_url",
+                            creative_id,
+                        )
+                        return (
+                            _failed_sync_result(
+                                creative_id,
+                                AdCPCreativeRejectedError(
+                                    field="media_url",
+                                    details={"creative_id": creative_id, "cause": "no_previews"},
+                                ),
+                            ),
+                            False,
+                        )
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
             # honestly so the buyer does not retry a misconfiguration.
-            error_msg = str(config_error)
-            logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
-            return (_failed_sync_result(creative_id, error_msg, recovery="terminal"), False)
+            logger.error("[sync_creatives] configuration error - rejecting creative %s", creative_id, exc_info=True)
+            return (
+                _failed_sync_result(
+                    creative_id,
+                    AdCPConfigurationError(
+                        recovery="terminal",
+                        details={"creative_id": creative_id},
+                        internal_detail=config_error,
+                    ),
+                ),
+                False,
+            )
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
             # Do NOT store the creative - it needs validation before acceptance
-            error_msg = (
-                f"Creative agent unreachable or validation error: {str(validation_error)}. "
-                f"Retry recommended - creative agent may be temporarily unavailable."
-            )
             logger.error(
-                f"[sync_creatives] {error_msg} - rejecting creative {creative_id}",
+                "[sync_creatives] creative agent unreachable or validation error - rejecting creative %s",
+                creative_id,
                 exc_info=True,
             )
-            return (_failed_sync_result(creative_id, error_msg, recovery="transient"), False)
+            return (
+                _failed_sync_result(
+                    creative_id,
+                    AdCPServiceUnavailableError(
+                        recovery="transient",
+                        details={"creative_id": creative_id},
+                        internal_detail=validation_error,
+                    ),
+                ),
+                False,
+            )
 
     # Determine creative status based on approval mode
 

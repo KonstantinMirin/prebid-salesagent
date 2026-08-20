@@ -235,14 +235,17 @@ class AdServerAdapter(ABC):
             config.get("manual_approval_operations", ["create_media_buy", "update_media_buy", "add_creative_assets"])
         )
 
-    def _require_config(self, value: _ConfigT | None, *, field: str, message: str | None = None) -> _ConfigT:
+    def _require_config(self, value: _ConfigT | None, *, field: str, operator_detail: str | None = None) -> _ConfigT:
         """Return ``value`` when present; otherwise raise ``AdCPConfigurationError``.
 
         Centralizes the adapter-``__init__`` "required config value is absent"
         guard so every adapter raises the same exception type with the missing
-        ``field`` attached to the error. Pass ``message`` for the operator-facing
-        wording (adapters keep their own phrasing, standardized on "is missing");
-        ``field`` is always recorded on the error for structured consumers.
+        ``field`` attached to the error.
+
+        ``operator_detail`` names the adapter and, where relevant, the principal.
+        That is a SERVER-side diagnostic, so it rides ``internal_detail`` (logged by
+        the boundary, absent from every serializer) rather than the buyer-facing
+        sentence, which the code's table entry supplies.
 
         Returns the value with ``None`` stripped from its type, so callers can
         rebind (``self.x = self._require_config(self.x, ...)``) to narrow the
@@ -250,7 +253,7 @@ class AdServerAdapter(ABC):
         """
         if value:
             return value
-        raise AdCPConfigurationError(message or f"Adapter config is missing required field '{field}'", field=field)
+        raise AdCPConfigurationError(field=field, internal_detail=operator_detail)
 
     def log(self, message: str, dry_run_prefix: bool = True):
         """Log a message, with optional dry-run prefix."""

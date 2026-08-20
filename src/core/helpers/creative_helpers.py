@@ -584,7 +584,6 @@ def process_and_upload_package_creatives(
                 error_msg = "Creative validation failed:\n" + "\n".join(f"  • {m}" for m in detail_msgs)
                 logger.error(error_msg)
                 raise AdCPCreativeRejectedError(
-                    error_msg,
                     suggestion=(
                         "Fix the rejected creative(s) so each reference format has the required "
                         "content URL and dimensions, then re-submit the create_media_buy request."
@@ -625,7 +624,7 @@ def process_and_upload_package_creatives(
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"
             logger.error(error_msg)
             # Re-raise as ToolError for consistent error handling
-            raise AdCPAdapterError(error_msg) from e
+            raise AdCPAdapterError() from e
 
     return updated_packages, uploaded_by_product
 

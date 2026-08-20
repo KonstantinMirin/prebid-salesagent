@@ -49,7 +49,7 @@ class TestGetProductsMCPWrapper:
         ):
             from src.core.tools.products import get_products
 
-            with pytest.raises(AdCPValidationError, match="Invalid get_products request"):
+            with pytest.raises(AdCPValidationError):
                 await get_products(brief="test", ctx=None)
 
     @pytest.mark.asyncio

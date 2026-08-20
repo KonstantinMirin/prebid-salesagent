@@ -192,12 +192,12 @@ class TestGetTaskTool:
 
         get_task_fn = await self._get_get_task_fn()
 
-        mock_workflow_repo.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError("Task nonexistent not found")
+        mock_workflow_repo.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError()
 
         identity = self._make_identity(sample_tenant)
 
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
-            with pytest.raises(ToolError, match="not found"):
+            with pytest.raises(ToolError):
                 await get_task_fn(task_id="nonexistent", identity=identity)
 
 
@@ -288,5 +288,5 @@ class TestCompleteTaskTool:
 
         identity = self._make_identity(sample_tenant)
 
-        with pytest.raises(ToolError, match="Invalid status"):
+        with pytest.raises(ToolError):
             await complete_task_fn(task_id="step_123", status="invalid_status", identity=identity)

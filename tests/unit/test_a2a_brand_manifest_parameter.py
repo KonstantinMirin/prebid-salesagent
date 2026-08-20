@@ -151,7 +151,7 @@ async def test_handle_get_products_skill_no_brief_no_brand_raises():
     with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_core_tool:
         from src.core.exceptions import AdCPValidationError
 
-        mock_core_tool.side_effect = AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
+        mock_core_tool.side_effect = AdCPValidationError()
 
         # AdCPError propagates via 'except AdCPError: raise' to outer handler
         with pytest.raises(AdCPValidationError):

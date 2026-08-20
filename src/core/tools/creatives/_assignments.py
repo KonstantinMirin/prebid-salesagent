@@ -9,6 +9,7 @@ from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPCreativeRejectedError,
     AdCPPackageNotFoundError,
+    AdCPValidationError,
 )
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
@@ -135,7 +136,6 @@ def _process_assignments(
                         # correctable, MANDATED uniformly for unowned creative_ids) —
                         # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
                         raise AdCPCreativeNotFoundError(
-                            error_msg,
                             suggestion=(
                                 "Sync the creative via sync_creatives (or include it in this "
                                 "request's creatives array) before assigning it to a package."
@@ -165,7 +165,7 @@ def _process_assignments(
                             # Use the specific subclass so the wire code is PACKAGE_NOT_FOUND
                             # (STANDARD); the base AdCPNotFoundError would emit INVALID_REQUEST
                             # via the wire-safe translation and lose buyer-facing specificity.
-                            raise AdCPPackageNotFoundError(error_msg)
+                            raise AdCPPackageNotFoundError()
                         else:
                             logger.warning(log_safe(f"Package not found during assignment: {package_id}, skipping"))
                             continue
@@ -239,7 +239,6 @@ def _process_assignments(
                                     # creative-format-incompatible-with-product is CREATIVE_REJECTED,
                                     # the canonical code for a rejected creative (#1417).
                                     raise AdCPCreativeRejectedError(
-                                        error_msg,
                                         suggestion=(
                                             "Assign a creative whose format matches one of the product's "
                                             f"supported formats ({supported_formats_display}), or call "
@@ -370,9 +369,15 @@ def _process_assignments(
             # also carry package causes. Other synthesized causes still ride
             # VALIDATION_ERROR — a known residual (strict package-not-found emits
             # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
-            message = "; ".join(sorted(set(errors.values())))
-            code = "CREATIVE_NOT_FOUND" if creative_id in not_found_creative_ids else "VALIDATION_ERROR"
-            entry = _failed_sync_result(creative_id, message, recovery="correctable", code=code)
+            not_found = creative_id in not_found_creative_ids
+            cause = AdCPCreativeNotFoundError if not_found else AdCPValidationError
+            entry = _failed_sync_result(
+                creative_id,
+                cause(
+                    recovery="correctable",
+                    details={"creative_id": creative_id, "assignment_errors": dict(errors)},
+                ),
+            )
             entry.assignment_errors = errors
         results.append(entry)
 

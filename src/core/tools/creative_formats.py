@@ -210,7 +210,7 @@ def _list_creative_formats_impl(
     except Exception as e:
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
         raise AdCPServiceUnavailableError(
-            f"Creative agent registry initialization failed: {e}",
+            internal_detail=e,
             context=req.context,
         ) from e
 

@@ -79,7 +79,7 @@ class MediaBuyRepository:
             from src.core.exceptions import AdCPMediaBuyNotFoundError
 
             raise AdCPMediaBuyNotFoundError(
-                f"Media buy '{media_buy_id}' not found",
+                details={"media_buy_id": media_buy_id},
                 suggestion="Verify the media_buy_id is correct and belongs to your account.",
                 context=context,
             )
@@ -203,7 +203,7 @@ class MediaBuyRepository:
             from src.core.exceptions import AdCPPackageNotFoundError
 
             raise AdCPPackageNotFoundError(
-                f"Package '{package_id}' not found for media buy '{media_buy_id}'",
+                details={"package_id": package_id, "media_buy_id": media_buy_id},
                 suggestion="Verify the package_id exists in this media buy; list the media buy's packages to find valid ids.",
                 context=context,
             )

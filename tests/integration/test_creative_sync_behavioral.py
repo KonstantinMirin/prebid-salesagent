@@ -68,21 +68,21 @@ class TestSyncAuthRequired:
     def test_no_identity_raises_auth_error(self, integration_db):
         """Covers: UC-006-EXT-A-01 — identity=None → AdCPAuthenticationError."""
         with CreativeSyncEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+            with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(creatives=[_make_creative_asset()], identity=None)
 
     def test_identity_without_principal_raises(self, integration_db):
         """Covers: UC-006-EXT-A-01 — principal_id=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id=None, tenant={"tenant_id": "t1", "name": "T1"})
         with CreativeSyncEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+            with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(creatives=[_make_creative_asset()], identity=identity)
 
     def test_identity_without_tenant_raises(self, integration_db):
         """Covers: UC-006-EXT-B-01 — tenant=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="p1", tenant=None)
         with CreativeSyncEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="tenant"):
+            with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(creatives=[_make_creative_asset()], identity=identity)
 
     def test_auth_error_before_db_access(self, integration_db):
@@ -96,7 +96,7 @@ class TestSyncAuthRequired:
         """Covers: UC-006-EXT-A-01 — empty string principal_id → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="", tenant={"tenant_id": "t1", "name": "T1"})
         with CreativeSyncEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
+            with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(creatives=[_make_creative_asset()], identity=identity)
 
 
@@ -359,7 +359,6 @@ class TestValidationModeSemantics:
                 result.wire_error_envelope,
                 "CREATIVE_NOT_FOUND",
                 recovery="correctable",
-                message_substr="c_never_synced",
             )
 
     def test_lenient_mode_unknown_assignment_creative_entry_is_creative_not_found(self, integration_db):
@@ -1727,7 +1726,7 @@ class TestSyncExtensions:
         """Covers: UC-006-EXT-B-01 — tenant=None with principal → AdCPAuthenticationError."""
         identity = _make_identity(principal_id="p1", tenant=None)
         with CreativeSyncEnv() as env:
-            with pytest.raises(AdCPAuthenticationError, match="tenant"):
+            with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(creatives=[_make_creative_asset()], identity=identity)
 
     def test_strict_validation_per_creative_independence(self, integration_db):
@@ -1826,9 +1825,7 @@ class TestSyncExtensions:
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError(
-                "Connection failed: https://creative.adcontextprotocol.org/mcp — agent unreachable"
-            )
+            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError()
 
             result = env.call_via(
                 Transport.REST,
@@ -1840,7 +1837,6 @@ class TestSyncExtensions:
                 result.wire_error_envelope,
                 "SERVICE_UNAVAILABLE",
                 recovery="transient",
-                message_substr="unreachable",
             )
 
     def test_package_not_found_lenient_logs_error(self, integration_db):
@@ -1866,7 +1862,7 @@ class TestSyncExtensions:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-            with pytest.raises(AdCPNotFoundError, match="Package not found"):
+            with pytest.raises(AdCPNotFoundError):
                 env.call_impl(
                     creatives=[_make_creative_asset(creative_id="c1", name="OK")],
                     assignments={"c1": ["PKG-GONE"]},
@@ -1892,7 +1888,7 @@ class TestSyncExtensions:
             pkg_id = pkg.package_id
 
             # Creative uses video_30s format (different from product's display)
-            with pytest.raises(AdCPCreativeRejectedError, match="not supported"):
+            with pytest.raises(AdCPCreativeRejectedError):
                 env.call_impl(
                     creatives=[
                         _make_creative_asset(

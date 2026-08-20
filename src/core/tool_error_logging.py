@@ -461,8 +461,10 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     # implicit one: an unknown code becomes INTERNAL_ERROR because that is what
     # it means, not because it is what a default happened to be.
     resolved_code = _CODE_BY_VALUE.get(error_code, AppErrorCode.INTERNAL_ERROR)
-    synthetic = AdCPError.synthesize(
-        error_message,
+    # error_message is deliberately dropped: a plain ToolError's text has no
+    # provenance guarantee, and the resolved code's table sentence is what the buyer
+    # should see. The raw text is still logged server-side above.
+    synthetic = AdCPError(
         error_code=resolved_code,
         status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
         recovery=recovery,

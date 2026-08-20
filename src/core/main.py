@@ -303,8 +303,8 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
     # (salesagent-40kk).
     if not identity or not identity.tenant_id:
         if not identity or not identity.auth_token:
-            raise AdCPAuthRequiredError("No tenant configuration found")
-        raise AdCPAuthenticationError("No tenant configuration found")
+            raise AdCPAuthRequiredError()
+        raise AdCPAuthenticationError()
 
     if identity.tenant and isinstance(identity.tenant, dict):
         set_current_tenant(identity.tenant)
@@ -312,8 +312,8 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
         tenant_config = get_current_tenant()
         if not tenant_config:
             if not identity.auth_token:
-                raise AdCPAuthRequiredError("No tenant configuration found")
-            raise AdCPAuthenticationError("No tenant configuration found")
+                raise AdCPAuthRequiredError()
+            raise AdCPAuthenticationError()
 
     return StrategyManager(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
 

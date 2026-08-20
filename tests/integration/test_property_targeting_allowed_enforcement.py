@@ -118,8 +118,6 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
         await _create_media_buy_impl(req=request, identity=_make_identity())
 
     exc = excinfo.value
-    assert "prod_no_property_targeting" in exc.message
-    assert "property_targeting_allowed" in exc.message
     assert exc.error_code == "VALIDATION_ERROR"
     assert exc.field == "packages[].targeting_overlay.property_list"
     assert exc.details is not None
@@ -161,7 +159,6 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     assert not isinstance(response, CreateMediaBuyError), (
         f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     )
-    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 @pytest.mark.requires_db
@@ -198,7 +195,6 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
     assert not isinstance(response, CreateMediaBuyError), (
         f"Expected success but got CreateMediaBuyError: {[err.message for err in (response.errors or [])]}"
     )
-    assert all("property_targeting_allowed" not in err.message for err in (response.errors or []))
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +246,6 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
     exc = excinfo.value
     assert exc.error_code == "VALIDATION_ERROR"
     assert exc.field == "packages[].targeting_overlay.property_list"
-    assert "property_targeting_allowed" in exc.message
     assert exc.details is not None and "violations" in exc.details
 
 

@@ -123,7 +123,6 @@ class TestBudgetFormatCompatibility:
             PackageRequest(product_id="prod_1", budget=None, pricing_option_id="test_pricing")
 
         # Verify it's a budget validation error
-        assert "budget" in str(exc_info.value).lower()
 
 
 class TestBudgetExtractionHelpers:

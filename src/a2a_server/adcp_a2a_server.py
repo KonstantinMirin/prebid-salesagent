@@ -58,13 +58,13 @@ from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
+from src.core.errors.codes import AppErrorCode
 from src.core.exceptions import (
     AUTH_MISSING_SUGGESTION,
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
-    AdCPInternalError,
     AdCPValidationError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
@@ -128,13 +128,23 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
+def _require_params(params: dict, required: list[str], *, field: str | None = None) -> None:
+    """Refuse a skill invocation missing required parameters.
+
+    Three handlers carried an identical copy of this check; one helper keeps them from
+    drifting apart (CLAUDE.md treats duplicated logic as a defect).
+    """
+    missing = [p for p in required if p not in params]
+    if missing:
+        raise AdCPValidationError(details={"missing_params": missing}, field=field)
+
+
 def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
     """Wrap an SSRF rejection as A2A InvalidParamsError with AdCP ``data`` envelope."""
     if isinstance(exc, AdCPValidationError):
         adcp_err = exc
     else:
         adcp_err = AdCPValidationError(
-            str(exc),
             field="push_notification_config.url",
             suggestion=webhook_ssrf_suggestion(),
             recovery="correctable",
@@ -401,9 +411,7 @@ class AdCPRequestHandler(RequestHandler):
         if require_valid_token and not auth_token:
             raise InvalidRequestError(
                 message="Missing authentication token",
-                data=build_two_layer_error_envelope(
-                    AdCPAuthRequiredError("Missing authentication token", suggestion=AUTH_MISSING_SUGGESTION)
-                ),
+                data=build_two_layer_error_envelope(AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)),
             )
 
         # Extract testing context from A2A request headers (same as MCP does)
@@ -432,11 +440,7 @@ class AdCPRequestHandler(RequestHandler):
                 # error-code.json.
                 raise InvalidRequestError(
                     message="Authentication token is invalid or expired.",
-                    data=build_two_layer_error_envelope(
-                        AdCPAuthRequiredError(
-                            "Authentication token is invalid or expired.", suggestion=AUTH_MISSING_SUGGESTION
-                        )
-                    ),
+                    data=build_two_layer_error_envelope(AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)),
                 )
 
             if not identity.tenant:
@@ -705,7 +709,6 @@ class AdCPRequestHandler(RequestHandler):
                     message="Missing authentication token - Bearer token required in Authorization header",
                     data=build_two_layer_error_envelope(
                         AdCPAuthRequiredError(
-                            "Authentication required - Bearer token required in Authorization header",
                             suggestion=AUTH_MISSING_SUGGESTION,
                         )
                     ),
@@ -826,8 +829,12 @@ class AdCPRequestHandler(RequestHandler):
                         # which always sets error_envelope. A failed result without it
                         # is a contract violation — fail loud rather than silently emit
                         # the legacy flat ``{"error": ...}`` shape.
-                        raise AdCPInternalError(
-                            f"Skill result for {res.get('skill', '?')!r} is marked failed but carries no error_envelope"
+                        raise AdCPError(
+                            error_code=AppErrorCode.INTERNAL_ERROR,
+                            internal_detail=(
+                                f"Skill result for {res.get('skill', '?')!r} is marked failed "
+                                "but carries no error_envelope"
+                            ),
                         )
 
                     # Generate human-readable text from response __str__()
@@ -1595,11 +1602,7 @@ class AdCPRequestHandler(RequestHandler):
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
                 message="Authentication required for skill invocation",
-                data=build_two_layer_error_envelope(
-                    AdCPAuthRequiredError(
-                        "Authentication required for skill invocation", suggestion=AUTH_MISSING_SUGGESTION
-                    )
-                ),
+                data=build_two_layer_error_envelope(AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)),
             )
 
         # Map skill names to handlers. Handler signatures are heterogeneous
@@ -1771,13 +1774,7 @@ class AdCPRequestHandler(RequestHandler):
         # routes through `_build_failed_skill_result` -> `_build_error_envelope`, producing
         # the single two-layer envelope wire shape. Returning a custom dict here bypasses
         # the envelope builder and erases the real code on the buyer side.
-        required_params = ["brand", "packages", "start_time", "end_time"]
-        missing_params = [p for p in required_params if p not in params]
-        if missing_params:
-            raise AdCPValidationError(
-                f"Missing required AdCP parameters: {missing_params}",
-                suggestion=f"Required: {required_params}",
-            )
+        _require_params(params, ["brand", "packages", "start_time", "end_time"])
 
         # Validate via the shared boundary so every A2A handler emits the same
         # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
@@ -1827,7 +1824,6 @@ class AdCPRequestHandler(RequestHandler):
         # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
         if "creatives" not in parameters:
             raise AdCPValidationError(
-                "Missing required parameter: 'creatives'",
                 suggestion="Required: ['creatives']",
             )
 
@@ -1907,14 +1903,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Map A2A parameters - format_id, content_uri, and name are required.
         # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-        required_params = ["format_id", "content_uri", "name"]
-        missing_params = [param for param in required_params if param not in parameters]
-
-        if missing_params:
-            raise AdCPValidationError(
-                f"Missing required parameters: {missing_params}",
-                suggestion=f"Required: {required_params}",
-            )
+        _require_params(parameters, ["format_id", "content_uri", "name"])
 
         # TODO: Implement create_creative tool
         # Call core function with individual parameters
@@ -1943,14 +1932,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Map A2A parameters - media_buy_id, package_id, and creative_id are required.
         # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-        required_params = ["media_buy_id", "package_id", "creative_id"]
-        missing_params = [param for param in required_params if param not in parameters]
-
-        if missing_params:
-            raise AdCPValidationError(
-                f"Missing required parameters: {missing_params}",
-                suggestion=f"Required: {required_params}",
-            )
+        _require_params(parameters, ["media_buy_id", "package_id", "creative_id"])
 
         # TODO: Implement assign_creative tool
         # identity already resolved at transport boundary
@@ -2116,7 +2098,6 @@ class AdCPRequestHandler(RequestHandler):
         # routes it through the two-layer envelope, matching the create_media_buy skill.
         if "media_buy_id" not in params:
             raise AdCPValidationError(
-                "Missing required parameter: media_buy_id",
                 suggestion="Provide the media_buy_id of the media buy to update",
             )
 
@@ -2312,10 +2293,7 @@ class AdCPRequestHandler(RequestHandler):
         flows to the outer ``on_message_send`` error handler which attaches
         the proper two-layer envelope to the failed Task artifact.
         """
-        raise AdCPCapabilityNotSupportedError(
-            "Natural-language create_media_buy is not supported. "
-            "Invoke the explicit ``create_media_buy`` skill with AdCP-spec parameters."
-        )
+        raise AdCPCapabilityNotSupportedError()
 
 
 def create_agent_card() -> AgentCard:

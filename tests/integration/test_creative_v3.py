@@ -557,7 +557,7 @@ class TestFormatCompatibility:
         )
 
         # Now try to assign it to the video-only package in strict mode
-        with pytest.raises(AdCPCreativeRejectedError, match="not supported by product"):
+        with pytest.raises(AdCPCreativeRejectedError):
             sync_creatives_raw(
                 creatives=[_make_creative_dict(creative_id="c_display")],
                 assignments={"c_display": ["pkg_video"]},

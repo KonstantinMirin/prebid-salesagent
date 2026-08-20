@@ -378,8 +378,12 @@ class ContextManager(DatabaseManager):
             # machine-actionable correction context across the rewrite.
             wire_code = source.wire_error_code
             if wire_code not in WIRE_STANDARD_CODES:
-                source = AdCPError.synthesize(
-                    source.message or str(source),
+                # The base form, not AdCPServiceUnavailableError: naming the code on
+                # the base keeps status 500, which is what the previous path produced.
+                # The source's sentence is deliberately NOT carried: the rewritten code
+                # owns the text, so a message from the pre-rewrite code cannot disagree
+                # with the code the subscriber receives.
+                source = AdCPError(
                     error_code=ErrorCode.SERVICE_UNAVAILABLE,
                     recovery="terminal",
                     details=source.details,

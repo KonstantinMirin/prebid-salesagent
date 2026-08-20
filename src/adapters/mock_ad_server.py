@@ -348,10 +348,13 @@ class MockAdServer(AdServerAdapter):
         details = test_behavior.get("error_details")
         suggestion = (details or {}).pop("suggestion", None) if isinstance(details, dict) else None
         raise AdCPAdapterError(
-            test_behavior.get("error_message", "Test adapter failure"),
             recovery=test_behavior.get("recovery", "transient"),
             suggestion=suggestion or "Retry the operation or contact ad server support",
             details=details or None,
+            # A fault-injection knob must still DO something (CLAUDE.md: no quiet
+            # failures). The injected text is a server-side diagnostic, so it rides
+            # internal_detail rather than being dropped or put on the buyer's wire.
+            internal_detail=test_behavior.get("error_message"),
         )
 
     def _validate_targeting(self, targeting_overlay):
@@ -568,11 +571,11 @@ class MockAdServer(AdServerAdapter):
         if scenario:
             # Handle error simulation
             if scenario.error_message:
-                raise AdCPAdapterError(scenario.error_message)
+                raise AdCPAdapterError(internal_detail=scenario.error_message)
 
             # Handle rejection
             if scenario.should_reject:
-                raise AdCPMediaBuyRejectedError(f"Media buy rejected: {scenario.rejection_reason or 'Test rejection'}")
+                raise AdCPMediaBuyRejectedError(internal_detail=scenario.rejection_reason)
 
             # Handle question asking (return pending with question)
             if scenario.should_ask_question:
@@ -615,42 +618,26 @@ class MockAdServer(AdServerAdapter):
             if targeting:
                 # Mock adapter mirrors GAM behavior - these targeting types are not supported
                 if getattr(targeting, "device_type_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        f"Device targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for device types: {targeting.device_type_any_of}."
-                    )
+                    raise AdCPCapabilityNotSupportedError(details={"device_type_any_of": targeting.device_type_any_of})
 
                 if getattr(targeting, "os_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        f"OS targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for OS types: {targeting.os_any_of}."
-                    )
+                    raise AdCPCapabilityNotSupportedError(details={"os_any_of": targeting.os_any_of})
 
                 if getattr(targeting, "browser_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        f"Browser targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for browsers: {targeting.browser_any_of}."
-                    )
+                    raise AdCPCapabilityNotSupportedError(details={"browser_any_of": targeting.browser_any_of})
 
                 if getattr(targeting, "content_cat_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        f"Content category targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for categories: {targeting.content_cat_any_of}."
-                    )
+                    raise AdCPCapabilityNotSupportedError(details={"content_cat_any_of": targeting.content_cat_any_of})
 
                 if getattr(targeting, "keywords_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(
-                        f"Keyword targeting requested but not supported. "
-                        f"Cannot fulfill buyer contract for keywords: {targeting.keywords_any_of}."
-                    )
+                    raise AdCPCapabilityNotSupportedError(details={"keywords_any_of": targeting.keywords_any_of})
 
         # GAM-like validation (based on real GAM behavior)
         validation_errors = self.validate_media_buy_request(
             request, packages, start_time, end_time, package_pricing_info
         )
         if validation_errors:
-            error_message = "[" + ", ".join(validation_errors) + "]"
-            raise AdCPValidationError(error_message)
+            raise AdCPValidationError(details={"validation_errors": validation_errors})
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -736,7 +723,7 @@ class MockAdServer(AdServerAdapter):
         approved, rejection_reason = self._simulate_approval()
         if not approved:
             self.log(f"❌ Simulated rejection: {rejection_reason}")
-            raise AdCPMediaBuyRejectedError(f"Media buy rejected: {rejection_reason}")
+            raise AdCPMediaBuyRejectedError(details={"rejection_reason": rejection_reason})
 
         # Continue with immediate processing
         self.log("✅ SYNC delay completed, proceeding with creation")
@@ -806,16 +793,15 @@ class MockAdServer(AdServerAdapter):
 
             # Check for forced errors
             if self._should_force_error("budget_exceeded"):
-                raise AdCPBudgetExhaustedError("Simulated error: Campaign budget exceeds available funds")
+                raise AdCPBudgetExhaustedError()
 
             if self._should_force_error("targeting_invalid"):
                 raise AdCPValidationError(
-                    "Simulated error: Invalid targeting parameters",
                     field="targeting",
                 )
 
             if self._should_force_error("inventory_unavailable"):
-                raise AdCPInventoryUnavailableError("Simulated error: Requested inventory not available")
+                raise AdCPInventoryUnavailableError()
 
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8
@@ -1046,8 +1032,9 @@ class MockAdServer(AdServerAdapter):
 
         if rejected_assets and not approved_assets:
             # All rejected
-            reasons = [reason if reason else "unknown" for _, reason in rejected_assets]
-            raise AdCPCreativeRejectedError(f"All creatives rejected: {', '.join(reasons)}")
+            raise AdCPCreativeRejectedError(
+                details={"rejection_reasons": [reason if reason else "unknown" for _, reason in rejected_assets]}
+            )
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones
             for asset, reason in rejected_assets:
@@ -1091,7 +1078,7 @@ class MockAdServer(AdServerAdapter):
             self.log(f"Would return: All {len(assets)} creatives with status 'approved'")
         else:
             if media_buy_id not in self._media_buys:
-                raise AdCPMediaBuyNotFoundError(f"Media buy {media_buy_id} not found.")
+                raise AdCPMediaBuyNotFoundError(details={"media_buy_id": media_buy_id})
 
             self._media_buys[media_buy_id]["creatives"].extend(assets)
             self.log(f"✓ Successfully uploaded {len(assets)} creatives")
@@ -1136,7 +1123,7 @@ class MockAdServer(AdServerAdapter):
     def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
         """Simulates checking the status of a media buy."""
         if media_buy_id not in self._media_buys:
-            raise AdCPMediaBuyNotFoundError(f"Media buy {media_buy_id} not found.")
+            raise AdCPMediaBuyNotFoundError(details={"media_buy_id": media_buy_id})
 
         buy = self._media_buys[media_buy_id]
         start_date = buy["start_time"]
@@ -1202,7 +1189,7 @@ class MockAdServer(AdServerAdapter):
         if self.strategy_context and hasattr(self.strategy_context, "force_error"):
             if self.strategy_context.force_error == "platform_error":
                 self.log("[red]Simulating platform error[/red]")
-                raise AdCPServiceUnavailableError("Platform connectivity error (simulated)")
+                raise AdCPServiceUnavailableError()
             elif self.strategy_context.force_error == "budget_exceeded":
                 self.log("[yellow]Simulating budget exceeded scenario[/yellow]")
             elif self.strategy_context.force_error == "low_delivery":
@@ -1262,7 +1249,7 @@ class MockAdServer(AdServerAdapter):
             # Check for test scenario outage simulation
             if test_scenario and test_scenario.simulate_outage:
                 self.log(f"🚨 Test Scenario: Simulating platform outage on day {current_day}")
-                raise AdCPServiceUnavailableError(f"Simulated platform outage on day {current_day} (test scenario)")
+                raise AdCPServiceUnavailableError(details={"current_day": current_day})
 
             if elapsed_duration <= 0:
                 # Campaign hasn't started

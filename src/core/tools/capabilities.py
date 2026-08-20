@@ -438,7 +438,6 @@ def _get_adcp_capabilities_impl(
         with TenantConfigUoW(tenant_id) as uow:
             if uow.tenant_config is None:
                 raise AdCPConfigurationError(
-                    "TenantConfigUoW did not initialize its tenant_config repository.",
                     recovery="terminal",
                 )
             for partner in uow.tenant_config.list_publisher_partners():

@@ -134,7 +134,7 @@ class TestGAMCostTypeMapping:
         from src.core.exceptions import AdCPCapabilityNotSupportedError
 
         for unsupported in ["cpcv", "cpv", "cpp", "invalid"]:
-            with pytest.raises(AdCPCapabilityNotSupportedError, match="not supported by GAM adapter"):
+            with pytest.raises(AdCPCapabilityNotSupportedError):
                 PricingCompatibility.get_gam_cost_type(unsupported)
 
 

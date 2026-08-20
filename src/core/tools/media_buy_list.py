@@ -105,7 +105,6 @@ def _get_media_buys_impl(
 
     if req.account is not None or req.account_id is not None:
         raise AdCPCapabilityNotSupportedError(
-            "account filtering is not yet supported",
             suggestion="Omit account/account_id from the request; the seller infers the account from the auth token.",
         )
 
@@ -467,7 +466,7 @@ def _resolve_status_filter(
         # 500. (A dedicated STATUS_FILTER_INVALID_VALUE code is a separate,
         # unimplemented gap; see the xfailed boundary-status-filter rows.)
         raise AdCPValidationError(
-            f"Invalid status_filter value: {e}",
+            internal_detail=e,
             field="status_filter",
             suggestion="status_filter values must be valid media-buy statuses",
         ) from e
