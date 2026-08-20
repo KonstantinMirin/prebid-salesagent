@@ -3575,6 +3575,11 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
         xfail_reason="T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652",
     ),
+    # When the dormant all-fields boundary scenarios are wired, their Then must
+    # assert value-when-present, not key-presence-of-13: list_creatives drops a
+    # corrupt tags/assets blob to absent and collapses an empty stored tags list
+    # to omission (both conformant at 3.1.1) -- see the #1508 reconciliation note
+    # in test_uc018_list_creatives.py's module docstring.
     EnvRoute(
         tag="uc018-not-wired",
         when=_uc("UC-018", lambda m: True),
