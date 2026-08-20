@@ -29,7 +29,7 @@ TESTS_DIR = REPO_ROOT / "tests"
 # proving real-HTTP wiring distinct from the harness's in-process capture
 # (test_a2a_wire_integer_serialization.py).
 ALLOWLIST: set[tuple[str, int]] = {
-    ("tests/unit/test_error_envelope.py", 369),
+    ("tests/unit/test_error_envelope.py", 370),
     ("tests/integration/test_a2a_wire_integer_serialization.py", 41),
 }
 

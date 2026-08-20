@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import Any
 
-from adcp import Error, create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 # FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
@@ -16,7 +16,7 @@ from src.admin.utils import echo_context, require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
-from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 

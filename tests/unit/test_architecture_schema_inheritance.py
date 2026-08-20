@@ -14,6 +14,8 @@ beads: salesagent-v0kb (structural-guard epic)
 
 import importlib
 import inspect
+import types
+import typing
 
 import pytest
 
@@ -109,6 +111,34 @@ def _get_class_own_field_names(class_name: str) -> set[str]:
                     _CLASS_OWN_FIELDS[node.name] = fields
 
     return _CLASS_OWN_FIELDS.get(class_name, set())
+
+
+def _annotation_members(annotation: object) -> list[object]:
+    """Union members of an annotation, or the annotation itself."""
+    origin = typing.get_origin(annotation)
+    if origin in (typing.Union, types.UnionType):
+        return list(typing.get_args(annotation))
+    return [annotation]
+
+
+def _is_strict_narrowing(local: object, library: object) -> bool:
+    """True when every value the LOCAL field admits is already a valid LIBRARY value.
+
+    A narrowing can only refuse more than its parent, never admit something new, so
+    it cannot drift from the source the way a copied declaration can. Anything that
+    is not provably a narrowing stays a violation — including a widening, an
+    optional-ization (``str`` -> ``str | None``: ``NoneType`` is not a ``str``), and a
+    substitution of an unrelated model.
+    """
+    if local == library:
+        return False
+    lib_members = _annotation_members(library)
+    if not all(isinstance(m, type) for m in lib_members):
+        return False
+    return all(
+        isinstance(m, type) and any(issubclass(m, lib) for lib in lib_members)  # type: ignore[arg-type]
+        for m in _annotation_members(local)
+    )
 
 
 class TestSchemaInheritance:
@@ -274,11 +304,26 @@ class TestSchemaInheritance:
             local_own_annotations = _get_class_own_field_names(local_name)
 
             for field_name in local_own_annotations & lib_fields:
-                if (local_name, field_name) not in KNOWN_OVERRIDES:
-                    violations.append(
-                        f"{local_name}.{field_name} redefines field from "
-                        f"{lib_type.__name__} — inherit instead of redeclare"
-                    )
+                if (local_name, field_name) in KNOWN_OVERRIDES:
+                    continue
+                # RESTATING a library field is the defect: a duplicated declaration
+                # is free to drift from the source it copied. STRICTLY NARROWING one
+                # is not — every value the local field admits is already a valid
+                # library value, so it cannot drift, only refuse more. That is how a
+                # permissive wire type (``code: str``, open by spec) is made to carry
+                # this seller's actual vocabulary.
+                #
+                # NARROWING only, never "any retype": widening a type, making a
+                # required field optional, or substituting an unrelated model are all
+                # retypes that this guard must keep flagging.
+                lib_annotation = lib_type.model_fields[field_name].annotation
+                local_annotation = local_cls.model_fields[field_name].annotation
+                if _is_strict_narrowing(local_annotation, lib_annotation):
+                    continue
+                violations.append(
+                    f"{local_name}.{field_name} restates field from "
+                    f"{lib_type.__name__} with the same type — inherit instead of redeclare"
+                )
 
         assert not violations, "Schema classes redefining library fields (should inherit):\n" + "\n".join(
             f"  - {v}" for v in violations

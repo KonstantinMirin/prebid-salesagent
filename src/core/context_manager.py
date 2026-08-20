@@ -9,7 +9,7 @@ from typing import Any
 
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
-from adcp.types import McpWebhookPayload
+from adcp.types import ErrorCode, McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
 from pydantic import BaseModel
 from rich.console import Console
@@ -380,7 +380,7 @@ class ContextManager(DatabaseManager):
             if wire_code not in WIRE_STANDARD_CODES:
                 source = AdCPError.synthesize(
                     source.message or str(source),
-                    error_code="SERVICE_UNAVAILABLE",
+                    error_code=ErrorCode.SERVICE_UNAVAILABLE,
                     recovery="terminal",
                     details=source.details,
                     field=source.field,

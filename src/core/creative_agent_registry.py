@@ -30,7 +30,6 @@ from typing import Any
 from adcp import ADCPMultiAgentClient, ListCreativeFormatsRequest
 from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
-from adcp.types import Error as AdCPResponseError
 from pydantic import ValidationError
 
 from src.core.exceptions import (
@@ -39,6 +38,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
 )
 from src.core.format_cache import load_reference_formats
+from src.core.schemas import Error as AdCPResponseError
 from src.core.schemas import Format, FormatId, canonical_agent_url
 
 

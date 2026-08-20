@@ -299,10 +299,9 @@ class RestE2EDispatcher:
                 # No wire_error_envelope: there is no structured body to expose, and
                 # the INTERNAL_ERROR/5xx shape lets the "invalid" Then-step tell a
                 # server crash apart from a real validation rejection (#1420).
-                from src.core.exceptions import AdCPError
 
                 body_text = response.text or "(empty body)"
-                error = AdCPError(
+                error = AdCPInternalError(
                     f"HTTP {response.status_code}: {body_text}",
                     details={"status_code": response.status_code, "raw_body": body_text},
                 )

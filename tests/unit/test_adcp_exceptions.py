@@ -22,9 +22,9 @@ class TestExceptionHierarchy:
 
     def test_base_exception_exists(self):
         """AdCPError base class must exist."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPInternalError
 
-        exc = AdCPError("test error")
+        exc = AdCPInternalError("test error")
         assert str(exc) == "test error"
         assert isinstance(exc, Exception)
 
@@ -220,9 +220,9 @@ class TestRecoveryClassification:
         enumMetadata. This is the normalize_to_adcp_error crash-wrap path —
         buyers may retry a generic server failure.
         """
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPInternalError
 
-        exc = AdCPError("something broke")
+        exc = AdCPInternalError("something broke")
         assert exc.recovery == "transient"
 
     def test_validation_error_defaults_to_correctable(self):
@@ -750,27 +750,27 @@ class TestErrorCodeWireTranslation:
 
     def test_wire_error_code_property_translates(self):
         """``wire_error_code`` exposes the translated code on an instance."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPInternalError
 
         # Override on an instance — does NOT create a new subclass, so this
         # avoids tripping the AdCPError subclass compliance guard.
-        exc = AdCPError("over budget")
+        exc = AdCPInternalError("over budget")
         exc.error_code = "BUDGET_CEILING_EXCEEDED"
         assert exc.wire_error_code == "BUDGET_EXCEEDED"
 
     def test_to_dict_preserves_raw_error_code(self):
         """Model serialization preserves the raw ``error_code`` (translation at boundary)."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPInternalError
 
-        exc = AdCPError("over budget")
+        exc = AdCPInternalError("over budget")
         exc.error_code = "BUDGET_CEILING_EXCEEDED"
         assert exc.to_dict()["error_code"] == "BUDGET_CEILING_EXCEEDED"
 
     def test_to_adcp_error_preserves_raw_error_code(self):
         """Model envelope preserves the raw ``error_code`` (translation at boundary)."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPInternalError
 
-        exc = AdCPError("slow down")
+        exc = AdCPInternalError("slow down")
         exc.error_code = "RATE_LIMIT_EXCEEDED"
         assert exc.to_adcp_error()["errors"][0]["code"] == "RATE_LIMIT_EXCEEDED"
 

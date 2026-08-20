@@ -29,6 +29,16 @@ KNOWN_VIOLATIONS = {
     ("src/core/tool_error_logging.py", "handle_tool_error"),
 }
 
+#: ``synthesize`` IS the sanctioned override mechanism, so its own body necessarily
+#: passes ``error_code=`` — counting that as a violation would make the mechanism a
+#: violation of itself. Excluded by DEFINITION SITE, not by allowlist: the allowlist
+#: pins CALLERS and must keep doing so.
+#:
+#: This became visible only when synthesize stopped constructing ``cls(...)`` and named
+#: a concrete class instead. The guard keys on the callee NAME, so ``cls(...)`` was
+#: invisible to it — the same name-blindness that hides an aliased advisory site.
+_MECHANISM_DEFINITION = ("src/core/exceptions.py", "synthesize")
+
 
 def _func_targets_adcp_error_or_synthesize(func: ast.expr) -> bool:
     """True if a Call's func is an AdCP*Error constructor or a .synthesize() call."""
@@ -101,7 +111,7 @@ class TestNoErrorCodeKwargInImpl:
         new_violations = [
             f"  {rel}:{lineno} in {func}()"
             for rel, func, lineno in _find_error_code_kwargs()
-            if (rel, func) not in KNOWN_VIOLATIONS
+            if (rel, func) not in KNOWN_VIOLATIONS and (rel, func) != _MECHANISM_DEFINITION
         ]
         assert not new_violations, (
             f"Found {len(new_violations)} NEW error_code= site(s) on AdCP*Error/synthesize.\n"
@@ -111,7 +121,7 @@ class TestNoErrorCodeKwargInImpl:
 
     def test_known_violations_not_stale(self):
         """Every allowlisted (file, function) must still contain a sanctioned site."""
-        actual = {(rel, func) for rel, func, _ in _find_error_code_kwargs()}
+        actual = {(rel, func) for rel, func, _ in _find_error_code_kwargs()} - {_MECHANISM_DEFINITION}
         assert_violations_match_allowlist(
             actual,
             KNOWN_VIOLATIONS,
@@ -120,7 +130,7 @@ class TestNoErrorCodeKwargInImpl:
 
     def test_violation_count_capped_at_two(self):
         """Exactly two sanctioned error_code= sites exist (the synthesize() callers)."""
-        all_sites = {(rel, func) for rel, func, _ in _find_error_code_kwargs()}
+        all_sites = {(rel, func) for rel, func, _ in _find_error_code_kwargs()} - {_MECHANISM_DEFINITION}
         msg = f"error_code= sites changed.\nFound: {sorted(all_sites)}\nAllowlist: {sorted(KNOWN_VIOLATIONS)}"
         assert all_sites == KNOWN_VIOLATIONS, msg
 

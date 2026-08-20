@@ -16,7 +16,7 @@ import pytest
 
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPError,
+    AdCPInternalError,
     AdCPNotFoundError,
     AdCPValidationError,
 )
@@ -134,7 +134,7 @@ class TestExtractErrorInfoAdCPError:
         """
         from src.core.tool_error_logging import extract_error_info
 
-        exc = AdCPError("something broke")
+        exc = AdCPInternalError("something broke")
         code, message, recovery = extract_error_info(exc)
         assert code == "INTERNAL_ERROR"
         assert message == "something broke"
@@ -815,7 +815,6 @@ class TestToDictRecoveryField:
             AdCPAdapterError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
-            AdCPError,
             AdCPGoneError,
             AdCPNotFoundError,
             AdCPRateLimitError,
@@ -827,7 +826,7 @@ class TestToDictRecoveryField:
             # Recovery follows the wire code (salesagent-nr2q): base
             # AdCPError→SERVICE_UNAVAILABLE=transient,
             # AdCPNotFoundError→INVALID_REQUEST=correctable.
-            (AdCPError("internal"), "transient"),
+            (AdCPInternalError("internal"), "transient"),
             (AdCPValidationError("bad field"), "correctable"),
             (AdCPNotFoundError("missing"), "correctable"),
             (AdCPConflictError("duplicate"), "transient"),
@@ -971,7 +970,6 @@ class TestRecoveryRoundtrip:
             AdCPAdapterError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
-            AdCPError,
             AdCPGoneError,
             AdCPNotFoundError,
             AdCPRateLimitError,
@@ -986,7 +984,7 @@ class TestRecoveryRoundtrip:
         cases = [
             # Recovery matches the pinned classification of the WIRE code
             # (salesagent-nr2q): SERVICE_UNAVAILABLE=transient, INVALID_REQUEST=correctable.
-            (AdCPError, "internal", "SERVICE_UNAVAILABLE", "transient"),
+            (AdCPInternalError, "internal", "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", "INVALID_REQUEST", "correctable"),
             (AdCPConflictError, "dup", "CONFLICT", "transient"),
@@ -1036,7 +1034,6 @@ class TestRecoveryRoundtrip:
             AdCPAdapterError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
-            AdCPError,
             AdCPGoneError,
             AdCPNotFoundError,
             AdCPRateLimitError,
@@ -1046,7 +1043,7 @@ class TestRecoveryRoundtrip:
 
         cases = [
             # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q).
-            (AdCPError, "internal", "transient"),
+            (AdCPInternalError, "internal", "transient"),
             (AdCPValidationError, "bad", "correctable"),
             (AdCPNotFoundError, "missing", "correctable"),
             (AdCPConflictError, "dup", "transient"),
@@ -1078,7 +1075,6 @@ class TestRecoveryRoundtrip:
             AdCPAdapterError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
-            AdCPError,
             AdCPGoneError,
             AdCPNotFoundError,
             AdCPRateLimitError,
@@ -1091,7 +1087,7 @@ class TestRecoveryRoundtrip:
         # class directly, not from the wire code translation).
         cases = [
             # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q).
-            (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "transient"),
+            (AdCPInternalError, "internal", 500, "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "correctable"),
             (AdCPConflictError, "dup", 409, "CONFLICT", "transient"),

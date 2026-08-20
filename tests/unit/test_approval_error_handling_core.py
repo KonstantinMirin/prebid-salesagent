@@ -42,7 +42,7 @@ class TestCreateMediaBuyErrorHandling:
         error_response = CreateMediaBuyError(
             errors=[
                 Error(code="VALIDATION_ERROR", message="Budget exceeds daily limit"),
-                Error(code="INVENTORY_ERROR", message="Requested inventory not available"),
+                Error(code="SERVICE_UNAVAILABLE", message="Requested inventory not available"),
             ]
         )
 
@@ -50,7 +50,7 @@ class TestCreateMediaBuyErrorHandling:
         assert hasattr(error_response, "errors")
         assert len(error_response.errors) == 2
         assert error_response.errors[0].code == "VALIDATION_ERROR"
-        assert error_response.errors[1].code == "INVENTORY_ERROR"
+        assert error_response.errors[1].code == "SERVICE_UNAVAILABLE"
 
         # CreateMediaBuyError does NOT have 'media_buy_id' field
         assert not hasattr(error_response, "media_buy_id")

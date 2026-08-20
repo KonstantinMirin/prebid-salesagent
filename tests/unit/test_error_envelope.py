@@ -16,6 +16,7 @@ import json
 
 from src.core.exceptions import (
     AdCPError,
+    AdCPInternalError,
     AdCPNotFoundError,
     AdCPValidationError,
     build_two_layer_error_envelope,
@@ -46,7 +47,7 @@ class TestEnvelopeShape:
         spec STANDARD code). AUTH_REQUIRED passes through unchanged — it is a
         translation target, not a key, in ERROR_CODE_MAPPING.
         """
-        exc = AdCPError("resource gone")
+        exc = AdCPInternalError("resource gone")
         exc.error_code = "NOT_FOUND"
         envelope = build_two_layer_error_envelope(exc)
         assert envelope["adcp_error"]["code"] == "INVALID_REQUEST"
@@ -318,11 +319,11 @@ class TestTypedSubclasses:
         for class_name, expected_code in substrate.items():
             cls = getattr(exc_mod, class_name, None)
             assert cls is not None, f"{class_name} missing from src.core.exceptions"
-            # _default_error_code is the class-level identity slot
+            # _code is the class-level identity slot
             # (option-A refactor, salesagent-fnk9). error_code is an instance
             # attribute set in __init__ from this default.
-            msg = f"{class_name}._default_error_code={cls._default_error_code!r}, expected {expected_code!r}"
-            assert cls._default_error_code == expected_code, msg
+            msg = f"{class_name}._code={cls._code!r}, expected {expected_code!r}"
+            assert cls._code == expected_code, msg
             assert expected_code in STANDARD_ERROR_CODES, f"{expected_code!r} missing from STANDARD_ERROR_CODES"
 
 

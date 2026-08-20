@@ -21,7 +21,7 @@ class TestErrorCodeStatusTableDerivation:
     """The status table is derived from class attributes, not hand-edited."""
 
     def test_every_adcp_error_subclass_present_in_status_table(self):
-        """Pin: any ``AdCPError`` subclass with ``_default_error_code``+``_default_status_code`` is in the table.
+        """Pin: any ``AdCPError`` subclass with ``_code``+``_default_status_code`` is in the table.
 
         Mutation test: removing either attribute from a subclass breaks this assertion
         and forces a re-evaluation of why that subclass exists. The "derived from
@@ -38,14 +38,12 @@ class TestErrorCodeStatusTableDerivation:
         table = _build_error_code_to_status()
         missing: list[str] = []
         for cls in AdCPError.iter_concrete_subclasses():
-            code = getattr(cls, "_default_error_code", None)
+            code = getattr(cls, "_code", None)
             status = getattr(cls, "_default_status_code", None)
             if not code or not status:
                 continue
             if code not in table:
-                missing.append(
-                    f"  {cls.__name__}: _default_error_code={code!r} _default_status_code={status} not in table"
-                )
+                missing.append(f"  {cls.__name__}: _code={code!r} _default_status_code={status} not in table")
         assert not missing, (
             "AdCPError subclasses are not represented in _ERROR_CODE_TO_STATUS — "
             "drift between class _default_* attributes and the derived table:\n" + "\n".join(missing)

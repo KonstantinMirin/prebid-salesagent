@@ -297,16 +297,16 @@ class TestSyncCreativesResponseShape:
     def test_sync_response_failed_creative_has_errors(self):
         """Failed creative includes errors list."""
         from adcp.types import CreativeAction
-        from adcp.types import Error as AdCPErrorDetail
 
+        from src.core.schemas import Error as AdCPErrorDetail
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
         result = SyncCreativeResult(
             creative_id="creative_003",
             action=CreativeAction.failed,
             errors=[
-                AdCPErrorDetail(code="format_error", message="Format not supported"),
-                AdCPErrorDetail(code="asset_error", message="Missing required asset"),
+                AdCPErrorDetail(code="FORMAT_NOT_FOUND", message="Format not supported"),
+                AdCPErrorDetail(code="FORMAT_NOT_FOUND", message="Missing required asset"),
             ],
         )
         resp = SyncCreativesResponse(creatives=[result], dry_run=False)  # type: ignore[call-arg]
@@ -898,8 +898,8 @@ class TestSerializationConsistency:
         import json
 
         from adcp.types import CreativeAction
-        from adcp.types import Error as AdCPErrorDetail
 
+        from src.core.schemas import Error as AdCPErrorDetail
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 
         resp = SyncCreativesResponse(  # type: ignore[call-arg]
@@ -911,7 +911,7 @@ class TestSerializationConsistency:
                 SyncCreativeResult(
                     creative_id="c2",
                     action=CreativeAction.failed,
-                    errors=[AdCPErrorDetail(code="format_error", message="Bad format")],
+                    errors=[AdCPErrorDetail(code="FORMAT_NOT_FOUND", message="Bad format")],
                 ),
             ],
             dry_run=False,

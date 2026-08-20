@@ -141,8 +141,8 @@ class TestImportValidation:
         """Verify Error class can be constructed (basic smoke test)."""
         from src.core.schemas import Error
 
-        error = Error(code="test_code", message="test message")
-        assert error.code == "test_code"
+        error = Error(code="VALIDATION_ERROR", message="test message")
+        assert error.code == "VALIDATION_ERROR"
         assert error.message == "test message"
 
     def test_error_class_imported_in_main(self):
@@ -165,11 +165,11 @@ class TestImportValidation:
         from src.core.schemas import CreateMediaBuyError, Error
 
         response = CreateMediaBuyError(
-            errors=[Error(code="test", message="test error")],
+            errors=[Error(code="VALIDATION_ERROR", message="test error")],
         )
 
         assert len(response.errors) == 1
-        assert response.errors[0].code == "test"
+        assert response.errors[0].code == "VALIDATION_ERROR"
 
 
 @pytest.mark.integration

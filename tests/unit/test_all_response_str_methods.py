@@ -183,7 +183,7 @@ class TestResponseStrMethods:
 
     def test_activate_signal_response_with_errors(self):
         """ActivateSignalResponse with errors shows error count."""
-        from adcp import Error
+        from src.core.schemas import Error
 
         resp = ActivateSignalResponse(
             signal_id="sig_123", errors=[Error(code="SERVICE_UNAVAILABLE", message="Could not activate signal")]

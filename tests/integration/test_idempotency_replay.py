@@ -318,7 +318,7 @@ class TestErrorsAreNeverCached:
             adapter = env.mock["adapter"].return_value
             adapter.create_media_buy.side_effect = None
             adapter.create_media_buy.return_value = CreateMediaBuyError(
-                errors=[Error(code="ADAPTER_ERROR", message="adapter failure", recovery="terminal")],
+                errors=[Error(code="SERVICE_UNAVAILABLE", message="adapter failure", recovery="terminal")],
                 context=None,
             )
             now = datetime.now(UTC)
@@ -390,7 +390,7 @@ class TestErrorsAreNeverCached:
             # MediaBuy backstop (the rejection returns before the persist).
             adapter.create_media_buy.side_effect = None
             adapter.create_media_buy.return_value = CreateMediaBuyError(
-                errors=[Error(code="ADAPTER_ERROR", message="adapter failure", recovery="terminal")],
+                errors=[Error(code="SERVICE_UNAVAILABLE", message="adapter failure", recovery="terminal")],
                 context=None,
             )
             first = env.call_impl(**dict(kwargs))

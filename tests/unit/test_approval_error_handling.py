@@ -15,7 +15,7 @@ class TestApprovalErrorHandling:
     def test_create_media_buy_error_has_errors_field_not_media_buy_id(self):
         """Verify CreateMediaBuyError structure - has 'errors' but not 'media_buy_id'."""
         # This test documents the schema structure that caused the bug
-        error_response = CreateMediaBuyError(errors=[Error(code="TEST_ERROR", message="Test error message")])
+        error_response = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="Test error message")])
 
         # CreateMediaBuyError has 'errors' field
         assert hasattr(error_response, "errors")
@@ -38,7 +38,7 @@ class TestApprovalErrorHandling:
 
     def test_error_response_isinstance_check(self):
         """Test isinstance check correctly identifies error responses."""
-        error_response = CreateMediaBuyError(errors=[Error(code="TEST", message="Test error")])
+        error_response = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="Test error")])
         success_response = CreateMediaBuySuccess(
             media_buy_id="mb_123",
             packages=[],
@@ -56,8 +56,8 @@ class TestApprovalErrorHandling:
         # With errors
         error_with_errors = CreateMediaBuyError(
             errors=[
-                Error(code="ERROR1", message="First error"),
-                Error(code="ERROR2", message="Second error"),
+                Error(code="VALIDATION_ERROR", message="First error"),
+                Error(code="INVALID_REQUEST", message="Second error"),
             ]
         )
         error_str = str(error_with_errors)

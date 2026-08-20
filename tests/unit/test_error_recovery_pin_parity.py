@@ -48,7 +48,7 @@ class _RecoveryClaimant(Protocol):
     """Anything that claims a wire code with a recovery — an ``AdCPError`` subclass."""
 
     __name__: str
-    _default_error_code: str
+    _code: str
     _default_recovery: str
 
 
@@ -63,7 +63,7 @@ def _recovery_claims(classes: Iterable[Any]) -> dict[str, list[tuple[str, str]]]
     """
     claims: dict[str, list[tuple[str, str]]] = {}
     for cls in classes:
-        code = getattr(cls, "_default_error_code", None)
+        code = getattr(cls, "_code", None)
         if code in WIRE_STANDARD_CODES:
             claims.setdefault(code, []).append((cls.__name__, cls._default_recovery))
     return claims
@@ -179,11 +179,11 @@ class TestCollectorModelsTheForm:
 
     def test_groups_multiple_claimants_under_one_code(self) -> None:
         class _First:
-            _default_error_code = "CONFIGURATION_ERROR"
+            _code = "CONFIGURATION_ERROR"
             _default_recovery = "terminal"
 
         class _Second:
-            _default_error_code = "CONFIGURATION_ERROR"
+            _code = "CONFIGURATION_ERROR"
             _default_recovery = "transient"
 
         assert _recovery_claims([_First, _Second]) == {
@@ -192,7 +192,7 @@ class TestCollectorModelsTheForm:
 
     def test_drops_codes_the_wire_table_does_not_carry(self) -> None:
         class _InternalOnly:
-            _default_error_code = "WORKFLOW_CREATION_FAILED"
+            _code = "WORKFLOW_CREATION_FAILED"
             _default_recovery = "transient"
 
         assert "WORKFLOW_CREATION_FAILED" not in WIRE_STANDARD_CODES

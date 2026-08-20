@@ -14,7 +14,10 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
+from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
+
+from src.core.errors.codes import AppErrorCode, ErrorCodeT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -186,8 +189,8 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "ACTIVATION_FAILED": "SERVICE_UNAVAILABLE",
     "WORKFLOW_CREATION_FAILED": "SERVICE_UNAVAILABLE",
     "ACTIVATION_WORKFLOW_FAILED": "SERVICE_UNAVAILABLE",
-    "LINE_ITEM_CREATION_FAILED": "SERVICE_UNAVAILABLE",
-    "GAM_UPDATE_FAILED": "SERVICE_UNAVAILABLE",
+    "AD_SERVER_CREATE_FAILED": "SERVICE_UNAVAILABLE",
+    "AD_SERVER_UPDATE_FAILED": "SERVICE_UNAVAILABLE",
     "CREATIVE_SYNC_FAILED": "SERVICE_UNAVAILABLE",
     "PARTIAL_FAILURE": "SERVICE_UNAVAILABLE",
     "PRODUCT_NOT_CONFIGURED": "PRODUCT_UNAVAILABLE",
@@ -206,11 +209,11 @@ INTERNAL_CODES: frozenset[str] = frozenset(
         "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
-        "LINE_ITEM_CREATION_FAILED",  # GAM line-item creation detail
+        "AD_SERVER_CREATE_FAILED",  # ad-server create detail
         "FLIGHT_NOT_FOUND",  # Kevel/Triton internal flight lookup
         "ACTIVATION_WORKFLOW_FAILED",  # GAM activation workflow detail
         "API_UPDATE_FAILED",  # Broadstreet API update detail
-        "GAM_UPDATE_FAILED",  # GAM update API detail
+        "AD_SERVER_UPDATE_FAILED",  # ad-server update detail
         "PARTIAL_FAILURE",  # Bulk partial-failure taxonomy (AdCPBulkUpdateError)
         "MEDIA_BUY_REJECTED",  # Seller declined the buy; wire emits POLICY_VIOLATION
         "INVENTORY_UNAVAILABLE",  # Requested inventory absent; wire emits PRODUCT_UNAVAILABLE
@@ -282,7 +285,7 @@ def advisory_recovery_for(code: str) -> RecoveryHint:
     return cast(RecoveryHint, entry["recovery"])
 
 
-def normalize_advisory_errors(errors: list[Error]) -> list[Error]:
+def normalize_advisory_errors[ErrorT: "Error"](errors: Sequence[ErrorT]) -> list[ErrorT]:
     """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes
     and populate ``recovery``, preserving every other caller-set field verbatim.
 
@@ -362,7 +365,7 @@ def _serialize_context(
 class AdCPError(Exception):
     """Base exception for all AdCP errors.
 
-    Class-level identity (``_default_error_code``, ``_default_status_code``,
+    Class-level identity (``_code``, ``_default_status_code``,
     ``_default_recovery``) is declared with ``ClassVar`` per PEP 526 — each
     typed subclass overrides the ``_default_*`` slot, not the public name.
     The public ``error_code``/``status_code``/``recovery`` are instance
@@ -371,7 +374,7 @@ class AdCPError(Exception):
 
     Code that needs class-level identity (e.g. ``_build_error_code_to_status``
     walking ``__subclasses__()`` to build the wire-code → HTTP-status table)
-    reads ``cls._default_error_code`` / ``cls._default_status_code`` directly.
+    reads ``cls._code`` / ``cls._default_status_code`` directly.
     Instance code reads ``self.error_code`` etc. as before.
 
     Attributes:
@@ -419,7 +422,10 @@ class AdCPError(Exception):
     # enumMetadata classification is transient (#1430 review). Subclasses
     # whose wire code is pinned terminal declare terminal explicitly.
     _default_status_code: ClassVar[int] = 500
-    _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
+    #: The code this class IS. Annotation only on the base: a class that declares
+    #: none cannot be constructed (see ``__new__``), so a code is identity rather
+    #: than a default anyone can fall through to.
+    _code: ClassVar[ErrorCodeT]
     _default_recovery: ClassVar[RecoveryHint] = "transient"
     # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
     # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
@@ -428,16 +434,31 @@ class AdCPError(Exception):
     _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
-    error_code: str
+    error_code: ErrorCodeT
     status_code: int
     recovery: RecoveryHint
     internal_detail: BaseException | str | None
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> AdCPError:
+        """Refuse to build an error that has no code.
+
+        ``_code`` is annotation-only on the base, so ``hasattr`` is False here and
+        True on every subclass that declares one. This is the check
+        ``object.__new__`` performs for an abstract class and that
+        ``BaseException.__new__`` does not: ABC is a runtime no-op for exception
+        classes, so without this a bare ``AdCPError(...)`` would construct and put
+        a null code on the buyer's wire. Nothing scans for the violation; it
+        cannot be constructed.
+        """
+        if not hasattr(cls, "_code"):
+            raise TypeError(f"{cls.__name__} declares no _code; raise a subclass that does")
+        return cast("AdCPError", super().__new__(cls, *args, **kwargs))
 
     def __init__(
         self,
         message: str = "",
         *,
-        error_code: str | None = None,
+        error_code: ErrorCodeT | None = None,
         status_code: int | None = None,
         details: dict[str, Any] | None = None,
         recovery: RecoveryHint | None = None,
@@ -462,7 +483,7 @@ class AdCPError(Exception):
         # build_two_layer_error_envelope(); emitted only to the server-side log
         # by normalize_to_adcp_error(). Never add it to a serializer.
         self.internal_detail = internal_detail
-        self.error_code = error_code if error_code is not None else type(self)._default_error_code
+        self.error_code = error_code if error_code is not None else type(self)._code
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
         self.recovery = recovery if recovery is not None else type(self)._default_recovery
 
@@ -483,7 +504,7 @@ class AdCPError(Exception):
         cls,
         message: str,
         *,
-        error_code: str,
+        error_code: ErrorCodeT,
         status_code: int | None = None,
         recovery: RecoveryHint | None = None,
         details: dict[str, Any] | None = None,
@@ -506,7 +527,7 @@ class AdCPError(Exception):
         documents the synthesis intent explicitly so reviewers can audit
         every site that bypasses the typed class hierarchy.
         """
-        return cls(
+        return AdCPInternalError(
             message,
             error_code=error_code,
             status_code=status_code,
@@ -605,11 +626,25 @@ class AdCPError(Exception):
         )
 
 
+class AdCPInternalError(AdCPError):
+    """An unclassified server-side failure.
+
+    Exists because the base declares no ``_code`` and therefore cannot be
+    constructed. Every path that previously fell through to the base's
+    ``INTERNAL_ERROR`` default now names this class explicitly: the
+    ``normalize_to_adcp_error`` terminal fallback and ``synthesize``. Status and
+    recovery are inherited from the base (500 / transient), which is exactly what
+    those paths produced before, so the wire is unchanged.
+    """
+
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
+
+
 class AdCPValidationError(AdCPError):
     """Invalid parameters or request data (400)."""
 
     _default_status_code: ClassVar[int] = 400
-    _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -621,7 +656,7 @@ class AdCPVersionUnsupportedError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 400
-    _default_error_code: ClassVar[str] = "VERSION_UNSUPPORTED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.VERSION_UNSUPPORTED
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -634,7 +669,7 @@ class AdCPInvalidRequestError(AdCPValidationError):
     Inherits 400 + correctable from AdCPValidationError.
     """
 
-    _default_error_code: ClassVar[str] = "INVALID_REQUEST"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_REQUEST
 
 
 # v3.1.1 error-code.json deprecates the single AUTH_REQUIRED code in favor of
@@ -666,7 +701,7 @@ class AdCPAuthenticationError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 401
-    _default_error_code: ClassVar[str] = "AUTH_INVALID"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_INVALID
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
     _default_suggestion: ClassVar[str | None] = AUTH_INVALID_SUGGESTION
 
@@ -679,7 +714,7 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     correctable (provide credentials via the auth header and retry)."
     """
 
-    _default_error_code: ClassVar[str] = "AUTH_MISSING"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_MISSING
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
     _default_suggestion: ClassVar[str | None] = AUTH_MISSING_SUGGESTION
 
@@ -696,7 +731,7 @@ class AdCPAuthorizationError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 403
-    _default_error_code: ClassVar[str] = "PERMISSION_DENIED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PERMISSION_DENIED
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -710,7 +745,7 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
     recovery is ``correctable`` rather than the parent's ``terminal``.
     """
 
-    _default_error_code: ClassVar[str] = "POLICY_VIOLATION"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.POLICY_VIOLATION
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -723,7 +758,7 @@ class AdCPNotFoundError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 404
-    _default_error_code: ClassVar[str] = "NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -735,7 +770,7 @@ class AdCPAccountNotFoundError(AdCPNotFoundError):
     match its INVALID_REQUEST wire code).
     """
 
-    _default_error_code: ClassVar[str] = "ACCOUNT_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
@@ -743,7 +778,7 @@ class AdCPAccountSetupRequiredError(AdCPError):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "ACCOUNT_SETUP_REQUIRED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SETUP_REQUIRED
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -755,7 +790,7 @@ class AdCPAccountSuspendedError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 403
-    _default_error_code: ClassVar[str] = "ACCOUNT_SUSPENDED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SUSPENDED
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
@@ -770,7 +805,7 @@ class AdCPAccountPaymentRequiredError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 402
-    _default_error_code: ClassVar[str] = "ACCOUNT_PAYMENT_REQUIRED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_PAYMENT_REQUIRED
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
@@ -785,14 +820,14 @@ class AdCPConflictError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 409
-    _default_error_code: ClassVar[str] = "CONFLICT"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CONFLICT
     _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
 class AdCPAccountAmbiguousError(AdCPConflictError):
     """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
 
-    _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_AMBIGUOUS
     # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
     # an explicit account_id) — override the transient CONFLICT parent (#1417).
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
@@ -807,7 +842,7 @@ class AdCPGoneError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 410
-    _default_error_code: ClassVar[str] = "INVALID_STATE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_STATE
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -820,7 +855,7 @@ class AdCPBudgetExhaustedError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "BUDGET_EXHAUSTED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXHAUSTED
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
@@ -828,7 +863,7 @@ class AdCPRateLimitError(AdCPError):
     """Too many requests (429)."""
 
     _default_status_code: ClassVar[int] = 429
-    _default_error_code: ClassVar[str] = "RATE_LIMITED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.RATE_LIMITED
     _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
@@ -836,7 +871,7 @@ class AdCPAdapterError(AdCPError):
     """External adapter (GAM, etc.) failure (502)."""
 
     _default_status_code: ClassVar[int] = 502
-    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
     _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
@@ -853,7 +888,7 @@ class AdCPConfigurationError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 500
-    _default_error_code: ClassVar[str] = "CONFIGURATION_ERROR"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CONFIGURATION_ERROR
     _default_recovery: ClassVar[RecoveryHint] = "terminal"
 
 
@@ -866,7 +901,7 @@ class AdCPServiceUnavailableError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 503
-    _default_error_code: ClassVar[str] = "SERVICE_UNAVAILABLE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
     _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
@@ -889,7 +924,7 @@ class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
     case the buyer's own request is the lever for recovery.
     """
 
-    _default_error_code: ClassVar[str] = "MEDIA_BUY_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.MEDIA_BUY_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -901,7 +936,7 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     the same reason as ``AdCPMediaBuyNotFoundError``.
     """
 
-    _default_error_code: ClassVar[str] = "PACKAGE_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PACKAGE_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -916,7 +951,7 @@ class AdCPProductNotFoundError(AdCPNotFoundError):
     not in ERROR_CODE_MAPPING).
     """
 
-    _default_error_code: ClassVar[str] = "PRODUCT_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -935,7 +970,7 @@ class AdCPContextNotFoundError(AdCPNotFoundError):
     ``terminal`` default for the same reason as ``AdCPMediaBuyNotFoundError``.
     """
 
-    _default_error_code: ClassVar[str] = "SESSION_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.SESSION_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -952,7 +987,7 @@ class AdCPCreativeNotFoundError(AdCPNotFoundError):
     (discoverable via list_creatives / sync_creatives).
     """
 
-    _default_error_code: ClassVar[str] = "CREATIVE_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -967,7 +1002,7 @@ class AdCPFormatNotFoundError(AdCPNotFoundError):
     (discoverable via list_creative_formats).
     """
 
-    _default_error_code: ClassVar[str] = "FORMAT_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.FORMAT_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -982,7 +1017,7 @@ class AdCPTaskNotFoundError(AdCPNotFoundError):
     (discoverable via list_tasks).
     """
 
-    _default_error_code: ClassVar[str] = "TASK_NOT_FOUND"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.TASK_NOT_FOUND
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -990,7 +1025,7 @@ class AdCPBudgetTooLowError(AdCPError):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "BUDGET_TOO_LOW"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1014,7 +1049,7 @@ class AdCPCapabilityNotSupportedError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "UNSUPPORTED_FEATURE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1031,7 +1066,7 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
     validations grades the value.
     """
 
-    _default_error_code: ClassVar[str] = "IDEMPOTENCY_CONFLICT"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_CONFLICT
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1057,7 +1092,7 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     recovery wins, exactly as for ``IDEMPOTENCY_CONFLICT``.
     """
 
-    _default_error_code: ClassVar[str] = "IDEMPOTENCY_EXPIRED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_EXPIRED
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1065,7 +1100,7 @@ class AdCPCreativeRejectedError(AdCPError):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "CREATIVE_REJECTED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_REJECTED
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1073,7 +1108,7 @@ class AdCPBudgetExceededError(AdCPError):
     """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "BUDGET_EXCEEDED"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXCEEDED
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1081,7 +1116,7 @@ class AdCPProductUnavailableError(AdCPError):
     """Product is offline, deactivated, or otherwise unavailable (422, PRODUCT_UNAVAILABLE)."""
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "PRODUCT_UNAVAILABLE"
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_UNAVAILABLE
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1104,7 +1139,7 @@ class AdCPWorkflowError(AdCPAdapterError):
     workflow subsystem may succeed on retry.
     """
 
-    _default_error_code: ClassVar[str] = "WORKFLOW_CREATION_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.WORKFLOW_CREATION_FAILED
 
 
 class AdCPLineItemError(AdCPAdapterError):
@@ -1114,7 +1149,7 @@ class AdCPLineItemError(AdCPAdapterError):
     same rationale as ``AdCPWorkflowError``.
     """
 
-    _default_error_code: ClassVar[str] = "LINE_ITEM_CREATION_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.AD_SERVER_CREATE_FAILED
 
 
 class AdCPBulkUpdateError(AdCPAdapterError):
@@ -1129,7 +1164,7 @@ class AdCPBulkUpdateError(AdCPAdapterError):
     on retry.
     """
 
-    _default_error_code: ClassVar[str] = "PARTIAL_FAILURE"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.PARTIAL_FAILURE
 
 
 class AdCPActivationWorkflowError(AdCPAdapterError):
@@ -1140,7 +1175,7 @@ class AdCPActivationWorkflowError(AdCPAdapterError):
     class identity; same wire mapping as the other adapter-workflow failures.
     """
 
-    _default_error_code: ClassVar[str] = "ACTIVATION_WORKFLOW_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.ACTIVATION_WORKFLOW_FAILED
 
 
 class AdCPGamUpdateError(AdCPAdapterError):
@@ -1150,7 +1185,7 @@ class AdCPGamUpdateError(AdCPAdapterError):
     detail (package_id, line_item_id) belongs in ``details`` as data.
     """
 
-    _default_error_code: ClassVar[str] = "GAM_UPDATE_FAILED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.AD_SERVER_UPDATE_FAILED
 
 
 class AdCPMediaBuyRejectedError(AdCPError):
@@ -1162,7 +1197,7 @@ class AdCPMediaBuyRejectedError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "MEDIA_BUY_REJECTED"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1175,7 +1210,7 @@ class AdCPInventoryUnavailableError(AdCPError):
     """
 
     _default_status_code: ClassVar[int] = 422
-    _default_error_code: ClassVar[str] = "INVENTORY_UNAVAILABLE"
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.INVENTORY_UNAVAILABLE
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -1337,4 +1372,4 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     # without carrying instance-specific internal detail onto the wire.
     # The original exception is still logged in full server-side by the
     # transport boundary's record_boundary_error() / audit logger.
-    return AdCPError(type(exc).__name__)
+    return AdCPInternalError(type(exc).__name__)

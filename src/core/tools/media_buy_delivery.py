@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, Duration, Error, MediaBuyStatus
+from adcp.types import ContextObject, Duration, MediaBuyStatus
 from adcp.types.generated_poc.core.attribution_window import (
     AttributionWindow as ResponseAttributionWindow,  # TODO: no stable alias in adcp.types
 )
@@ -71,6 +71,8 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
 )
+
+from src.core.schemas import Error
 
 # Seller platform default attribution model (BR-RULE-092). The AdCP response
 # AttributionWindow requires a non-null ``model``; when the buyer does not

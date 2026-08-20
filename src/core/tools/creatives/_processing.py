@@ -17,12 +17,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adcp.types import CreativeAsset
-from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
 from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
+from src.core.schemas import Error as AdCPErrorDetail
 from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets

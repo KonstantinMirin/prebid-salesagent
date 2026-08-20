@@ -64,7 +64,9 @@ from src.core.validation_helpers import adcp_validation_boundary
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
 
 if TYPE_CHECKING:
-    from adcp.types import Error, Setup
+    from adcp.types import Setup
+
+    from src.core.schemas import Error
 
 logger = logging.getLogger(__name__)
 
@@ -617,7 +619,7 @@ def _gate_failures_to_errors(failures: list[GateFailure]) -> list["Error"]:
     its own code, recovery and pointer rooting. They now describe WHY they
     refused and this decides how that reaches the wire.
     """
-    from adcp.types import Error
+    from src.core.schemas import Error
 
     return [
         Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
@@ -1212,7 +1214,7 @@ def _unmatched_settings_update_result(ref: AccountRef) -> SyncResponseAccount:
     established placeholder convention in this file for exactly that situation
     (cf. the publisher-domain placeholder above), not a fabricated real value.
     """
-    from adcp.types import Error
+    from src.core.schemas import Error
 
     if isinstance(ref, AccountReference1):
         fail_brand: LibraryBrandReference | Mapping[str, object] = {"domain": "unknown"}

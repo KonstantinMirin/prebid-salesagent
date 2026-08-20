@@ -443,7 +443,7 @@ class TestGAMAdapterErrorTaxonomy:
                     request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
-        assert exc_info.value.error_code == "LINE_ITEM_CREATION_FAILED"
+        assert exc_info.value.error_code == "AD_SERVER_CREATE_FAILED"
 
 
 class TestGAMProductUnavailableRaiseSites:

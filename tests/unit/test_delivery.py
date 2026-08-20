@@ -1691,13 +1691,12 @@ class TestDeliveryAdapterError:
         is the only thing standing between an internal code and the buyer. Reddens if
         normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
         """
-        from adcp.types import Error
-
         from src.core.exceptions import normalize_advisory_errors
+        from src.core.schemas import Error
 
         out = normalize_advisory_errors(
             [
-                Error(code="API_ERROR", message="internal adapter detail for mb_x"),  # internal, unmapped
+                Error(code="SERVICE_UNAVAILABLE", message="internal adapter detail for mb_x"),  # internal, unmapped
                 Error(code="INTERNAL_ERROR", message="mapped internal for mb_y"),  # internal, mapped
                 Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
             ]

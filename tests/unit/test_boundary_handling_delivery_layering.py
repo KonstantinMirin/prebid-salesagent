@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPInternalError
 
 # Importing the domain module registers its boundary handler post-refactor.
 from tests.bdd.steps.domain import uc004_delivery  # noqa: F401
@@ -41,7 +41,7 @@ def test_valid_delivery_boundary_empty_deliveries_raises():
 
 
 def test_invalid_delivery_boundary_with_error_passes():
-    ctx = {"error": AdCPError("bad reporting_dimensions")}
+    ctx = {"error": AdCPInternalError("bad reporting_dimensions")}
     then_boundary_handling_result(ctx, DELIVERY_FIELD, "invalid")  # no raise
 
 

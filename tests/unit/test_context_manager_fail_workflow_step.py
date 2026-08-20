@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core.context_manager import ContextManager
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPInternalError, AdCPValidationError
 
 
 def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
@@ -45,9 +45,9 @@ def _expected_response_data(
     now uses — so the test asserts on EXACTLY the dict shape
     ``update_workflow_step`` will receive.
     """
-    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+    from src.core.exceptions import build_two_layer_error_envelope
 
-    exc = AdCPError(message, field=field, details=details, recovery=recovery)
+    exc = AdCPInternalError(message, field=field, details=details, recovery=recovery)
     exc.error_code = code
     return build_two_layer_error_envelope(exc)
 

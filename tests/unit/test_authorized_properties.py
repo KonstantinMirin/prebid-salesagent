@@ -7,9 +7,9 @@ Old fields removed: name, identifiers (list), publisher_domain, tags, property_i
 """
 
 import pytest
-from adcp import Error
 
 from src.core.schemas import (
+    Error,
     ListAuthorizedPropertiesRequest,
     ListAuthorizedPropertiesResponse,
     Property,
@@ -181,7 +181,7 @@ class TestListAuthorizedPropertiesResponse:
             portfolio_description="Premium content portfolio",
             advertising_policies="No tobacco or alcohol ads",
             last_updated="2025-10-27T12:00:00Z",
-            errors=[Error(code="WARNING", message="Test warning")],
+            errors=[Error(code="VALIDATION_ERROR", message="Test warning")],
         )
 
         assert len(response.publisher_domains) == 1

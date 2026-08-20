@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, cast
 
 from adcp import CreativeFilters
-from adcp.types import ContextObject, Error, PaginationRequest
+from adcp.types import ContextObject, PaginationRequest
 from adcp.types.generated_poc.creative.list_creatives_request import (
     Field1 as FieldModel,
 )
@@ -25,6 +25,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
     Creative,
+    Error,
     ListCreativesRequest,
     ListCreativesResponse,
 )

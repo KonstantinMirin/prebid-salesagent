@@ -2664,7 +2664,7 @@ class TestUC003ExtN:
             mock_session.scalars.return_value = mock_scalars
 
             # Adapter returns error for insufficient privileges
-            from adcp.types import Error as AdCPErrorModel
+            from src.core.schemas import Error as AdCPErrorModel
 
             env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuyError(
                 errors=[AdCPErrorModel(code="AUTH_REQUIRED", message="Admin required")]
@@ -2702,10 +2702,10 @@ class TestUC003ExtO:
             mock_session.scalars.return_value = mock_scalars
 
             # Adapter returns error
-            from adcp.types import Error as AdCPError
+            from src.core.schemas import Error
 
             env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuyError(
-                errors=[AdCPError(code="API_QUOTA_EXCEEDED", message="Quota exceeded")]
+                errors=[Error(code="SERVICE_UNAVAILABLE", message="Quota exceeded")]
             )
 
             identity = env.identity

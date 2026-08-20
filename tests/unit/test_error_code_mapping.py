@@ -50,9 +50,9 @@ class TestErrorCodeMapping:
         assert not unsafe, f"Internal codes in mapping must translate to STANDARD targets: {unsafe}"
 
     def test_class_error_codes_are_standard_or_internal(self):
-        """Every AdCPError subclass _default_error_code must be standard, internal, or spec-required.
+        """Every AdCPError subclass _code must be standard, internal, or spec-required.
 
-        Reads ``_default_error_code`` (the ClassVar slot per option-A refactor
+        Reads ``_code`` (the ClassVar slot per option-A refactor
         salesagent-fnk9). The public ``error_code`` is an instance attribute
         set in ``__init__`` and is not present on the class object.
         """
@@ -63,9 +63,9 @@ class TestErrorCodeMapping:
         allowed = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | spec_codes
         violations = []
         for cls in AdCPError.iter_concrete_subclasses():
-            code = cls._default_error_code
+            code = cls._code
             if code not in allowed:
-                violations.append(f"{cls.__name__}._default_error_code = {code!r}")
+                violations.append(f"{cls.__name__}._code = {code!r}")
         assert not violations, "AdCPError subclasses with non-standard, non-internal codes:\n" + "\n".join(
             f"  {v}" for v in violations
         )

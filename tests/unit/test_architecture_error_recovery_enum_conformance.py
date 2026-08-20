@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.core.errors.codes import AppErrorCode
 from src.core.exceptions import ERROR_CODE_MAPPING, AdCPError, translate_error_code
 from tests.helpers import pinned_schema
 
@@ -53,7 +54,7 @@ def _adcp_error_subclasses() -> list[type[AdCPError]]:
 
 
 _GRADED_CLASSES = sorted(
-    (c for c in _adcp_error_subclasses() if c._default_error_code in _RECOVERY_BY_CODE),
+    (c for c in _adcp_error_subclasses() if c._code in _RECOVERY_BY_CODE),
     key=lambda c: c.__name__,
 )
 
@@ -70,7 +71,7 @@ def test_pinned_enum_metadata_loaded() -> None:
 @pytest.mark.parametrize("cls", _GRADED_CLASSES, ids=lambda c: c.__name__)
 def test_default_recovery_matches_pinned_enum(cls: type[AdCPError]) -> None:
     """Each subclass's ``_default_recovery`` must equal the pinned enum's normative recovery."""
-    code = cls._default_error_code
+    code = cls._code
     expected = _RECOVERY_BY_CODE[code]
     assert cls._default_recovery == expected, (
         f"{cls.__name__} (code {code!r}) declares recovery={cls._default_recovery!r} "
@@ -79,12 +80,14 @@ def test_default_recovery_matches_pinned_enum(cls: type[AdCPError]) -> None:
     )
 
 
-# Classes whose _default_error_code is rewritten by ERROR_CODE_MAPPING before it
+# Classes whose _code is rewritten by ERROR_CODE_MAPPING before it
 # reaches the wire. Base AdCPError is included explicitly: iter_concrete_subclasses
-# yields descendants only, yet the base class is live on the wire via the
-# normalize_to_adcp_error crash-wrap path at every transport boundary.
+# yields descendants only. The base is NO LONGER included: it declares no ``_code``
+# at all now (annotation-only), so it cannot be constructed and cannot reach the wire —
+# the normalize_to_adcp_error crash-wrap path builds AdCPInternalError instead, which IS
+# a concrete subclass and is therefore already enumerated below.
 _REMAPPED_CLASSES = sorted(
-    (c for c in [AdCPError, *AdCPError.iter_concrete_subclasses()] if c._default_error_code in ERROR_CODE_MAPPING),
+    (c for c in AdCPError.iter_concrete_subclasses() if c._code in ERROR_CODE_MAPPING),
     key=lambda c: c.__name__,
 )
 
@@ -111,10 +114,10 @@ def test_wire_recovery_matches_pinned_enum(cls: type[AdCPError]) -> None:
     for the code actually emitted on the wire (post-translation). The envelope
     builder emits ``exc.wire_error_code`` alongside ``exc.recovery`` — recovery
     follows the wire code, never the internal class taxonomy."""
-    wire_code = translate_error_code(cls._default_error_code)
+    wire_code = translate_error_code(cls._code)
     expected = _RECOVERY_BY_CODE[wire_code]
     assert cls._default_recovery == expected, (
-        f"{cls.__name__} (code {cls._default_error_code!r} -> wire {wire_code!r}) "
+        f"{cls.__name__} (code {cls._code!r} -> wire {wire_code!r}) "
         f"declares recovery={cls._default_recovery!r} but the pinned error-code.json "
         f"enumMetadata says the wire code {wire_code!r} is {expected!r}. The envelope "
         f"emits the wire code with the class recovery, so this pair is spec-nonconformant "
@@ -127,24 +130,15 @@ def test_internal_only_codes_are_documented() -> None:
     internal/adapter-only (no AdCP wire equivalent). Pin the known set so a NEW
     exception class with a non-spec code is surfaced for review rather than
     silently escaping the recovery oracle."""
-    internal_codes = {
-        c._default_error_code for c in _adcp_error_subclasses() if c._default_error_code not in _RECOVERY_BY_CODE
-    }
-    known_internal = {
-        "NOT_FOUND",
-        "TASK_NOT_FOUND",
-        "FORMAT_NOT_FOUND",
-        "WORKFLOW_CREATION_FAILED",
-        "LINE_ITEM_CREATION_FAILED",
-        "PARTIAL_FAILURE",
-        "ACTIVATION_WORKFLOW_FAILED",
-        "GAM_UPDATE_FAILED",
-        "MEDIA_BUY_REJECTED",
-        "INVENTORY_UNAVAILABLE",
-    }
-    unexpected = internal_codes - known_internal
+    # The hand-maintained ``known_internal`` set this used to carry is DELETED.
+    # It duplicated ``AppErrorCode``, which is now the typed vocabulary of exactly
+    # these codes — so membership IS the documentation, and a list beside it could
+    # only drift from it. A new platform code is declared in one place or it does
+    # not type-check; nothing here needs updating when one is added.
+    internal_codes = {c._code for c in _adcp_error_subclasses() if c._code not in _RECOVERY_BY_CODE}
+    unexpected = {c for c in internal_codes if not isinstance(c, AppErrorCode)}
     assert not unexpected, (
         f"New non-spec error code(s) {sorted(unexpected)} are not in the pinned enum and so "
         f"escape the recovery oracle. Either add the code to the AdCP error-code enum (and the "
-        f"pin) or, if it is genuinely internal-only, add it to known_internal here."
+        f"pin), or declare it as an AppErrorCode member if it is genuinely platform-only."
     )

@@ -1125,9 +1125,9 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
 
     # Handle forced internal error
     if ctx.get("force_internal_error"):
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPInternalError
 
-        err = AdCPError("Internal server error")
+        err = AdCPInternalError("Internal server error")
         err.error_code = "INTERNAL_ERROR"
         ctx["error"] = err
         return

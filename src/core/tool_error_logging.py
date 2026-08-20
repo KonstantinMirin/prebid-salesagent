@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
 
+from src.core.errors.codes import CODE_TABLE, AppErrorCode
 from src.core.exceptions import (
     ERROR_CODE_MAPPING,
     AdCPError,
@@ -25,6 +26,9 @@ from src.core.exceptions import (
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
+
+#: Wire-string -> vocabulary member. DERIVED from CODE_TABLE; nothing to maintain.
+_CODE_BY_VALUE = {str(code): code for code in CODE_TABLE}
 
 _CONTEXT_LIKE_TYPES: tuple[type, ...] = (FastMCPContext, ToolContext)
 
@@ -407,7 +411,7 @@ def _build_error_code_to_status() -> dict[str, int]:
     # lives on the _default_* ClassVar slots; error_code/status_code are instance
     # attrs set in __init__, so read the _default_* slots off the class object.
     for cls in AdCPError.iter_concrete_subclasses():
-        code = getattr(cls, "_default_error_code", None)
+        code = getattr(cls, "_code", None)
         status = getattr(cls, "_default_status_code", None)
         if not code or not status:
             continue
@@ -452,9 +456,14 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
         return JSONResponse(status_code=e.status_code, content=dict(e.envelope))
 
     error_code, error_message, recovery = extract_error_info(e)
+    # A plain ToolError carries its code as an unvalidated string. Resolve it
+    # against the vocabulary, with an explicit named fallback rather than an
+    # implicit one: an unknown code becomes INTERNAL_ERROR because that is what
+    # it means, not because it is what a default happened to be.
+    resolved_code = _CODE_BY_VALUE.get(error_code, AppErrorCode.INTERNAL_ERROR)
     synthetic = AdCPError.synthesize(
         error_message,
-        error_code=error_code,
+        error_code=resolved_code,
         status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
         recovery=recovery,
     )

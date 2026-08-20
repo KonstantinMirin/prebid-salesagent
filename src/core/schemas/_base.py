@@ -19,7 +19,7 @@ from src.core.enum_helpers import enum_value
 if TYPE_CHECKING:
     from src.core.schemas.creative import Creative, CreativeApproval
 
-from adcp import Error
+from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import (
     ContextObject,
@@ -66,6 +66,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 )  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
+from src.core.errors.codes import ErrorCodeT
 from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
@@ -135,6 +136,22 @@ AdCPPricingOption = (
 
 
 # Helper function for creating AnyUrl instances (eliminates mypy warnings)
+
+
+class Error(_LibraryError):
+    """Advisory error whose ``code`` IS the vocabulary, not a string.
+
+    The SDK types ``code`` as ``str`` — correctly, because AdCP 3.1.1 makes the
+    error-code vocabulary open. That openness is a wire contract, not a licence
+    for this seller to emit a code it never defined. Narrowing the field here
+    makes an out-of-vocabulary advisory unconstructible, at every site, whatever
+    local name the type is imported under — which an AST guard cannot do, because
+    an import alias defeats it.
+    """
+
+    code: ErrorCodeT
+
+
 def url(value: str) -> AnyUrl:
     """Convert string to AnyUrl for type-safe URL construction.
 

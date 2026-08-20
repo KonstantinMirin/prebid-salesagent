@@ -671,7 +671,7 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         then the response contains formats from the healthy agent
         and an errors[] entry for the failed agent.
         """
-        from adcp.types import Error as AdCPResponseError
+        from src.core.schemas import Error as AdCPResponseError
 
         healthy_formats = [
             _make_format("display_300x250", "Display 300x250"),
@@ -717,7 +717,7 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
         then the response contains an empty formats array
         and errors[] with one entry per failed agent.
         """
-        from adcp.types import Error as AdCPResponseError
+        from src.core.schemas import Error as AdCPResponseError
 
         # Simulate all agents failing — registry returns no formats but reports
         # errors. Same conversion as UC-005-EXT-C-01 above: the fixtures carry
@@ -782,7 +782,7 @@ class TestErrorEntriesFollowAdCPSchema:
         then each error has code (string) and message (string) at minimum,
         conforming to error.json schema.
         """
-        from adcp.types import Error
+        from src.core.schemas import Error
 
         agent_errors = [Error(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE)]
         response = _call_impl_raw(formats=[], errors=agent_errors)

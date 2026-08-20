@@ -274,9 +274,9 @@ class TestCreateMediaBuyResponseShapes:
         Ported from test_approval_error_handling_core.py::test_error_response_has_errors_not_media_buy_id
         Covers: UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-02
         """
-        from adcp.types import Error
+        from src.core.schemas import Error
 
-        resp = CreateMediaBuyError(errors=[Error(code="test", message="msg")])
+        resp = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="msg")])
         assert resp.errors is not None
         assert len(resp.errors) == 1
 
@@ -353,9 +353,11 @@ class TestCreateMediaBuyResponseShapes:
         Spec: UNSPECIFIED (implementation-defined string representation)
         Covers: UC-002-POST-02
         """
-        from adcp.types import Error
+        from src.core.schemas import Error
 
-        resp = CreateMediaBuyError(errors=[Error(code="a", message="a"), Error(code="b", message="b")])
+        resp = CreateMediaBuyError(
+            errors=[Error(code="VALIDATION_ERROR", message="a"), Error(code="INVALID_REQUEST", message="b")]
+        )
         assert "2 error" in str(resp)
 
     def test_success_str_includes_media_buy_id(self):
@@ -1472,8 +1474,7 @@ class TestCreateMediaBuyAdapterInteraction:
         Source: UC-002, BR-RULE-020
         Covers: UC-002-EXT-J-01
         """
-        from adcp.types import Error
-
+        from src.core.schemas import Error
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
         error_response = CreateMediaBuyError(errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")])
@@ -1767,9 +1768,9 @@ class TestUpdateMediaBuyResponseShapes:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Covers: UC-003-EXT-O-05
         """
-        from adcp.types import Error
+        from src.core.schemas import Error
 
-        resp = UpdateMediaBuyError(errors=[Error(code="test", message="fail")])
+        resp = UpdateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         assert "errors" in dumped
         # success fields should not be present or should be None
@@ -3102,8 +3103,7 @@ class TestUpdateMediaBuyAdapterFailure:
         Source: UC-003 ext-o, BR-RULE-020
         Covers: UC-003-EXT-O-01
         """
-        from adcp.types import Error
-
+        from src.core.schemas import Error
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
@@ -3164,9 +3164,7 @@ class TestUpdateMediaBuyAdapterFailure:
         Source: UC-003 ext-o, BR-RULE-020
         Covers: UC-003-EXT-O-04
         """
-        from adcp.types import Error
-
-        from src.core.schemas import AdCPPackageUpdate
+        from src.core.schemas import AdCPPackageUpdate, Error
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
@@ -3186,7 +3184,7 @@ class TestUpdateMediaBuyAdapterFailure:
         cl.min_package_budget = None
 
         adapter_error = UpdateMediaBuyError(
-            errors=[Error(code="ADAPTER_FAILURE", message="GAM API timeout")],
+            errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API timeout")],
         )
 
         with (
@@ -4413,9 +4411,9 @@ class TestBRRule018AtomicResponse:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-response.json
         Covers: UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-02
         """
-        from adcp.types import Error
+        from src.core.schemas import Error
 
-        resp = CreateMediaBuyError(errors=[Error(code="test", message="fail")])
+        resp = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         # media_buy_id should not be set or should be None
         assert dumped.get("media_buy_id") is None
@@ -4438,9 +4436,9 @@ class TestBRRule018AtomicResponse:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Covers: UC-003-EXT-O-05
         """
-        from adcp.types import Error
+        from src.core.schemas import Error
 
-        resp = UpdateMediaBuyError(errors=[Error(code="test", message="fail")])
+        resp = UpdateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         assert dumped.get("affected_packages") is None
 
@@ -4474,10 +4472,10 @@ class TestBRRule043ContextEcho:
         assert dumped["context"]["conversation_id"] == "conv_123"
 
         # Error response also echoes context
-        from adcp.types import Error
+        from src.core.schemas import Error
 
         err_resp = CreateMediaBuyError(
-            errors=[Error(code="test", message="fail")],
+            errors=[Error(code="VALIDATION_ERROR", message="fail")],
             context=context_obj,
         )
         err_dumped = err_resp.model_dump()

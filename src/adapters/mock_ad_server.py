@@ -19,10 +19,10 @@ from src.adapters.base import (
     TargetingCapabilities,
 )
 from src.core.exceptions import (
+    AdCPAdapterError,
     AdCPBudgetExhaustedError,
     AdCPCapabilityNotSupportedError,
     AdCPCreativeRejectedError,
-    AdCPError,
     AdCPInventoryUnavailableError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
@@ -568,7 +568,7 @@ class MockAdServer(AdServerAdapter):
         if scenario:
             # Handle error simulation
             if scenario.error_message:
-                raise AdCPError(scenario.error_message)
+                raise AdCPAdapterError(scenario.error_message)
 
             # Handle rejection
             if scenario.should_reject:

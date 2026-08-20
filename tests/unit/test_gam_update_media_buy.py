@@ -450,7 +450,7 @@ class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
             # Budget change must NOT be persisted when the GAM sync fails.
             mock_session.commit.assert_not_called()
 
-        assert exc_info.value.error_code == "GAM_UPDATE_FAILED"
+        assert exc_info.value.error_code == "AD_SERVER_UPDATE_FAILED"
 
     def test_pause_media_buy_partial_gam_failure_raises_bulk_update_error(self):
         """When some line items fail to pause in GAM, the bulk operation raises

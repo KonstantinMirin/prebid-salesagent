@@ -558,7 +558,7 @@ class TestMCPRecoveryInErrorResponses:
             # Recovery matches the pinned enumMetadata of the WIRE code
             # (salesagent-nr2q): SERVICE_UNAVAILABLE=transient,
             # INVALID_REQUEST=correctable.
-            ("AdCPError", "internal error", "SERVICE_UNAVAILABLE", "transient"),
+            ("AdCPInternalError", "internal error", "SERVICE_UNAVAILABLE", "transient"),
             ("AdCPValidationError", "bad field", "VALIDATION_ERROR", "correctable"),
             ("AdCPNotFoundError", "gone", "INVALID_REQUEST", "correctable"),
             # The recovery-conformance oracle grades the CLASS ATTRIBUTE
@@ -627,7 +627,7 @@ class TestA2ARecoveryInErrorResponses:
             # Recovery matches the pinned enumMetadata of the WIRE code
             # (salesagent-nr2q): AdCPError→SERVICE_UNAVAILABLE=transient,
             # AdCPNotFoundError→INVALID_REQUEST=correctable.
-            ("AdCPError", "internal", "transient"),
+            ("AdCPInternalError", "internal", "transient"),
             ("AdCPValidationError", "bad", "correctable"),
             ("AdCPNotFoundError", "missing", "correctable"),
             ("AdCPConflictError", "dup", "transient"),
@@ -773,8 +773,8 @@ class TestErrorCodeVocabularyConsistency:
         # Adapter-taxonomy codes (internal; wire → SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING)
         "WORKFLOW_CREATION_FAILED",  # Internal: AdCPWorkflowError
         "ACTIVATION_WORKFLOW_FAILED",  # Internal: AdCPActivationWorkflowError
-        "LINE_ITEM_CREATION_FAILED",  # Internal: AdCPLineItemError
-        "GAM_UPDATE_FAILED",  # Internal: AdCPGamUpdateError
+        "AD_SERVER_CREATE_FAILED",  # Internal: AdCPLineItemError
+        "AD_SERVER_UPDATE_FAILED",  # Internal: AdCPGamUpdateError
         "PARTIAL_FAILURE",  # Internal: AdCPBulkUpdateError
         # Mock-adapter business-outcome codes (internal; wire → standard via ERROR_CODE_MAPPING)
         "MEDIA_BUY_REJECTED",  # Internal: AdCPMediaBuyRejectedError (wire → POLICY_VIOLATION)
@@ -816,11 +816,14 @@ class TestErrorCodeVocabularyConsistency:
         ]
 
         for exc_class in exception_classes:
-            # _default_error_code is the class-level identity slot per
-            # salesagent-fnk9 option A. error_code is an instance attribute.
-            code = exc_class._default_error_code
+            # _code is the class-level identity slot. The BASE declares none — it is
+            # annotation-only, which is what makes the base unconstructible — so a
+            # class without one contributes no code to the vocabulary.
+            code = getattr(exc_class, "_code", None)
+            if code is None:
+                continue
             assert code in self.CANONICAL_ERROR_CODES, (
-                f"{exc_class.__name__}._default_error_code = {code!r} is not in the canonical vocabulary. "
+                f"{exc_class.__name__}._code = {code!r} is not in the canonical vocabulary. "
                 f"If this is a new code, add it to CANONICAL_ERROR_CODES with a comment. "
                 f"If this is a renamed code, update the exception class."
             )
@@ -832,11 +835,11 @@ class TestErrorCodeVocabularyConsistency:
         """
         from src.core.exceptions import AdCPRateLimitError
 
-        # Class-level identity lives on _default_error_code (option A,
+        # Class-level identity lives on _code (option A,
         # salesagent-fnk9). The public error_code is an instance attribute set
         # in __init__ from this default unless overridden via synthesize().
-        assert AdCPRateLimitError._default_error_code == "RATE_LIMITED", (
-            f"AdCPRateLimitError._default_error_code = {AdCPRateLimitError._default_error_code!r}, "
+        assert AdCPRateLimitError._code == "RATE_LIMITED", (
+            f"AdCPRateLimitError._code = {AdCPRateLimitError._code!r}, "
             f"expected 'RATE_LIMITED' per SDK STANDARD_ERROR_CODES"
         )
         # Also pin via instance — proves the class-level default propagates
@@ -848,11 +851,13 @@ class TestErrorCodeVocabularyConsistency:
         from src.core.exceptions import AdCPError
 
         # Discover all concrete subclasses (recursively). Reads
-        # _default_error_code per option-A refactor (salesagent-fnk9).
+        # _code per option-A refactor (salesagent-fnk9).
         subclass_codes = set()
 
         def _collect(cls: type) -> None:
-            subclass_codes.add(cls._default_error_code)
+            # skip the annotation-only base: it declares no code and cannot be raised
+            if (code := getattr(cls, "_code", None)) is not None:
+                subclass_codes.add(code)
             for sub in cls.__subclasses__():
                 _collect(sub)
 

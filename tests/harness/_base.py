@@ -74,6 +74,7 @@ def _adcp_error_from_code(
         AdCPError,
         AdCPIdempotencyConflictError,
         AdCPIdempotencyExpiredError,
+        AdCPInternalError,
         AdCPMediaBuyNotFoundError,
         AdCPNotFoundError,
         AdCPPackageNotFoundError,
@@ -82,12 +83,12 @@ def _adcp_error_from_code(
         AdCPValidationError,
     )
 
-    # Read class-level identity from the _default_error_code ClassVar slot
+    # Read class-level identity from the _code ClassVar slot
     # (option-A refactor per salesagent-fnk9). error_code is an instance
     # attribute set in __init__; reading it off the class would return the
     # descriptor, not the wire code string.
     _CODE_TO_CLASS: dict[str, type[AdCPError]] = {
-        cls._default_error_code: cls
+        cls._code: cls
         for cls in (
             AdCPValidationError,
             AdCPAuthenticationError,
@@ -119,7 +120,7 @@ def _adcp_error_from_code(
     }
     # AUTH_MISSING -> AdCPAuthRequiredError and AUTH_INVALID -> AdCPAuthenticationError
     # are unambiguous per v3.1.1 error-code.json (salesagent-mkso) — each class's
-    # own _default_error_code disambiguates them via the dict comprehension above.
+    # own _code disambiguates them via the dict comprehension above.
     # AUTH_REQUIRED (deprecated alias) is no longer emitted by any subclass
     # (salesagent-otc5 migrated AdCPAuthorizationError to PERMISSION_DENIED and
     # split the former tenant-axis raises across AUTH_MISSING/AUTH_INVALID).
@@ -132,7 +133,7 @@ def _adcp_error_from_code(
     assert error_code not in INTERNAL_CODES, (
         f"INTERNAL code {error_code!r} reached harness reconstruction — production wire leaked an internal-only code"
     )
-    exc_cls = _CODE_TO_CLASS.get(error_code, AdCPError)
+    exc_cls = _CODE_TO_CLASS.get(error_code, AdCPInternalError)
     reconstructed = exc_cls(
         message=message,
         details=details,
@@ -140,7 +141,7 @@ def _adcp_error_from_code(
         suggestion=suggestion,
         field=field,
     )
-    if exc_cls is AdCPError:
+    if exc_cls is AdCPInternalError:
         reconstructed.error_code = error_code
     return reconstructed
 
@@ -816,15 +817,15 @@ class BaseTestEnv:
         # success response.
         from a2a.types import TaskState
 
-        if task_result.status.state == TaskState.TASK_STATE_FAILED:
-            from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPInternalError
 
+        if task_result.status.state == TaskState.TASK_STATE_FAILED:
             if task_result.artifacts:
                 envelope = extract_data_from_artifact(task_result.artifacts[0])
                 reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
                 if reconstructed is not None:
                     raise reconstructed
-            raise AdCPError(f"A2A task failed: {task_result.status}")
+            raise AdCPInternalError(f"A2A task failed: {task_result.status}")
 
         if task_result.status.state == TaskState.TASK_STATE_SUBMITTED:
             # Async manual-approval path: the server returns a submitted Task with NO

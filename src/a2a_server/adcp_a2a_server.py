@@ -64,6 +64,7 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
+    AdCPInternalError,
     AdCPValidationError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
@@ -825,7 +826,7 @@ class AdCPRequestHandler(RequestHandler):
                         # which always sets error_envelope. A failed result without it
                         # is a contract violation — fail loud rather than silently emit
                         # the legacy flat ``{"error": ...}`` shape.
-                        raise AdCPError(
+                        raise AdCPInternalError(
                             f"Skill result for {res.get('skill', '?')!r} is marked failed but carries no error_envelope"
                         )
 

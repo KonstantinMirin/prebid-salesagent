@@ -28,10 +28,10 @@ from src.core.exceptions import (
     [
         # Adapter-taxonomy classes: distinct internal codes, all collapse to
         # SERVICE_UNAVAILABLE on the wire (the buyer retries the same way).
-        (AdCPLineItemError, "LINE_ITEM_CREATION_FAILED", "SERVICE_UNAVAILABLE"),
+        (AdCPLineItemError, "AD_SERVER_CREATE_FAILED", "SERVICE_UNAVAILABLE"),
         (AdCPBulkUpdateError, "PARTIAL_FAILURE", "SERVICE_UNAVAILABLE"),
         (AdCPActivationWorkflowError, "ACTIVATION_WORKFLOW_FAILED", "SERVICE_UNAVAILABLE"),
-        (AdCPGamUpdateError, "GAM_UPDATE_FAILED", "SERVICE_UNAVAILABLE"),
+        (AdCPGamUpdateError, "AD_SERVER_UPDATE_FAILED", "SERVICE_UNAVAILABLE"),
         (AdCPWorkflowError, "WORKFLOW_CREATION_FAILED", "SERVICE_UNAVAILABLE"),
         # Mock-adapter business outcomes: distinct buyer-facing wire codes.
         (AdCPMediaBuyRejectedError, "MEDIA_BUY_REJECTED", "POLICY_VIOLATION"),

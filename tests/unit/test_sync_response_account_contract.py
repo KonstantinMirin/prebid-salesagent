@@ -9,11 +9,11 @@ the sync_accounts response. This contract test verifies:
 beads: salesagent-a6zc
 """
 
-from adcp.types import Error as LibraryError
 from adcp.types import Setup as LibrarySetup
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.business_entity import BusinessEntity as LibraryBusinessEntity
 
+from src.core.schemas import Error as LibraryError
 from src.core.schemas import SyncResponseAccount
 
 # The 13 fields that production code (_build_sync_result / _build_failed_result)
