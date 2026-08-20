@@ -41,7 +41,7 @@ from sqlalchemy import delete
 
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import live_db_env
-from tests.helpers.signing import json_seeded_client_factory
+from tests.helpers.signing import json_seeded_client_factory, wire_origin
 
 #: The super-admin the e2e stack seeds, and the endpoint that logs it in.
 #: ``/test/auth`` needs ``ADCP_AUTH_TEST_MODE`` (docker-compose.e2e.yml) AND the
@@ -73,8 +73,14 @@ def netloc(url: str) -> str:
 
 
 def origin(url: str) -> str:
-    parsed = httpx.URL(url)
-    return f"{parsed.scheme}://{parsed.netloc.decode()}"
+    """The port-bearing origin a signature's ``@target-uri`` covers.
+
+    Delegates rather than re-deriving: ``tests.helpers.signing.wire_origin`` is the
+    one definition, now that the harness's e2e_rest dispatch needs the same value
+    (salesagent-n78j0.1.1). Kept as a name here because every module in this suite
+    already reads it from this seam.
+    """
+    return wire_origin(url)
 
 
 def tls_base_url(live_server: dict) -> str:

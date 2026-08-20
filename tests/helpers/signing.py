@@ -95,6 +95,24 @@ UNRESOLVABLE_AGENT_URL = "http://127.0.0.1:1/a2a"
 #: against any other origin fails on its merits before the behavior under test is reached.
 WIRE_ORIGIN = "http://testserver"
 
+
+def wire_origin(url: str) -> str:
+    """The scheme+authority of *url* — what a signature's ``@target-uri`` covers.
+
+    The PORT is the whole reason this is a function and not a slice: ``_verify_url``
+    (``src/core/signing/request_verifier_middleware.py``) rebuilds the authority from
+    the ``Host`` header the proxy forwards verbatim, so a caller that signs against a
+    portless origin covers a different ``@target-uri`` than the verifier reconstructs
+    and is refused as ``request_signature_invalid``. One definition — shared by the
+    e2e suite (``tests/e2e/_signing_e2e.origin``) and the harness's e2e_rest dispatch
+    — because a second copy that drops the port looks exactly like a verifier bug.
+    """
+    import httpx
+
+    parsed = httpx.URL(url)
+    return f"{parsed.scheme}://{parsed.netloc.decode()}"
+
+
 #: The seller tenant and the buyer's principal within it. Shared so the three
 #: in-process suites address the same rows and one ``seed_principal`` serves all.
 SIGNING_TENANT_ID = "sig_tenant"
@@ -323,9 +341,33 @@ def declared_posture(*, tenant_id: str = SIGNING_TENANT_ID, **declaration: Any) 
         _restore_declarations(tenant_id, previous)
 
 
+def posture_declaration_document(tenant: Any, declaration: dict[str, Any]) -> dict[str, Any]:
+    """The whole ``capability_declarations`` document a declared posture needs.
+
+    ``identity.brand_json_url`` travels WITH the posture and is DERIVED from
+    ``src.core.agent_identity``, never a literal: any non-empty bucket fires the
+    pinned ``required_when`` trigger, and the capabilities read path cross-checks a
+    declared pointer against the served one, so a posture written without it is
+    refused whole — and the suite then grades the refusal path while reading like it
+    graded the declared one.
+
+    Stated here rather than inside :func:`_declare` because the e2e path cannot use
+    that writer: a ``TenantConfigUoW`` write from the runner opens its own engine
+    against the runner's ``DATABASE_URL`` and is empirically NOT visible to the live
+    server's read (measured in ``test_request_signature_required_e2e``), so an e2e
+    caller writes the same document through its live-DB session. One document shape,
+    two writers — never two shapes.
+    """
+    from src.core.agent_identity import brand_json_url
+
+    return {
+        "request_signing": declaration,
+        "identity": {"brand_json_url": brand_json_url(tenant)},
+    }
+
+
 def _declare(tenant_id: str, declaration: dict[str, Any]) -> dict[str, Any] | None:
     """Write the posture + derived identity onto the tenant; return what was there."""
-    from src.core.agent_identity import brand_json_url
     from src.core.database.repositories.uow import TenantConfigUoW
 
     with TenantConfigUoW(tenant_id) as uow:
@@ -336,10 +378,7 @@ def _declare(tenant_id: str, declaration: dict[str, Any]) -> dict[str, Any] | No
             "on it — seed it (seed_principal / TenantFactory) first"
         )
         previous = tenant.capability_declarations
-        tenant.capability_declarations = {
-            "request_signing": declaration,
-            "identity": {"brand_json_url": brand_json_url(tenant)},
-        }
+        tenant.capability_declarations = posture_declaration_document(tenant, declaration)
         return previous
 
 

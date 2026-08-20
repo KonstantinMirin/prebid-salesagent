@@ -519,7 +519,7 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         return kwargs
 
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+    def _run_rest_request(self, endpoint: str, *, signed: bool = False, **kwargs: Any) -> Any:
         """REST dispatch: POST /api/v1/capabilities with a JSON body when
         request params are present (protocols/context/adcp_version), else GET
         the parameterless happy-path route — both are real production routes
@@ -529,7 +529,20 @@ class CapabilitiesEnv(IntegrationEnv):
         The preamble (identity pop → factory commit → client → auth override) is
         the shared ``_prepare_rest_request`` helper on IntegrationEnv, whose own
         docstring names this env as the GET-route override precedent.
+
+        ``signed`` is DECLARED, never swallowed into ``**kwargs``: the dispatcher
+        passes it to every ``_run_rest_request``, and an override that let it
+        fall through to ``build_rest_body`` would put a ``signed`` FIELD in the
+        request body — which ``GetCapabilitiesBody`` refuses under
+        ``extra="forbid"`` as ``INVALID_REQUEST: Extra inputs are not permitted
+        (field=signed)``, on every REST dispatch this env makes
+        (salesagent-n78j0.1.1). Once the env can sign, the base implementation
+        owns the request: it carries the serialize-once + credential merge, and
+        the parameterless GET has no body to sign, so the POST arm is the one
+        both branches share.
         """
+        if signed or self.can_sign:
+            return super()._run_rest_request(endpoint, signed=signed, **kwargs)
         client, _identity = self._prepare_rest_request(kwargs)
         if not kwargs:
             return client.get(endpoint)

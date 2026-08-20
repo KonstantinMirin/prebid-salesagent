@@ -69,21 +69,57 @@ JWKS_PATH = "/.well-known/jwks.json"
 JWKS_CONTROL_PATH = "/_control/jwks"
 HEALTH_PATH = "/health"
 
+#: SLOTS — the same listed-agent shape, once per caller instead of once per origin.
+#:
+#: The two agents above are FIXED documents shared by every consumer, which is
+#: right for the accepted/unlisted PAIR (their whole point is that they differ in
+#: one bit) and wrong for anyone who needs a key of their own. The server caches a
+#: resolved ``AgentResolution`` — JWKS included — per ``agent_url`` for an hour
+#: (``request_verifier_middleware._resolution_for``), so a SECOND consumer of
+#: ``/agent/listed`` does not merely race the first: whichever walks first pins the
+#: keyset, and every key published afterwards at that url is invisible to the
+#: verifier for the rest of the TTL. A slot gives each caller its own agent url,
+#: hence its own cache entry, hence no interference — across xdist workers, across
+#: suites, and with the fixed pair above.
+#:
+#: One JWKS store, keyed; one document shape, parametrized. The slot is opaque to
+#: this service: whoever PUTs a keyset at ``/_control/jwks/<slot>`` gets an agent
+#: at ``/agent/slot/<slot>`` whose published brand.json lists exactly that url.
+SLOT_AGENT_PREFIX = "/agent/slot/"
+SLOT_BRAND_PREFIX = "/.well-known/brand-slot/"
+SLOT_JWKS_PREFIX = "/.well-known/jwks-slot/"
+SLOT_CONTROL_PREFIX = "/_control/jwks/"
+
+
+def slot_agent_url(slot: str) -> str:
+    """The absolute ``agent_url`` a caller records on its Principal row."""
+    return f"{PUBLIC_ORIGIN}{SLOT_AGENT_PREFIX}{slot}"
+
+
+def slot_control_path(slot: str) -> str:
+    """Where a caller PUTs the keyset this origin serves for *slot*."""
+    return f"{SLOT_CONTROL_PREFIX}{slot}"
+
 
 class _JwksStore:
-    """The keyset this origin publishes, installed at runtime and read concurrently."""
+    """The keysets this origin publishes, installed at runtime and read concurrently.
+
+    Keyed by SLOT, with ``""`` the shared slot the fixed ``/agent/listed`` pair
+    serves. One store rather than two so an unknown slot is a MISS (404) rather
+    than the shared keyset wearing another caller's clothes.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._jwks: dict = {"keys": []}
+        self._jwks: dict[str, dict] = {"": {"keys": []}}
 
-    def install(self, jwks: dict) -> None:
+    def install(self, jwks: dict, slot: str = "") -> None:
         with self._lock:
-            self._jwks = jwks
+            self._jwks[slot] = jwks
 
-    def get(self) -> dict:
+    def get(self, slot: str = "") -> dict | None:
         with self._lock:
-            return self._jwks
+            return self._jwks.get(slot)
 
 
 def _capabilities(brand_json_url: str) -> dict:
@@ -118,7 +154,7 @@ def _capabilities(brand_json_url: str) -> dict:
     }
 
 
-def _brand_json(listed_agent_url: str | None) -> dict:
+def _brand_json(listed_agent_url: str | None, jwks_uri: str | None = None) -> dict:
     """A brand.json listing zero or one agent.
 
     ``jwks_uri`` on the agent entry is what hop 3 fetches. When
@@ -133,7 +169,7 @@ def _brand_json(listed_agent_url: str | None) -> dict:
         agents.append(
             {
                 "url": listed_agent_url,
-                "jwks_uri": f"{PUBLIC_ORIGIN}{JWKS_PATH}",
+                "jwks_uri": jwks_uri or f"{PUBLIC_ORIGIN}{JWKS_PATH}",
                 "type": "buying",
             }
         )
@@ -158,12 +194,36 @@ class _CounterpartyHandler(JsonRequestHandler):
         elif path == BRAND_UNLISTED_PATH:
             self._write_json(200, _brand_json(None))
         elif path == JWKS_PATH:
-            self._write_json(200, store.get())
+            self._write_json(200, store.get() or {"keys": []})
+        elif path.startswith(SLOT_AGENT_PREFIX):
+            slot = path[len(SLOT_AGENT_PREFIX) :]
+            self._write_json(200, _capabilities(f"{PUBLIC_ORIGIN}{SLOT_BRAND_PREFIX}{slot}.json"))
+        elif path.startswith(SLOT_BRAND_PREFIX) and path.endswith(".json"):
+            slot = path[len(SLOT_BRAND_PREFIX) : -len(".json")]
+            self._write_json(
+                200,
+                _brand_json(slot_agent_url(slot), jwks_uri=f"{PUBLIC_ORIGIN}{SLOT_JWKS_PREFIX}{slot}.json"),
+            )
+        elif path.startswith(SLOT_JWKS_PREFIX) and path.endswith(".json"):
+            slot = path[len(SLOT_JWKS_PREFIX) : -len(".json")]
+            jwks = store.get(slot)
+            if jwks is None:
+                # 404 rather than an empty keyset: an empty ``{"keys": []}`` is a
+                # WELL-FORMED answer, so the walk would succeed and the signature
+                # would then fail as an unresolvable keyid — blaming the verifier
+                # for a caller that never installed anything at this slot.
+                self._write_json(404, {"error": f"no keyset installed for slot {slot!r}"})
+            else:
+                self._write_json(200, jwks)
         else:
             self._write_json(404, {"error": f"no counterparty document at {self.path!r}"})
 
     def do_PUT(self) -> None:  # noqa: N802 - stdlib handler name
-        if self.path.split("?", 1)[0].rstrip("/") != JWKS_CONTROL_PATH:
+        path = self.path.split("?", 1)[0].rstrip("/")
+        slot = ""
+        if path.startswith(SLOT_CONTROL_PREFIX):
+            slot = path[len(SLOT_CONTROL_PREFIX) :]
+        elif path != JWKS_CONTROL_PATH:
             self._write_json(404, {"error": f"no control endpoint at {self.path!r}"})
             return
         raw = self._read_raw_body()
@@ -176,8 +236,8 @@ class _CounterpartyHandler(JsonRequestHandler):
             self._write_json(400, {"error": f"JWKS body is not valid JSON: {exc}"})
             return
         store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
-        store.install(jwks)
-        self._write_json(200, {"installed": len(jwks.get("keys", []))})
+        store.install(jwks, slot)
+        self._write_json(200, {"installed": len(jwks.get("keys", [])), "slot": slot})
 
 
 @contextlib.contextmanager

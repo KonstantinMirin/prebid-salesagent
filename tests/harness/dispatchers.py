@@ -85,6 +85,29 @@ def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
     return None
 
 
+def _refuse_signed_impl() -> None:
+    """Fail loudly when ``signed=True`` reaches ``impl``, which has no wire.
+
+    All four WIRE legs — ``rest``, ``a2a``, ``mcp`` and ``e2e_rest`` — realize a
+    real signature over the real HTTP path (``salesagent-n78j0.1.1``). ``IMPL``
+    is not an oversight and is not "next": it is a direct in-process function
+    call with nothing between the caller and ``_impl``, so there is nothing to
+    sign and no verifier to grade it. It stays a refusal permanently.
+
+    Refusing rather than ignoring ``signed`` is the whole discipline: an
+    unsigned send here would let a signing scenario PASS on a transport that
+    never signed anything, which is precisely the class of hole S1 exists to
+    close (the A2A credential-location bypass survived because the property was
+    asserted by code shape and never observed).
+    """
+    raise NotImplementedError(
+        "call_via(signed=True) has no meaning on transport 'impl': a direct _impl call "
+        "puts nothing on a wire, so there is nothing for RequestSignatureMiddleware to "
+        "verify. Dispatch the scenario over rest, a2a, mcp or e2e_rest. Refusing rather "
+        "than running unsigned, which would make a signing scenario pass without a signature."
+    )
+
+
 class ImplDispatcher:
     """Dispatch via direct ``_impl()`` call.
 
@@ -98,7 +121,9 @@ class ImplDispatcher:
     in-memory exception). Use A2A, REST, or MCP for wire-shape coverage.
     """
 
-    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+        if signed:
+            _refuse_signed_impl()
         try:
             payload = env.call_impl(**kwargs)
         except Exception as exc:
@@ -118,9 +143,18 @@ class A2ADispatcher:
     ``AdCPError`` from the artifact DataPart and stashes the real wire
     envelope on the exception via ``_wire_error_envelope`` — captured here
     by ``_wire_envelope_from_exception``.
+
+    ``signed`` is not consumed here. Whether a signature is realizable is a fact
+    about the ENV (does it have a counterparty key?), not about this class, and
+    the answer changes the TRANSPORT: once the env can sign, ``_run_a2a_handler``
+    routes through a real ``POST /a2a`` on ``src.app.app``, because an
+    ``on_message_send`` call has no wire for the ASGI verifier to see. The flag
+    reaches that method on the env — see ``BaseTestEnv._signed_dispatch``. An env
+    with no capability raises from ``env.signing``, naming
+    ``enable_request_signing()``.
     """
 
-    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
         try:
             payload = env.call_a2a(**kwargs)
         except Exception as exc:
@@ -148,10 +182,10 @@ class RestDispatcher:
     (status_code, content_type) since tests may assert on these.
     """
 
-    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
         try:
             endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
-            response = env._run_rest_request(endpoint, **kwargs)
+            response = env._run_rest_request(endpoint, signed=signed, **kwargs)
 
             envelope = {
                 "transport": "rest",
@@ -186,9 +220,14 @@ class McpDispatcher:
 
     Identity flows through kwargs to env.call_mcp() → _run_mcp_client(),
     which pops it and dispatches via FastMCP in-memory transport.
+
+    ``signed`` is not consumed here, for the reason given on ``A2ADispatcher``:
+    an env that can sign makes ``_run_mcp_client`` drive a real streamable-HTTP
+    session against ``src.app.app`` instead of FastMCP's in-memory object
+    streams, which carry no headers and never reach the ASGI verifier.
     """
 
-    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
         try:
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
@@ -239,11 +278,32 @@ class RestE2EDispatcher:
     parse_rest_response / parse_rest_error); the only e2e-specific dependency is
     ``env.e2e_config`` (base_url of the live stack), set by the bdd conftest for
     E2E scenarios. Ported from feature/media-buy-refactoring (PR #1360 lineage).
+
+    THE SIGNED PATH (salesagent-n78j0.1.1). This is the only leg that leaves the
+    process, and the owner's D1 ruling — "the http path is the only really
+    truthful one" — makes it the one that matters most. Once the env can sign,
+    both the signed and the unsigned dispatch go through ``env.wire_request``,
+    the same seam the three in-process legs use, which owns all three rules a
+    signed request obeys (serialize once and send exactly those bytes; carry the
+    same credential and tenant hint whether or not you sign; one identity, on
+    ``Authorization``). Two things are this leg's OWN, and both are stated at the
+    call site rather than inside that seam because only this leg has them:
+
+    * the ORIGIN is the live stack's, port included — nginx forwards ``Host``
+      verbatim and ``_verify_url`` rebuilds the authority from it;
+    * the tenant hint names the env's tenant, because ``request_headers``
+      otherwise injects the in-process ``sig_tenant``, which does not exist in
+      the live database. A header asserting a tenant other than the one being
+      addressed is a lie inside the signed byte range, and one ladder reordering
+      away from collapsing the posture bucket to ``none`` — an unverified
+      pass-through wearing a 200.
     """
 
-    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
         import httpx
 
+        if signed and not env.can_sign:
+            env.signing  # raises, naming enable_request_signing()  # noqa: B018
         if not env.e2e_config:
             return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
@@ -270,14 +330,43 @@ class RestE2EDispatcher:
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
 
+        method = getattr(env, "REST_METHOD", "post")
+        bodyless_get = method == "get" and not kwargs
+
+        raw: bytes | None = None
+        if env.can_sign:
+            from tests.helpers.signing import wire_origin
+
+            extra = {"x-adcp-tenant": env._tenant_id}
+            if "x-dry-run" in headers:
+                extra["x-dry-run"] = headers["x-dry-run"]
+            raw, headers = env.wire_request(
+                path=endpoint,
+                body=None if bodyless_get else body,
+                signed=signed,
+                extra=extra,
+                origin=wire_origin(base_url),
+                credentialed=identity is not None,
+                method="GET" if bodyless_get else "POST",
+            )
+
         with httpx.Client(base_url=base_url, timeout=30) as client:
-            method = getattr(env, "REST_METHOD", "post")
             # GET-with-no-body only when no params were supplied at all — mirrors
             # the in-process _run_rest_request dispatch (e.g. CapabilitiesEnv:
             # parameterless GET /api/v1/capabilities happy path vs POST
             # /api/v1/capabilities when protocols/context/adcp_version are set,
             # salesagent-5yik).
-            if method == "get" and not kwargs:
+            if raw is not None:
+                # Signed or not, the bytes signed are the bytes sent — httpx's
+                # `json=` re-serializes with its own separators, which is refused
+                # as request_signature_digest_mismatch.
+                response = client.request(
+                    "GET" if bodyless_get else "POST",
+                    endpoint,
+                    content=raw,
+                    headers=headers,
+                )
+            elif bodyless_get:
                 response = client.get(endpoint, headers=headers)
             elif method == "get":
                 response = client.post(endpoint, json=body, headers=headers)
@@ -345,7 +434,7 @@ class RestE2EDispatcher:
 class McpE2EDispatcher:
     """Placeholder for real MCP E2E dispatch (not yet implemented)."""
 
-    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
         raise NotImplementedError(
             "E2E_MCP dispatcher is not yet implemented. Use Transport.MCP for in-process MCP dispatch."
         )
@@ -354,7 +443,7 @@ class McpE2EDispatcher:
 class A2AE2EDispatcher:
     """Placeholder for real A2A E2E dispatch (not yet implemented)."""
 
-    def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
         raise NotImplementedError(
             "E2E_A2A dispatcher is not yet implemented. Use Transport.A2A for in-process A2A dispatch."
         )

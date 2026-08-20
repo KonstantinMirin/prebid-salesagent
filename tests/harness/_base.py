@@ -26,6 +26,8 @@ import os
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests.harness._realize import realize_e2e
+
 # The MCP transport boots the real FastMCP app lifespan, which starts the
 # background schedulers. Those run a batch immediately on the *real* wall clock
 # and rewrite media-buy status rows — silently mutating data a test just seeded
@@ -308,6 +310,119 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     return exc
 
 
+# ---------------------------------------------------------------------------
+# The JSON-RPC wire, for the A2A and MCP legs that go over real HTTP
+# (salesagent-n78j0.1.1). Kept module-level and transport-named so the env keeps
+# ONE seam per leg — build the DTO, hand it to ``wire_request``, POST it.
+# ---------------------------------------------------------------------------
+
+#: The A2A JSON-RPC route on ``src.app.app``. NO trailing slash: ``/a2a/`` is a
+#: 307 redirect, and httpx replays a redirect with the ORIGINAL signature, which
+#: then covers the wrong ``@target-uri`` and is refused as
+#: ``request_signature_invalid`` — a fixture bug wearing a verifier bug's clothes.
+_A2A_PATH = "/a2a"
+
+#: The MCP streamable-HTTP endpoint. WITH the trailing slash, same reason: the
+#: mount answers ``/mcp`` with a 307 to ``/mcp/``.
+_MCP_PATH = "/mcp/"
+
+#: MCP streamable HTTP requires the client to accept BOTH renderings; the server
+#: refuses the POST outright ("Not Acceptable") when either is missing.
+_MCP_ACCEPT = "application/json, text/event-stream"
+
+
+def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    """The ``message/send`` JSON-RPC envelope naming *skill_name* explicitly.
+
+    Built from the a2a-sdk's own v0.3 request model — the SAME model the server's
+    compat adapter validates the body against
+    (``a2a/compat/v0_3/jsonrpc_adapter.py`` ``METHOD_TO_MODEL``) — rather than a
+    hand-rolled dict, so a field the SDK renames or requires cannot silently
+    diverge here. Explicit-skill invocation is the ``data`` part shape
+    ``{"skill": ..., "parameters": ...}`` (``src/a2a_server/adcp_a2a_server.py``),
+    which is also what ``src/core/signing/operations.py`` names the operation from.
+    """
+    import uuid
+
+    from a2a.compat.v0_3 import types as v03
+
+    request = v03.SendMessageRequest(
+        id=str(uuid.uuid4()),
+        params=v03.MessageSendParams(
+            message=v03.Message(
+                message_id=str(uuid.uuid4()),
+                role=v03.Role.user,
+                parts=[v03.Part(root=v03.DataPart(data={"skill": skill_name, "parameters": parameters}))],
+            )
+        ),
+    )
+    return request.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _a2a_first_data_part(artifact: dict[str, Any]) -> dict[str, Any] | None:
+    """The first ``data`` part of an artifact as the ``/a2a`` HTTP wire renders it."""
+    for part in artifact.get("parts") or []:
+        if isinstance(part, dict) and isinstance(part.get("data"), dict):
+            return dict(part["data"])
+    return None
+
+
+def _mcp_jsonrpc_request(request_id: int, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One MCP JSON-RPC request frame, built from the mcp SDK's own models.
+
+    The envelope shape is the SDK's ``JSONRPCRequest`` rather than a literal
+    dict, so a field the protocol renames cannot silently diverge in the harness
+    while the server keeps validating against the model.
+    """
+    from mcp import types as mcp_types
+
+    frame = mcp_types.JSONRPCRequest(jsonrpc="2.0", id=request_id, method=method, params=params)
+    return frame.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+
+def _mcp_error_to_exception(payload: dict[str, Any]) -> Exception:
+    """The exception an MCP error frame stands for, in the shape the unwrapper reads.
+
+    ``_unwrap_mcp_tool_error`` reconstructs the typed ``AdCPError`` from the JSON
+    envelope FastMCP puts in ``str(ToolError)``. Over HTTP that envelope arrives
+    as the ``isError`` result's text content (or as a JSON-RPC ``error.message``),
+    so it is re-wrapped in a ``ToolError`` here and handed to the SAME unwrapper
+    the in-memory leg uses — one reconstruction, not two.
+    """
+    from fastmcp.exceptions import ToolError
+
+    for item in payload.get("content") or []:
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            return ToolError(item["text"])
+    return ToolError(str(payload.get("message") or payload))
+
+
+def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
+    """One JSON-RPC envelope out of an HTTP response, SSE-framed or not.
+
+    MCP's streamable HTTP answers a POST with ``text/event-stream`` (FastMCP's
+    ``http_app`` does not enable JSON responses), so the envelope arrives as an
+    SSE ``data:`` line; ``/a2a`` answers with plain JSON. One reader for both,
+    because the CALLER only ever wants the envelope and a per-leg copy of this
+    framing would be two ways to mis-read the same wire.
+    """
+    import json as _json
+
+    if response.status_code >= 400 or not response.content:
+        raise AssertionError(f"{surface} returned HTTP {response.status_code}: {response.text[:800]!r}")
+
+    if "text/event-stream" not in response.headers.get("content-type", ""):
+        return response.json()
+
+    for line in response.text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        envelope = _json.loads(line[len("data:") :].strip())
+        if isinstance(envelope, dict) and ("result" in envelope or "error" in envelope):
+            return envelope
+    raise AssertionError(f"{surface} SSE response carried no JSON-RPC envelope: {response.text[:800]!r}")
+
+
 class _TestClock:
     """Minimal clock for BDD relative date-token resolution.
 
@@ -416,6 +531,15 @@ class BaseTestEnv:
         # with NO artifacts — and the synthesized submitted wire above cannot
         # prove artifact absence, so guards assert on this captured Task.
         self._last_a2a_task: Any = None
+        # Whether the dispatch currently in flight asked for a signature. It
+        # travels on the env rather than as a kwarg because A2A and MCP dispatch
+        # through env-owned ``call_a2a``/``call_mcp`` OVERRIDES whose signatures
+        # the harness does not control — a ``signed=`` kwarg would have to be
+        # forwarded by every subclass or it would arrive as a skill parameter.
+        # ``call_via`` sets it for exactly one dispatch, next to the wire capture
+        # those same two methods already stash here. REST needs none of this: its
+        # dispatcher calls ``_run_rest_request`` directly and passes ``signed=``.
+        self._signed_dispatch: bool = False
 
     # -- Transport mode -----------------------------------------------------
 
@@ -579,12 +703,20 @@ class BaseTestEnv:
 
     # -- Transport dispatch -------------------------------------------------
 
-    def call_via(self, transport: Transport, **kwargs: Any) -> TransportResult:
+    def call_via(self, transport: Transport, *, signed: bool = False, **kwargs: Any) -> TransportResult:
         """Dispatch through *transport* and return normalized TransportResult.
 
         Injects the correct identity for the transport into kwargs (unless
         the caller explicitly provides one). Routes to the appropriate
         dispatcher.
+
+        ``signed=True`` asks for a genuinely signed request — a real RFC 9421
+        signature over the exact bytes this call puts on the wire, under a key
+        the counterparty's own trust root publishes. The DISPATCHER realizes it,
+        because what "signed" means is transport-specific; callers (and every
+        BDD step) stay transport-blind. A transport that cannot yet sign REFUSES
+        rather than silently sending an unsigned request — see
+        ``tests/harness/signing_capability.py``.
         """
         from tests.harness.dispatchers import DISPATCHERS
 
@@ -595,7 +727,59 @@ class BaseTestEnv:
         # Reset success-path wire capture; _run_a2a_handler / _run_mcp_client
         # set it fresh on success so A2A/MCP dispatchers can surface real wire.
         self._last_wire_response = None
-        return dispatcher.dispatch(self, **kwargs)
+        self._signed_dispatch = signed
+        return dispatcher.dispatch(self, signed=signed, **kwargs)
+
+    # -- Request signing ----------------------------------------------------
+
+    def _realize_e2e_request_signing(self) -> Any:
+        """Establish the counterparty against a verifier in ANOTHER process.
+
+        The in-process branch below seeds the middleware's process-global
+        ``AGENT_RESOLUTION_CACHE`` — a patch the live server container cannot
+        see. Over e2e the same intent has to travel by the real mechanism: the
+        key is PUBLISHED on the counterparty origin, the ``agent_url`` that names
+        it is recorded on a Principal row in the SERVER's database, and the
+        server resolves the two by its own brand.json walk. See
+        ``tests/harness/signing_capability.py``.
+        """
+        from tests.harness.signing_capability import build_e2e_signing_capability
+
+        if self.__dict__.get("_signing") is None:
+            self.__dict__["_signing"] = build_e2e_signing_capability(self)
+        return self.__dict__["_signing"]
+
+    @realize_e2e(_realize_e2e_request_signing)
+    def enable_request_signing(self) -> Any:
+        """Mint this env's counterparty signing key and publish its trust root.
+
+        Idempotent: the capability is built once per env. Call from a Given (or
+        a fixture) that establishes "this buyer signs"; the transport is chosen
+        later, at ``call_via``.
+        """
+        from tests.harness.signing_capability import build_signing_capability
+
+        if self.__dict__.get("_signing") is None:
+            self.__dict__["_signing"] = build_signing_capability(self)
+        return self.__dict__["_signing"]
+
+    @property
+    def signing(self) -> Any:
+        """The env's signing capability, or a hard failure naming the fix.
+
+        Returning None here would surface as a confusing ``AttributeError`` deep
+        inside header construction; the caller's actual mistake is that nothing
+        established the counterparty's key.
+        """
+        capability = self.__dict__.get("_signing")
+        if capability is None:
+            raise AssertionError(
+                f"{type(self).__name__} was asked for a signed request but no signing "
+                "capability exists. Call env.enable_request_signing() first (from the "
+                "Given that establishes the counterparty), then dispatch with "
+                "call_via(..., signed=True)."
+            )
+        return capability
 
     # -- Per-transport hooks (override in subclass) -------------------------
 
@@ -668,12 +852,21 @@ class BaseTestEnv:
         ``_get_auth_token`` on the handler instance — single mock point, same
         as the MCP Client approach patches resolve_identity_from_context.
 
+        Once the env CAN sign, this defers to ``_run_a2a_over_http``: an
+        ``on_message_send`` call has no wire, so ``RequestSignatureMiddleware``
+        (ASGI, above the whole app) never sees it and a signature would be
+        unobservable. See ``can_sign`` for why the fork is on the capability and
+        not on ``signed``.
+
         Args:
             skill_name: A2A skill name (e.g., "get_products").
             response_cls: Pydantic model class to parse artifact data into.
             **kwargs: Skill parameters. ``identity`` is popped and used for
                 the identity mock; remaining kwargs become skill parameters.
         """
+        if self.can_sign:
+            return self._run_a2a_over_http(skill_name, response_cls, **kwargs)
+
         import asyncio
 
         from a2a.server.routes.common import ServerCallContext
@@ -696,14 +889,7 @@ class BaseTestEnv:
         if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
             self._ensure_tenant_for_audit(a2a_identity.tenant_id)
 
-        # Unpack req object into flat parameters if present.
-        # A2A skills accept a flat parameter dict, not a request model.
-        req = kwargs.pop("req", None)
-        if req is not None and hasattr(req, "model_dump"):
-            req_fields = req.model_dump(mode="json", exclude_none=True)
-            parameters = {**req_fields, **kwargs}
-        else:
-            parameters = dict(kwargs)
+        parameters = self._a2a_skill_parameters(kwargs)
 
         handler = AdCPRequestHandler()
 
@@ -764,36 +950,84 @@ class BaseTestEnv:
         # (state, artifact absence) that the parsed response cannot prove.
         self._last_a2a_task = task_result
 
-        # AdCP-domain errors now surface as a failed Task with the two-layer
-        # envelope in the artifact DataPart. Reconstruct the AdCPError so
-        # callers can catch domain exceptions instead of getting
-        # a pydantic ValidationError from trying to parse the envelope as a
-        # success response.
         from a2a.types import TaskState
 
-        if task_result.status.state == TaskState.TASK_STATE_FAILED:
+        # Normalize the protobuf state onto the v0.3 spelling the shared outcome
+        # helper reads — the HTTP leg receives that spelling straight off the wire.
+        protobuf_states = {
+            TaskState.TASK_STATE_FAILED: "failed",
+            TaskState.TASK_STATE_SUBMITTED: "submitted",
+        }
+
+        return self._a2a_task_outcome(
+            state=protobuf_states.get(task_result.status.state, ""),
+            status=task_result.status,
+            task_id=task_result.id,
+            artifact_data=(extract_data_from_artifact(task_result.artifacts[0]) if task_result.artifacts else None),
+            response_cls=response_cls,
+        )
+
+    @staticmethod
+    def _a2a_skill_parameters(kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Flat A2A skill parameters from dispatch kwargs (``req`` unpacked).
+
+        A2A skills accept a flat parameter dict, not a request model. Shared by
+        the in-process handler leg and the HTTP leg so the two cannot send
+        different parameters for the same call.
+        """
+        req = kwargs.pop("req", None)
+        if req is not None and hasattr(req, "model_dump"):
+            req_fields = req.model_dump(mode="json", exclude_none=True)
+            return {**req_fields, **kwargs}
+        return dict(kwargs)
+
+    def _a2a_task_outcome(
+        self,
+        *,
+        state: str,
+        status: Any,
+        task_id: str,
+        artifact_data: dict[str, Any] | None,
+        response_cls: type,
+    ) -> Any:
+        """Turn one A2A Task into a parsed response, a raise, or the submitted wire.
+
+        Stated ONCE for both A2A legs. The in-process leg reads a protobuf
+        ``Task``, the HTTP leg reads the v0.3 JSON the ``/a2a`` route serializes;
+        the three OUTCOMES (failed → reconstructed ``AdCPError``, submitted →
+        synthesized submitted wire, otherwise → the stripped artifact DataPart)
+        are the same contract, and a second copy of them is how the two legs
+        would drift into grading different things.
+
+        *state* is the normalized A2A task state — the v0.3 spelling
+        (``"failed"`` / ``"submitted"``), which the protobuf leg maps onto via
+        :data:`_A2A_PROTOBUF_STATES`.
+        """
+        # AdCP-domain errors surface as a FAILED Task with the two-layer envelope
+        # in the artifact DataPart. Reconstruct the AdCPError so callers catch
+        # domain exceptions instead of a pydantic ValidationError from trying to
+        # parse the envelope as a success response.
+        if state == "failed":
             from src.core.exceptions import AdCPError
 
-            if task_result.artifacts:
-                envelope = extract_data_from_artifact(task_result.artifacts[0])
-                reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
+            if artifact_data:
+                reconstructed = _envelope_to_adcp_error(artifact_data, fallback_message="A2A skill failed")
                 if reconstructed is not None:
                     raise reconstructed
-            raise AdCPError(f"A2A task failed: {task_result.status}")
+            raise AdCPError(f"A2A task failed: {status}")
 
-        if task_result.status.state == TaskState.TASK_STATE_SUBMITTED:
+        if state == "submitted":
             # Async manual-approval path: the server returns a submitted Task with NO
             # artifacts (adcp_a2a_server.py:683) — the submitted envelope is conveyed by
             # the Task state + id, not an artifact union. Reconstruct the submitted wire
             # (protocol status="submitted" + the task_id the buyer polls) so success-path
             # grading sees the real A2A wire.
-            submitted_wire = {"status": "submitted", "task_id": task_result.id}
+            submitted_wire = {"status": "submitted", "task_id": task_id}
             self._last_wire_response = dict(submitted_wire)
             return response_cls(**submitted_wire)
 
-        if not task_result.artifacts:
-            raise ValueError(f"Task has no artifacts. Status: {task_result.status}")
-        artifact_data = extract_data_from_artifact(task_result.artifacts[0])
+        if artifact_data is None:
+            raise ValueError(f"Task has no artifacts. Status: {status}")
         # Surface the full, unstripped artifact DataPart as the real A2A wire for
         # success-path assertions. Captured BEFORE stripping so siblings that need
         # the top-level envelope fields (message/success) still see them.
@@ -806,6 +1040,66 @@ class BaseTestEnv:
         artifact_data.pop("message", None)
         artifact_data.pop("success", None)
         return response_cls(**artifact_data)
+
+    def _run_a2a_over_http(self, skill_name: str, response_cls: type, **kwargs: Any) -> Any:
+        """A2A dispatch as a real POST to ``/a2a`` on ``src.app.app``.
+
+        The leg the signing capability needs, and strictly MORE production than
+        the in-process one: the request traverses ``UnifiedAuthMiddleware`` →
+        ``RequestSignatureMiddleware`` → the SDK's JSON-RPC route → the integer-
+        restoring wrapper (``src/app.py``) → the same ``AdCPRequestHandler``.
+        Identity is not fabricated here — it is resolved from the real bearer
+        ``wire_request`` puts on ``Authorization``, by the same
+        ``AdCPCallContextBuilder`` a live buyer would meet.
+
+        The wire method is ``message/send``, NOT the a2a-sdk 1.0 native
+        ``SendMessage``. The pinned AdCP 3.1.1 capabilities schema constrains
+        every ``protocol_methods_*`` bucket with
+        ``pattern: ^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$``, so ``SendMessage`` is
+        UNREPRESENTABLE in any posture bucket — a request naming it can never
+        land anywhere but the ``none`` bucket, where the verifier is never
+        called and a signing assertion would be vacuous. ``message/send`` reaches
+        the same handler through the SDK's v0.3 compat adapter
+        (``enable_v0_3_compat=True``, ``src/app.py``) and resolves through
+        ``src/core/signing/operations.py`` to the SKILL as the operation, which
+        is the namespace ``required_for`` actually grades.
+        """
+        from tests.harness.transport import Transport
+
+        self._commit_factory_data()
+
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        a2a_identity = self.identity_for(Transport.A2A) if identity is _NO_OVERRIDE else identity
+        if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
+            self._ensure_tenant_for_audit(a2a_identity.tenant_id)
+
+        parameters = self._a2a_skill_parameters(kwargs)
+        body = _a2a_message_send_body(skill_name, parameters)
+        # /a2a with NO trailing slash: src/app.py 307-redirects /a2a/, and httpx
+        # would replay the pre-redirect signature against the new target-uri —
+        # a genuine signature failing as request_signature_invalid.
+        raw, headers = self.wire_request(path=_A2A_PATH, body=body, signed=self._signed_dispatch)
+        response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
+
+        envelope = _jsonrpc_body(response, surface=_A2A_PATH)
+        if "error" in envelope:
+            from src.core.exceptions import AdCPError
+
+            raise AdCPError(f"A2A JSON-RPC error: {envelope['error']}")
+        result = envelope.get("result") or {}
+        # v1.0 wraps the task; v0.3 returns it bare. Accept both so this parse does
+        # not silently start returning {} if the compat arm is ever retired.
+        task = result.get("task", result)
+        artifacts = task.get("artifacts") or []
+        artifact_data = _a2a_first_data_part(artifacts[0]) if artifacts else None
+        return self._a2a_task_outcome(
+            state=(task.get("status") or {}).get("state", ""),
+            status=task.get("status"),
+            task_id=task.get("id", ""),
+            artifact_data=artifact_data,
+            response_cls=response_cls,
+        )
 
     def _run_mcp_client(
         self,
@@ -826,6 +1120,11 @@ class BaseTestEnv:
         When no real token is available (unit mode), patches
         ``resolve_identity_from_context`` directly.
 
+        Once the env CAN sign, this defers to ``_run_mcp_over_http``: FastMCP's
+        in-memory transport is a pair of anyio object streams with no HTTP, no
+        ASGI and no headers, so ``RequestSignatureMiddleware`` — registered on
+        ``src.app.app`` — is not on that path at all. See ``can_sign``.
+
         Args:
             tool_name: MCP tool name (e.g., "get_products").
             response_cls: Pydantic model class to parse structured_content into.
@@ -833,6 +1132,9 @@ class BaseTestEnv:
                 auth mock; ``req`` is popped and its fields unpacked into the
                 arguments dict.
         """
+        if self.can_sign:
+            return self._run_mcp_over_http(tool_name, response_cls, **kwargs)
+
         import asyncio
         from unittest.mock import patch
 
@@ -848,15 +1150,7 @@ class BaseTestEnv:
         identity = kwargs.pop("identity", _NO_OVERRIDE)
         mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
 
-        # Unpack req object into flat arguments if present.
-        # MCP tools accept individual params, not a request model.
-        req = kwargs.pop("req", None)
-        if req is not None and hasattr(req, "model_dump"):
-            req_fields = req.model_dump(exclude_none=True)
-            # kwargs override req fields (explicit > implicit)
-            arguments = {**req_fields, **kwargs}
-        else:
-            arguments = dict(kwargs)
+        arguments = self._mcp_tool_arguments(kwargs)
 
         # Choose auth strategy based on whether we have a real DB token.
         auth_token = mcp_identity.auth_token if mcp_identity else None
@@ -903,6 +1197,182 @@ class BaseTestEnv:
             return asyncio.run(_call())
         except Exception as exc:
             raise _unwrap_mcp_tool_error(exc) from exc
+
+    @staticmethod
+    def _mcp_tool_arguments(kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Flat MCP tool arguments from dispatch kwargs (``req`` unpacked).
+
+        MCP tools accept individual params, not a request model; explicit kwargs
+        win over ``req`` fields. Shared by the in-memory leg and the HTTP leg so
+        one call cannot become two different tool invocations.
+        """
+        req = kwargs.pop("req", None)
+        if req is not None and hasattr(req, "model_dump"):
+            req_fields = req.model_dump(exclude_none=True)
+            return {**req_fields, **kwargs}
+        return dict(kwargs)
+
+    def _run_mcp_over_http(self, tool_name: str, response_cls: type, **kwargs: Any) -> Any:
+        """MCP dispatch as real streamable-HTTP POSTs to ``/mcp/`` on ``src.app.app``.
+
+        The leg the signing capability needs. FastMCP exposes no per-request
+        header seam on its in-memory transport (``Client.call_tool`` has no
+        ``headers=``), and more fundamentally that transport never touches
+        ``src.app.app``, where the verifier lives — so the session is driven
+        directly here: ``initialize`` → ``notifications/initialized`` →
+        ``tools/call``, each POSTed through the SAME ``TestClient``-on-
+        ``src.app.app`` the REST leg uses, each serialized ONCE and signed over
+        exactly the bytes sent.
+
+        Only the ``tools/call`` frame is a graded operation. ``initialize`` names
+        a protocol method with no ``/``, which the pinned
+        ``protocol_methods_*`` pattern cannot represent, and
+        ``notifications/initialized`` is not something an AdCP posture declares —
+        both land in the ``none`` bucket, which
+        ``RequestSignatureMiddleware`` passes through WITHOUT calling the
+        verifier. Signing them anyway is correct (each gets its own fresh nonce)
+        and keeps "the verifier ran exactly once per dispatch" true.
+
+        Driving the three frames by hand rather than through FastMCP's
+        ``StreamableHttpTransport`` is deliberate: that client also opens a
+        long-lived ``GET`` SSE stream, and httpx's ASGI transport BUFFERS the
+        whole app call before returning, so the stream would never complete.
+        Hand-driving also means no frame is sent that this leg did not choose.
+
+        REMOVAL TRIGGER — **salesagent-n78j0.12** (convention:
+        ``src/core/signing/_upstream/``). This is a HAND-ROLLED PROTOCOL SEQUENCE
+        standing in for an SDK transport, the shape that silently drifts from the
+        SDK — the same class as adcontextprotocol/adcp#6734. It is a workaround,
+        not an architecture, and without a recorded trigger it becomes permanent
+        by default.
+
+        The precise upstream inconsistency, which is what n78j0.12 exists to
+        verify: the SDK's ``streamablehttp_client`` DOES expose
+        ``httpx_client_factory`` — a seam whose natural case is supplying
+        ``httpx.ASGITransport`` for in-process testing — but
+        ``handle_get_stream`` opens the standalone ``GET`` SSE UNCONDITIONALLY
+        once a session id exists, with no knob, which defeats exactly that seam.
+
+        That is report-worthy, but it is NOT filed and must not be filed from
+        here: the counterfactual is unverified. n78j0.12 runs it — suppress
+        ``handle_get_stream``, drive ``streamablehttp_client`` over an
+        ASGI-backed factory, and see whether initialize/initialized/tools-call
+        actually completes. If it does, the ticket has proof and THAT becomes
+        this method's trigger; if it does not, a second blocker exists and the
+        ticket would be unactionable. Scheduled after S1 closes.
+
+        So: delete this method and dispatch through the SDK transport when
+        n78j0.12 shows the ASGI-backed factory completing the handshake — or if
+        an MCP/FastMCP transport appears that speaks streamable-HTTP without a
+        standalone ``GET`` stream at all.
+
+        What must NOT happen meanwhile is this sequence quietly accreting frames
+        as the MCP spec evolves: if a future SDK adds or reorders a handshake
+        frame, this copy will not know, and the failure will present as a
+        verifier bug rather than a stale hand-roll.
+        Pinned against: ``mcp`` / ``fastmcp`` as vendored at the time of writing.
+
+        The app LIFESPAN must be running — the ``/mcp`` mount's session manager
+        is started there — so a dedicated ``TestClient`` is entered for the
+        dispatch, wrapped in ``preserved_global_app_state`` because lifespan
+        startup rewrites the process-global route table and shutdown does not
+        undo it (``tests/helpers/app_state.py``, salesagent-66a1).
+        """
+        from starlette.testclient import TestClient
+
+        from src.app import app
+        from tests.harness.transport import Transport
+        from tests.helpers.app_state import preserved_global_app_state
+
+        self._commit_factory_data()
+
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
+        if self.use_real_db and mcp_identity and mcp_identity.tenant_id:
+            self._ensure_tenant_for_audit(mcp_identity.tenant_id)
+
+        arguments = self._mcp_tool_arguments(kwargs)
+
+        with preserved_global_app_state(), TestClient(app) as client:
+            session_id = self._mcp_open_session(client)
+            envelope = self._mcp_post(
+                client,
+                _mcp_jsonrpc_request(2, "tools/call", {"name": tool_name, "arguments": arguments}),
+                session_id=session_id,
+            )
+
+        if "error" in envelope:
+            raise _unwrap_mcp_tool_error(_mcp_error_to_exception(envelope["error"]))
+        result = envelope.get("result") or {}
+        if result.get("isError"):
+            raise _unwrap_mcp_tool_error(_mcp_error_to_exception(result))
+        structured = result.get("structuredContent")
+        if structured is None:
+            raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
+        self._last_wire_response = structured
+        return response_cls(**structured)
+
+    def _mcp_open_session(self, client: Any) -> str:
+        """Run the two handshake frames and return the server's session id.
+
+        ``initialize`` mints the session; the server REFUSES any request before
+        ``notifications/initialized`` confirms it ("Received request before
+        initialization was complete"), so both are mandatory — and both are
+        signed, because once the env can sign every byte it puts on this wire
+        carries a signature.
+        """
+        from mcp import types as mcp_types
+
+        response = self._mcp_send(
+            client,
+            _mcp_jsonrpc_request(
+                1,
+                "initialize",
+                {
+                    "protocolVersion": mcp_types.LATEST_PROTOCOL_VERSION,
+                    "capabilities": mcp_types.ClientCapabilities().model_dump(by_alias=True, exclude_none=True),
+                    "clientInfo": mcp_types.Implementation(name="adcp-harness", version="1.0").model_dump(
+                        by_alias=True, exclude_none=True
+                    ),
+                },
+            ),
+        )
+        session_id = response.headers.get("mcp-session-id")
+        if not session_id:
+            raise AssertionError(f"MCP initialize returned no mcp-session-id: {response.text[:800]!r}")
+        # Read the envelope even though the session id is what we need: an
+        # ``initialize`` that answered an ERROR still carries a session header,
+        # and a handshake that failed must surface here rather than as an
+        # inexplicable refusal three frames later.
+        handshake = _jsonrpc_body(response, surface=_MCP_PATH)
+        if "error" in handshake:
+            raise AssertionError(f"MCP initialize failed: {handshake['error']!r}")
+
+        initialized = mcp_types.JSONRPCNotification(jsonrpc="2.0", method="notifications/initialized")
+        acknowledged = self._mcp_send(
+            client,
+            initialized.model_dump(by_alias=True, mode="json", exclude_none=True),
+            session_id=session_id,
+        )
+        if acknowledged.status_code >= 400:
+            raise AssertionError(
+                f"MCP notifications/initialized was refused with HTTP "
+                f"{acknowledged.status_code}: {acknowledged.text[:800]!r}"
+            )
+        return session_id
+
+    def _mcp_send(self, client: Any, body: dict[str, Any], *, session_id: str | None = None) -> Any:
+        """POST one MCP frame, signed-or-not by the SAME rules every other leg obeys."""
+        extra = {"Accept": _MCP_ACCEPT}
+        if session_id:
+            extra["mcp-session-id"] = session_id
+        raw, headers = self.wire_request(path=_MCP_PATH, body=body, signed=self._signed_dispatch, extra=extra)
+        return client.post(_MCP_PATH, content=raw, headers=headers)
+
+    def _mcp_post(self, client: Any, body: dict[str, Any], *, session_id: str | None = None) -> dict[str, Any]:
+        """POST one MCP frame and return its JSON-RPC envelope."""
+        return _jsonrpc_body(self._mcp_send(client, body, session_id=session_id), surface=_MCP_PATH)
 
     def _run_mcp_wrapper(
         self,
@@ -998,7 +1468,7 @@ class BaseTestEnv:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+    def _run_rest_request(self, endpoint: str, *, signed: bool = False, **kwargs: Any) -> Any:
         """Shared REST dispatch: configure auth → build body → POST → return Response.
 
         Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
@@ -1014,7 +1484,121 @@ class BaseTestEnv:
         """
         client, identity = self._prepare_rest_request(kwargs)
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+
+        if not self.can_sign:
+            if signed:
+                self.signing  # raises, naming enable_request_signing()  # noqa: B018
+            return client.post(endpoint, json=body)
+
+        raw, headers = self.wire_request(path=endpoint, body=body, signed=signed)
+        return client.post(endpoint, content=raw, headers=headers)
+
+    @property
+    def can_sign(self) -> bool:
+        """Whether ``enable_request_signing()`` established a counterparty here.
+
+        The fork EVERY leg takes, and the reason it is a fork rather than a
+        branch on ``signed``: owner decision D1's corollary. Once an env can
+        sign, both its signed AND its unsigned dispatches go over the HTTP path,
+        so the two differ by exactly one variable — the signature. An env that
+        cannot sign keeps the historical in-process dispatch untouched.
+        """
+        return self.__dict__.get("_signing") is not None
+
+    def wire_request(
+        self,
+        *,
+        path: str,
+        body: Any,
+        signed: bool,
+        extra: dict[str, str] | None = None,
+        origin: str | None = None,
+        credentialed: bool = True,
+        method: str = "POST",
+    ) -> tuple[bytes, dict[str, str]]:
+        """The bytes and headers ONE signed-or-unsigned request puts on the wire.
+
+        Stated once because all four legs obey the identical rules and only the
+        PATH and the DTO differ. Three of those rules were learned the hard way
+        and a per-leg copy would re-learn them:
+
+        1. **Serialize ONCE, send exactly those bytes.** httpx's ``json=``
+           re-serializes with its own separators, so a signature built over a
+           different rendering of the same object covers different bytes than the
+           wire carries and is refused as ``request_signature_digest_mismatch`` —
+           a fixture bug wearing a verifier bug's clothes, the trap
+           ``tests/helpers/signing.py`` warns about in its own docstring.
+        2. **Once the env CAN sign, EVERY request carries the credential and the
+           tenant hint, signed or not.** Otherwise ``signed=False`` is not a
+           control: with no ``x-adcp-tenant`` the middleware never resolves the
+           tenant whose posture was declared, falls to the ``none`` bucket and
+           answers 200 — which reads as "unsigned was accepted" when in truth the
+           verifier was never engaged. Measured on the first spike run, where it
+           produced exactly that false green.
+        3. **One identity, on the spec-canonical header** (owner decision D3/D4).
+           ``signed_headers``/``request_headers`` put the capability's token in
+           ``Authorization: Bearer`` and set no ``x-adcp-auth``: the alias appears
+           nowhere in the pinned 3.1 schemas, and the pinned SDK calls Bearer "the
+           spec-canonical header" with the alias "purely additive"
+           (``adcp/server/auth.py:311-322``). A leg that also emitted
+           ``x-adcp-auth`` would win the precedence race in
+           ``resolved_identity._extract_auth_token`` and silently swap the acting
+           principal — signed and unsigned would then differ by more than the
+           signature.
+
+        *extra* carries whatever else the transport's own framing requires (MCP's
+        ``Accept`` negotiation and its ``mcp-session-id``, for instance). It is
+        merged BEFORE signing rather than added afterwards so the header set the
+        signature was computed over is byte-identical to the one sent — rule 1
+        applied to headers instead of to the body.
+
+        *origin* is the scheme+authority the signature's ``@target-uri`` covers,
+        and defaults to the in-process ASGI client's ``http://testserver`` — right
+        for the three in-process legs and wrong for the one that leaves the
+        process. ``_verify_url`` (``request_verifier_middleware``) rebuilds the
+        authority from the ``Host`` header the proxy forwards VERBATIM, so an e2e
+        caller must pass the real origin INCLUDING THE PORT or the signature
+        covers a different target-uri than the verifier reconstructs and is
+        refused as ``request_signature_invalid`` — a fixture bug wearing a
+        verifier bug's clothes.
+
+        *credentialed* exists for exactly one case, and it is a case rule 2 does
+        not cover: grading the REFUSAL. security.mdx :1269 says an unsigned
+        request carrying a valid bearer that resolves to an accepted Principal
+        MUST NOT be refused for the missing signature, so a credentialed unsigned
+        request is a spec-correct 200 and cannot produce a
+        ``request_signature_required`` challenge to read. Only an UNACCEPTABLE
+        credential — here, none at all — reaches that branch. Everything else
+        about the request (the path, the body, the tenant hint) stays identical,
+        so the challenge is attributable to the missing credential.
+
+        Returns ``(raw_bytes, headers)``; the caller owns the verb and the client.
+        """
+        import json as _json
+
+        from tests.helpers.signing import WIRE_ORIGIN, request_headers, signed_headers
+
+        capability = self.signing
+        token = capability.token if credentialed else None
+        # ``body=None`` is a BODYLESS request (a GET with no parameters), not an
+        # empty JSON document: it must sign — and send — zero bytes, or the
+        # content-digest covers a ``{}`` the wire does not carry.
+        raw = b"" if body is None else _json.dumps(body).encode()
+        merged = {"Content-Type": "application/json", **(extra or {})}
+        if not signed:
+            return raw, request_headers(token, merged)
+        return raw, signed_headers(
+            capability.private_key,
+            token,
+            # ``@method`` is inside the signature base, so a signature made as
+            # POST and sent as GET is refused as request_signature_invalid.
+            method=method,
+            path=path,
+            body=raw,
+            extra=merged,
+            key_id=capability.key_id,
+            origin=origin or WIRE_ORIGIN,
+        )
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.

@@ -29,6 +29,17 @@ app which path a counterparty lands on, and a leaked catch-all changes the answe
 A test that starts the real lifespan therefore MUST restore. Use this context manager
 rather than re-deriving the snapshot list per call site: the set of globals startup
 touches is one fact, and two copies of it drift.
+
+THE SECOND START (salesagent-n78j0.1.1)
+---------------------------------------
+``src.app.mcp_app`` is built ONCE at import, so the ``StreamableHTTPSessionManager``
+behind the ``/mcp`` mount is a process singleton — and its ``run()`` deliberately
+refuses a second call ("can only be called once per instance"). Left alone, the FIRST
+test in a process that starts the lifespan silently makes the app un-startable for
+every later one: measured as a ``RuntimeError`` on the second signed-MCP dispatch,
+not as anything resembling its cause. Restarting is exactly the "restore what startup
+mutated" contract this module already owns, so the one-shot latch is cleared here
+rather than at each call site.
 """
 
 from __future__ import annotations
@@ -49,6 +60,8 @@ def preserved_global_app_state() -> Iterator[None]:
       and hands the next file on the worker a closed client.
     * ``lifecycle._shutdown_callbacks`` — the service-agnostic registry the shutdown
       hook drains.
+    * the ``/mcp`` session manager's one-shot ``run()`` latch — see the module
+      docstring's "second start" section.
 
     Restores by rebinding/slicing rather than by re-running production setup, so it
     stays correct whether or not the body actually reached startup.
@@ -66,3 +79,27 @@ def preserved_global_app_state() -> Iterator[None]:
         app_module.app.router.routes = original_routes
         protocol_webhook_service._webhook_service = original_singleton
         lifecycle._shutdown_callbacks[:] = original_callbacks
+        _rearm_mcp_session_manager()
+
+
+def _rearm_mcp_session_manager() -> None:
+    """Clear the ``/mcp`` session manager's "already ran" latch.
+
+    ``StreamableHTTPSessionManager.run()`` unwinds everything else itself on exit
+    (task group cancelled, ``_task_group`` cleared, session and owner maps
+    emptied); the only thing it deliberately does NOT reset is the flag that makes
+    a second ``run()`` raise, because upstream expects a fresh instance per run and
+    a long-lived server never needs one. We cannot supply a fresh instance — the
+    lifespan closure in ``fastmcp.server.http`` captured this one, and the app is
+    built at import — so the latch is cleared instead. Nothing else is touched.
+
+    A no-op when the mount's shape changes: the manager is located through the
+    route rather than assumed, so this degrades to doing nothing rather than to
+    an AttributeError far from any call site.
+    """
+    import src.app as app_module
+
+    for route in getattr(app_module.mcp_app, "routes", []):
+        manager = getattr(getattr(route, "endpoint", None), "session_manager", None)
+        if manager is not None:
+            manager._has_started = False
