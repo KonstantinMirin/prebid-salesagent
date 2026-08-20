@@ -29,23 +29,24 @@ Mode selection is a CONSTRUCTOR choice, so "signed both ways" (which :1425 forbi
 is not a rule to enforce but a shape that cannot be expressed: a ``WebhookSender``
 holds exactly one auth strategy, and ``signs_with_rfc9421`` reports which.
 
-**Destination policy is deliberately unchanged by C1, and that has a cost worth
-naming.** The sender is handed an ``httpx.AsyncClient`` we own, which puts it on the
-SDK's operator-supplied-client path. That path does NOT mean "our transport owns
-SSRF, exactly as today" — read at the pin, ``adcp/webhooks.py:1727`` says
-*"Operator-supplied client: trust them completely; they own SSRF"* and ``:1604`` that
-operator-supplied clients SKIP the SSRF check, while the owned-client path
-(``:1636``, ``:1715``) builds a PINNED transport that resolves the URL,
-SSRF-validates it and pins the connection to the validated IP before anything is
-serialized. Our supplied client is a plain ``AsyncClient``, so on this path nothing
-validates the destination AT DELIVERY TIME; the only check is the caller's fire-time
-one, with the residual TOCTOU that ``notification_proof_service`` already concedes.
+**Destination policy: whoever owns the client owns the SSRF check.** Read at the
+pin, ``adcp/webhooks.py`` branches on ``_owns_client``. ``:1727`` — *"Operator-supplied
+client: trust them completely; they own SSRF"* — and ``:1604``, that operator-supplied
+clients SKIP the SDK's check; while the owned-client path (``:1636``, ``:1715``)
+builds a PINNED transport that resolves the URL, validates it, and pins the
+connection to the validated IP before anything is serialized.
 
-Adopting the SDK's pinned transport is still a real behaviour change to every
-existing receiver URL — and one that cannot be judged by reading range tables, since
-the e2e stack's own compose subnet is the deprecated 6to4 block. It belongs with the
-SSRF seam work (GH #1802) and the defect it closes (GH #1890), graded on the live
-stack, not with the signing switch.
+So handing the SDK a plain ``AsyncClient`` never meant "our transport owns SSRF,
+exactly as today". It meant nothing validated the destination AT DELIVERY TIME — only
+the caller's fire-time check, with the TOCTOU between the two resolutions that
+``notification_proof_service`` concedes.
+
+The two SYNCHRONOUS senders now pass ``None``, so the SDK owns a pinned client for
+them (see :func:`adcp_webhook_sender`). Their receivers are buyer-supplied, which is
+exactly the case the pinned path exists for. ``ProtocolWebhookService`` still supplies
+its own long-lived pool and therefore still skips the SDK check; retiring that
+belongs with the egress seam (GH #1802) and the defect it closes (GH #1890), because
+it needs a pool the seam owns rather than a per-delivery client.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ import hashlib
 import logging
 import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -628,16 +629,34 @@ async def adcp_webhook_sender(
     now: datetime | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[WebhookSender]:
-    """A configured sender bound to an HTTP client.
+    """A configured sender bound to an HTTP client, or to the SDK's pinned one.
 
     A caller with a long-lived pool (``ProtocolWebhookService``) passes it in and
-    keeps owning its lifecycle; callers without one — the two synchronous senders,
+    keeps owning its lifecycle. A caller WITHOUT one — the two synchronous senders,
     which run each delivery on their own event loop and so cannot share a client —
-    get a per-delivery client opened and closed here.
+    now gets ``None``, and the SDK opens its own per-delivery client.
+
+    That is deliberate, and it is a destination-policy change. ``adcp/webhooks.py``
+    branches on ``_owns_client``: an operator-supplied client is trusted completely
+    and SKIPS the SDK's SSRF check (``:1604``, ``:1727``), while the owned-client path
+    (``:1636``, ``:1715``) resolves the URL, validates it against
+    ``resolve_and_validate_host``, and PINS the connection to the validated IP before
+    anything is serialized. Opening a plain client here therefore bought nothing but
+    the loss of that check — the destination went unvalidated at delivery time, with
+    only the caller's fire-time check and the TOCTOU between the two resolutions.
+
+    The receivers this reaches are buyer-supplied, so the pinned path is the one they
+    should get. ``allow_private_destinations`` stays at the SDK default of ``False``.
+    Measured before adopting: the e2e stack's own compose subnet
+    (``E2E_NETWORK_SUBNET``, default ``192.88.99.0/26``) is accepted by every flag the
+    SDK classifier tests — private, loopback, link-local, multicast, reserved — which
+    is what that subnet was chosen for. Docker's default bridge (``172.17/16``) and
+    RFC 1918 are refused, as they should be.
+
+    ``ProtocolWebhookService`` still supplies its pool and therefore still skips the
+    SDK check; closing that is the egress-seam work in GH #1802.
     """
-    async with AsyncExitStack() as stack:
-        if client is None:
-            client = await stack.enter_async_context(httpx.AsyncClient(timeout=_TIMEOUT_SECONDS))
+    with ExitStack() as stack:
         resolved_repo = stack.enter_context(_signing_repo(repo, tenant_id))
         yield build_webhook_sender(
             config=config,
