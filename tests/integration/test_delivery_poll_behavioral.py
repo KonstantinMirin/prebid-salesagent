@@ -99,7 +99,8 @@ class TestWebhookNotificationTypeFinal:
 
             dumped = response.model_dump(mode="json")
             assert dumped["notification_type"] == "final"
-            assert dumped["next_expected_at"] is None
+            # The pin omits next_expected_at on final notifications; it is never null.
+            assert "next_expected_at" not in dumped
 
 
 @pytest.mark.requires_db
@@ -145,7 +146,8 @@ class TestSimulationReachesFinalThroughRealHook:
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "completed"
             assert dumped["notification_type"] == "final"
-            assert dumped["next_expected_at"] is None
+            # The pin omits next_expected_at on final notifications; it is never null.
+            assert "next_expected_at" not in dumped
 
     def test_mock_time_in_flight_reports_active_and_scheduled(self, integration_db):
         """The in-flight companion: simulated clock inside the window -> active/scheduled."""

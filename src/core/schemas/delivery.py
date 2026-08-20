@@ -328,15 +328,13 @@ class GetMediaBuyDeliveryResponse(
         ..., description="Array of delivery data for each media buy"
     )
 
-    # ``next_expected_at`` is required-and-nullable only once ``notification_type``
-    # is set: the AdCP protocol wants it explicitly present (as null) so a consumer
-    # of a 'final' report knows no further reports are expected. That per-instance
-    # condition is why the mixin carries a ``_should_always_include`` seat — before
-    # it had one, this class hand-wrote the re-insert after ``model_dump()``.
-    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset({"next_expected_at"})
-
-    def _should_always_include(self, field: str) -> bool:
-        return self.notification_type is not None
+    # Derived from the pin. The premise the old hand-declaration rested on was
+    # false: get-media-buy-delivery-response.json types next_expected_at
+    # `{"type": "string"}` — not nullable — and does not list it in `required`. Its
+    # own description says it is "only present in webhook deliveries when
+    # notification_type is not 'final'", so a null is never the right wire value and
+    # `notification_type is not None` included 'final', the one case the pin excludes.
+    _PINNED_SCHEMA_REF: ClassVar[str] = "media-buy/get-media-buy-delivery-response.json"
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

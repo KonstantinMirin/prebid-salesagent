@@ -480,23 +480,31 @@ class TestGetMediaBuysAlwaysIncludeNullFields:
 
         nullable = {name for name, spec in properties.items() if "null" in _as_type_list(spec.get("type"))}
         required_nullable = required & nullable
-        assert required_nullable == {"confirmed_at"}, (
-            f"The pinned get-media-buys item's required+nullable set is now {sorted(required_nullable)}, "
-            f"not ['confirmed_at'] — the adcp pin moved. Every field in that set must be re-inserted "
-            f"after `exclude_none`, so add the new ones to "
-            f"GetMediaBuysMediaBuy._ALWAYS_INCLUDE_NULL_FIELDS (and drop any that left)."
+        assert required_nullable, (
+            "The pinned get-media-buys item declares no required+nullable property, so this test "
+            "would pass without exercising anything. The pin moved — check what replaced it."
         )
 
-        declared = getattr(GetMediaBuysMediaBuy, "_ALWAYS_INCLUDE_NULL_FIELDS", None)
-        assert declared is not None, (
-            "GetMediaBuysMediaBuy must declare _ALWAYS_INCLUDE_NULL_FIELDS (via "
-            "AlwaysIncludeFieldsMixin) instead of hand-writing the single-field re-insert."
+        # Assert the WIRE, not the declaration. The set is derived from this same pin
+        # (_PINNED_SCHEMA_REF), so comparing it against the pin would be a tautology;
+        # what is worth grading is that a null value for such a field actually survives
+        # `exclude_none` and reaches the buyer as an explicit null.
+        blank = dict.fromkeys(required_nullable)
+        buy = GetMediaBuysMediaBuy(
+            media_buy_id="mb-1",
+            status="active",
+            currency="USD",
+            total_budget=1000.0,
+            packages=[],
+            revision=1,
+            **blank,
         )
-        assert required_nullable <= set(declared), (
-            f"{sorted(required_nullable - set(declared))} are required+nullable in the pinned "
-            f"get-media-buys item but absent from GetMediaBuysMediaBuy._ALWAYS_INCLUDE_NULL_FIELDS "
-            f"({sorted(declared)}) — they would be dropped by exclude_none for every buy whose "
-            f"value is null."
+        dumped = buy.model_dump(mode="json")
+        missing = sorted(name for name in required_nullable if name not in dumped)
+        assert not missing, (
+            f"{missing} are required+nullable in the pinned get-media-buys item but were dropped "
+            f"by exclude_none, so a buy whose value is null would fail item-level validation at "
+            f"the buyer. Emitted keys: {sorted(dumped)}"
         )
 
 

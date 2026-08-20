@@ -295,18 +295,23 @@ class WireSerializerMixin:
     A class that needs both names both mixins and still gets exactly one serializer.
     """
 
-    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset()
+    # The schema an adopter is graded against. Naming it is the whole opt-in: the
+    # always-include set is DERIVED from the pin, so it cannot disagree with it.
+    # Declaring the field names by hand is what let two adopters drift into
+    # emitting schema-invalid nulls (advertiser/rate_card/payment_terms on Account,
+    # next_expected_at on the delivery response) — both typed as plain optionals by
+    # the pin, neither required, neither nullable.
+    _PINNED_SCHEMA_REF: ClassVar[str | None] = None
     _SERIALIZE_NESTED_MODELS: ClassVar[bool] = False
 
-    def _should_always_include(self, field: str) -> bool:
-        """Whether *field* is required-nullable on THIS instance.
+    @classmethod
+    def _always_include_null_fields(cls) -> frozenset[str]:
+        """Fields the pin lists in ``required`` AND types nullable."""
+        if cls._PINNED_SCHEMA_REF is None:
+            return frozenset()
+        from src.core.schemas._pinned_fields import required_nullable_fields
 
-        The overridable seat for a conditional adopter: a field the spec requires
-        only in some states (``GetMediaBuyDeliveryResponse.next_expected_at``, which
-        is required only once ``notification_type`` is set) answers per instance
-        instead of hand-writing a re-insert block after ``model_dump()``.
-        """
-        return True
+        return required_nullable_fields(cls._PINNED_SCHEMA_REF)
 
     @model_serializer(mode="wrap")
     def _serialize_wire(self, serializer, info):
@@ -356,12 +361,10 @@ class WireSerializerMixin:
         """
         excluded = info.exclude or ()
         included = info.include
-        for field in self._ALWAYS_INCLUDE_NULL_FIELDS:
+        for field in self._always_include_null_fields():
             if field in data or field in excluded:
                 continue
             if included is not None and field not in included:
-                continue
-            if not self._should_always_include(field):
                 continue
             if getattr(self, field, None) is None:
                 data[field] = None
@@ -426,10 +429,10 @@ class AlwaysIncludeFieldsMixin(WireSerializerMixin):
     of those produces a response that fails item-level validation: the same class
     of silent omission as the missing envelope status (GH #1900).
 
-    Adopters declare the field names in ``_ALWAYS_INCLUDE_NULL_FIELDS``, and an
-    adopter whose field is required only in some states overrides
-    ``_should_always_include``. Both hooks and the serializer itself live in
-    :class:`WireSerializerMixin`; this class is the opt-in name.
+    Adopters name the schema they are graded against in ``_PINNED_SCHEMA_REF`` and
+    the field set is derived from it — there is no list to keep in step with the
+    spec. The hook and the serializer live in :class:`WireSerializerMixin`; this
+    class is the opt-in name.
 
     The two footguns this mixin used to document are fixed rather than described —
     see ``WireSerializerMixin._apply_always_include``: only a ``None`` value is
@@ -3045,7 +3048,11 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
     # not-yet-confirmed buy — the same class of silent omission as the missing
     # envelope status (GH #1900), caught by the wire-graded UC-019 scenario rather
     # than by review. AlwaysIncludeFieldsMixin keeps it present.
-    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset({"confirmed_at"})
+    # Derived from the pin: the item schema lists confirmed_at in `required` and
+    # types it ["string","null"], so it is the one field that must stay on the wire
+    # as an explicit null. This adopter was already correct; deriving means it stays
+    # correct across a pin bump without anyone re-checking.
+    _PINNED_SCHEMA_REF: ClassVar[str] = "media-buy/get-media-buys-response.json#/properties/media_buys/items"
 
     def model_dump(self, **kwargs):
         """Serialize local package subclasses, then keep required-nullable fields."""

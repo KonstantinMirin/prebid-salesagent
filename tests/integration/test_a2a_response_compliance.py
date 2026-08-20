@@ -206,6 +206,41 @@ class TestA2ASpecCompliance:
         assert "success" not in response_dict
         assert "message" not in response_dict
 
+    def test_get_media_buys_spec_compliance(self):
+        """get_media_buys returns only spec-defined fields.
+
+        This oracle class is the only thing that can see a spurious wire key on this
+        response: get-media-buys-response.json sets additionalProperties true, so
+        schema validation accepts an invented key and says nothing.
+        """
+        from src.core.schemas import GetMediaBuysResponse
+
+        ctx = {"user_id": "1234567890"}
+        response = GetMediaBuysResponse(media_buys=[], context=ctx)
+
+        # `status` reaches the wire through the composed protocol-envelope arm rather
+        # than the root properties. `replayed` is an SDK 5.7 envelope default the pin
+        # does not declare — accepted here on the same footing as the get_products
+        # case above, and legal only because this root sets additionalProperties true.
+        spec_fields = {"media_buys", "errors", "status", "context", "pagination", "sandbox", "ext", "replayed"}
+        extra = set(response.model_dump().keys()) - spec_fields
+        assert extra == set(), f"Response has non-spec fields: {extra}"
+
+    def test_sync_accounts_spec_compliance(self):
+        """sync_accounts returns only spec-defined fields.
+
+        Same reasoning as get_media_buys: account/sync-accounts-response.json also
+        sets additionalProperties true, so a stray key passes validation unseen.
+        """
+        from src.core.schemas import SyncAccountsResponse
+
+        ctx = {"user_id": "1234567890"}
+        response = SyncAccountsResponse(accounts=[], context=ctx)
+
+        spec_fields = {"accounts", "errors", "status", "context", "dry_run", "sandbox", "ext"}
+        extra = set(response.model_dump().keys()) - spec_fields
+        assert extra == set(), f"Response has non-spec fields: {extra}"
+
     def test_get_media_buy_delivery_spec_compliance(self):
         """Test get_media_buy_delivery returns only spec-defined fields."""
         from datetime import UTC, datetime

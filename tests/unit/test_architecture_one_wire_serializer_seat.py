@@ -8,9 +8,9 @@ both fail SILENTLY — which is what makes them worth a guard rather than a revi
 1. **Hand-rolled required-nullable re-insert.** ``model_dump()`` calls ``super()``
    and then puts a key back that ``exclude_none=True`` dropped. It is invisible to
    ``model_dump_json()``, it cannot see the caller's ``exclude=``, and under
-   ``mode="json"`` it can plant a raw Python value in a JSON document. Declare
-   ``_ALWAYS_INCLUDE_NULL_FIELDS`` (and override ``_should_always_include`` when the
-   field is required only in some states) instead.
+   ``mode="json"`` it can plant a raw Python value in a JSON document. Name the
+   schema in ``_PINNED_SCHEMA_REF`` instead — the retained set is derived from the
+   pin's required-and-nullable intersection, so it cannot drift from the spec.
 
 2. **A second model serializer on one model.** Pydantic runs only the FIRST model
    serializer it finds in the MRO and drops the rest with no error and no warning, so
@@ -215,10 +215,10 @@ def test_no_hand_rolled_required_nullable_reinsert() -> None:
         summary="Required-nullable retention belongs to AlwaysIncludeFieldsMixin, not a model_dump() override",
         violations=violations,
         fix_hint=(
-            "Declare _ALWAYS_INCLUDE_NULL_FIELDS on the class (and override "
-            "_should_always_include when the field is required only in some states). "
-            "A model_dump() override cannot see the caller's exclude= and never runs "
-            "for model_dump_json()."
+            "Name the schema in _PINNED_SCHEMA_REF on the class — the retained set is "
+            "derived from the pin's required-and-nullable intersection, so it cannot "
+            "drift from the spec. A model_dump() override cannot see the caller's "
+            "exclude= and never runs for model_dump_json()."
         ),
         docs_link="docs/development/structural-guards.md",
     )

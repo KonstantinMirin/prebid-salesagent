@@ -8,7 +8,6 @@ Then steps assert on GetMediaBuysResponse fields.
 
 from __future__ import annotations
 
-import pathlib
 from datetime import date, datetime
 from typing import Any
 
@@ -1625,12 +1624,13 @@ def _pinned_recovery(code: str) -> str | None:
     platform-specific codes), leaving recovery ungraded rather than inventing an
     expectation the spec does not state.
     """
-    import json
+    from tests.helpers.pinned_schema import load
 
-    import adcp
-
-    schema = pathlib.Path(adcp.__file__).parent / "_schemas" / "3.1" / "enums" / "error-code.json"
-    metadata = json.loads(schema.read_text()).get("enumMetadata", {})
+    # Read through the pin helper rather than rebuilding the path by hand. The
+    # literal "3.1" here was a hand copy of the pinned version, inside the one step
+    # whose entire purpose is reading a fact FROM the pin — it would have kept
+    # answering from 3.1 after a bump, silently grading against the wrong spec.
+    metadata = load("enums/error-code.json").get("enumMetadata", {})
     return (metadata.get(code) or {}).get("recovery")
 
 

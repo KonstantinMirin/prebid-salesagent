@@ -46,11 +46,12 @@ class Account(AlwaysIncludeFieldsMixin, LibraryAccountDomain):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # POST-S3: Buyer knows advertiser, rate_card, and payment_terms.
-    # Library model_dump defaults exclude_none=True which strips these when
-    # None.  AlwaysIncludeFieldsMixin re-inserts them so callers can distinguish
-    # "field absent" from "field=null".
-    _ALWAYS_INCLUDE_NULL_FIELDS: ClassVar[frozenset[str]] = frozenset({"advertiser", "rate_card", "payment_terms"})
+    # Derived from the pin, not declared. core/account.json types advertiser,
+    # rate_card and payment_terms as plain non-nullable optionals and lists none of
+    # them in `required`, so the intersection is empty and all three are omitted
+    # when null. Declaring them always-include emitted a document that FAILED
+    # validation against that schema, on list_accounts — a registered A2A skill.
+    _PINNED_SCHEMA_REF: ClassVar[str] = "core/account.json"
 
 
 # ---------------------------------------------------------------------------
