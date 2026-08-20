@@ -186,8 +186,14 @@ iterate:
       acceptance: "Verdict recorded with a reason; PROCEED or LEDGER required to continue, and a LEDGER verdict records all four conditions; NARROW and DEEPEN route back to design; ESCALATE stops the chain."
       depends_on: ["design-{TASK_ID}"]
       labels: ["atom:solution-review", "atom:gate"]
+      # NOT review-architecture. That agent is specified to run LAST, consuming
+      # eight prior dimensional reviewers' findings as its symptom set. This atom
+      # runs FIRST, before any code exists, so it hands that agent no input and
+      # gets no verdict back -- it goes idle silently, which reads like a passed
+      # gate. A fresh-context general-purpose referee applying the rubric above
+      # is what this atom needs; the rubric, not the agent, carries the review.
       delegate:
-        agent: review-architecture
+        agent: general-purpose
 
     # ── Atom 3: Predict — replaces write-test ────────────────────────────
     - id: "predict-{TASK_ID}"

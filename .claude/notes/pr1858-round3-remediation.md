@@ -83,8 +83,43 @@ touches production behavior.
   `tests/unit/test_architecture_spec_field_disposition.py`, and
   `UNDISPOSED_LEDGER`, with no replacement.
 - The `canceled`-honoring code in `media_buy_update.py`, and the
-  `idempotency_key`-honoring code in `creatives/_sync.py` and the
-  `idempotency_seam` migration.
+  `idempotency_key`-honoring code in `creatives/_sync.py`.
+
+**Owner decision on the idempotency seam.** The plan first said to revert "the
+`idempotency_seam` migration". No such alembic migration exists; this branch
+adds no file under `alembic/versions/`. The only referent is the module
+`src/core/idempotency_seam.py`, and deleting it removes behavior that main
+already has. Measured at the merged head: `origin/main` does not contain the
+module, and main's `media_buy_create.py` carries the create_media_buy
+idempotency inline, with 80 `idempotenc*` references and 7 `payload_hash`
+references. This branch extracted that logic into the module, which
+`media_buy_create.py:130-136` imports and calls at `:1692`, `:1714`, `:1786`,
+`:1819`, and `:1878`.
+
+**Keep `src/core/idempotency_seam.py`.** A behavior-neutral extraction of
+main-existing logic changes no behavior, so the step's core invariant holds. The
+step reverts only the Lane A behavior layered on top of it: the
+`idempotency_key` honoring in `creatives/_sync.py`. The honor path continues on
+`fix/1858-field-disposition`. Un-extracting the module back into
+`media_buy_create.py` would re-duplicate logic that the DRY invariant in
+`CLAUDE.md` treats as a defect.
+
+**Additional consumers the deletion list must cover.** Deleting
+`tests/harness/spec_field_consumption.py` leaves three imports unbuildable:
+
+- `tests/integration/test_spec_request_fields_accepted.py:42` imports
+  `UNDISPOSED_LEDGER`, `spec_tool_names`, and `undisposed_fields`. The file is
+  new this round, so delete it.
+- `tests/unit/test_mcp_tool_schemas.py:138` imports `published_input_fields`.
+  This file exists on main and main's copy does not reference the harness
+  module, so revert the import rather than deleting the file.
+- `src/core/tools/media_buy_create.py:130-136` imports the five seam functions.
+  Keeping the module resolves this one.
+
+**Stale docstring references to correct**, all prose rather than imports:
+`src/core/version_compat.py:425`, `src/core/spec_request_carrier.py:107`,
+`src/core/transport_helpers.py:171`, and
+`src/core/tools/media_buy_update.py:1627`.
 
 **Inexpressibility.** After this step, the seam has one acceptance rule, so no
 call site can express a second disposition policy.
