@@ -1086,6 +1086,23 @@ def _render_scenario_lines(scenario: Scenario) -> list[str]:
     return lines
 
 
+def _without_trailing_blanks(lines: list[str]) -> list[str]:
+    """Right-strip every line and drop the trailing blank ones.
+
+    ``parse_feature_file`` ends a Background block at the next scenario, so the
+    blank lines separating the two land inside ``background_lines``. The merge
+    renderer then emits that block and appends its own separator, so each
+    ``--merge`` run over the same file grew the gap by one line and no run
+    reproduced its own input. A byte-for-byte round trip is what tells you a
+    generated feature still matches its adcp-req source, so a renderer that
+    cannot reproduce its own output destroys the only available check.
+    """
+    trimmed = [line.rstrip() for line in lines]
+    while trimmed and not trimmed[-1]:
+        trimmed.pop()
+    return trimmed
+
+
 # ---------------------------------------------------------------------------
 # Binding ground truth (which scenarios actually have step-defs in salesagent)
 # ---------------------------------------------------------------------------
@@ -1409,25 +1426,23 @@ def merge_feature(
     out_lines.append(target_feature.feature_line)
     for dl in target_feature.description_lines:
         out_lines.append(dl.rstrip())
+    background_lines: list[str] | None = None
     if use_target_background and target_feature.background_lines:
         # Unwired UC + Background diff → TARGET wins (no bindings to keep).
-        for bl in target_feature.background_lines:
-            out_lines.append(bl.rstrip())
-        out_lines.append("")
+        background_lines = target_feature.background_lines
     elif legacy_feature is not None and legacy_feature.background_lines:
-        for bl in legacy_feature.background_lines:
-            out_lines.append(bl.rstrip())
-        out_lines.append("")
+        background_lines = legacy_feature.background_lines
     elif target_feature.background_lines:
-        for bl in target_feature.background_lines:
-            out_lines.append(bl.rstrip())
+        background_lines = target_feature.background_lines
+    if background_lines is not None:
+        out_lines.extend(_without_trailing_blanks(background_lines))
         out_lines.append("")
 
     for scen in merged_scenarios:
         out_lines.extend(_render_scenario_lines(scen))
         out_lines.append("")
 
-    output_text = "\n".join(out_lines) + "\n"
+    output_text = "\n".join(_without_trailing_blanks(out_lines)) + "\n"
 
     # Also pass through new mappings so the caller can update traceability
     # (mirrors compile_feature's contract for the prune step).
