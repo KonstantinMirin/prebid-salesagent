@@ -312,6 +312,14 @@ def _restore_a2a_wire_integers(endpoint):
     integer-typed AdCP fields before it reaches the client -- see
     ``restore_a2a_integer_types`` for the shared coercion logic and the
     field list's spec citations.
+
+    REMOVAL TRIGGER: an a2a-sdk that does not round-trip AdCP integers through
+    ``protobuf.Value``. This wrapper compensates for an upstream lossy conversion, so
+    it is a seam with an owner elsewhere, not a permanent part of our design -- the
+    same reason ``src/core/signing/_upstream/`` carries deletion triggers rather than
+    living forever. Nothing yet tracks it upstream: file it against a2a-sdk before
+    relying on the trigger, and record the number here. Tracked as
+    ``salesagent-n78j0.11``.
     """
 
     async def _wrapped(request):
@@ -334,7 +342,28 @@ def _restore_a2a_wire_integers(endpoint):
 _agent_card = create_agent_card()
 _request_handler = AdCPRequestHandler()
 
-# Build A2A routes using a2a-sdk 1.0 route factories
+# Build A2A routes using a2a-sdk 1.0 route factories.
+#
+# enable_v0_3_compat=True is LOAD-BEARING FOR SPEC CONFORMANCE, not a migration
+# convenience, and it has a removal trigger: adcontextprotocol/adcp#6734.
+#
+# AdCP 3.1.1 binds request_signing.protocol_methods_* to A2A 0.3.0 wire names. All
+# three buckets constrain their items with
+# pattern "^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$", and the field description says the
+# `tasks/*` family "matches the A2A 0.3.0 task-lifecycle methods". Measured against
+# a2a-sdk 1.0.1's own vocabularies: 6 of 11 0.3.0 JSON-RPC names satisfy that pattern
+# and 0 of 9 v1.0 names do -- `SendMessage`, `GetTask`, `CancelTask` and the rest
+# cannot match it at all.
+#
+# So with this flag OFF, our wire would carry v1.0 method names, nothing matching
+# them could ever be listed in protocol_methods_required_for, `required_for` could
+# never fire on the A2A surface, and a seller could not declare a conformant signing
+# posture for an A2A client. The flag is what keeps that surface declarable.
+#
+# REMOVE IT when #6734 resolves and AdCP admits v1.0 method names into
+# protocol_methods_* -- same shape as the deletion triggers on
+# src/core/signing/_upstream/ (#1794), which test_signing_vendored_provenance.py
+# grades. Tracked as salesagent-n78j0.11.
 _a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
