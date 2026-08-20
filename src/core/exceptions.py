@@ -17,7 +17,7 @@ from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
 
-from src.core.errors.codes import AppErrorCode, ErrorCodeT
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -456,7 +456,7 @@ class AdCPError(Exception):
 
     def __init__(
         self,
-        message: str = "",
+        message: str | None = None,
         *,
         error_code: ErrorCodeT | None = None,
         status_code: int | None = None,
@@ -472,8 +472,22 @@ class AdCPError(Exception):
         # sanctioned ``synthesize()`` classmethod for boundary fallback paths
         # that need a wire code the typed class hierarchy doesn't model.
         # Direct raises use a typed subclass and inherit its ``_default_*``.
-        super().__init__(message)
-        self.message = message
+        #
+        # error_code is assigned FIRST because the message resolution keys on it.
+        # Keying on ``type(self)._code`` instead would resolve every synthesized
+        # error against its CLASS's code rather than the code it actually carries.
+        self.error_code = error_code if error_code is not None else type(self)._code
+        # Resolve ONCE, then hand the SAME value to both readers. ``args`` and
+        # ``.message`` therefore cannot disagree — a raise site that has nothing to
+        # add passes nothing and gets the table's text.
+        #
+        # ``is not None``, never ``or``: an OMITTED message and an EMPTY one are
+        # different. Boundary paths do pass '' (a text-less ValueError, a
+        # text-less ToolError), and '' must stay '' rather than acquire a sentence
+        # the caller did not choose.
+        resolved_message = message if message is not None else CODE_TABLE[self.error_code].message
+        super().__init__(resolved_message)
+        self.message = resolved_message
         self.details = details
         self.field = field
         self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
@@ -483,7 +497,6 @@ class AdCPError(Exception):
         # build_two_layer_error_envelope(); emitted only to the server-side log
         # by normalize_to_adcp_error(). Never add it to a serializer.
         self.internal_detail = internal_detail
-        self.error_code = error_code if error_code is not None else type(self)._code
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
         self.recovery = recovery if recovery is not None else type(self)._default_recovery
 
