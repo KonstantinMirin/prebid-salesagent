@@ -224,6 +224,60 @@ class TestSignedDispatchAcrossTransports:
             )
 
 
+@pytest.mark.requires_db
+def test_refusal_is_graded_by_the_challenge_not_by_the_status(integration_db):
+    """``assert_signature_challenge`` grades WHICH refusal happened, byte-exactly.
+
+    The refusal half of this file's property, on the in-process leg — until now
+    only the live-stack test below could state it, and it stated it by reading
+    ``WWW-Authenticate`` by hand.
+
+    WHY A CREDENTIAL-LESS CALL. security.mdx :1269 makes an unsigned request
+    carrying a valid bearer a spec-correct 200, so ``signed=False`` ALONE never
+    reaches the verifier's refusal branch. ``identity=None`` — the harness's
+    established "send without a credential" — is what leaves the missing
+    signature as the only thing the request can be refused for.
+
+    WHY NOT ``status_code == 401``. Because a 401 is equally produced by the auth
+    middleware rejecting first, by a 404 wearing a 401, and by the
+    malformed-header precheck — and because a status-shaped oracle on this path
+    has already been observed to be vacuous: forcing a leg to dispatch UNSIGNED
+    in salesagent-n78j0.1.1 left ``is_success`` passing.
+
+    The three negatives are the assertion's own non-vacuity, graded rather than
+    argued: the wrong (but real) code fails, a code outside the verifier's
+    vocabulary fails, and — the one that matters — an ACCEPTED dispatch fails
+    instead of being read as a refusal.
+
+    ONLY THE REST LEG, deliberately and for now: ``_run_a2a_over_http`` /
+    ``_run_mcp_over_http`` always attach the capability's bearer and their
+    JSON-RPC readers discard the HTTP response on a 4xx, so neither can produce
+    an anonymous refusal to grade yet. The helper does not paper over that — on
+    such a result it FAILS, naming the cause.
+    """
+    with _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+        env.enable_request_signing()
+
+        with declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
+            refused = env.call_via(Transport.REST, signed=False, identity=None)
+            accepted = env.call_via(Transport.REST, signed=True)
+
+        refused.assert_signature_challenge("request_signature_required")
+
+        with pytest.raises(AssertionError, match="request_signature_invalid"):
+            refused.assert_signature_challenge("request_signature_invalid")
+
+        with pytest.raises(AssertionError, match="not a request-signature rejection code"):
+            refused.assert_signature_challenge("REQUEST_SIGNATURE_REQUIRED")
+
+        assert accepted.is_success, (
+            f"the signed control must be accepted, or the refusal above is not attributable to the "
+            f"missing signature: {accepted.envelope} error={accepted.error!r}"
+        )
+        with pytest.raises(AssertionError, match="request_signature_required"):
+            accepted.assert_signature_challenge("request_signature_required")
+
+
 # ---------------------------------------------------------------------------
 # The e2e_rest leg — the only one that leaves the process
 # ---------------------------------------------------------------------------
@@ -387,11 +441,11 @@ if LIVE_STACK is not None:
                 "equally consistent with a request that was never verified, so this delta — not the status "
                 "code — is what says the verifier ran and accepted THIS signature."
             )
-            assert rejection_code(refused.raw_response) == "request_signature_required", (
-                "the same dispatch without a signature and without an acceptable credential must be refused "
-                "by the VERIFIER, with the challenge that names it. Got HTTP "
-                f"{getattr(refused.raw_response, 'status_code', None)} with WWW-Authenticate="
-                f"{getattr(refused.raw_response, 'headers', {}).get('WWW-Authenticate')!r}. A 2xx here means "
-                "the posture never reached this request (wrong tenant hint, or the declaration was refused) "
-                "and the accepted leg above proves less than it appears to."
-            )
+            # Through the harness helper rather than a local header read: the
+            # challenge is graded the same way on every leg, and the helper adds the
+            # non-vacuity this call site had to state in prose (an unknown code, or
+            # a result with no HTTP response, fails loudly instead of comparing
+            # equal to None). A 2xx here still means what the prose said — the
+            # posture never reached this request, and the accepted leg above proves
+            # less than it appears to.
+            refused.assert_signature_challenge("request_signature_required")

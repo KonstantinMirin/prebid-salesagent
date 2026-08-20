@@ -1262,23 +1262,31 @@ def then_capabilities_not_gated_on_token(ctx: dict) -> None:
 
 @then(parsers.re(r'the wire error message should contain "(?P<first>[^"]+)" and "(?P<second>[^"]+)"$'))
 def then_wire_error_message_contains(ctx: dict, first: str, second: str) -> None:
-    """errors[0].message on the wire envelope must carry BOTH pinned substrings
-    (case-insensitive). core/error.json message is a free string, so the spec
-    cannot pin content — the substrings are pinned to production's ACTUAL
-    AUTH_INVALID wording: resolved_identity.py "Authentication token is invalid
-    for tenant '...'" and adcp_a2a_server.py "Authentication token is invalid or
-    expired." both contain "token" and "invalid". Requiring both rejects the
-    AUTH_REQUIRED missing-credential wording ("authentication required")."""
-    envelope = ctx["result"].wire_error_envelope
-    assert isinstance(envelope, dict), f"no wire error envelope captured (error={ctx.get('error')!r})"
-    errors = envelope.get("errors") or [{}]
-    message = errors[0].get("message") or ""
-    assert message, f"errors[0].message is empty on the wire envelope: {envelope}"
-    lowered = message.lower()
-    for substring in (first, second):
-        assert substring.lower() in lowered, (
-            f"wire error message {message!r} is missing the pinned substring {substring!r}"
-        )
+    """errors[0].message on the wire envelope must carry BOTH pinned substrings,
+    UNDER THE AUTH_INVALID CODE.
+
+    core/error.json's ``message`` is a free string, so the spec cannot pin
+    content — the substrings are pinned to production's ACTUAL AUTH_INVALID
+    wording: resolved_identity.py "Authentication token is invalid for tenant
+    '...'" and adcp_a2a_server.py "Authentication token is invalid or expired."
+    both contain "token" and "invalid". Requiring both rejects the AUTH_REQUIRED
+    missing-credential wording ("authentication required").
+
+    The CODE is part of the claim and is stated here rather than left to the
+    preceding Then. This step used to hand-roll ``envelope.get("errors") or
+    [{}]`` and grade the text alone, so the identical message satisfied it under
+    ANY code — the text is only evidence of the right rejection if the rejection
+    is the right one. AUTH_INVALID is not a guess: it is what this step's own
+    wording contract is derived from, and the only scenario bound to this phrasing
+    (BR-UC-010 "A2A request with invalid auth token") asserts it on the line
+    above. A scenario that pins a different code will fail here loudly, which is
+    the correct outcome — it is not this step.
+
+    Matching is CASE-SENSITIVE, the one rule for every positive substring
+    assertion in the suite; the rationale lives with the matcher
+    (``TransportResult.assert_wire_error``).
+    """
+    ctx["result"].assert_wire_error("AUTH_INVALID", recovery="terminal", message_substr=[first, second])
 
 
 # ── Thens: protocols filter (ext-d) ──────────────────────────────────

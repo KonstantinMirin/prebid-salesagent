@@ -85,6 +85,39 @@ def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
     return None
 
 
+def _non_json_error_result(response: Any, envelope: dict[str, Any]) -> TransportResult:
+    """One result shape for a 4xx/5xx whose body is not JSON, on EVERY REST leg.
+
+    A BODYLESS rejection is not a parse accident: the ASGI signature verifier
+    answers 401 with the challenge in ``WWW-Authenticate`` and NO body at all
+    (``_reject``, ``request_verifier_middleware``). Both REST legs must survive
+    that and keep the response, or ``assert_signature_challenge`` has nothing to
+    read.
+
+    They must also produce the SAME ``error``. The in-process leg previously
+    returned the raw ``JSONDecodeError`` while the e2e leg built a typed
+    ``AdCPError`` — so one transport-blind scenario saw two different
+    ``ctx["error"]`` types depending on which leg ran it. The unsigned refusal
+    IS a bodyless 401, so that divergence lands exactly on the scenarios S1.3
+    adds; a cross-transport claim that resolves differently per transport is the
+    defect this epic exists to remove, not a detail. One helper, both callers,
+    so they cannot drift again.
+
+    No ``wire_error_envelope``: there is no structured body to expose. The
+    status and the raw text ride on ``details`` so a Then step can tell a server
+    crash apart from a real rejection (#1420).
+    """
+    from src.core.exceptions import AdCPError
+
+    body_text = response.text or "(empty body)"
+    error = AdCPError(
+        f"HTTP {response.status_code}: {body_text}",
+        details={"status_code": response.status_code, "raw_body": body_text},
+    )
+    error.status_code = response.status_code
+    return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+
+
 def _refuse_signed_impl() -> None:
     """Fail loudly when ``signed=True`` reaches ``impl``, which has no wire.
 
@@ -194,7 +227,15 @@ class RestDispatcher:
             }
 
             if response.status_code >= 400:
-                body = response.json()
+                try:
+                    body = response.json()
+                except Exception:  # noqa: BLE001 - surfaced as the result's error
+                    # Letting the decode error escape to the outer handler
+                    # discarded the response — and with it the only evidence of
+                    # WHICH refusal happened, leaving assert_signature_challenge
+                    # nothing to read. Shared with the e2e leg so both produce the
+                    # same error shape (salesagent-n78j0.1.2).
+                    return _non_json_error_result(response, envelope)
                 error = env.parse_rest_error(response.status_code, body)
                 return TransportResult(
                     error=error,
@@ -383,20 +424,11 @@ class RestE2EDispatcher:
             try:
                 body = response.json()
             except Exception:
-                # Non-JSON error (e.g. 500 with empty body) — wrap as AdCPError so
-                # Then steps detect the error type and xfail spec-production gaps.
-                # No wire_error_envelope: there is no structured body to expose, and
-                # the INTERNAL_ERROR/5xx shape lets the "invalid" Then-step tell a
-                # server crash apart from a real validation rejection (#1420).
-                from src.core.exceptions import AdCPError
-
-                body_text = response.text or "(empty body)"
-                error = AdCPError(
-                    f"HTTP {response.status_code}: {body_text}",
-                    details={"status_code": response.status_code, "raw_body": body_text},
-                )
-                error.status_code = response.status_code
-                return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
+                # Non-JSON error (e.g. 500 with empty body, or the verifier's
+                # bodyless 401) — wrapped as AdCPError so Then steps detect the
+                # error type and xfail spec-production gaps. Shared with the
+                # in-process leg: one shape, both transports.
+                return _non_json_error_result(response, envelope)
             # Structured JSON error: mirror the in-process RestDispatcher and expose
             # the raw two-layer body as wire_error_envelope so error Then-steps assert
             # on the buyer-visible envelope (e.g. uc004 _assert_wire_rejection, or

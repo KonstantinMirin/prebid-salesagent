@@ -25,6 +25,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import Any
 from unittest.mock import patch
 
@@ -710,6 +711,29 @@ def rejection_code(response: Any) -> str | None:
         return None
     _, _, remainder = challenge.partition('error="')
     return remainder.rstrip('"') or None
+
+
+@lru_cache(maxsize=1)
+def request_signature_codes() -> frozenset[str]:
+    """Every ``request_signature_*`` code the verifier can name in a challenge.
+
+    Read off the SDK module the MIDDLEWARE itself builds the challenge from
+    (``adcp.signing.errors`` -> ``SignatureVerificationError.code`` ->
+    ``unauthorized_response_headers``), never re-listed here: a local copy of the
+    vocabulary cannot fail when the vocabulary changes, and a grader holding its
+    own copy of the thing under test is the defect this epic already found once.
+
+    The webhook family (``webhook_signature_*``) is deliberately excluded — it is
+    the same shape on a different surface, and a request-signature assertion
+    passing for a webhook code would grade the wrong direction.
+    """
+    from adcp.signing import errors as _sdk_errors
+
+    return frozenset(
+        value
+        for name, value in vars(_sdk_errors).items()
+        if name.startswith("REQUEST_SIGNATURE_") and isinstance(value, str)
+    )
 
 
 #: One Prometheus text-format sample line: ``name{a="1",b="2"} 3.0`` (labels optional).

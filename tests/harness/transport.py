@@ -14,6 +14,7 @@ Usage::
 from __future__ import annotations
 
 import functools
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -186,7 +187,7 @@ class TransportResult:
         *,
         recovery: str | None = None,
         require_suggestion: bool = False,
-        message_substr: str | None = None,
+        message_substr: str | Sequence[str] | None = None,
         field: str | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
@@ -195,16 +196,63 @@ class TransportResult:
         dispatcher captured for whatever transport produced this result, so the
         same call holds on a2a/mcp/rest. Recovery defaults to the PINNED AdCP
         enum's classification for ``code`` (pin-wins), making the assertion
-        non-vacuous without per-scenario duplication. This is the single
-        harness-provided way to verify an error on the wire — step definitions
-        must not hand-roll envelope parsing.
+        non-vacuous without per-scenario duplication. This is the SANCTIONED way
+        to verify an error on the wire, and new step definitions must not
+        hand-roll envelope parsing. It is not yet the ONLY way — call sites that
+        still read the envelope by hand are pre-existing debt being routed here
+        as they are touched (``uc010_capabilities`` was one, S1.2), so read this
+        as the target state plus a migration, not as a claim about today's tree.
 
         ``field`` pins ``errors[0].field``, the error.json pointer naming WHICH
         request field was rejected. It is a kwarg here rather than a separate
         wire_error_field() helper on purpose: one sanctioned error surface means a
         step never has to decide which mechanism to reach for.
+
+        ``message_substr`` takes ONE substring or a SEQUENCE of them, every one of
+        which must appear in ``errors[0].message``. The sequence form is here, on
+        the one sanctioned surface, rather than in a step-local loop: a step that
+        pins two substrings by hand also stops pinning the CODE, so the same
+        message text satisfies it under any error code (measured: the
+        two-substring step in ``uc010_capabilities.py`` graded nothing but text).
+        An EMPTY sequence pins nothing and is refused rather than passing.
+
+        MATCHING IS CASE-SENSITIVE for every positive substring assertion that
+        routes THROUGH HERE (``assert_envelope_shape`` is the matcher and always
+        has been case-sensitive; the BDD steps that lowercased both sides now
+        route their positive form here). That is not yet a suite-wide invariant —
+        it holds for this surface and for the steps migrated onto it, and becomes
+        suite-wide only as the remaining hand-rolled readers are routed here. The buyer-facing message is graded as the buyer
+        receives it: a casing change is a rendering change, and the whole reason
+        these substrings exist is that a rendering defect — the pydantic RootModel
+        interpolated as ``root=...`` — is observable only in the exact wire text.
+        The one deliberate exception is the NEGATIVE step ("should not contain"),
+        which stays case-INSENSITIVE: for an absence claim, ignoring case is the
+        STRICTER reading (it also rejects ``ROOT=``), so both rules are the strict
+        form of their own direction rather than two spellings of one rule.
         """
         from tests.helpers import assert_envelope_shape
+
+        if message_substr is None:
+            substrings: tuple[str, ...] = ()
+        elif isinstance(message_substr, str):
+            substrings = (message_substr,)
+        else:
+            substrings = tuple(message_substr)
+            assert substrings, (
+                "message_substr=[] pins no message content at all — pass the substrings the "
+                "scenario names, or omit the argument if the message is not being graded."
+            )
+        # An EMPTY substring is the same vacuity as an empty sequence wearing a
+        # different shape: `"" in anything` is True, so it grades nothing while
+        # LOOKING like a message assertion — worse than omitting the argument,
+        # which at least reads as "not graded". Refusing both closes the hole in
+        # one place rather than trusting every caller to notice.
+        for substring in substrings:
+            assert substring, (
+                f"message_substr={message_substr!r} contains an empty substring, which every "
+                "message trivially satisfies. Pass the text the scenario names, or omit the "
+                "argument if the message is not being graded."
+            )
 
         meta = _pinned_error_metadata()
         spec = meta.get(code)
@@ -220,7 +268,73 @@ class TransportResult:
             f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
             "succeeded or errored before reaching a transport."
         )
-        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr, field=field)
+        # One matcher, applied once per pinned substring — the shape/code/recovery
+        # checks are idempotent, so this stays a single implementation of "does the
+        # buyer-facing message contain X" instead of a second one that would be free
+        # to disagree about case.
+        for expected_substring in substrings or (None,):
+            assert_envelope_shape(
+                envelope, code, recovery=expected_recovery, message_substr=expected_substring, field=field
+            )
         if require_suggestion:
             suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
+
+    def assert_signature_challenge(self, code: str) -> None:
+        """Assert the VERIFIER refused this dispatch with ``WWW-Authenticate: Signature error="<code>"``.
+
+        The signing counterpart of :meth:`assert_wire_error`, and the single
+        harness-provided way to grade a request-signature refusal — a step or test
+        must not read the challenge header itself, for the same reason it must not
+        hand-roll an error envelope.
+
+        WHAT IS GRADED, and what deliberately is NOT. The claim is the challenge
+        header BYTE-EXACTLY, read with :func:`tests.helpers.signing.rejection_code`
+        (reused, never re-parsed here: a reader that mishandles the label escaping
+        reports "no rejection", which looks exactly like the mechanism not running).
+        ``status_code == 401`` is NOT the assertion and never can be — a bare 401 is
+        equally produced by the auth middleware rejecting first, by a 404 wearing a
+        401, and by the malformed-header precheck
+        (``tests/e2e/test_request_signature_required_e2e.py``). The evidence that
+        this distinction is load-bearing is first-hand: in salesagent-n78j0.1.1 an
+        e2e leg was forced to dispatch UNSIGNED and ``is_success`` still passed, so
+        every status-shaped oracle on this path is vacuous by construction.
+
+        NON-VACUITY, the same contract ``assert_wire_error`` carries:
+
+        * an unknown ``code`` is refused up front against the SDK's own
+          ``request_signature_*`` vocabulary (``adcp.signing.errors``, the module
+          the middleware builds the challenge from), so a typo or an invented code
+          fails loudly instead of comparing equal to a ``None`` that never arrives;
+        * a result with NO raw HTTP response FAILS, naming the two things that
+          produce one — the env never called ``enable_request_signing()`` (so the
+          leg dispatched in-process, where there is no wire and no verifier), or a
+          dispatcher dropped the response. It never passes for want of evidence.
+        """
+        from tests.helpers.signing import rejection_code, request_signature_codes
+
+        canonical = request_signature_codes()
+        assert code in canonical, (
+            f"{code!r} is not a request-signature rejection code the verifier can emit "
+            f"(adcp.signing.errors' REQUEST_SIGNATURE_* vocabulary). Did you mean one of: "
+            f"{', '.join(sorted(c for c in canonical if code.split('_')[-1] in c)) or 'see adcp.signing.errors'}?"
+        )
+
+        response = self.raw_response
+        assert response is not None and hasattr(response, "status_code") and hasattr(response, "headers"), (
+            f"Expected the {code!r} signature challenge, but this result carries no raw HTTP response "
+            f"to read WWW-Authenticate from (raw_response={response!r}, is_error={self.is_error}, "
+            f"error={self.error!r}). Either the env has no signing capability — call "
+            "env.enable_request_signing() so the leg dispatches over real HTTP instead of in-process — "
+            "or the dispatcher dropped the response. Refusing to grade the refusal on anything else."
+        )
+
+        actual = rejection_code(response)
+        assert actual == code, (
+            f"expected WWW-Authenticate: Signature error={code!r}, got {actual!r} "
+            f"(HTTP {response.status_code}, WWW-Authenticate="
+            f"{response.headers.get('WWW-Authenticate')!r}). None means the verifier did not refuse this "
+            "request at all: a non-401, or a 401 from somewhere else in the stack (auth middleware, a 404 "
+            "wearing a 401). A 2xx here usually means the operation never landed in a graded posture "
+            "bucket, so the request was waved through unverified."
+        )

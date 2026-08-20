@@ -1490,7 +1490,15 @@ class BaseTestEnv:
                 self.signing  # raises, naming enable_request_signing()  # noqa: B018
             return client.post(endpoint, json=body)
 
-        raw, headers = self.wire_request(path=endpoint, body=body, signed=signed)
+        # ``identity=None`` already means "send without a credential" everywhere
+        # else in the harness (``_configure_rest_auth`` removes the auth dep for
+        # it, and ``RestE2EDispatcher`` reads it the same way) — so it decides
+        # ``credentialed`` here too, rather than the signed path quietly attaching
+        # the capability's bearer to a call the caller asked to make anonymous.
+        # It is the ONLY way an in-process leg reaches the verifier's refusal
+        # branch at all: security.mdx :1269 makes an unsigned request carrying a
+        # valid bearer a spec-correct 200.
+        raw, headers = self.wire_request(path=endpoint, body=body, signed=signed, credentialed=identity is not None)
         return client.post(endpoint, content=raw, headers=headers)
 
     @property

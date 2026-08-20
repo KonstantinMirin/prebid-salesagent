@@ -195,15 +195,31 @@ def _wire_envelope(ctx: dict) -> dict:
     return envelope
 
 
+def _assert_wire_error(ctx: dict, code: str, *, recovery: str | None = None) -> None:
+    """Grade the wire envelope through the ONE sanctioned surface.
+
+    ``TransportResult.assert_wire_error`` rather than a local
+    ``assert_envelope_shape`` call on ``_wire_envelope(ctx)``: it additionally
+    refuses a code that is not in the pinned AdCP enum, and it defaults recovery
+    from that enum when the scenario does not spell it out. BDD dispatches on a
+    wire transport in every run, so the synthesized-envelope fallback
+    ``_wire_envelope`` keeps for IMPL is not wanted here — a missing wire
+    envelope is a wiring bug to surface.
+    """
+    result = ctx.get("result")
+    assert result is not None, (
+        f"no dispatch result recorded — the When step must run before a wire assertion. ctx keys: {list(ctx.keys())}"
+    )
+    result.assert_wire_error(code, recovery=recovery)
+
+
 @then(
     parsers.re(
         r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)" with recovery "(?P<recovery>[a-z]+)"$'
     )
 )
 def then_wire_envelope_code_and_recovery(ctx: dict, code: str, recovery: str) -> None:
-    from tests.helpers.envelope_assertions import assert_envelope_shape
-
-    assert_envelope_shape(_wire_envelope(ctx), code, recovery=recovery)
+    _assert_wire_error(ctx, code, recovery=recovery)
 
 
 @then(parsers.re(r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)"$'))
@@ -211,11 +227,15 @@ def then_wire_envelope_code(ctx: dict, code: str) -> None:
     """Code-only variant for scenarios that don't pin recovery semantics.
 
     Anchored regex (not parse) so it cannot shadow the with-recovery form.
+
+    Routed through the sanctioned surface (salesagent-n78j0.1.2). This step used
+    to CAPTURE ``code`` and never use it: it asserted only that the envelope was
+    two-layer, so ``should carry code "X"`` passed for every X. Recovery is not
+    dropped by "code-only" either — ``assert_wire_error`` defaults it to the
+    PINNED enum's classification for the code, which is what makes a scenario
+    that declines to spell recovery out still non-vacuous.
     """
-    body = _wire_envelope(ctx)
-    assert "adcp_error" in body and "errors" in body and body["errors"], f"not a two-layer envelope: {body}"
-    assert body["adcp_error"]["code"] == code, f"adcp_error.code={body['adcp_error']['code']!r}, expected {code!r}"
-    assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
+    _assert_wire_error(ctx, code)
 
 
 @then("the error message should reference authentication or token validation")
@@ -384,14 +404,33 @@ def _wire_error_message(ctx: dict) -> str:
 
 @then(parsers.parse('the wire error message should contain "{text}"'))
 def then_wire_error_message_contains(ctx: dict, text: str) -> None:
-    """Assert the buyer-facing WIRE message contains the text (case-insensitive)."""
+    """Assert the buyer-facing WIRE message contains the text, CASE-SENSITIVELY.
+
+    One case rule for every positive substring assertion in the suite, stated
+    with the matcher (``TransportResult.assert_wire_error`` /
+    ``assert_envelope_shape``, which have always compared case-sensitively): the
+    message is graded as the buyer receives it, and these steps exist precisely
+    because a RENDERING defect is observable only in the exact wire text.
+
+    This step cannot route through ``assert_wire_error`` itself — its scenario
+    grammar carries no error code — so it keeps ``_wire_error_message``; what it
+    must not do is disagree about matching, which lowercasing both sides did
+    (salesagent-n78j0.1.2).
+    """
     msg = _wire_error_message(ctx)
-    assert text.lower() in msg.lower(), f"Expected {text!r} in wire error message: {msg!r}"
+    assert text in msg, f"Expected {text!r} in wire error message: {msg!r}"
 
 
 @then(parsers.parse('the wire error message should not contain "{text}"'))
 def then_wire_error_message_not_contains(ctx: dict, text: str) -> None:
-    """Assert the buyer-facing WIRE message does NOT contain the text (case-insensitive)."""
+    """Assert the buyer-facing WIRE message does NOT contain the text (case-INSENSITIVE).
+
+    The deliberate exception to the case rule above, and it is not an
+    inconsistency: for an ABSENCE claim, ignoring case is the STRICTER reading —
+    the live consumer forbids ``root=`` (the pydantic RootModel repr leaking into
+    a buyer-facing message), and a leak spelled ``ROOT=`` is the same leak. Each
+    direction takes its strict form.
+    """
     msg = _wire_error_message(ctx)
     assert text.lower() not in msg.lower(), f"Unexpected {text!r} in wire error message: {msg!r}"
 
