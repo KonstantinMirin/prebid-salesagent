@@ -89,7 +89,6 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | No ToolError in _impl | `_impl` raises AdCPError, never ToolError | `test_no_toolerror_in_impl.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
-| Schema inheritance | Schemas extend adcp library base types | `test_architecture_schema_inheritance.py` |
 | Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
@@ -159,7 +158,11 @@ class Product(LibraryProduct):
 - Only redeclare parent fields when needed for nested serialization (Pattern #4)
 - Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
-- **Enforced by:** `test_architecture_schema_inheritance.py`
+- **Enforced by:** `tests/unit/test_pydantic_schema_alignment.py` — declared fields and
+  model_dump survival graded against the PINNED SCHEMA. There is deliberately no guard
+  asserting things about the SDK's own classes: the spec is the authority, not the SDK,
+  and such a guard has to enumerate how this repo spells its imports — every spelling it
+  does not know is a silent hole.
 
 ### 2. Flask: Prevent Route Conflicts
 **Pre-commit hook detects duplicate routes** - Run manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`

@@ -157,7 +157,7 @@ class TestCreativeSchemaCompliance:
 
         Spec: CONFIRMED -- list-creatives-response.json defines the listing schema;
         library type at adcp-client-python media_buy/list_creatives_response.py.
-        Existing: test_architecture_schema_inheritance.py (structural guard)
+        Existing: test_pydantic_schema_alignment.py (graded against the pinned schema)
         """
         from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
