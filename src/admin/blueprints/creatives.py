@@ -17,12 +17,11 @@ from adcp.types import (
 )
 from adcp.webhooks import GeneratedTaskStatus
 
-from src.core.database.models import (
-    PushNotificationConfig as DBPushNotificationConfig,
-)
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhooks.registration import accept_push_notification_config
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -181,35 +180,46 @@ async def _call_webhook_for_creative_status(
 
             complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False, context=context_obj)
 
-            # build push notification config from step request data
-            # this is because we don't store push notification config in the database when creating the creative
-            from uuid import uuid4
-
+            # The push-notification config is not stored when the creative is
+            # created, so the target comes from the step's request data. It is built
+            # by the GATE, not here: send_notification takes DeliverableWebhookTarget,
+            # which ValidatedWebhookRegistration satisfies — the same migration made on the A2A
+            # path when it deleted the detached row fabricated "purely to type-check"
+            # (#1802). Nothing on this path is persisted, so no scope ids are
+            # needed and none are invented.
+            #
+            # This retires a schemes[0] read. The pinned AuthenticationScheme permits
+            # AT MOST ONE scheme, so a two-scheme document must be REFUSED; taking the
+            # first silently delivered under a scheme the buyer did not solely request.
+            # The gate owns that rule.
+            #
+            # The authentication block is forwarded only when TRUTHY, matching the
+            # previous `or {}` behaviour: an empty block keeps meaning "no
+            # authentication" and keeps delivering unsigned, because turning today's
+            # unsigned delivery into a refusal is a delivered -> never-delivered change
+            # that needs an owner sign-off (#1802 made one for a legacy scheme).
             cfg_dict = step.request_data.get("push_notification_config") or {}
             url = cfg_dict.get("url")
             if not url:
                 logger.error(f"No push notification URL present for creative {creative_id}")
                 return False
 
-            authentication = cfg_dict.get("authentication") or {}
-            schemes = authentication.get("schemes") or []
-            auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
-            auth_token = authentication.get("credentials")
+            registration_config = {"url": url}
+            if cfg_dict.get("authentication"):
+                registration_config["authentication"] = cfg_dict["authentication"]
 
-            # Derive principal/tenant from the step context if available
-            context_obj = getattr(step, "context", None)
-            derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
-            derived_principal_id = getattr(context_obj, "principal_id", None)
-
-            push_notification_config = DBPushNotificationConfig(
-                id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
-                tenant_id=derived_tenant_id,
-                principal_id=derived_principal_id,
-                url=url,
-                authentication_type=auth_type,
-                authentication_token=auth_token,
-                is_active=True,
-            )
+            try:
+                push_notification_config = accept_push_notification_config(
+                    registration_config, field_prefix="push_notification_config"
+                )
+            except AdCPValidationError as exc:
+                # A workflow-completion path, outside any request context: a refusal is
+                # a logged non-delivery, not an exception that breaks the sync.
+                logger.error(
+                    f"Refusing to send completion webhook for creative {creative_id}: "
+                    f"its push_notification_config is invalid ({exc})"
+                )
+                return False
 
             # Extract step attributes before UoW closes (avoid DetachedInstanceError)
             step_tool_name = step.tool_name
