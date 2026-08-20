@@ -422,15 +422,22 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # The flight-window rule is the shared domain owner, not a
                     # route-local copy: this branch used to compute scheduled /
                     # completed / active inline, a third spelling of the same rule.
-                    # `or ACTIVE` covers the buy with no flight window at all, which
-                    # this route has always treated as immediately serving.
-                    approved_status = (
-                        resolve_flight_window_status(
-                            media_buy,
-                            now=datetime.now(UTC),
-                            creatives_approved=all_creatives_approved,
-                        )
-                        or PersistedMediaBuyStatus.ACTIVE
+                    # No `or ACTIVE` fallback: MediaBuy.start_date and end_date are
+                    # nullable=False, so flight_window() always resolves for a persisted
+                    # row and the None branch it guarded cannot be reached.
+                    # Not `or ACTIVE`: that silently substituted a status for a branch that
+                    # cannot occur. MediaBuy.start_date and end_date are nullable=False, so
+                    # flight_window() always resolves for a persisted row. The assert narrows
+                    # the type AND states the premise — if a migration ever makes those columns
+                    # nullable, this fires instead of quietly writing the wrong status.
+                    approved_status = resolve_flight_window_status(
+                        media_buy,
+                        now=datetime.now(UTC),
+                        creatives_approved=all_creatives_approved,
+                    )
+                    assert approved_status is not None, (
+                        "flight_window() returned None for a persisted media buy; "
+                        "MediaBuy.start_date/end_date are NOT NULL, so this cannot happen"
                     )
 
                     # One repository write for the whole branch: the status and the

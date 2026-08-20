@@ -244,15 +244,22 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # wire projection and the sweep corrected it downstream, which is
                     # why nothing caught it, but the column disagreed with the calendar.
                     # Every creative is approved here — the unapproved branch returned
-                    # above. `or ACTIVE` covers the buy with no flight window at all,
-                    # matching the approval route in operations.py.
-                    approved_status = (
-                        resolve_flight_window_status(
-                            media_buy,
-                            now=datetime.now(UTC),
-                            creatives_approved=True,
-                        )
-                        or PersistedMediaBuyStatus.ACTIVE
+                    # above. No `or ACTIVE` fallback: MediaBuy.start_date and end_date are
+                    # nullable=False, so flight_window() always resolves for a persisted
+                    # row and the None branch it guarded cannot be reached.
+                    # Not `or ACTIVE`: that silently substituted a status for a branch that
+                    # cannot occur. MediaBuy.start_date and end_date are nullable=False, so
+                    # flight_window() always resolves for a persisted row. The assert narrows
+                    # the type AND states the premise — if a migration ever makes those columns
+                    # nullable, this fires instead of quietly writing the wrong status.
+                    approved_status = resolve_flight_window_status(
+                        media_buy,
+                        now=datetime.now(UTC),
+                        creatives_approved=True,
+                    )
+                    assert approved_status is not None, (
+                        "flight_window() returned None for a persisted media buy; "
+                        "MediaBuy.start_date/end_date are NOT NULL, so this cannot happen"
                     )
 
                     # Update media buy status through the repository, which owns the

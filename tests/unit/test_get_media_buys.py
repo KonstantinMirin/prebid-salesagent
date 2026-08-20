@@ -293,6 +293,22 @@ class TestFetchTargetMediaBuys:
         assert "buy_corrupt" in advisory.message
         assert "MEDIA_BUY_UNRENDERABLE" in advisory.message
 
+    def test_a_null_revision_is_refused_like_a_below_minimum_one(self):
+        """The ``revision is None`` operand has an oracle now.
+
+        Nothing graded it: deleting the operand left the suite green, because every
+        other case reaches the ``< minimum`` comparison instead. A null column would
+        then have gone straight into that comparison and surfaced at the buyer as a
+        TypeError from inside the read path, rather than the terminal error the
+        seller-side defect deserves.
+        """
+        corrupt = make_media_buy("buy_null_rev", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        corrupt.revision = None
+
+        req = GetMediaBuysRequest(media_buy_ids=["buy_null_rev"])
+        with pytest.raises(AdCPPersistedStateError):
+            self._run(req, [corrupt])
+
     def test_named_unrenderable_row_is_refused_rather_than_omitted(self):
         """A buyer who NAMED the broken row is told it is broken, not that it is absent.
 

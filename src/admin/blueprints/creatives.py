@@ -17,7 +17,6 @@ from adcp.types import (
 )
 from adcp.webhooks import GeneratedTaskStatus
 
-from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
@@ -631,9 +630,16 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                         # creatives_approved=True. The shared rule is what makes a buy
                         # approved PAST its flight end come out `completed`; the
                         # route-local copy this replaced answered `scheduled` for it.
-                        new_status = (
-                            resolve_flight_window_status(mb, now=datetime.now(UTC), creatives_approved=True)
-                            or PersistedMediaBuyStatus.ACTIVE
+                        # Not `or ACTIVE`: that silently substituted a status for a branch
+                        # that cannot occur. MediaBuy.start_date and end_date are
+                        # nullable=False, so flight_window() always resolves for a persisted
+                        # row. The assert narrows the type AND states the premise — if a
+                        # migration ever makes those columns nullable, this fires instead of
+                        # quietly writing the wrong status.
+                        new_status = resolve_flight_window_status(mb, now=datetime.now(UTC), creatives_approved=True)
+                        assert new_status is not None, (
+                            "flight_window() returned None for a persisted media buy; "
+                            "MediaBuy.start_date/end_date are NOT NULL, so this cannot happen"
                         )
                         uow2.media_buys.update_status(
                             action["media_buy_id"],

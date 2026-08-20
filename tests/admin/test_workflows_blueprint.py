@@ -381,6 +381,46 @@ class TestWorkflowApprovalMovesMediaBuy:
             "confirmed_at is still NULL after approval"
         )
 
+    def test_approval_from_another_tenants_session_is_refused(self, client, test_tenant, factory_session):
+        """@require_tenant_access() on approve_workflow_step is graded here.
+
+        Nothing graded it: deleting the decorator left the admin suite green, because
+        every other test in this file authenticates as a super_admin, who is allowed
+        across tenants by design. Only a tenant-SCOPED session can tell the decorator
+        apart from its absence.
+
+        The assertion is the media buy's state, not the status code. A route that
+        redirects to a login page still returns 200 for the redirect target, so
+        "did the write happen" is the question that cannot be answered two ways.
+        """
+        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
+        context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
+
+        # A session scoped to a DIFFERENT tenant, and not a super admin.
+        with client.session_transaction() as sess:
+            sess["authenticated"] = True
+            sess["user"] = {"email": "outsider@example.com", "is_super_admin": False}
+            sess["email"] = "outsider@example.com"
+            sess["test_user"] = "outsider@example.com"
+            sess["test_user_role"] = "tenant_admin"
+            sess["test_tenant_id"] = "some_other_tenant"
+            sess["tenant_id"] = "some_other_tenant"
+
+        before = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
+        with patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)):
+            client.post(
+                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
+        assert after.status == before.status, (
+            f"a session scoped to another tenant moved this buy from {before.status!r} to "
+            f"{after.status!r}; require_tenant_access() is not holding"
+        )
+        assert after.confirmed_at is None, "an outsider's request stamped the seller-commitment instant"
+
     def test_approve_inside_the_flight_window_activates_rather_than_schedules(
         self, client, test_tenant, factory_session
     ):

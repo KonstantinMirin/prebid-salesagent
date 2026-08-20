@@ -484,8 +484,12 @@ class MediaBuyRepository:
         is the buyer's optimistic-concurrency token — it MUST strictly increase on
         every successful mutation, including two landing in the same clock tick.
 
-        Note the attribute is left holding an expression until the next refresh, so
-        callers must not read ``media_buy.revision`` between this call and the flush.
+        The attribute holds a SQL expression until the next refresh. A caller that
+        reads ``media_buy.revision`` between this call and the flush gets that
+        expression object, not an int — so arithmetic or comparison on it raises
+        ``TypeError`` rather than returning a wrong number. The invariant announces
+        itself on any exercised path, which is why there is no guard here: an
+        AST read-scanner would be more machinery than the failure mode needs.
         """
         media_buy.revision = MediaBuy.revision + 1
 

@@ -648,9 +648,15 @@ class AdCPConfigurationError(AdCPError):
 class AdCPPersistedStateError(AdCPConfigurationError):
     """A persisted value is outside the vocabulary its column may hold (500).
 
-    Raised at the two doors of ``media_buys.status``: the write door refuses a value
-    that would enter the column, and the read door refuses a value already in it.
-    Both are SELLER-side store defects — the buyer neither supplied the value nor can
+    Raised wherever a persisted value cannot be published or stored: the ``status``
+    write door refuses a value that would enter the column, the ``status`` read door
+    refuses a value already in it, and the ``revision`` read door refuses an integer
+    below the pinned minimum. The last is a bound rather than a vocabulary, and it
+    reaches the buyer in both envelope layers — the pinned ``CONFIGURATION_ERROR``
+    metadata permits that payload, so the contract is wider than "two doors of
+    status" and this docstring says so rather than describing the narrower case it
+    was written for.
+    All are SELLER-side store defects — the buyer neither supplied the value nor can
     correct it — so this inherits ``CONFIGURATION_ERROR`` / ``terminal`` from
     ``AdCPConfigurationError`` rather than restating them. That is also what the
     pinned 3.1.1 ``enums/error-code.json`` metadata selects: ``VALIDATION_ERROR`` is
