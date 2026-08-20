@@ -17,8 +17,8 @@
 schema_version: 1
 source:
   repository: adcp-req
-  commit: 5967bbda117667537ac193ba00aced716e4e0b7c
-  compiled_at: "2026-08-18T19:09:26Z"
+  commit: cac2015cd7436b762053f469b952f94f262cf02f
+  compiled_at: "2026-08-20T12:03:24Z"
 
 mappings:
   COMPAT-001:
