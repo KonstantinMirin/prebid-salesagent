@@ -169,27 +169,39 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
-    # Runs as the INVOKING host user, not the image's default root --
-    # Dockerfile.test has no USER directive, so without this the container
-    # writes test-results/.tox/schemas/logs into the bind-mounted /app as
-    # literal root (no userns-remap on these hosts, so container root IS host
-    # root), and the next run -- as an ordinary user -- dies on `mkdir:
-    # Permission denied` before a single suite starts.
-    #
-    # Derived, never hardcoded. run_all_tests.sh exports TEST_UID/TEST_GID from
-    # `id -u`/`id -g`; the defaults here are only for a bare `docker compose
-    # run tests` and reproduce the old root behaviour rather than guessing.
-    # A literal uid here was correct on exactly one machine: pinning the CI
-    # box's 1003:1001 turned GitHub Actions red with
-    # `PermissionError: '/app/.tox'`, because .tox lives on the bind mount
-    # (see the volumes block) and the Actions checkout is owned by a different
-    # uid. Nothing local can catch that -- `BDD In-Network (e2e_rest)` is the
-    # only job that runs the suite INSIDE this container.
-    user: "${TEST_UID:-0}:${TEST_GID:-0}"
+    # NO `user:` directive, deliberately. This used to pin
+    # user: "${TEST_UID:-0}:${TEST_GID:-0}", derived from `id -u`/`id -g` by
+    # run_all_tests.sh. The reasoning it carried assumed "no userns-remap on
+    # these hosts, so container root IS host root" -- false on the ROOTLESS
+    # daemon the run boxes use, and wrong in BOTH directions there:
+    #   - with TEST_UID exported, the container runs as that uid INSIDE the
+    #     container, which rootless maps to a host SUBUID (~100000+uid), so the
+    #     bind-mounted /app collects files the run itself cannot write;
+    #   - without it -- any path that does not source run_all_tests.sh, e.g.
+    #     cassini's supervisor calling `docker compose run tests`, or a plain
+    #     `docker compose up` for adcp-server -- the `:-0` default applies.
+    # Under rootless, container root ALREADY maps to the invoking user, which is
+    # exactly the outcome the pin was hand-building. Unset gets it for free.
+    # cassini removed the identical workaround on its own side for the same
+    # reason (cassini/identity.py: "a workaround for a root daemon, and there is
+    # no longer a root daemon"). Symptom this caused live: /app/logs/* created
+    # root-owned, adcp-server (uid 1001) dying at import on a module-level
+    # FileHandler, cascading into ~2100 test failures (cassini-w37).
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
+      # Unbuffered stdout/stderr for the tox process that actually runs the
+      # suite. cassini sets PYTHONUNBUFFERED on its supervisor's own subprocess
+      # env, but the work runs HERE -- a separate container started by
+      # `docker compose run tests` -- and this environment: block is a curated
+      # allowlist with no host passthrough, so it never arrived. Verified live
+      # by `docker exec ... env | grep PYTHONUNBUFFERED` returning nothing.
+      # Consequence: output sat in the buffer, so cassini's RunState.quiet_for
+      # climbed monotonically (0m34s -> 12m+) on a genuinely busy run at 1082%
+      # CPU that finished exit=0, crossing the 5-minute false-red threshold
+      # (cassini-1w1, reproduced end-to-end as cassini-e7z on run sa-0c74d963).
+      PYTHONUNBUFFERED: "${PYTHONUNBUFFERED:-1}"
       # Non-root (user: above) has no /etc/passwd entry for a raw numeric
       # UID, so HOME defaults to "/" and Dockerfile.test's baked
       # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
