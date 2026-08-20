@@ -213,6 +213,12 @@ async def list_authorized_properties(
     Returns:
         ToolResult with human-readable text and structured data.
     """
+    # FIXME(#1882): this wrapper constructs the request OUTSIDE
+    # adcp_validation_boundary, unlike its A2A and REST siblings which are already
+    # boundary-wrapped. So a malformed argument surfaces as a pydantic error shaped by
+    # FastMCP rather than as the AdCP envelope the boundary emits. Allowlisted in
+    # tests/unit/test_architecture_request_construction_boundary.py::ALLOWLIST_DEFERRED;
+    # remove both together.
     req = ListAuthorizedPropertiesRequest(
         publisher_domains=publisher_domains,
         property_tags=property_tags,

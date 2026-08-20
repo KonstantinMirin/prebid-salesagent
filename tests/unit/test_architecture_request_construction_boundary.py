@@ -24,7 +24,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCAN_FILES = [
@@ -166,6 +166,35 @@ def test_request_construction_is_boundary_protected() -> None:
             "add a reasoned entry to ALLOWLIST_DEFERRED (with a filed ticket) or "
             "ALLOWLIST_NOT_APPLICABLE (not a transport boundary) in this file."
         ),
+    )
+
+
+def test_deferred_entries_carry_their_citation_at_the_source() -> None:
+    """The ticket in each ALLOWLIST_DEFERRED entry must appear at the source file.
+
+    ``test_request_construction_is_boundary_protected`` destructures the ticket out
+    and throws it away (``for f, d, form, _ticket in``), so until now the fourth
+    element was decorative: an entry could cite any string and nothing checked that a
+    reader arriving at the code would find it. That is exactly what happened —
+    ``src/core/tools/properties.py`` carried no FIXME at all while this file claimed
+    ``FIXME(#1882)`` tracked it, so the gap was invisible from the code and visible
+    only from the guard that permits it.
+
+    CLAUDE.md's rule is that every allowlisted violation carries a
+    ``# FIXME(#<gh-issue>)`` at the source location, and a GitHub issue rather than a
+    beads id, because outside contributors cannot resolve a beads id.
+    """
+    root = repo_root()
+    missing = [
+        (rel_path, ticket)
+        for rel_path, _def_name, _form, ticket in sorted(ALLOWLIST_DEFERRED)
+        if ticket not in (root / rel_path).read_text(encoding="utf-8")
+    ]
+    assert not missing, (
+        "these ALLOWLIST_DEFERRED entries cite a ticket that does not appear in the file "
+        f"they defer: {missing}. Add `# {missing[0][1]}: <why, and what removes it>` at the "
+        "construction site, so a reader of the CODE learns the gap is tracked — not only a "
+        "reader of the guard that permits it."
     )
 
 
