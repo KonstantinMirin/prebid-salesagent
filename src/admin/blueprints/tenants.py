@@ -566,9 +566,13 @@ def test_slack(tenant_id):
                 400,
             )
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error testing Slack webhook: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    # No `except requests.exceptions.RequestException` here: 1910d8489 routed this
+    # send through deliver_json_to_allowed_destination, which catches
+    # requests.RequestException itself (src/core/webhook_validator.py:187) and reports
+    # failure as a False return. The handler that used to sit here was left behind with
+    # its `import requests` already gone, so it was both unreachable AND a NameError if
+    # anything had reached it -- it would have masked the real exception with a lookup
+    # failure. mypy --check-untyped-defs caught it (name-defined, ADR-009 / #1611).
     except Exception as e:
         logger.error(f"Unexpected error testing Slack: {e}", exc_info=True)
         return jsonify({"success": False, "error": "Internal server error"}), 500
