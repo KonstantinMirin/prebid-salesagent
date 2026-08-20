@@ -16,6 +16,7 @@ import re
 from typing import Any
 
 import pytest
+from adcp.types import AuthenticationScheme
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
@@ -382,15 +383,49 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
         _persist_webhook_config_if_needed(ctx, env)
 
 
-# The pinned AdCP 3.1.1 ``AuthenticationScheme`` spellings. Every writer in
-# ``src/`` persists these verbatim, so a scenario that stores anything else is
-# describing a row no buyer can produce (salesagent-47n9.24, GH #1894).
-_DB_SCHEME_FOR_GHERKIN = {
-    "hmac-sha256": "HMAC-SHA256",
-    "hmac_sha256": "HMAC-SHA256",
-    "hmac": "HMAC-SHA256",
-    "bearer": "Bearer",
-}
+def _canonical_scheme(scheme: str) -> AuthenticationScheme:
+    """The pinned AdCP ``AuthenticationScheme`` member a Gherkin token names.
+
+    The SDK enum is the SINGLE SOURCE. Its constructor is both the membership
+    test and the refusal, and the member IS the spec spelling (a ``StrEnum``), so
+    ``authentication_type`` is canonical by construction rather than by a local
+    lookup that can drift. There used to be such a lookup here, mapping four
+    Gherkin spellings onto two DB values; the drift it permitted is exactly how
+    ``authentication_type="hmac"`` -- a fifth spelling matching nothing
+    production compares against -- reached the DB (salesagent-47n9.24, GH #1894).
+    A local table is not re-introduced: with none, a fifth spelling has nowhere
+    to live.
+    """
+    try:
+        return AuthenticationScheme(scheme)
+    except ValueError as exc:
+        canonical = ", ".join(f"{member!s}" for member in AuthenticationScheme)
+        raise ValueError(
+            f"Gherkin names webhook authentication scheme {scheme!r}, which is not a pinned "
+            f"AdCP AuthenticationScheme. Canonical spellings: {canonical}. The pinned enum is "
+            "case-SENSITIVE; a scenario must name the scheme exactly as the spec spells it."
+        ) from exc
+
+
+def _credential_in_ctx(scheme: AuthenticationScheme, ctx: dict) -> str | None:
+    """The credential a scheme signs/authenticates with, matched EXHAUSTIVELY.
+
+    Mirrors the exhaustive destructuring production does at
+    ``src/core/security/webhook_egress.py``. The predecessor was a binary
+    if/else on one member, so Bearer was "whatever is not HMAC-SHA256" and a
+    third canonical member would have silently read the bearer token. Falling
+    out of this match is a visible gap instead.
+    """
+    match scheme:
+        case AuthenticationScheme.HMAC_SHA256:
+            return ctx.get("webhook_secret")
+        case AuthenticationScheme.Bearer:
+            return ctx.get("webhook_bearer_token")
+    raise AssertionError(
+        f"No credential source wired for AuthenticationScheme {scheme!r}. A new member was "
+        "added to the pinned enum -- give it its ctx key here rather than letting it inherit "
+        "another scheme's credential."
+    )
 
 
 def _auth_scheme_to_db_fields(scheme: str | None, ctx: dict) -> dict[str, Any]:
@@ -400,23 +435,30 @@ def _auth_scheme_to_db_fields(scheme: str | None, ctx: dict) -> dict[str, Any]:
     ``authentication_token``, which is where AdCP 3.1.1 puts the credential
     (``push_notification_config.authentication.credentials``).
 
-    This used to write the HMAC secret to ``webhook_secret`` -- a column with
-    zero writers in ``src/`` -- and to store ``authentication_type="hmac"``, a
-    FIFTH spelling matching nothing production compares against. Between them
-    the graded HMAC surface exercised a row no buyer can create, against a
-    branch production has since abandoned (salesagent-47n9.24, GH #1894).
+    Three outcomes, and nothing else:
+
+    1. No scheme named -> ``{}``. The scenario wants an unauthenticated webhook.
+    2. A canonical scheme with its credential -> both columns.
+    3. A scheme that is not a pinned ``AuthenticationScheme`` member -> RAISE.
+
+    A canonical scheme whose credential is not in ``ctx`` YET returns ``{}`` on
+    purpose, and that is NOT outcome 1 in disguise: scenarios name the scheme on
+    one line and supply the credential on the next
+    (BR-UC-004-deliver-media-buy-metrics.feature:252-253), and
+    ``given_webhook_auth_scheme`` persists the row on the first line, so mid-setup
+    absence is legitimate and the row is updated in place when the credential
+    arrives. The end-state invariant -- a scenario that claims auth and never
+    supplied a credential -- is enforced once setup is COMPLETE, in
+    ``_wire_webhook_db``. Raising here instead would redden the two scenarios
+    this translation exists to serve.
     """
-    fields: dict[str, Any] = {}
     if scheme is None:
-        return fields
-    db_scheme = _DB_SCHEME_FOR_GHERKIN.get(scheme.lower())
-    if db_scheme is None:
-        return fields
-    credential = ctx.get("webhook_secret") if db_scheme == "HMAC-SHA256" else ctx.get("webhook_bearer_token")
-    if credential:
-        fields["authentication_type"] = db_scheme
-        fields["authentication_token"] = credential
-    return fields
+        return {}
+    canonical = _canonical_scheme(scheme)
+    credential = _credential_in_ctx(canonical, ctx)
+    if not credential:
+        return {}
+    return {"authentication_type": canonical, "authentication_token": credential}
 
 
 def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
@@ -3401,6 +3443,22 @@ def _wire_webhook_db(ctx: dict) -> None:
             {"webhook_secret": secret, "webhook_bearer_token": bearer},
         )
 
+        # END-STATE INVARIANT, enforced HERE and nowhere earlier. This runs from
+        # the dispatch helper at the When step, so every Given has already run:
+        # a scheme still without its credential was never going to get one. Left
+        # tolerant, the config below would be built unauthenticated while the
+        # Gherkin claims signing, the Then steps would grade that unauthenticated
+        # config, and the scenario would pass green while measuring nothing.
+        # Deliberately not a `require_credential` flag on the translation helper:
+        # a strictness switch lets a future caller take the lax branch by
+        # accident, which is the defect class this lane removes.
+        if scheme is not None and not auth_fields:
+            raise AssertionError(
+                f"Scenario configured webhook authentication scheme {scheme} but no credential "
+                "reached ctx by dispatch time -- add the Given step that supplies it. Building "
+                "the config unauthenticated would let the scenario grade signing it never had."
+            )
+
         configs.append(
             env.make_webhook_config(
                 url=url,
@@ -3624,7 +3682,7 @@ def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
     wh = ctx.setdefault("webhook_config", {}).setdefault(label, {})
     wh["url"] = "https://buyer.example.com/webhook"
     wh["active"] = True
-    wh["auth_scheme"] = "hmac-sha256"
+    wh["auth_scheme"] = AuthenticationScheme.HMAC_SHA256
 
     try:
         WebhookVerifier(webhook_secret=secret)
