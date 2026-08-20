@@ -95,7 +95,7 @@ class MediaBuyStatusScheduler:
                 # 1. pending_start (or legacy pending_activation/scheduled) -> active if start_time passed
                 # 2. active -> should become completed if end_time passed
                 media_buys = MediaBuyRepository.get_all_by_statuses(
-                    session, ["pending_start", "pending_activation", "scheduled", "active"]
+                    session, _ACTIVATABLE_STATUSES | {PersistedMediaBuyStatus.ACTIVE}
                 )
 
                 for media_buy in media_buys:

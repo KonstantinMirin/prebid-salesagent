@@ -5,7 +5,7 @@ Requires PostgreSQL (integration_db fixture).
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import patch
 
 import pytest
@@ -227,7 +227,7 @@ class TestWorkflowRejection:
 _EXECUTE_APPROVED_PATCH = "src.core.tools.media_buy_create.execute_approved_media_buy"
 
 
-def _create_step_mapped_to_media_buy(session, tenant_id: str, media_buy_id: str) -> tuple[str, str]:
+def _create_step_mapped_to_media_buy(session, tenant_id: str, media_buy_id: str, **media_buy_fields) -> tuple[str, str]:
     """Create a pending_approval media buy + an approval step mapped to it.
 
     Returns (context_id, step_id). Uses the ContextManager production API for the
@@ -249,6 +249,7 @@ def _create_step_mapped_to_media_buy(session, tenant_id: str, media_buy_id: str)
         principal=principal,
         media_buy_id=media_buy_id,
         status="pending_approval",
+        **media_buy_fields,
     )
 
     cm = ContextManager()
@@ -329,10 +330,24 @@ class TestWorkflowApprovalMovesMediaBuy:
         )
 
     def test_approve_schedules_buy_and_bumps_revision(self, client, test_tenant, factory_session):
-        """The scheduled arm: manual approval is the buy's first real commitment."""
+        """The scheduled arm: a buy approved BEFORE its flight window opens.
+
+        The status this write persists is the flight-window rule's answer, not a
+        constant. This route used to write ``scheduled`` unconditionally, so a buy
+        approved INSIDE its window persisted as scheduled and disagreed with the
+        calendar; the wire projection and the sweep corrected it downstream, which
+        is why nothing caught it. The sibling test below grades the inside-window
+        answer, and the two together pin that the rule is consulted at all.
+        """
         _auth_session(client, test_tenant)
         media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
-        context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
+        context_id, step_id = _create_step_mapped_to_media_buy(
+            factory_session,
+            test_tenant,
+            media_buy_id,
+            start_date=date(2099, 1, 1),
+            end_date=date(2099, 12, 31),
+        )
 
         before = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
         before_revision = before.revision
@@ -364,4 +379,41 @@ class TestWorkflowApprovalMovesMediaBuy:
         assert after.confirmed_at is not None, (
             "an admin-approved buy must carry the instant the seller committed; "
             "confirmed_at is still NULL after approval"
+        )
+
+    def test_approve_inside_the_flight_window_activates_rather_than_schedules(
+        self, client, test_tenant, factory_session
+    ):
+        """The active arm: a buy approved INSIDE its window is serving, not scheduled.
+
+        This is the case the route got wrong. Mutate ``approved_status`` back to a
+        bare ``PersistedMediaBuyStatus.SCHEDULED`` and this test reddens while its
+        sibling above stays green — which is what tells you the flight-window rule is
+        being consulted rather than a constant happening to match.
+        """
+        _auth_session(client, test_tenant)
+        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
+        context_id, step_id = _create_step_mapped_to_media_buy(
+            factory_session,
+            test_tenant,
+            media_buy_id,
+            start_date=date(2020, 1, 1),
+            end_date=date(2099, 12, 31),
+        )
+
+        with patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)):
+            response = client.post(
+                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+        assert response.status_code == 200
+
+        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
+        assert after.status == "active", (
+            "a buy approved inside its flight window is serving; persisting 'scheduled' "
+            "makes the column disagree with the calendar"
+        )
+        assert after.confirmed_at is not None, (
+            "'active' is a seller-confirmed status, so approval must stamp confirmed_at"
         )

@@ -14,6 +14,7 @@ from src.core.database.models import Context, PersistedMediaBuyStatus
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.tools._media_buy_transitions import resolve_flight_window_status
 
 logger = logging.getLogger(__name__)
 
@@ -237,11 +238,28 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
                         return jsonify({"success": False, "error": error_msg}), 500
 
+                    # The flight-window rule is the shared domain owner, not a
+                    # route-local constant: this branch wrote SCHEDULED unconditionally,
+                    # so a buy approved INSIDE its window persisted as scheduled. The
+                    # wire projection and the sweep corrected it downstream, which is
+                    # why nothing caught it, but the column disagreed with the calendar.
+                    # Every creative is approved here — the unapproved branch returned
+                    # above. `or ACTIVE` covers the buy with no flight window at all,
+                    # matching the approval route in operations.py.
+                    approved_status = (
+                        resolve_flight_window_status(
+                            media_buy,
+                            now=datetime.now(UTC),
+                            creatives_approved=True,
+                        )
+                        or PersistedMediaBuyStatus.ACTIVE
+                    )
+
                     # Update media buy status through the repository, which owns the
                     # revision bump and the write-once confirmed_at stamp.
                     media_buy_repo.update_status(
                         media_buy_id,
-                        PersistedMediaBuyStatus.SCHEDULED,
+                        approved_status,
                         approved_at=datetime.now(UTC),
                         approved_by=user_email,
                     )

@@ -13,6 +13,7 @@ beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (ad
 from __future__ import annotations
 
 import datetime
+from collections.abc import Collection
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -709,10 +710,16 @@ class MediaBuyRepository:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_all_by_statuses(session: Session, statuses: list[str]) -> list[MediaBuy]:
+    def get_all_by_statuses(session: Session, statuses: Collection[PersistedMediaBuyStatus]) -> list[MediaBuy]:
         """Get media buys across ALL tenants filtered by status.
 
         This is a system-level query for schedulers that need to process
         media buys regardless of tenant. Not tenant-scoped.
+
+        Takes the enum, not strings. A ``list[str]`` parameter let a caller spell the
+        same set of states a second time, next to the enum set it already had, and the
+        two drifted apart in silence — adding a member to one left the other behind.
+        ``PersistedMediaBuyStatus`` is a ``StrEnum``, so members bind against the
+        ``String`` column exactly as the bare strings did.
         """
         return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
