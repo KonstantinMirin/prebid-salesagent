@@ -1780,7 +1780,7 @@ class TestUpdateMediaBuyResponseShapes:
         Ported from test_update_media_buy_affected_packages.py::test_response_serialization_includes_affected_packages
         Covers: UC-003-MAIN-09
         """
-        resp = UpdateMediaBuySuccess(
+        resp = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[
                 AffectedPackage(package_id="pkg_1", paused=False),
@@ -1855,7 +1855,7 @@ class TestUpdateMediaBuyMainFlow:
         cl.max_daily_package_spend = Decimal("5000")
         cl.min_package_budget = None
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_resolved",
             affected_packages=[AffectedPackage(package_id="pkg_1", paused=False)],
         )
@@ -1963,7 +1963,7 @@ class TestUpdateMediaBuyPauseResume:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[],
         )
@@ -2027,7 +2027,7 @@ class TestUpdateMediaBuyPauseResume:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=False)
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[],
         )
@@ -2090,7 +2090,7 @@ class TestUpdateMediaBuyPauseResume:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[],
         )
@@ -4468,7 +4468,7 @@ class TestBRRule018AtomicResponse:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Covers: UC-003-EXT-O-05
         """
-        resp = UpdateMediaBuySuccess(media_buy_id="mb_1")
+        resp = UpdateMediaBuySuccess.carrier(media_buy_id="mb_1")
         dumped = resp.model_dump()
         assert dumped.get("errors") is None
 

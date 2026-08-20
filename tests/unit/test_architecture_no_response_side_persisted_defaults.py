@@ -34,18 +34,7 @@ PERSISTED_FIELDS = {"confirmed_at", "revision"}
 
 # (file, class, field) -> why this default is allowed to stand.
 # Shrink-only: a new entry needs the same kind of argument, in writing.
-ALLOWED_DEFAULTS = {
-    (
-        "src/core/schemas/_base.py",
-        "UpdateMediaBuySuccess",
-        "revision",
-    ): (
-        "Every update path passes the persisted value (the tool re-reads the row and "
-        "threads it); the default survives only for construction sites outside the "
-        "update tool, and the class comment says so. Routed as prose-only by the "
-        "#1941 round-3 plan, lane L4."
-    ),
-}
+ALLOWED_DEFAULTS: dict[tuple[str, str, str], str] = {}
 
 _KNOWN_BAD = """
 class SomeResponse(Base):

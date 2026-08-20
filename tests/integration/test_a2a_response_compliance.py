@@ -193,7 +193,7 @@ class TestA2ASpecCompliance:
     def test_update_media_buy_spec_compliance(self):
         """Test update_media_buy returns only spec-defined fields."""
         ctx = {"user_id": "1234567890"}
-        response = UpdateMediaBuySuccess(
+        response = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb-456",
             context=ctx,
         )

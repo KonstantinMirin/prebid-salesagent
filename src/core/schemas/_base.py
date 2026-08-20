@@ -801,12 +801,53 @@ class UpdateMediaBuySuccess(CompletedTaskStatusMixin, AdCPUpdateMediaBuySuccess)
     # CompletedTaskStatusMixin (composed above), which supplies the default so the
     # literal is not threaded through every constructor.
     #
-    # revision is NOT invariant — it is the buy's live optimistic-concurrency token,
-    # and every update path passes the persisted value. The default remains only
-    # because this model has construction sites outside the update tool; a caller
-    # that lets it default is reporting a token it did not read, so pass the row's
-    # revision rather than relying on this.
-    revision: int = 1
+    # revision is NOT invariant — it is the buy's live optimistic-concurrency token, so
+    # it is a column the repository owns and carries NO default here. It previously
+    # defaulted to 1, and the allowlist entry that permitted the default asserted
+    # "every update path passes the persisted value". That was false for 22 of the 25
+    # construction sites: no adapter passes one. The three sites that build the buyer's
+    # envelope do read the row, so nothing fabricated reached a wire — but a default is
+    # what lets the next consumer read a token nobody looked up, which is the state the
+    # create branch was changed to make unreachable.
+    #
+    # Mirrors CreateMediaBuySuccess: the buyer's envelope uses sync_success() and passes
+    # the row's value; a construction that is NOT that envelope uses carrier().
+    revision: int
+
+    @classmethod
+    def sync_success(cls, **kwargs: Any) -> "UpdateMediaBuySuccess":
+        """Construct a synchronous update_media_buy success the BUYER will receive.
+
+        ``revision`` is a required keyword argument in practice: it carries no field
+        default, so omitting it is a construction error rather than a silently
+        fabricated value. Pass what the persisted row holds — the repository owns the
+        column, and the update tool re-reads the row before building this.
+
+        Do NOT re-default anything here.
+        """
+        return cls(**kwargs)
+
+    @classmethod
+    def carrier(cls, **kwargs: Any) -> "UpdateMediaBuySuccess":
+        """Construct a Success that is NOT the buyer-facing envelope.
+
+        An adapter's ``update_media_buy`` returns this type, but what it returns is not
+        an envelope: the tool builds a fresh one for the buyer after the row is written.
+        Verified across every read site — ``adapter.update_media_buy`` is called at three
+        places in ``media_buy_update``, and each reads only ``result.errors``. Nothing
+        reads the Success arm's fields.
+
+        So ``revision`` is meaningless here, and an adapter has no row to read it from
+        (adapters do not touch the database — that is the boundary). The same is true of
+        a test that needs *an* Update Success object to hand to an envelope or a str()
+        check: it is not speaking for the repository either.
+
+        Rather than restore a field default — which would let a real wire producer omit
+        it silently — the placeholder lives HERE, once, behind a name that says what the
+        object is.
+        """
+        kwargs.setdefault("revision", 1)
+        return cls(**kwargs)
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)

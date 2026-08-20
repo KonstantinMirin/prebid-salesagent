@@ -258,5 +258,8 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         if data.get("status") == "submitted":
             return UpdateMediaBuySubmitted(**data)
         if "media_buy_id" in data:
+            # Bare construction on purpose, not carrier(): this reconstructs a response
+            # FROM THE WIRE, so a missing spec-required `revision` must raise here rather
+            # than be filled in with a placeholder that hides the gap.
             return UpdateMediaBuySuccess(**data)
         return UpdateMediaBuyError(**data)

@@ -2169,7 +2169,7 @@ class TestAdCPContract:
         # Note: affected_packages now uses full Package type with paused field (adcp 2.12.0+)
         from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuySuccess
 
-        response = UpdateMediaBuySuccess(
+        response = UpdateMediaBuySuccess.carrier(
             media_buy_id="buy_123",
             implementation_date=datetime.now(UTC) + timedelta(hours=1),
             affected_packages=[{"package_id": "pkg_1", "paused": False}],

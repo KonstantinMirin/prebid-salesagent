@@ -177,7 +177,7 @@ class TestSuccessEnvelopeErrorsField:
         assert "errors" not in dumped
 
     def test_update_success_round_trips_errors(self):
-        resp = UpdateMediaBuySuccess(
+        resp = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             status="completed",
             affected_packages=[],
@@ -188,7 +188,7 @@ class TestSuccessEnvelopeErrorsField:
         assert dumped["errors"][0]["code"] == "UNSUPPORTED_FEATURE"
 
     def test_update_success_errors_absent_when_none(self):
-        resp = UpdateMediaBuySuccess(media_buy_id="mb_1", status="completed", affected_packages=[])
+        resp = UpdateMediaBuySuccess.carrier(media_buy_id="mb_1", status="completed", affected_packages=[])
         dumped = resp.model_dump(exclude_none=True)
         assert "errors" not in dumped
 

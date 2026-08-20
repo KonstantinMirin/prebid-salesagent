@@ -1480,7 +1480,7 @@ class MockAdServer(AdServerAdapter):
                 else:
                     logger.warning(f"[MockAdapter] Package {package_id} not found for media buy {media_buy_id}")
 
-        return UpdateMediaBuySuccess(
+        return UpdateMediaBuySuccess.carrier(
             media_buy_id=media_buy_id,
             affected_packages=[],
             implementation_date=today,

@@ -699,7 +699,7 @@ class TestA2ASkillInvocation:
             from src.core.schemas import UpdateMediaBuySuccess
 
             mock_adapter = MagicMock()
-            mock_adapter.update_media_buy.return_value = UpdateMediaBuySuccess(
+            mock_adapter.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
                 media_buy_id="mb_test_123",
                 affected_packages=[],  # adcp 2.5.0 field (replaces packages/errors)
             )

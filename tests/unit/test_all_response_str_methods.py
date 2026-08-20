@@ -221,7 +221,7 @@ class TestResponseStrMethods:
 
     def test_update_media_buy_response(self):
         """UpdateMediaBuySuccess shows updated media buy ID."""
-        resp = UpdateMediaBuySuccess(media_buy_id="mb_123", affected_packages=[])
+        resp = UpdateMediaBuySuccess.carrier(media_buy_id="mb_123", affected_packages=[])
         assert str(resp) == "Media buy mb_123 updated successfully."
 
     # Note: GetMediaBuyDeliveryResponse, CreateCreativeResponse, GetSignalsResponse
