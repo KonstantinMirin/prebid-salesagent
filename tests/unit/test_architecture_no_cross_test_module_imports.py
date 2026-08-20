@@ -76,12 +76,6 @@ _ALLOWLIST: set[tuple[str, str]] = {
         "tests/unit/test_version_negotiation.py",
         "tests.unit.test_get_adcp_capabilities",
     ),
-    # DEFERRED — same disease; the shared constant belongs in
-    # tests/unit/_architecture_helpers.py, the home that already exists.
-    (
-        "tests/unit/test_architecture_wrapper_field_descriptions.py",
-        "tests.unit.test_architecture_wrapper_typed_params",
-    ),
     # DEFERRED — same disease, unrelated domain (delivery webhooks).
     (
         "tests/integration/test_delivery_webhooks_force.py",
