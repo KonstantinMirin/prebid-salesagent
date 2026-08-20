@@ -22,9 +22,9 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.domain_config import get_sales_agent_domain
-from src.core.security.outbound_http import OutboundError, send
 from src.core.validation import sanitize_form_data, validate_form_data
 from src.services.setup_checklist_service import SetupChecklistService
+from src.services.slack_notifier import SlackNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -482,44 +482,49 @@ def test_slack(tenant_id):
             if not tenant.slack_webhook_url:
                 return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
 
-            # Send test message
-            # max_attempts=1: a test notification that silently sends three times is
-            # worse than one that fails visibly. This call did not retry before.
-            send(
-                tenant.slack_webhook_url,
-                json={
-                    "text": f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {
+            # One Block Kit owner. This route used to assemble its own blocks and
+            # dial the raw egress seam, duplicating what slack_notifier already does
+            # — and skipping its retry/record bookkeeping in the process.
+            #
+            # max_retries=1 is preserved deliberately: a test notification that
+            # silently sends three times is worse than one that fails visibly. That
+            # decision predates this change and survives it; the notifier grew a
+            # passthrough rather than the route keeping its own dialer.
+            sent = SlackNotifier(webhook_url=tenant.slack_webhook_url).send_message(
+                text=f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"*Test Notification*\nThis is a test message from the "
+                                f"Prebid Sales Agent for *{tenant.name}*."
+                            ),
+                        },
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
                                 "type": "mrkdwn",
-                                "text": f"*Test Notification*\nThis is a test message from the Prebid Sales Agent for *{tenant.name}*.",
-                            },
-                        },
-                        {
-                            "type": "context",
-                            "elements": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-                                }
-                            ],
-                        },
-                    ],
-                },
-                timeout=5.0,
-                max_attempts=1,
+                                "text": f"Sent at {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                            }
+                        ],
+                    },
+                ],
+                tenant_id=tenant.tenant_id,
+                max_retries=1,
             )
+
+            if not sent:
+                # Same contract the OutboundError arm used to serve: 400 with an
+                # opaque message. Slack's own response body is a counterparty
+                # response and is never echoed back to the operator.
+                return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
 
             return jsonify({"success": True, "message": "Test message sent successfully"})
 
-    except OutboundError as e:
-        # The seam raises on a non-2xx, so the old status branch is this arm. Slack's
-        # response body is not echoed back: it is a counterparty response and the seam
-        # discards it by design.
-        logger.error(f"Error testing Slack webhook: {e}")
-        return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
     except Exception as e:
         logger.error(f"Unexpected error testing Slack: {e}", exc_info=True)
         return jsonify({"success": False, "error": "Internal server error"}), 500

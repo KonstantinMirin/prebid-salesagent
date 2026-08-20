@@ -18,7 +18,7 @@ from src.core.config_loader import get_tenant_config
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.schemas import MediaPackage
-from src.core.security.outbound_http import send
+from src.services.slack_notifier import SlackNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -187,44 +187,43 @@ class BaseWorkflowManager:
             # Get notification styling based on action type
             notification = self._get_notification_details(step_id, action_details)
 
-            # Build Slack message
-            slack_payload = {
-                "attachments": [
+            # The attachment is the message; the notifier is the sender. This used
+            # to assemble a payload and dial the raw egress seam itself, which meant
+            # no retry bookkeeping and no delivery record — while slack_notifier
+            # already owned both. The attachment shape is relocated VERBATIM: Slack
+            # renders legacy attachments differently from Block Kit, so converting
+            # would change what an operator sees, which is not a refactor's call.
+            # max_retries=1 preserves the previous single-attempt behaviour.
+            attachment = {
+                "color": notification["color"],
+                "title": notification["title"],
+                "text": notification["description"],
+                "fields": [
+                    {"title": "Step ID", "value": step_id, "short": True},
                     {
-                        "color": notification["color"],
-                        "title": notification["title"],
-                        "text": notification["description"],
-                        "fields": [
-                            {"title": "Step ID", "value": step_id, "short": True},
-                            {
-                                "title": "Platform",
-                                "value": action_details.get("platform", self.platform_name),
-                                "short": True,
-                            },
-                            {
-                                "title": "Automation Mode",
-                                "value": action_details.get("automation_mode", "unknown").replace("_", " ").title(),
-                                "short": True,
-                            },
-                            {
-                                "title": "Action Required",
-                                "value": action_details.get("instructions", ["Check admin dashboard"])[0],
-                                "short": False,
-                            },
-                        ],
-                        "footer": "AdCP Sales Agent",
-                        "ts": int(datetime.now(UTC).timestamp()),
-                    }
-                ]
+                        "title": "Platform",
+                        "value": action_details.get("platform", self.platform_name),
+                        "short": True,
+                    },
+                    {
+                        "title": "Automation Mode",
+                        "value": action_details.get("automation_mode", "unknown").replace("_", " ").title(),
+                        "short": True,
+                    },
+                    {
+                        "title": "Action Required",
+                        "value": action_details.get("instructions", ["Check admin dashboard"])[0],
+                        "short": False,
+                    },
+                ],
+                "footer": "AdCP Sales Agent",
+                "ts": int(datetime.now(UTC).timestamp()),
             }
 
-            # Send notification
-            send(
-                slack_webhook_url,
-                json=slack_payload,
-                headers={"Content-Type": "application/json"},
-                timeout=10.0,
-                max_attempts=1,
+            SlackNotifier(webhook_url=slack_webhook_url).send_message(
+                text=notification["title"],
+                attachments=[attachment],
+                max_retries=1,
             )
 
             self.log(f"Sent Slack notification for workflow step {step_id}")
