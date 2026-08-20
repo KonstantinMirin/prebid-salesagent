@@ -3,7 +3,6 @@
 Given steps set up error conditions (missing auth, wrong principal, bad budget,
 invalid creatives, etc.). Then steps assert error fields (recovery, suggestion).
 
-beads: salesagent-05b
 """
 
 from __future__ import annotations
@@ -885,7 +884,7 @@ def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
     This step stores the expected values in ctx so downstream Then steps
     can assert on error details shape when the gap is closed.
 
-    FIXME(salesagent-9vgz.1): Wire seller minimum budget to production
+    FIXME: Wire seller minimum budget to production
     validation and error details.
     """
     import pytest
@@ -895,7 +894,7 @@ def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Seller minimum budget ({amount} {currency}) "
         "not carried in production. v3.1 BUDGET_TOO_LOW error details "
-        "(minimum_budget, currency) not populated. FIXME(salesagent-9vgz.1)"
+        "(minimum_budget, currency) not populated. FIXME"
     )
 
 

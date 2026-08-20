@@ -1,6 +1,5 @@
 """Unit test: execute_approved_media_buy must update status to 'active' after adapter success.
 
-Bug: salesagent-mckm
 Root cause: execute_approved_media_buy returns (True, None) after successful adapter
 execution but never sets media_buy.status = 'active' in the database.
 """
@@ -82,7 +81,7 @@ class TestExecuteApprovedStatusUpdate:
     def test_status_updated_to_active_after_adapter_success(self):
         """After successful adapter execution, media_buy.status must be 'active'.
 
-        This is the regression test for salesagent-mckm: the function returns
+        This is the regression test for : the function returns
         (True, None) but never updates the status field.
         """
         # -- Arrange --

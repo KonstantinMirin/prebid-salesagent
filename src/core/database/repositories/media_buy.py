@@ -6,8 +6,7 @@ is set at construction time and injected into all queries automatically.
 Cross-tenant queries (for schedulers) use class methods that explicitly accept a
 session and do not enforce tenant isolation — these are system-level operations.
 
-beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (admin/scheduler migration),
-       salesagent-dyb6 (write methods)
+        (write methods)
 """
 
 from __future__ import annotations

@@ -4,7 +4,6 @@ Given steps build ctx["update_kwargs"], assembled into UpdateMediaBuyRequest
 in the When step. Background steps set up the existing media buy via
 conftest's _harness_env.
 
-beads: salesagent-82p
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 # but MediaPackageFactory uses a Sequence (pkg_0000, pkg_0001, ...). Step
 # definitions must resolve the label to the real database package_id
 # before comparing or operating on packages. See UC-019 principal_id
-# pattern (salesagent-vmqv) for the same approach.
+# pattern for the same approach.
 
 
 def _register_package(ctx: dict, label: str, package: Any) -> None:
@@ -762,7 +761,7 @@ def given_package_update_negative_keywords_add(ctx: dict) -> None:
     hardcoded defaults. Feature files using this step do not provide a DataTable;
     the ':' is part of the step text pattern matching the Gherkin scenario phrasing.
 
-    FIXME(salesagent-9vgz.1): Accept datatable parameter when feature files provide one.
+    FIXME: Accept datatable parameter when feature files provide one.
     """
     _set_keyword_field_on_package(ctx, "negative_keywords_add", [{"keyword": "cheap", "match_type": "exact"}])
 
@@ -775,7 +774,7 @@ def given_package_update_negative_keywords_remove(ctx: dict) -> None:
     hardcoded defaults. Feature files using this step do not provide a DataTable;
     the ':' is part of the step text pattern matching the Gherkin scenario phrasing.
 
-    FIXME(salesagent-9vgz.1): Accept datatable parameter when feature files provide one.
+    FIXME: Accept datatable parameter when feature files provide one.
     """
     _set_keyword_field_on_package(ctx, "negative_keywords_remove", [{"keyword": "cheap", "match_type": "exact"}])
 
@@ -918,7 +917,7 @@ def then_implementation_date_not_null(ctx: dict) -> None:
     impl_date = resp.implementation_date
     # Step text claims "not null" unconditionally — hard assert.
     # If production doesn't populate this, the SCENARIO should be xfailed in conftest.py,
-    # not the step body. See salesagent-ghgx.
+    # not the step body.
     assert impl_date is not None, (
         "implementation_date is None in response — step text claims 'not null' unconditionally"
     )
@@ -1026,7 +1025,7 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
         actual_budget = pkg.get("budget")
     # Step text claims "updated budget of {budget}" unconditionally — hard assert.
     # If production doesn't echo budget, the SCENARIO should be xfailed in conftest.py.
-    # See salesagent-2c9b.
+    #
     assert actual_budget is not None, (
         f"affected package '{expected_pkg_id}' budget is None — step text claims "
         f"'updated budget of {budget}' unconditionally"
@@ -1066,7 +1065,7 @@ def then_response_has_sandbox(ctx: dict) -> None:
         sandbox = dumped.get("sandbox")
     # Step text claims "should include a sandbox flag" unconditionally — hard assert.
     # If production doesn't include sandbox, the SCENARIO should be xfailed in conftest.py.
-    # See salesagent-n3bf.
+    #
     assert sandbox is not None, (
         f"sandbox flag not present on response (type: {type(resp).__name__}) — "
         "step text claims envelope 'should include' it unconditionally"

@@ -91,7 +91,7 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
 
 # AdCP-compliant delivery models
-# FIXME(salesagent-jz3y): DeliveryTotals and PackageDelivery duplicate fields from
+# FIXME: DeliveryTotals and PackageDelivery duplicate fields from
 # adcp library Totals/ByPackageItem instead of inheriting. These should extend the
 # library types (Pattern #1). Field names are now spec-aligned (completed_views);
 # remaining work is switching to inheritance.
@@ -246,7 +246,7 @@ class MediaBuyDeliveryData(SalesAgentBaseModel):
     spec-aligned (completed_views); remaining work is switching DeliveryTotals
     and PackageDelivery to extend their library counterparts.
 
-    TODO(salesagent-jz3y): Add buyer_campaign_ref field from adcp spec
+    TODO: Add buyer_campaign_ref field from adcp spec
     (present in library MediaBuyDelivery but missing here).
     """
 

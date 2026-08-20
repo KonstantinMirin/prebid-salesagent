@@ -1187,7 +1187,7 @@ def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[Response
     for row in registry:
         arm = _success_shape(load_json_schema(row.schema_ref))
         # The REQUIRED fields (not all properties): the bug class is a spec-REQUIRED
-        # field silently dropped (F4/F5/Chris-#2). Demanding every OPTIONAL
+        # field silently dropped (PR #1941 review). Demanding every OPTIONAL
         # forward-compat property be declared would over-reach — response models
         # intentionally carry optional fields via extra='allow'.
         declared = frozenset(arm.get("required", [])) - _VERSION_FIELDS

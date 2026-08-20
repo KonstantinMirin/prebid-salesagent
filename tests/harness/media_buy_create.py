@@ -5,7 +5,6 @@ Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
 
 Requires: integration_db fixture.
 
-beads: salesagent-4n0
 """
 
 from __future__ import annotations

@@ -578,7 +578,7 @@ class TestCreateMediaBuyValidation:
         Spec: UPDATED -- buyer_campaign_ref removed from create-media-buy-request.json in adcp 3.12
         Priority: P0
         Type: unit
-        Source: UC-002, salesagent-7gnv
+        Source: UC-002,
         Covers: UC-002-UPG-03
         """
         with pytest.raises(ValidationError, match="buyer_campaign_ref"):
@@ -591,7 +591,7 @@ class TestCreateMediaBuyValidation:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
         Priority: P0
         Type: unit
-        Source: UC-002, salesagent-7gnv
+        Source: UC-002,
         Covers: UC-002-UPG-05
         """
         req = _make_request(ext={"custom_key": "custom_value"})
@@ -613,7 +613,7 @@ class TestCreateMediaBuyValidation:
         (AccountReference) instead of 'account_id' (string).
         Priority: P1
         Type: unit
-        Source: UC-002, salesagent-7gnv
+        Source: UC-002,
         Covers: UC-002-UPG-06
         """
         req = _make_request(account={"account_id": "acc_123"})
@@ -783,7 +783,7 @@ class TestCreateMediaBuyValidation:
 
 
 class TestBuildAdapterAssetFormatFallback:
-    """_build_adapter_asset_from_creative format-spec fallback (salesagent-mpo1 TQ-04).
+    """_build_adapter_asset_from_creative format-spec fallback ( TQ-04).
 
     Cache-miss (None) falls back to format_resolver.get_format; a genuinely
     unknown format proceeds with no spec (raw-data extraction); a typed
@@ -1273,7 +1273,7 @@ class TestCreateMediaBuyImplAuth:
         """Setup incomplete errors are terminal — buyer can't fix by retrying.
 
         Admin must complete tenant setup (currency limits, property tags).
-        Covers: salesagent-91pp (PR #1083 review)
+        Covers: (PR #1083 review)
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.services.setup_checklist_service import SetupIncompleteError
@@ -1725,7 +1725,7 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/core/media-buy.json
         Priority: P0
         Type: unit
-        Source: UC-003, salesagent-7gnv
+        Source: UC-003,
         Covers: UC-003-MAIN-11
         """
         # buyer_campaign_ref is a create-time field, not an update field.
@@ -1756,7 +1756,7 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Priority: P0
         Type: unit
-        Source: UC-003, salesagent-7gnv
+        Source: UC-003,
         Covers: UC-003-MAIN-12
         """
         req = UpdateMediaBuyRequest(
@@ -3879,7 +3879,7 @@ class TestDeliveryImplErrors:
     def test_missing_identity_recovery_is_correctable(self):
         """Missing identity is correctable — buyer can fix by including auth headers.
 
-        Covers: salesagent-80je (PR #1083 review)
+        Covers: (PR #1083 review)
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
         with pytest.raises(AdCPAuthenticationError) as exc_info:
@@ -3979,7 +3979,7 @@ class TestDeliveryImplErrors:
 
 
 class TestDeliveryImplPricingLookup:
-    """UC-004 pricing: salesagent-mq3n string-to-integer PK regression."""
+    """UC-004 pricing: string-to-integer PK regression."""
 
     def test_pricing_option_lookup_uses_string_field(self):
         """UC-004-PL01: lookup via synthetic ID (model_currency_type), not integer PK.
@@ -3988,7 +3988,7 @@ class TestDeliveryImplPricingLookup:
         Our implementation constructs synthetic IDs like "cpm_usd_fixed".
         Priority: P0
         Type: unit
-        Source: UC-004, salesagent-mq3n
+        Source: UC-004,
         Covers: UC-002-EXT-N-08
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
@@ -4014,7 +4014,7 @@ class TestDeliveryImplPricingLookup:
         Spec: UNSPECIFIED (implementation-defined spend calculation)
         Priority: P0
         Type: unit
-        Source: UC-004, salesagent-mq3n
+        Source: UC-004,
         """
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
         buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1", "pricing_option_id": "42"}]}
@@ -4408,7 +4408,7 @@ class TestGetMediaBuysImplAuth:
     def test_account_id_unsupported_recovery_is_correctable(self):
         """Unsupported account_id should be correctable — buyer removes the param.
 
-        Covers: salesagent-bmlk (PR #1083 review)
+        Covers: (PR #1083 review)
         """
         from src.core.exceptions import AdCPCapabilityNotSupportedError
         from src.core.resolved_identity import ResolvedIdentity

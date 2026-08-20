@@ -718,11 +718,11 @@ class TestGetMediaBuysResponseFields:
     async def test_persisted_status_authoritative_over_flight_window(
         self, mb_tenant, mb_principal, mb_products, mb_identity, persisted_status, expected
     ):
-        """Regression (salesagent-36d): list_media_buys must report the persisted
+        """Regression : list_media_buys must report the persisted
         MediaBuy.status for terminal/explicit lifecycle states even when the
         media buy's flight window covers today.
 
-        Identical defect to salesagent-18h.1 (fixed in _get_target_media_buys):
+        Identical defect to (fixed in _get_target_media_buys):
         terminal states are lifecycle decisions and cannot be re-derived from
         flight dates. Before the fix, _compute_status recomputed status purely
         from dates, so a completed/paused/rejected/canceled buy whose flight

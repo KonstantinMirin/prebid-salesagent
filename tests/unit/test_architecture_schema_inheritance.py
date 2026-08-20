@@ -9,7 +9,6 @@ Scanning approach: Introspection — import the schemas module, discover all
 Library* aliases (imported from adcp), then verify that for each Library alias,
 the corresponding local class inherits from it.
 
-beads: salesagent-v0kb (structural-guard epic)
 """
 
 import importlib

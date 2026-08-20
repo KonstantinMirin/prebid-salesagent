@@ -115,7 +115,7 @@ def _adcp_status_and_actions(buy: "MediaBuy", today: date | None = None) -> tupl
     + the delivery-only ``failed`` -> ``rejected`` mapping) so the update-response
     ``media_buy_status`` agrees with ``get_media_buys`` for the same buy and reference
     date — the two surfaces must describe one buy identically (the 8plg agreement;
-    salesagent-109m). A past-end serving buy therefore reports ``completed`` on both,
+    ). A past-end serving buy therefore reports ``completed`` on both,
     not the un-refined persisted ``active`` (the status scheduler that transitions the
     column may lag behind the flight window).
 
@@ -388,7 +388,7 @@ def _update_media_buy_impl(
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant["tenant_id"]) as uow:
             assert uow.media_buys is not None
-            # FIXME(salesagent-9f2): raw session usages below should migrate to repository methods
+            # FIXME: raw session usages below should migrate to repository methods
             assert uow.session is not None
             session = uow.session
 

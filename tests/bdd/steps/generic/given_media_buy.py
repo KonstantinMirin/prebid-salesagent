@@ -522,7 +522,7 @@ def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
     CurrencyLimit, not per product. This step uses CurrencyLimit as the
     mechanism. When per-product minimums are implemented, update this step.
 
-    FIXME(salesagent-9vgz.1): Per-product minimum spend not yet implemented.
+    FIXME: Per-product minimum spend not yet implemented.
     """
     import pytest
 
@@ -531,7 +531,7 @@ def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Per-product minimum spend ({amount} {currency}) "
         "not yet implemented. Production uses CurrencyLimit.min_package_budget "
-        "for all products in a tenant. FIXME(salesagent-9vgz.1)"
+        "for all products in a tenant. FIXME"
     )
 
 
@@ -2788,7 +2788,7 @@ def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
     accepted but never validated. This step cannot establish the claimed
     precondition, so the scenario is xfailed.
 
-    FIXME(salesagent-9vgz.1): When production implements proposal storage, this step must:
+    FIXME: When production implements proposal storage, this step must:
     1. Verify no proposal record exists for this ID, OR
     2. Create an expired proposal record to test the expiry path
     Then remove the xfail.
@@ -2800,7 +2800,7 @@ def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Production has no proposal store — cannot establish "
         f"'proposal \"{proposal_id}\" does not exist or has expired' precondition. "
-        "FIXME(salesagent-9vgz.1)"
+        "FIXME"
     )
 
 
@@ -2812,7 +2812,7 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
     SPEC-PRODUCTION GAP: Production has no proposal budget guidance.
     This step cannot configure the claimed precondition, so the scenario is xfailed.
 
-    FIXME(salesagent-9vgz.1): When production implements proposal budget guidance, this step must:
+    FIXME: When production implements proposal budget guidance, this step must:
     1. Configure the proposal record with total_budget_guidance.min = amount
     2. Verify the proposal exists in ctx before setting guidance
     Then remove the xfail.
@@ -2823,7 +2823,7 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
     ctx["expected_budget_guidance_min"] = amount
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Production has no proposal budget guidance — cannot establish "
-        f"'total_budget_guidance.min is {amount}' precondition. FIXME(salesagent-9vgz.1)"
+        f"'total_budget_guidance.min is {amount}' precondition. FIXME"
     )
 
 

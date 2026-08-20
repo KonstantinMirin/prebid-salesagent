@@ -7,7 +7,6 @@ Steps dispatch a full create_media_buy through the wire transport
 (MediaBuyCreateEnv); production resolves the account at the transport boundary
 and emits the outcome on the wire (#1417).
 
-beads: salesagent-2rq, salesagent-zh85
 """
 
 from __future__ import annotations
@@ -1967,7 +1966,7 @@ def then_webhook_notification(ctx: dict) -> None:
       B. step.request_data carries push_notification_config URL -- required for
          _send_push_notifications to actually POST. The BDD reject path uses
          repository methods that bypass the admin flow which populates this field.
-         FIXME(salesagent-9vgz.1): Wire through the production admin approve/reject
+         FIXME: Wire through the production admin approve/reject
          flow, then remove the xfail.
     """
     import pytest
@@ -2104,7 +2103,7 @@ def then_webhook_notification(ctx: dict) -> None:
         # SPEC-PRODUCTION GAP: the repository-driven reject path does NOT populate
         # step.request_data with push_notification_config because it bypasses the
         # Flask admin flow that writes the original request payload onto the step.
-        # FIXME(salesagent-9vgz.1): wire through the production admin approve/reject
+        # FIXME: wire through the production admin approve/reject
         # flow which populates request_data, then remove this xfail.
         req_data = step.request_data or {}
         step_push_cfg = req_data.get("push_notification_config") if isinstance(req_data, dict) else None
@@ -2113,7 +2112,7 @@ def then_webhook_notification(ctx: dict) -> None:
                 "SPEC-PRODUCTION GAP: step.request_data does not carry "
                 "push_notification_config with the buyer's URL — "
                 "_send_push_notifications would skip dispatch. "
-                "FIXME(salesagent-9vgz.1): wire through the admin flow."
+                "FIXME: wire through the admin flow."
             )
 
         # Happy path (reached when harness wires the full admin flow):

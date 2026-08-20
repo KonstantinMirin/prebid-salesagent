@@ -521,7 +521,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         else:
                             # tool_name is untrusted (workflow_steps DB column).
                             # Validate a COPY for the SDK payload; metadata keeps
-                            # the original label (salesagent-yi3s, salesagent-yk7o).
+                            # the original label .
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
                                 task_id=step_data["step_id"],
                                 task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
@@ -619,7 +619,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     else:
                         # tool_name is untrusted (workflow_steps DB column).
                         # Validate a COPY for the SDK payload; metadata keeps the
-                        # original label (salesagent-yi3s, salesagent-yk7o).
+                        # original label .
                         create_media_buy_rejected_payload = create_mcp_webhook_payload(
                             task_id=step_data["step_id"],
                             task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),

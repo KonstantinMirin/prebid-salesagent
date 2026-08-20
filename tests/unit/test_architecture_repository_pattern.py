@@ -8,7 +8,6 @@ Three invariants:
 Scanning approach: AST — parse source files for function calls matching prohibited
 patterns. All pre-existing violations are allowlisted; new code fails immediately.
 
-beads: salesagent-qo8a (repository pattern enforcement)
 """
 
 import ast
@@ -49,7 +48,7 @@ IMPL_FILES = [
 
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
-# FIXME(salesagent-qo8a): all _impl functions should use repositories instead of get_db_session()
+# FIXME: all _impl functions should use repositories instead of get_db_session()
 IMPL_SESSION_ALLOWLIST: set[tuple[str, str]] = set()
 
 # ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ def _discover_integration_test_files() -> list[str]:
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
 
 # Pre-existing violations: (file_path, function_or_fixture_name)
-# FIXME(salesagent-qo8a): integration tests should use polyfactory fixtures
+# FIXME: integration tests should use polyfactory fixtures
 INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/conftest.py
     ("tests/integration/conftest.py", "authenticated_admin_session"),
@@ -94,11 +93,11 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_adapter_factory.py
     ("tests/integration/test_adapter_factory.py", "setup_adapters"),
     # tests/integration/test_gam_adapter_auth.py — no AdapterConfigFactory exists yet
-    # FIXME(salesagent-zj9): migrate to factory when AdapterConfigFactory is created
+    # FIXME: migrate to factory when AdapterConfigFactory is created
     ("tests/integration/test_gam_adapter_auth.py", "oauth_tenant"),
     ("tests/integration/test_gam_adapter_auth.py", "sa_tenant"),
     # tests/integration/test_adapter_config_repository.py — same: no AdapterConfigFactory
-    # FIXME(salesagent-zj9): migrate to factory when AdapterConfigFactory is created
+    # FIXME: migrate to factory when AdapterConfigFactory is created
     ("tests/integration/test_adapter_config_repository.py", "_tenants"),
     # tests/integration/test_admin_ui_pages.py
     ("tests/integration/test_admin_ui_pages.py", "test_cannot_access_other_tenant_data"),

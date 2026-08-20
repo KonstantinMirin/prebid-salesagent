@@ -4,7 +4,6 @@ Given steps seed media buys in DB via factories.
 When steps build GetMediaBuysRequest and dispatch through MediaBuyListEnv.
 Then steps assert on GetMediaBuysResponse fields.
 
-beads: salesagent-lqb
 """
 
 from __future__ import annotations
@@ -577,14 +576,14 @@ def given_package_creative_rejected(ctx: dict, pkg_id: str, status: str, reason:
 def given_package_creative_assignment(ctx: dict, pkg_id: str, creative_id: str) -> None:
     """Record creative assignment — cannot seed real DB records.
 
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, seed real DB records.
+    FIXME: When CreativeAssignmentFactory exists, seed real DB records.
     """
     import pytest
 
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
         f"for '{creative_id}' on package '{pkg_id}'. "
-        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+        f"FIXME: Create factory to seed real DB records."
     )
 
 
@@ -592,14 +591,14 @@ def given_package_creative_assignment(ctx: dict, pkg_id: str, creative_id: str) 
 def given_creative_status_with_reason(ctx: dict, creative_id: str, status: str, reason: str) -> None:
     """Update creative status/reason — cannot update real DB records.
 
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, update real DB records.
+    FIXME: When CreativeAssignmentFactory exists, update real DB records.
     """
     import pytest
 
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
         f"'{creative_id}' with status='{status}', rejection_reason='{reason}' in DB. "
-        f"FIXME(salesagent-vov): Create factory to seed/update real DB records."
+        f"FIXME: Create factory to seed/update real DB records."
     )
 
 
@@ -607,14 +606,14 @@ def given_creative_status_with_reason(ctx: dict, creative_id: str, status: str, 
 def given_creative_status_extra(ctx: dict, creative_id: str, status: str, extra_condition: str) -> None:
     """Update creative status with extra conditions — cannot update real DB records.
 
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, update real DB records.
+    FIXME: When CreativeAssignmentFactory exists, update real DB records.
     """
     import pytest
 
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
         f"'{creative_id}' status to '{status}' with '{extra_condition}' in DB. "
-        f"FIXME(salesagent-vov): Create factory to seed/update real DB records."
+        f"FIXME: Create factory to seed/update real DB records."
     )
 
 
@@ -622,14 +621,14 @@ def given_creative_status_extra(ctx: dict, creative_id: str, status: str, extra_
 def given_creative_status_simple(ctx: dict, creative_id: str, status: str) -> None:
     """Set creative internal status — cannot update real DB records.
 
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, update real DB records.
+    FIXME: When CreativeAssignmentFactory exists, update real DB records.
     """
     import pytest
 
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
         f"'{creative_id}' status to '{status}' in DB. "
-        f"FIXME(salesagent-vov): Create factory to seed/update real DB records."
+        f"FIXME: Create factory to seed/update real DB records."
     )
 
 
@@ -637,7 +636,7 @@ def given_creative_status_simple(ctx: dict, creative_id: str, status: str) -> No
 def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
     """Mark creative as nonexistent — cannot verify or enforce DB absence.
 
-    FIXME(salesagent-vov): When CreativeAssignmentFactory exists, verify actual
+    FIXME: When CreativeAssignmentFactory exists, verify actual
     DB absence rather than relying on ctx-only sentinels.
     """
     import pytest
@@ -645,7 +644,7 @@ def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Cannot enforce DB absence for creative '{creative_id}' — "
         f"no CreativeAssignmentFactory to verify or control DB state. "
-        f"FIXME(salesagent-vov): Verify actual DB absence."
+        f"FIXME: Verify actual DB absence."
     )
 
 
@@ -653,14 +652,14 @@ def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
 def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: str) -> None:
     """Record creative assignment referencing a potentially nonexistent creative.
 
-    FIXME(salesagent-vov): No CreativeAssignmentFactory — cannot seed real DB records.
+    FIXME: No CreativeAssignmentFactory — cannot seed real DB records.
     """
     import pytest
 
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
         f"for '{creative_id}' on package '{pkg_id}'. "
-        f"FIXME(salesagent-vov): Create factory to seed real DB records."
+        f"FIXME: Create factory to seed real DB records."
     )
 
 
@@ -679,7 +678,7 @@ def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
 def given_adapter_supports_reporting(ctx: dict) -> None:
     """Configure the adapter mock to support realtime reporting for snapshots.
 
-    FIXME(salesagent-9vgz.1): When the harness supports full adapter capability
+    FIXME: When the harness supports full adapter capability
     configuration, this step should also set up mock reporting endpoints that
     return test data (impressions, spend, etc.).
     """
@@ -1413,7 +1412,7 @@ def then_package_details(ctx: dict) -> None:
             f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} of "
             f"{total_packages_checked} package(s): {', '.join(paused_gaps)}. "
             f"All other fields (budget, bid_price, product_id, flight dates) verified. "
-            f"FIXME(salesagent-9vgz.1)"
+            f"FIXME"
         )
 
 

@@ -15,7 +15,7 @@ from src.core.schemas import GetProductsRequest
 
 
 class TestDeliveryLoopErrorHandling:
-    """salesagent-m06j: single media buy error must not kill entire response.
+    """: single media buy error must not kill entire response.
 
     The delivery loop should log errors for individual media buys and continue
     processing the rest, returning partial results.
@@ -94,7 +94,7 @@ class TestDeliveryLoopErrorHandling:
 
 
 class TestBrandExtractionFromPydanticModel:
-    """salesagent-7bzt: brand domain must be extracted after Pydantic coercion.
+    """: brand domain must be extracted after Pydantic coercion.
 
     When a buyer provides brand={"domain": "example.com"}, Pydantic coerces it
     to BrandReference. The code must extract domain from the model, not treat
@@ -157,7 +157,7 @@ class TestBrandExtractionFromPydanticModel:
 
 
 class TestAuditLogBrandFieldName:
-    """salesagent-bff0: audit log must use 'has_brand' key after 3.6 rename.
+    """: audit log must use 'has_brand' key after 3.6 rename.
 
     In adcp 3.6.0, brand_manifest was renamed to brand. The audit log
     detail key must reflect this.

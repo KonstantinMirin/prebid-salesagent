@@ -21,7 +21,6 @@ Usage:
         partners = uow.tenant_config.list_publisher_partners()
         # auto-commits when exiting the `with` block
 
-beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-rn59 (ProductUoW), salesagent-4d4 (WorkflowUoW), salesagent-9y0 (TenantConfigUoW), salesagent-q8n (CreativeUoW), salesagent-24c (BaseUoW extraction)
 """
 
 from __future__ import annotations
@@ -75,7 +74,7 @@ class BaseUoW:
         It will be removed once all callers use repository methods.
         """
         warnings.warn(
-            "uow.session is deprecated — use repository methods instead of raw session access. See salesagent-9f2.",
+            "uow.session is deprecated — use repository methods instead of raw session access.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -221,7 +220,6 @@ class AccountUoW(BaseUoW):
     Args:
         tenant_id: Tenant scope for all repository queries.
 
-    beads: salesagent-m44
     """
 
     accounts: AccountRepository | None
@@ -299,7 +297,6 @@ class AdminCreativeUoW(BaseUoW):
     Args:
         tenant_id: Tenant scope for all repository queries.
 
-    beads: salesagent-4tb, salesagent-p6i
     """
 
     creatives: CreativeRepository | None

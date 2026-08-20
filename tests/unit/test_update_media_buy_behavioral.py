@@ -54,7 +54,7 @@ def _make_mock_media_buy(media_buy_id="mb_test", currency="USD", status="active"
     """Create a mock MediaBuy database object.
 
     Default status is "active" so the state-machine precondition guard
-    (added in salesagent-ljz0) lets all buyer actions through.
+    (added in ) lets all buyer actions through.
     """
     mb = MagicMock()
     mb.media_buy_id = media_buy_id
@@ -2737,7 +2737,7 @@ class TestUC003ExtO:
 
 
 # ---------------------------------------------------------------------------
-# State-machine precondition (salesagent-ljz0)
+# State-machine precondition
 # ---------------------------------------------------------------------------
 
 

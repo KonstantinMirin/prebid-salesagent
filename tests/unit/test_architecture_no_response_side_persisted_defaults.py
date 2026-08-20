@@ -10,7 +10,7 @@ That is not hypothetical: ``CreateMediaBuySuccess`` shipped
 ``revision: int = 1``. No construction site passed either, the row returned by
 ``create_from_request`` was discarded one function away, and the response reported a
 seller-commitment instant for buys whose column was NULL. It survived three review
-rounds (round-1 R1-19 through round-3) because a default is invisible in the places
+rounds of review on PR #1941 because a default is invisible in the places
 you look: no assignment for the write-seam guard to see, no missing-argument error at
 any call site, and a test that asserted ``revision == 1`` read as passing when it was
 in fact pinning the fabrication.

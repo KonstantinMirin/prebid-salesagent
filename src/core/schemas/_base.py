@@ -2754,7 +2754,7 @@ class ActivateSignalRequest(LibraryActivateSignalRequest):
 class ActivateSignalResponse(SalesAgentBaseModel):
     """Response from signal activation.
 
-    NOT migrated to library base (evaluated in salesagent-xeb):
+    NOT migrated to library base (evaluated in ):
     1. Historically "library uses RootModel[SuccessVariant | ErrorVariant] — cannot
        add fields". That reason is STALE at adcp 6.6: ActivateSignalResponse is a
        union TypeAlias, not a RootModel, so the SyncAccountsResponse approach

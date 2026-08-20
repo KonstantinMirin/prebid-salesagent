@@ -3,7 +3,6 @@
 Core invariant: every query includes tenant_id in the WHERE clause. The tenant_id
 is set at construction time and injected into all queries automatically.
 
-beads: salesagent-o9k4 (foundation)
 """
 
 from __future__ import annotations
@@ -297,7 +296,7 @@ class CreativeRepository:
 
     # ------------------------------------------------------------------
     # Admin-specific lookups (no principal_id required)
-    # Added for admin blueprint migration (salesagent-4tb)
+    # Added for admin blueprint migration
     # ------------------------------------------------------------------
 
     def admin_get_by_id(self, creative_id: str) -> Creative | None:

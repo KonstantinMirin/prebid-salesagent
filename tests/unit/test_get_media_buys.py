@@ -158,7 +158,7 @@ class TestComputeStatus:
         ],
     )
     def test_persisted_terminal_status_authoritative_over_flight_window(self, persisted, expected):
-        """Regression (salesagent-36d): a buy persisted as a terminal/explicit
+        """Regression : a buy persisted as a terminal/explicit
         lifecycle status must be reported with that status even when its flight
         window covers today. The persisted MediaBuy.status column is the source
         of truth — terminal states cannot be re-derived from flight dates.
@@ -171,7 +171,7 @@ class TestComputeStatus:
         assert _compute_status(buy, date(2025, 6, 15)) == expected
 
     def test_paused_flag_overrides_active_window(self):
-        """Regression (salesagent-36d): is_paused True reports paused even when
+        """Regression : is_paused True reports paused even when
         the flight window covers today, via the shared resolve_canonical_status."""
         buy = make_media_buy(
             start_date=date(2025, 1, 1),

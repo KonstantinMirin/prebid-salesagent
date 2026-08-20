@@ -1,6 +1,6 @@
 """Integration test: execute_approved_media_buy must persist _platform_line_item_ids.
 
-Bug: salesagent-biv (GitHub #1037)
+Bug: (GitHub #1037)
 Root cause: execute_approved_media_buy calls adapter, gets _platform_line_item_ids
 back on the response object, but never persists them to MediaPackage.package_config.
 The auto-approval path in _create_media_buy_impl DOES persist them (lines 3047-3079).
@@ -232,7 +232,7 @@ class TestExecuteApprovedPlatformIds:
         """After adapter execution via manual approval, platform_line_item_id
         must be written to MediaPackage.package_config for each package.
 
-        This is the regression test for salesagent-biv (GitHub #1037).
+        This is the regression test for (GitHub #1037).
         """
         media_buy_id = pending_media_buy_with_package["media_buy_id"]
         tenant_id = pending_media_buy_with_package["tenant_id"]

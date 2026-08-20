@@ -490,7 +490,7 @@ class SyncCreativesResponse(CompletedTaskStatusMixin, LibrarySyncCreativesSucces
     raw dicts to context/ext, which Pydantic coerces on validation). Only
     ``creatives`` remains overridden — see below.
 
-    Design decision (salesagent-g3c): error variant never constructed.
+    Design decision : error variant never constructed.
     """
 
     # Protocol-envelope `status` comes from CompletedTaskStatusMixin (composed above):

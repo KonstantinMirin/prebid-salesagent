@@ -14,7 +14,6 @@ The MCP wrapper and ``create_media_buy_raw`` both construct CreateMediaBuyReques
 WITHOUT push_notification_config and forward it as a separate argument. The A2A
 skill handler must behave identically.
 
-beads: salesagent-18h.3
 """
 
 from unittest.mock import AsyncMock, patch

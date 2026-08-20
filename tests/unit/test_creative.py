@@ -46,7 +46,7 @@ GAPS identified in this surface (skip-stubbed below):
   - BR-RULE-037 INV-1: Default approval_mode is require-human
   - delete_missing parameter handling
   - dry_run parameter handling
-  - list_creatives_raw boundary-completeness (FIXME salesagent-v0kb)
+  - list_creatives_raw boundary-completeness (FIXME )
   - Creative webhook delivery on approval
 """
 
@@ -952,7 +952,7 @@ class TestCreativeValidation:
     def test_unreachable_agent_raises_with_retry(self):
         """Unreachable creative agent propagates the typed transient error.
 
-        Production-grounded (salesagent-mpo1): the registry types every
+        Production-grounded : the registry types every
         network failure (connect/timeout -> AdCPServiceUnavailableError), and
         the shared fetch path propagates typed errors with their recovery
         semantics instead of rewrapping them — a down agent is a transient
@@ -1504,7 +1504,7 @@ class TestListCreativesRawBoundaryCompleteness:
     """list_creatives_raw boundary completeness.
 
     Spec: UNSPECIFIED (implementation-defined transport boundary).
-    Ref: FIXME(salesagent-v0kb) at listing.py:581.
+    Ref: FIXME at listing.py:581.
     """
 
     def test_raw_forwards_filters_to_impl(self):
@@ -2393,7 +2393,7 @@ class TestWorkflowStepCreation:
     def test_workflow_context_failure_recovery_is_transient(self):
         """Failed workflow context creation should be transient — adapter failures are retryable.
 
-        Covers: salesagent-eber (PR #1083 review)
+        Covers: (PR #1083 review)
         """
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
@@ -2906,12 +2906,12 @@ class TestRESTCreativeRoutes:
 
 
 # ============================================================================
-# 17. CREATIVE SCHEMA: salesagent-goy2 (Wrong Base Class) -- P0 stubs
+# 17. CREATIVE SCHEMA: (Wrong Base Class) -- P0 stubs
 # ============================================================================
 
 
 class TestCreativeWrongBaseClass:
-    """P0 stubs for salesagent-goy2: Creative extends delivery base instead of
+    """P0 stubs for : Creative extends delivery base instead of
     listing base.  These fail today because the fix is not yet landed.
 
     Spec: CONFIRMED -- list-creatives-response.json Creative requires:
@@ -5168,7 +5168,7 @@ class TestProvenanceValidation:
 
 
 # ============================================================================
-# 33. TYPED CREATIVE ASSIGNMENTS (salesagent-e5ao)
+# 33. TYPED CREATIVE ASSIGNMENTS
 # ============================================================================
 
 
@@ -5179,7 +5179,7 @@ class TestTypedCreativeAssignments:
     creative_assignments as array of creative-assignment objects (creative_id,
     placement_ids, weight), never as dict[str, list[str]].
 
-    salesagent-e5ao removed the legacy untyped LegacyUpdateMediaBuyRequest
+     removed the legacy untyped LegacyUpdateMediaBuyRequest
     and consolidated the in-memory dict to use typed CreativeAssignment.
     """
 

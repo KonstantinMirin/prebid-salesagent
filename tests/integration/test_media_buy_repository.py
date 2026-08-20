@@ -6,7 +6,6 @@ Tests the repository pattern with real PostgreSQL to verify:
 - UoW commit/rollback semantics
 - MediaBuy.packages relationship loading
 
-beads: salesagent-t735
 """
 
 from datetime import UTC

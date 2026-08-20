@@ -7,7 +7,7 @@ Tests organized by BR-RULE invariant, covering:
 - BR-RULE-037 inv6: Slack notification guard
 - BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPError propagation in strict mode
 
-Reference: salesagent-1xsp design field.
+Reference: design field.
 """
 
 from datetime import UTC, datetime
