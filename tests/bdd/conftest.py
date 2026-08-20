@@ -653,6 +653,87 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # T-UC-003-boundary-revision is wired (see _UC003_REVISION above), so its steps
+        # RUN and each row fails or passes on its own assertion. Routing is per ROW,
+        # selected on the Examples `outcome` column rather than a node-id substring, so
+        # a row that changes its expected outcome stops matching instead of silently
+        # keeping someone else's exemption.
+        #
+        # Two rows expect CONFLICT and are the coverage half of #1607. Verified failure:
+        # `_assert_error_outcome` raises `AssertionError: Expected an error for outcome:
+        # error "CONFLICT" with suggestion` — an assertion about a response that came
+        # back 200 OK, NOT a StepDefinitionNotFoundError. Production accepts the stale
+        # and ahead tokens on a2a, mcp and rest and returns success; enforcement is what
+        # #1607 owns. strict=True so implementing it XPASSes and the graduation workflow
+        # catches the row rather than letting it sit green-by-omission.
+        #
+        # One row expects INVALID_REQUEST for revision 0 and fails for a DIFFERENT
+        # reason, which is why it is not filed under #1607: production DOES reject it,
+        # but `UpdateMediaBuyRequest.revision` carries `ge=1`, so pydantic raises during
+        # request construction inside the step — before any transport dispatch. The row
+        # cannot grade the seller's response because the request never reaches the
+        # seller. That is a harness limitation, not a production gap, and calling it one
+        # is the exact mislabelling this task exists to stop.
+        if marker_names & {"T-UC-003-boundary-revision", "T-UC-003-partition-revision"}:
+            # pytest-bdd nests a Scenario Outline's Examples row under the single
+            # `_pytest_bdd_example` param rather than exposing each column, so reading
+            # `params["outcome"]` returns None and every row falls through unrouted.
+            _row = (getattr(item, "callspec", None) and item.callspec.params.get("_pytest_bdd_example")) or {}
+            _row_outcome = str(_row.get("outcome") or "")
+            if "CONFLICT" in _row_outcome and is_a2a:
+                # a2a fails EARLIER than the others and for a different reason, so it
+                # does not carry #1607's label. Measured: a probe in _update_media_buy_impl
+                # reads `req.revision=None` on a2a and `6` on mcp/rest, because
+                # _handle_update_media_buy_skill rebuilds the request from five hand-listed
+                # fields and forwards another hand-listed subset — `revision` is in neither.
+                # Implementing CONFLICT would NOT xpass this row; the token never arrives.
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason=(
+                            "cause=transport-drops-parameter scope=per-transport ref=#1885 — the "
+                            "a2a skill handler discards `revision` before it reaches the tool, so "
+                            "this row cannot grade CONFLICT enforcement on a2a at all. NOT #1607: "
+                            "enforcing the check would leave this row red. #1885 is the remedy — "
+                            "route the handler through media_buy_update._build_update_request, which "
+                            "already forwards every field — so closing it makes this row gradeable. "
+                            "#1259 owns the separate question of why no guard sees the drop."
+                        ),
+                        strict=True,
+                    )
+                )
+            elif "CONFLICT" in _row_outcome:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason=(
+                            "cause=production-gap scope=per-transport ref=#1607 — update_media_buy "
+                            "accepts a stale or ahead revision and returns success; the spec MUST "
+                            "reject it with CONFLICT. Steps execute, the token arrives (probed: "
+                            "req.revision=6 on mcp and rest), and the failure is the missing "
+                            "rejection. scope=per-transport because each transport enforces (or "
+                            "fails to enforce) independently, so each must xpass on its own when "
+                            "#1607 lands."
+                        ),
+                        strict=True,
+                    )
+                )
+            elif "INVALID_REQUEST" in _row_outcome:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason=(
+                            "cause=harness-limitation scope=transport-independent ref=#1607 — "
+                            "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during request "
+                            "construction in the step, so the request never reaches the seller and "
+                            "this row cannot grade the seller's INVALID_REQUEST response. Not a "
+                            "production gap. REMEDY: build the raw payload instead of the typed "
+                            "model, so the seller sees the request. Note the scenario only means "
+                            "anything against a NON-conforming client — a conforming one is stopped "
+                            "by its own SDK before the wire, which is why the request-construction "
+                            "path has to be bypassed deliberately rather than fixed."
+                        ),
+                        strict=True,
+                    )
+                )
+
         # FIXME(salesagent-05b): UC-003 extension/error scenarios — production uses
         # different error codes than spec, or doesn't validate at all. These are
         # spec-production gaps where the step definitions are correct but production
@@ -2752,6 +2833,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     # xfail still proves out and an xpass is still caught when production catches
     # up) and deselect the redundant ones.
     #
+    # That rationale holds only when the failure IS transport-independent. It is
+    # not always: an obligation each transport enforces separately fails three
+    # times for three reasons, and each has to xpass on its own when production
+    # catches up — deselecting two of them would grade a cross-transport MUST on
+    # one transport and call it covered.
+    #
+    # So the exemption is keyed on the xfail reason declaring `scope=per-transport`,
+    # not on a list of node ids. A node list is an allowlist under another name and
+    # rots the moment someone adds a row; a declared property is inherited by every
+    # future row that carries it. See the cause taxonomy the UC-003 revision rows
+    # use above (`cause=... scope=... ref=...`).
+    #
     # IMPL was dropped from the BDD default parametrization (#1417), so
     # a2a is now the canonical transport that always runs; mcp/rest are the
     # redundant transports deselected when the scenario carries a strict xfail.
@@ -2769,8 +2862,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 remaining.append(item)
                 continue
             # Check if this item has a strict xfail marker
-            has_strict_xfail = any(m.name == "xfail" and m.kwargs.get("strict", False) for m in item.iter_markers())
-            if has_strict_xfail:
+            strict_xfails = [m for m in item.iter_markers() if m.name == "xfail" and m.kwargs.get("strict", False)]
+            per_transport = any("scope=per-transport" in str(m.kwargs.get("reason", "")) for m in strict_xfails)
+            if strict_xfails and not per_transport:
                 deselected.append(item)
             else:
                 remaining.append(item)
@@ -3330,6 +3424,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         _UC003_REVISION = {
             "T-UC-003-revision-success-increments",
             "T-UC-003-revision-and-idempotency-independent",
+            "T-UC-003-boundary-revision",
+            "T-UC-003-partition-revision",
         }
         if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
             # Extension/error scenarios: budget, currency, auth, creative,

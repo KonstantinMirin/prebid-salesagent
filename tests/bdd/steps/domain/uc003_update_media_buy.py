@@ -2370,6 +2370,20 @@ def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
     ctx.setdefault("seeded_revisions", {})[label] = revision
 
 
+@given("the request revision is set to <not provided>")
+def given_request_revision_absent(ctx: dict) -> None:
+    """Send NO revision — the last-write-wins path the spec makes optional.
+
+    Exact text rather than the `{revision:d}` parser above, because the Examples row
+    carries the literal `<not provided>` and an int parser cannot match it. Without
+    this the row failed on StepDefinitionNotFoundError and the suite's non-strict
+    auto-xfail absorbed it, so a row grading LWW read as dormant-for-some-reason.
+    Leaving `revision` out of the kwargs IS the assertion: the request must go without
+    a token, not with a null one.
+    """
+    _ensure_update_defaults(ctx)
+
+
 @given(parsers.parse("the request revision is set to {revision:d}"))
 def given_request_revision(ctx: dict, revision: int) -> None:
     """Send *revision* as the buyer''s expected-current token on the update request."""

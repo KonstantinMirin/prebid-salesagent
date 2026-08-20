@@ -13,6 +13,7 @@ beads: salesagent-2rq, salesagent-zh85
 from __future__ import annotations
 
 import uuid
+from functools import lru_cache
 from typing import Any
 from unittest.mock import ANY
 
@@ -1285,6 +1286,18 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
                 )
 
 
+@lru_cache(maxsize=1)
+def _pinned_error_codes() -> frozenset[str]:
+    """Every error code the pinned AdCP enum declares.
+
+    Read from the pin rather than hand-listed so a spec bump cannot leave this
+    check describing a vocabulary the suite no longer grades against.
+    """
+    from tests.helpers.pinned_schema import load
+
+    return frozenset(load("enums/error-code.json").get("enum") or ())
+
+
 def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     """Assert error outcome with exact code, recovery, and message matching.
 
@@ -1327,12 +1340,21 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
         return
 
-    # Check if first word is a structured error code (UPPER_CASE with _).
+    # Check if first word is a structured error code.
     # Strip surrounding quotes: the partition/boundary outlines write the code
     # quoted (e.g. error "INVALID_REQUEST" with suggestion).
+    #
+    # Membership in the PINNED enum, not "UPPER_CASE containing an underscore".
+    # That shape heuristic silently misread every single-word code as free-text
+    # prose and fell through to the message-contains branch below, so the row
+    # compared the buyer's error MESSAGE against the literal outcome string and
+    # could never pass however correct production was. Exactly one pinned code
+    # has no underscore — CONFLICT — and it is the one the optimistic-concurrency
+    # obligation (#1607) rests on, so the heuristic broke precisely the rows that
+    # needed it. Asking the pin is an observation; counting underscores was a guess.
     parts = remainder.split()
     first_word = parts[0].strip('"') if parts else ""
-    is_structured = bool(first_word) and first_word == first_word.upper() and "_" in first_word
+    is_structured = bool(first_word) and (first_word in _pinned_error_codes() or "_" in first_word)
 
     if is_structured:
         expected_code = first_word
