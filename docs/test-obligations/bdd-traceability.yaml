@@ -10979,6 +10979,12 @@ mappings:
       upstream_refs: ["BR-RULE-291"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-019-listing-omits-unrenderable-row"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-291", "media-buy/get-media-buys-response.json"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-019-inv-291-1"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null

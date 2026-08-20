@@ -1828,6 +1828,28 @@ def then_response_errors_include(ctx: dict, code: str) -> None:
     assert code in codes, f"Expected error code '{code}' in response errors, got {codes}"
 
 
+@then(parsers.parse('the response errors should name the omitted media buy "{mb_id}"'))
+def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
+    """Assert an advisory on the BUYER'S WIRE names the row that was left out.
+
+    Reads ``wire_dict`` rather than the typed payload: the advisory only does its job
+    if it reaches the buyer, and a re-serialized payload would report success on a
+    transport that never framed the ``errors`` channel at all.
+
+    The id matters more than the code here. An advisory saying a row was dropped
+    without saying WHICH row cannot be reconciled against — the buyer has no way to
+    tell whether the buy they wanted is broken or simply does not exist.
+    """
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    document = wire_dict(ctx)
+    errors = document.get("errors") or []
+    messages = [e.get("message", "") if isinstance(e, dict) else getattr(e, "message", "") for e in errors]
+    assert any(real_id in message for message in messages), (
+        f"expected an advisory naming the omitted media buy {real_id!r}; "
+        f"the response carried {len(errors)} advisory/advisories: {messages}"
+    )
+
+
 @then(parsers.parse('the error message should indicate "{text}" is not a valid MediaBuyStatus'))
 def then_error_invalid_status(ctx: dict, text: str) -> None:
     """Assert error mentions the invalid status value."""

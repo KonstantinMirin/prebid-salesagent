@@ -827,6 +827,34 @@ Feature: BR-UC-019 Query Media Buys
       | revision = 0                     | persisted revision 0 (defective seller)         | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
       | revision = -1                    | persisted revision -1 (defective seller)        | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
 
+  @T-UC-019-listing-omits-unrenderable-row @hand-edited @boundary @revision @schema-v3.1
+  Scenario: An unfiltered listing omits a row it cannot render and names it
+    Given the principal "buyer-001" owns media buy "mb-good" with persisted revision 1
+    And the principal "buyer-001" owns media buy "mb-broken" with persisted revision 0 (defective seller)
+    When the Buyer Agent sends a get_media_buys request with no filters
+    Then the response should include media buy "mb-good"
+    And the response should not include media buy "mb-broken"
+    And the response errors should name the omitted media buy "mb-broken"
+    And the response errors array should include error code "CONFIGURATION_ERROR"
+    # HAND-EDITED, pending the bulk upstream copy to adcp-req. Authored here rather than
+    # upstream by owner ruling; the @hand-edited marker keeps compile_bdd.py --merge from
+    # classifying it LEGACY-DELETE in the meantime. Expected, not stray.
+    #
+    # The sibling T-UC-019-boundary-revision grades the OTHER half of the same policy:
+    # when the buyer NAMES the defective row in media_buy_ids, the read refuses with
+    # CONFIGURATION_ERROR (ruling R-M1) rather than answering "no such media buy". This
+    # row grades the unfiltered listing, where refusing would deny a tenant every buy
+    # they own over one corrupt row. Request shape is the discriminator — see
+    # _buyer_named_rows in src/core/tools/media_buy_list.py.
+    #
+    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # Verified at that ref AND in the installed SDK's 3.1/ tree, which is what
+    # validate_against_pinned_schema reads: media_buys[].revision is
+    # {"type":"integer","minimum":1} and sits in the item's `required`, so persisted 0
+    # is unpublishable; and `errors` is a top-level sibling of `media_buys`, so a
+    # partial listing carrying an advisory is a legal document rather than a
+    # compromise this seller invented.
+
   @T-UC-019-inv-291-1 @invariant @BR-RULE-291 @schema-v3.1
   Scenario: INV-1 holds - every returned media buy has revision integer >= 1
     Given the principal "buyer-001" owns 3 media buys

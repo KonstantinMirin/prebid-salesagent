@@ -2,6 +2,41 @@
 
 Returns media buy status, creative approval state, and optional delivery snapshots
 for monitoring and reporting workflows.
+
+Per-row failure policy
+----------------------
+
+Seller-side data corruption in one row has three possible outcomes, and picking one
+takes two questions, in this order.
+
+**1. Does the corrupt field have a legal absent value?** Its schema decides.
+
+* OPTIONAL, so an empty value is legal: the row RENDERS with that value and the
+  buyer is told on the ``errors[]`` advisory channel. ``targeting_overlay`` takes
+  this path — ``None`` is a value the schema permits, and a silent ``None``,
+  indistinguishable from "no targeting", is what the advisory exists to prevent.
+  This answer is final; question 2 does not apply.
+* REQUIRED, so nothing can be put there: the row cannot be rendered at all, and
+  question 2 decides what happens instead. ``_persisted_revision`` and
+  ``_compute_status`` raise ``AdCPPersistedStateError`` to signal this — a
+  fabricated ``revision`` is a concurrency token nobody looked up, and a defaulted
+  ``status`` is a lifecycle claim nobody defined.
+
+**2. Did the buyer name this row?** ``_buyer_named_rows`` reads the request shape.
+
+* NAMED it in ``media_buy_ids``: the read REFUSES, terminally, with the error that
+  names the seller-side defect. Omitting the row here would answer "no such media
+  buy" to a buyer who just asked about that specific one, which is a worse answer
+  than an error they can escalate. Ruling R-M1; graded by
+  ``@T-UC-019-boundary-revision``.
+* Did NOT name it — an unfiltered listing: the row is OMITTED and an advisory
+  naming its ``media_buy_id`` takes its place. One corrupt row must not deny a
+  tenant every buy they own, and an advisory that does not say WHICH row went
+  missing cannot be reconciled against. Graded by
+  ``@T-UC-019-listing-omits-unrenderable-row``.
+
+So: never fabricate a required field; never fail a whole listing over one row;
+never answer "not found" when the buyer named the row that broke.
 """
 
 from __future__ import annotations
@@ -141,12 +176,17 @@ def _get_media_buys_impl(
     today = datetime.now(UTC).date()
     tenant_id: str = tenant["tenant_id"]
 
+    # Every non-fatal per-row advisory lands here — a degraded optional field and an
+    # omitted unrenderable row alike. Surfaced on the response so the buyer can
+    # reconcile out-of-band; see the module docstring for which fault takes which path.
+    row_advisories: list[Error] = []
+
     # Single DB session for all reads — ORM objects are converted to plain
     # dataclasses inside the UoW scope so nothing is accessed after session close.
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
         # Resolve which media buys to return
-        target_media_buys = _fetch_target_media_buys(req, principal_id, uow, today)
+        target_media_buys = _fetch_target_media_buys(req, principal_id, uow, today, row_advisories)
 
         # Resolve creative approvals for all packages in one batch query
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
@@ -184,13 +224,18 @@ def _get_media_buys_impl(
 
     # Build response
     response_media_buys = []
-    # Accumulate non-fatal targeting-rehydration failures here; one row per
-    # affected (media_buy_id, package_id). Surfaced on the response so the
-    # buyer can reconcile out-of-band — beats silently coercing to
-    # targeting_overlay=None which is indistinguishable from "no targeting".
-    hydration_errors: list[Error] = []
+    buyer_named_rows = _buyer_named_rows(req)
     for buy in target_media_buys:
-        status = _compute_status(buy, today)
+        try:
+            status = _compute_status(buy, today)
+        except AdCPPersistedStateError as exc:
+            if buyer_named_rows:
+                # The buyer named this row, so a listing without it answers "no such
+                # media buy" — a worse answer than the terminal error naming the
+                # seller-side defect (ruling R-M1).
+                raise
+            row_advisories.append(_omitted_row_advisory(buy.media_buy_id, exc))
+            continue
 
         # Build packages
         packages = packages_by_media_buy.get(buy.media_buy_id, [])
@@ -213,11 +258,12 @@ def _get_media_buys_impl(
             # Materialize targeting_overlay from package_config so callers can verify
             # what was persisted. Tolerates the legacy "targeting" key for data written
             # before the targeting_overlay rename (see media_buy_create.py:638-642).
-            # A single corrupted package_config row must not crash the whole tenant's
-            # get_media_buys response — log the bad row, surface a non-fatal
-            # TARGETING_REHYDRATION_FAILED on the response's errors channel, and
-            # set this package's targeting_overlay=None so the rest of the buy
-            # still renders.
+            # OPTIONAL-field branch of the module's per-row failure policy (see the
+            # module docstring): targeting_overlay has a legal empty value, so a
+            # single corrupted package_config row renders as None with a non-fatal
+            # TARGETING_REHYDRATION_FAILED advisory rather than crashing the whole
+            # tenant's get_media_buys response. The REQUIRED-field branch of the same
+            # policy is _persisted_revision / _compute_status, which refuse.
             #
             # Narrow ``except`` to ``TypeError`` only: production
             # ``extra="ignore"`` already absorbs unknown-field drift, so
@@ -246,7 +292,7 @@ def _get_media_buys_impl(
                     # creatives/_processing.py — with the specific
                     # ``TARGETING_REHYDRATION_FAILED`` shape in the message so
                     # callers can grep/route on it.
-                    hydration_errors.append(
+                    row_advisories.append(
                         Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
                             code="SERVICE_UNAVAILABLE",
                             message=(
@@ -306,7 +352,7 @@ def _get_media_buys_impl(
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
         context=req.context,
-        errors=hydration_errors or None,
+        errors=row_advisories or None,
     )
 
 
@@ -399,45 +445,108 @@ def get_media_buys_raw(
 # --- Helper functions ---
 
 
+def _buyer_named_rows(req: GetMediaBuysRequest) -> bool:
+    """Did the buyer name the rows they want, or ask for whatever this account has?
+
+    The request shape, read in one place, because it decides two unrelated things: the
+    default status filter, and what an unrenderable row does. Naming it here keeps the
+    second decision visible instead of falling out of a downstream filter, so a reader
+    can see which rule applies without tracing where the id list came from.
+    """
+    return bool(req.media_buy_ids)
+
+
+def _omitted_row_advisory(media_buy_id: str, exc: AdCPPersistedStateError) -> Error:
+    """The advisory that stands in for a media buy too corrupt to render.
+
+    Names the ``media_buy_id`` deliberately. An advisory that says a row was dropped
+    without saying which one cannot be reconciled against: the buyer has no way to
+    tell whether the buy they are looking for is missing or was never there.
+    """
+    # CONFIGURATION_ERROR, not SERVICE_UNAVAILABLE, and the pin's own enumMetadata is
+    # the reason. SERVICE_UNAVAILABLE carries recovery "transient" / "retry with
+    # exponential backoff" — advice that can never succeed here, because no amount of
+    # backoff repairs a row whose persisted revision is 0. CONFIGURATION_ERROR carries
+    # "terminal" / "surface to a human at the seller ... MUST NOT auto-retry", which is
+    # what this fault actually needs. It is also the code ruling R-M1 chose for the
+    # REFUSAL on this same fault: one defect, one code, two mechanisms.
+    # recovery is stated rather than left to be inferred from the code's enumMetadata:
+    # a client that does not consult the enum still learns not to retry.
+    return Error(  # structural-guard: advisory per-row omission in GetMediaBuysResponse.errors[]
+        code="CONFIGURATION_ERROR",
+        recovery="terminal",
+        message=(
+            f"MEDIA_BUY_UNRENDERABLE: media buy {media_buy_id!r} is omitted from this "
+            f"listing because a spec-required field could not be published from the "
+            f"persisted row; the remaining media buys are unaffected. Cause: {exc}"
+        ),
+        field="media_buys[]",
+    )
+
+
 def _fetch_target_media_buys(
     req: GetMediaBuysRequest,
     principal_id: str,
     uow: MediaBuyUoW,
     today: date,
+    row_advisories: list[Error],
 ) -> list[_MediaBuyData]:
-    """Fetch media buys from database matching the request filters."""
+    """Fetch media buys from database matching the request filters.
+
+    A row whose spec-required ``status`` or ``revision`` cannot be published is
+    either REFUSED or OMITTED, and ``_buyer_named_rows`` decides which. See the module
+    docstring for both dimensions of the policy.
+    """
     assert uow.media_buys is not None
     # Per AdCP spec: the default status filter (active-only) applies only when
     # media_buy_ids are omitted. When the caller specifies
     # explicit IDs, return all matching buys regardless of status.
-    has_explicit_ids = bool(req.media_buy_ids)
-    filter_statuses = _resolve_status_filter(req.status_filter, skip_default=has_explicit_ids)
+    #
+    # The same fact also decides what an unrenderable row does, which is why it is
+    # read from the request here rather than inferred downstream: a buyer who NAMED
+    # a broken row must be told that row is broken, and a buyer who asked for
+    # everything must still get the rest.
+    buyer_named_rows = _buyer_named_rows(req)
+    filter_statuses = _resolve_status_filter(req.status_filter, skip_default=buyer_named_rows)
 
     buys = uow.media_buys.get_by_principal(
         principal_id,
         media_buy_ids=req.media_buy_ids,
     )
 
-    return [
-        _MediaBuyData(
-            media_buy_id=buy.media_buy_id,
-            currency=buy.currency,
-            budget=buy.budget,
-            start_date=cast(date, buy.start_date),
-            end_date=cast(date, buy.end_date),
-            start_time=buy.start_time,
-            end_time=buy.end_time,
-            raw_request=buy.raw_request,
-            created_at=buy.created_at,
-            updated_at=buy.updated_at,
-            status=buy.status,
-            is_paused=buy.is_paused,
-            confirmed_at=buy.confirmed_at,
-            revision=_persisted_revision(buy),
+    renderable: list[_MediaBuyData] = []
+    for buy in buys:
+        try:
+            if filter_statuses is not None and _compute_status(buy, today) not in filter_statuses:
+                continue
+            revision = _persisted_revision(buy)
+        except AdCPPersistedStateError as exc:
+            if buyer_named_rows:
+                # The buyer named this row, so a listing without it answers "no such
+                # media buy" — a worse answer than the terminal error naming the
+                # seller-side defect (ruling R-M1).
+                raise
+            row_advisories.append(_omitted_row_advisory(buy.media_buy_id, exc))
+            continue
+        renderable.append(
+            _MediaBuyData(
+                media_buy_id=buy.media_buy_id,
+                currency=buy.currency,
+                budget=buy.budget,
+                start_date=cast(date, buy.start_date),
+                end_date=cast(date, buy.end_date),
+                start_time=buy.start_time,
+                end_time=buy.end_time,
+                raw_request=buy.raw_request,
+                created_at=buy.created_at,
+                updated_at=buy.updated_at,
+                status=buy.status,
+                is_paused=buy.is_paused,
+                confirmed_at=buy.confirmed_at,
+                revision=revision,
+            )
         )
-        for buy in buys
-        if filter_statuses is None or _compute_status(buy, today) in filter_statuses
-    ]
+    return renderable
 
 
 def _resolve_status_filter(
@@ -493,7 +602,13 @@ _PINNED_REVISION_MINIMUM = 1
 
 
 def _persisted_revision(buy) -> int:
-    """The row's revision, or ``AdCPPersistedStateError``."""
+    """The row's revision, or ``AdCPPersistedStateError``.
+
+    REQUIRED-field branch of the module's per-row failure policy: ``revision`` is the
+    buyer's optimistic-concurrency token, so there is no value to substitute. Raising
+    here does not fail the listing — the fetch stage catches it and omits this one row
+    with an advisory naming it.
+    """
     revision = buy.revision
     if revision is None or revision < _PINNED_REVISION_MINIMUM:
         raise AdCPPersistedStateError(

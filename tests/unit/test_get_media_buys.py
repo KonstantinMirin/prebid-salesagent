@@ -19,6 +19,7 @@ import pytest
 from adcp.types import MediaBuyStatus
 from pydantic import RootModel, ValidationError
 
+from src.core.exceptions import AdCPPersistedStateError
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -266,11 +267,46 @@ class TestFetchTargetMediaBuys:
     TODAY = date(2025, 6, 15)
 
     def _run(self, req, buys):
+        """Run the fetch and stash the advisories it raised on ``self.advisories``."""
         mock_repo = MagicMock()
         mock_repo.get_by_principal.return_value = buys
         mock_uow = MagicMock()
         mock_uow.media_buys = mock_repo
-        return _fetch_target_media_buys(req, "principal_1", mock_uow, self.TODAY)
+        self.advisories: list = []
+        return _fetch_target_media_buys(req, "principal_1", mock_uow, self.TODAY, self.advisories)
+
+    def test_listing_omits_unrenderable_row_with_an_advisory_naming_it(self):
+        """A buyer who asked for everything gets the rest, and is told which row is missing."""
+        good = make_media_buy("buy_good", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        corrupt = make_media_buy("buy_corrupt", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        corrupt.revision = 0  # below the pinned minimum — no legal value to publish
+
+        result = self._run(GetMediaBuysRequest(), [good, corrupt])
+
+        assert [b.media_buy_id for b in result] == ["buy_good"]
+        assert len(self.advisories) == 1
+        advisory = self.advisories[0]
+        assert advisory.code == "CONFIGURATION_ERROR"
+        assert advisory.recovery == "terminal", (
+            "a persisted-state defect cannot be retried into success; the advisory must say so"
+        )
+        assert "buy_corrupt" in advisory.message
+        assert "MEDIA_BUY_UNRENDERABLE" in advisory.message
+
+    def test_named_unrenderable_row_is_refused_rather_than_omitted(self):
+        """A buyer who NAMED the broken row is told it is broken, not that it is absent.
+
+        Omitting here would answer "no such media buy" to a buyer asking about that
+        exact buy. Ruling R-M1: a seller-side store defect is terminal, not a silent
+        empty result.
+        """
+        corrupt = make_media_buy("buy_corrupt", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
+        corrupt.revision = 0
+
+        req = GetMediaBuysRequest(media_buy_ids=["buy_corrupt"])
+        with pytest.raises(AdCPPersistedStateError):
+            self._run(req, [corrupt])
+        assert self.advisories == [], "a refusal carries the error, not an advisory"
 
     def test_media_buy_ids_with_status_filter_excludes_non_matching(self):
         active = make_media_buy("buy_active", start_date=date(2025, 1, 1), end_date=date(2025, 12, 31))
