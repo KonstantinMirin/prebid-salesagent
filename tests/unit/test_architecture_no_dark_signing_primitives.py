@@ -102,8 +102,17 @@ SCOPE: tuple[str, ...] = (
 #
 # SHRINK-ONLY. Each entry needs a `# FIXME(#<gh-issue>)` at the source location.
 ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(#1291): C1 (salesagent-z6nr.18) is the outbound webhook signer that
-    # calls this. Until it lands the only caller is tests/helpers/signing.py.
+    # FIXME(#1291): C1, the outbound webhook signer, HAS landed — and it consumes
+    # resolve_signing_material, not this. adcp.webhooks.WebhookSender's RFC 9421
+    # constructor takes a raw PrivateKey rather than a SigningProvider, so nothing in
+    # production needs the provider FORM. This is not dark code awaiting a caller: it
+    # is the second PROJECTION of a shared resolution path (row -> ref -> PEM ->
+    # revocation refusal -> published-JWK tripwire) whose sibling projection IS in
+    # production, and ~10 integration tests grade that shared path THROUGH this
+    # projection. Retiring it means deleting graded behaviour, and privatising it
+    # would satisfy this scan while changing nothing real. The source FIXME at
+    # src/core/signing/provider.py:316 carries the same reasoning; remove both
+    # together if the projection is ever genuinely retired.
     ("src/core/signing/provider.py", "resolve_signing_provider"),
 }
 
