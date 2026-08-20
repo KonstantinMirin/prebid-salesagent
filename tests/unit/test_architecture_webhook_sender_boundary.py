@@ -33,7 +33,8 @@ A sender that cannot use the DELIVERY act moves its POST into the boundary modul
 than earning an exemption where it stands. The proof-of-control challenge (#1291 C2) is
 the case: ``send_raw`` injects ``idempotency_key`` into the body and the challenge schema
 forbids extra properties, and its fire-time SSRF check is destination policy this repo
-deliberately still owns (GH #1697). Its send therefore lives in
+deliberately still owns (GH #1802 for the seam, GH #1890 for the defect). Its send
+therefore lives in
 :data:`BOUNDARY_MODULE`, which the scan skips — because that module's POST is the
 destination every routed sender is routed TO — and which
 :meth:`TestOutboundWebhookSenderBoundary.test_the_boundary_signs_what_it_posts` holds to

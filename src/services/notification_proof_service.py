@@ -175,8 +175,9 @@ class NotificationProofService:
         # Full SSRF check at FIRE time (not write time): we are about to send a
         # request, so where the name actually resolves now matters. Kept OURS rather than
         # delegated to the SDK's IP-pinned transport, which would move destination policy
-        # for every existing receiver URL (GH #1697). The residual TOCTOU — we resolve,
-        # then httpx resolves again — is pre-existing and is what #1697 closes.
+        # for every existing receiver URL (GH #1802, the egress seam). The residual
+        # TOCTOU — we resolve, then httpx resolves again — is pre-existing and is what
+        # GH #1890 closes.
         safe, reason = check_url_ssrf(url, require_https=True)
         if not safe:
             logger.info("Notification proof for account %s refused: %s", account_id, reason)

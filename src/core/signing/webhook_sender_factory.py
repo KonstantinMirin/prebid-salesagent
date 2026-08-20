@@ -29,12 +29,23 @@ Mode selection is a CONSTRUCTOR choice, so "signed both ways" (which :1425 forbi
 is not a rule to enforce but a shape that cannot be expressed: a ``WebhookSender``
 holds exactly one auth strategy, and ``signs_with_rfc9421`` reports which.
 
-**Destination policy is deliberately unchanged by C1.** The sender is handed an
-``httpx.AsyncClient`` we own, which puts it on the SDK's operator-supplied-client
-path — the operator's transport owns SSRF, exactly as today. Adopting the SDK's
-IP-pinned transport (DNS pre-resolution + private-range refusal) is a real behaviour
-change to every existing receiver URL and belongs with the SSRF work (GH #1697), not
-with the signing switch.
+**Destination policy is deliberately unchanged by C1, and that has a cost worth
+naming.** The sender is handed an ``httpx.AsyncClient`` we own, which puts it on the
+SDK's operator-supplied-client path. That path does NOT mean "our transport owns
+SSRF, exactly as today" — read at the pin, ``adcp/webhooks.py:1727`` says
+*"Operator-supplied client: trust them completely; they own SSRF"* and ``:1604`` that
+operator-supplied clients SKIP the SSRF check, while the owned-client path
+(``:1636``, ``:1715``) builds a PINNED transport that resolves the URL,
+SSRF-validates it and pins the connection to the validated IP before anything is
+serialized. Our supplied client is a plain ``AsyncClient``, so on this path nothing
+validates the destination AT DELIVERY TIME; the only check is the caller's fire-time
+one, with the residual TOCTOU that ``notification_proof_service`` already concedes.
+
+Adopting the SDK's pinned transport is still a real behaviour change to every
+existing receiver URL — and one that cannot be judged by reading range tables, since
+the e2e stack's own compose subnet is the deprecated 6to4 block. It belongs with the
+SSRF seam work (GH #1802) and the defect it closes (GH #1890), graded on the live
+stack, not with the signing switch.
 """
 
 from __future__ import annotations
@@ -545,10 +556,12 @@ async def send_signed_challenge(
     would cover bytes that never went on the wire (#1441's defect class). The caller
     serializes once and hands those exact bytes here.
 
-    Destination policy stays the CALLER's. This opens a plain ``httpx.AsyncClient`` rather
-    than the SDK's IP-pinned transport, because adopting that would change behaviour for
-    every existing receiver URL — deferred to GH #1697. The caller runs its own fire-time
-    SSRF check before calling this.
+    Destination policy stays the CALLER's. This opens a plain ``httpx.AsyncClient``
+    rather than the SDK's IP-pinned transport, because adopting that would change
+    behaviour for every existing receiver URL — deferred to GH #1802 (the egress seam)
+    and GH #1890 (the defect it closes). The caller runs its own fire-time SSRF check
+    before calling this, so the destination is validated ONCE, at fire time, and not
+    again when the socket opens — the TOCTOU the module docstring names.
     """
     headers = {
         "Content-Type": "application/json",
