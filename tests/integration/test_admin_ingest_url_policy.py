@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 
 import pytest
+from adcp.types import AuthenticationScheme
 from sqlalchemy import select
 
 from src.core.database.models import CreativeAgent, PushNotificationConfig, SignalsAgent, Tenant
@@ -431,13 +432,85 @@ def test_register_webhook_refuses_and_stores_nothing(url, authenticated_admin_cl
     assert push_notification_configs_for(seeded_principal) == []
 
 
-# No "accepts an admitted URL" positive control for this site: the handler's
-# PushNotificationConfig(...) call uses field names that do not exist on the
-# model (config_id/auth_type/auth_config instead of id/authentication_type/
-# webhook_secret), so it raises on every real insert regardless of the URL —
-# an unrelated pre-existing bug (salesagent-e4rf), not an SSRF-policy gap.
-# The refusal-path test above still catches a dropped url_policy call, which
-# is the obligation this file grades.
+# The positive control this site went without until salesagent-h585d (which
+# supersedes salesagent-e4rf). It could not be written before: the handler built
+# PushNotificationConfig with config_id/auth_type/auth_config — none of them
+# columns — so it raised TypeError on every real insert regardless of the URL,
+# and the surrounding try/except turned that into a generic error flash. The
+# refusal test above stayed green throughout, which is exactly why a refusal
+# test alone is not coverage: it cannot tell "refused for policy" apart from
+# "never worked at all".
+
+
+def test_register_webhook_stores_a_row_when_the_url_is_admitted(
+    authenticated_admin_client, seeded_principal, monkeypatch
+):
+    """principals.py — an admitted URL produces a PERSISTED, readable row.
+
+    The obligation is the row, not the redirect: an operator who registers a
+    webhook must end up with a config the senders can read. Both hatches open,
+    like the signals-agent positive control: ADMITTED_URL is loopback so the
+    case stays off the network, and the address rule is not what is under test.
+    """
+    set_flags(monkeypatch, private=True)
+
+    response = post_register_webhook(authenticated_admin_client, ADMITTED_URL)
+
+    assert response.status_code == 302
+    assert flashes(authenticated_admin_client) == [("success", "Webhook registered successfully")]
+
+    stored = push_notification_configs_for(seeded_principal)
+    assert len(stored) == 1, "the admin route must persist exactly one config"
+    assert stored[0].url == ADMITTED_URL
+
+
+def test_the_registration_form_offers_only_pinned_scheme_spellings(authenticated_admin_client, seeded_principal):
+    """The rendered form must POST a spelling the gate accepts.
+
+    The tests above post their payload directly, so they cannot see the template.
+    Without this, the form could regress to the old hardcoded "hmac_sha256" — the
+    spelling the gate now refuses — and every test here would stay green while an
+    operator could not register a webhook at all. That is precisely how the
+    original defect survived: the only coverage was a refusal path.
+    """
+    response = authenticated_admin_client.get(
+        f"/tenant/{TENANT_ID}/principals/{PRINCIPAL_ID}/webhooks",
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert f'<option value="{AuthenticationScheme.HMAC_SHA256}"' in body
+    assert 'value="hmac_sha256"' not in body, "the non-canonical spelling is back in the form"
+
+
+def test_register_webhook_stores_the_hmac_secret_where_senders_read_it(
+    authenticated_admin_client, seeded_principal, monkeypatch
+):
+    """An HMAC registration must land in the columns the senders actually read.
+
+    ``authentication_type`` must be the pinned spelling and the credential must
+    be in ``authentication_token`` — the pair ``webhook_auth_for`` resolves and
+    ``deliver_webhook`` signs with. A row spelled any other way is a row that
+    accepts and then never delivers, which is the defect Epic D exists to make
+    unconstructible.
+    """
+    set_flags(monkeypatch, private=True)
+    secret = "s" * 40
+
+    response = authenticated_admin_client.post(
+        f"/tenant/{TENANT_ID}/principals/{PRINCIPAL_ID}/webhooks/register",
+        # The form's option values are rendered from AuthenticationScheme, so this
+        # posts what a browser posts. The old non-canonical "hmac_sha256" is now
+        # refused by the gate, which is the point.
+        data={"url": ADMITTED_URL, "auth_type": AuthenticationScheme.HMAC_SHA256, "hmac_secret": secret},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    stored = push_notification_configs_for(seeded_principal)
+    assert len(stored) == 1
+    assert stored[0].authentication_type == AuthenticationScheme.HMAC_SHA256
+    assert stored[0].authentication_token == secret
 
 
 def post_creative_agent_add(client, url: str):

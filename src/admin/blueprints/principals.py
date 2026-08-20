@@ -6,6 +6,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime
 
+from adcp.types import AuthenticationScheme
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import func, select
 
@@ -14,6 +15,15 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
+from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.exceptions import AdCPValidationError
+from src.core.webhooks.registration import accept_push_notification_primitives
+
+# The form's "no authentication" choice. Defined ONCE and handed to the template
+# (see manage_webhooks) so the rendered <option value> and the comparison below
+# cannot drift apart — the authenticated choices come from AuthenticationScheme
+# for the same reason.
+NO_AUTHENTICATION = "none"
 
 logger = logging.getLogger(__name__)
 
@@ -602,6 +612,14 @@ def manage_webhooks(tenant_id, principal_id):
                 tenant_id=tenant_id,
                 principal=principal,
                 webhooks=webhooks,
+                # The SPELLING comes from the pinned enum, never from a literal:
+                # hardcoding it is how "hmac_sha256" — which nothing in src/
+                # compares against — became the value this form posted. Only
+                # HMAC-SHA256 is offered: Bearer is a member of the enum but this
+                # form has no field to collect a bearer token, and adding one is a
+                # feature, not part of fixing a route that never persisted a row.
+                auth_schemes=[AuthenticationScheme.HMAC_SHA256],
+                no_authentication=NO_AUTHENTICATION,
             )
 
     except Exception as e:
@@ -629,37 +647,40 @@ def register_webhook(tenant_id, principal_id):
         ):
             return blocked
 
-        # Build auth config based on type
-        auth_config = {}
-        if auth_type == "hmac_sha256":
-            secret = request.form.get("hmac_secret")
-            if not secret:
-                flash("HMAC secret is required for HMAC authentication", "error")
-                return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
-            auth_config = {"secret": secret}
+        # The scheme is whatever the form posted, and the form's option values are
+        # rendered from AuthenticationScheme itself (webhook_management.html), so it
+        # is already the pinned spelling. Nothing is translated here on purpose: a
+        # route-side lookup table is exactly the drift that put a fifth spelling in
+        # the database once already (salesagent-47n9.24, GH #1894).
+        scheme = None if auth_type == NO_AUTHENTICATION else auth_type
+        credentials = request.form.get("hmac_secret") if scheme else None
+
+        # The gate produces the VALUE; the repository takes the value. This route
+        # builds no ORM model: a registration reaches the database only as a
+        # ValidatedWebhookRegistration, so a config that skipped the ingest
+        # preconditions cannot be written from here (Epic D). It used to construct
+        # PushNotificationConfig(config_id=/auth_type=/auth_config=) — none of them
+        # columns — so every registration raised TypeError and the broad except
+        # below rendered it as a validation-looking flash.
+        registration = accept_push_notification_primitives(
+            url,
+            scheme,
+            credentials,
+            field_prefix="webhook",
+        )
 
         with get_db_session() as db_session:
-            # Check if webhook already exists
+            repository = PushNotificationConfigRepository(db_session, tenant_id)
             stmt = select(PushNotificationConfig).filter_by(tenant_id=tenant_id, principal_id=principal_id, url=url)
-            existing = db_session.scalars(stmt).first()
-
-            if existing:
+            if db_session.scalars(stmt).first():
                 flash("Webhook URL already registered for this principal", "warning")
                 return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
-            # Create new webhook
-            webhook = PushNotificationConfig(
+            repository.upsert(
+                registration,
                 config_id=str(uuid.uuid4()),
-                tenant_id=tenant_id,
                 principal_id=principal_id,
-                url=url,
-                auth_type=auth_type if auth_type != "none" else None,
-                auth_config=auth_config if auth_config else None,
-                is_active=True,
-                created_at=datetime.now(UTC),
             )
-
-            db_session.add(webhook)
             db_session.commit()
 
             logger.info(f"Registered webhook {url} for principal {principal_id} in tenant {tenant_id}")
@@ -667,8 +688,12 @@ def register_webhook(tenant_id, principal_id):
 
         return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
-    except Exception as e:
-        logger.error(f"Error registering webhook: {e}", exc_info=True)
+    # Only the gate's own refusals are operator-facing. Anything else is a defect
+    # in this handler and must reach the logs as a 500 rather than being flashed:
+    # a broad `except Exception` here is what let a route that never persisted a
+    # single row look like a validation problem for months.
+    except AdCPValidationError as e:
+        logger.warning(f"Rejected webhook registration for principal {principal_id}: {e}")
         flash(f"Error registering webhook: {str(e)}", "error")
         return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 

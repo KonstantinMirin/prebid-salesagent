@@ -52,16 +52,16 @@ _SCHEME_LITERALS = frozenset(
 # ``Authorization: Bearer`` header for the same reason, but uses ``.startswith``,
 # so it never matches this detector.)
 #
-# ``src/admin/blueprints/principals.py`` — DEBT. Its ``auth_type ==
-# "hmac_sha256"`` is a THIRD spelling of the scheme. Not fixed here because the
-# spelling is the smaller half of that site's defect: it writes ``auth_type=`` /
-# ``auth_config=`` kwargs that are not columns any sender reads, so the
-# registration it creates cannot authenticate regardless of spelling. Converting
-# it to register through ``accept_push_notification_config`` fixes both at once.
-# FIXME: needs a GitHub issue number — see the PR description.
+# ``src/admin/blueprints/principals.py`` was here as DEBT, with the note that its
+# ``auth_type == "hmac_sha256"`` was the smaller half of the defect and that
+# converting the route to register through the gate would fix both at once. That
+# is what happened (salesagent-h585d): the route now goes
+# ``accept_push_notification_primitives`` -> ``PushNotificationConfigRepository``
+# and constructs no ORM model, and the form's option value is rendered from
+# ``AuthenticationScheme`` so no spelling is written by hand. Entry removed —
+# this list only shrinks.
 _ALLOWLIST: set[tuple[str, ...]] = {
     ("src/core/utils/mcp_client.py",),
-    ("src/admin/blueprints/principals.py",),
 }
 
 
