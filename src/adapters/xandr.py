@@ -223,8 +223,10 @@ class XandrAdapter(AdServerAdapter):
             self.advertiser_id = mapping.get("advertiser_id")
 
         # Session management
-        self.token = None
-        self.token_expiry = None
+        # Annotated: a bare `= None` makes mypy infer the attribute as always-None,
+        # so every later use as a header value is an error (#1611 ratchet).
+        self.token: str | None = None
+        self.token_expiry: datetime | None = None
 
         # _bootstrap: the un-credentialed client that dials /auth itself; a
         # real VendorHttpClient exists the moment api_endpoint does (it
@@ -258,7 +260,11 @@ class XandrAdapter(AdServerAdapter):
 
             data = result.json()
             if data.get("response", {}).get("status") == "OK":
-                self.token = data["response"]["token"]
+                # Bound to a local first, then reused for the header below: reading
+                # `self.token` there would be `str | None` and mypy cannot see that
+                # this branch just set it. Same value, same order, no narrowing cast.
+                token = data["response"]["token"]
+                self.token = token
                 # Xandr tokens typically last 2 hours
                 self.token_expiry = datetime.now(UTC) + timedelta(hours=2)
                 # Rotation replaces the client whole, never mutates the live
@@ -268,7 +274,7 @@ class XandrAdapter(AdServerAdapter):
                 # one the dataclass enforces on its own.
                 self._vendor = VendorHttpClient(
                     base_url=self.api_endpoint,
-                    headers={"Authorization": self.token, "Content-Type": "application/json"},
+                    headers={"Authorization": token, "Content-Type": "application/json"},
                 )
                 logger.info("Successfully authenticated with Xandr")
             else:
