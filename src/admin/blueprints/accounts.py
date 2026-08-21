@@ -14,7 +14,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from src.core.database.models import Account
+from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.uow import AccountUoW
 
 logger = logging.getLogger(__name__)
@@ -83,18 +83,30 @@ def create_account(tenant_id):
 
     try:
         with AccountUoW(tenant_id) as uow:
-            new_account = Account(
-                tenant_id=tenant_id,
-                account_id=account_id,
-                name=name,
-                status="active",
-                brand=brand,
-                operator=operator or None,
-                billing=billing,
-                payment_terms=payment_terms,
-                sandbox=sandbox or None,
+            # THE SHARED BUILDER, not raw kwargs here (#1878, CLAUDE.md pattern #3). This
+            # site assembled its own ``Account(...)`` while the sync/provisioning arm and
+            # its dry-run preview both went through ``build_row`` — two callers sharing one
+            # row description while a third went its own way, which is exactly the drift
+            # #1721 added that builder to stop. ``billing`` / ``payment_terms`` /
+            # ``sandbox`` ride in ``created_fields``, the slot build_row already exposes so
+            # that "a field added to the re-sync arm and forgotten at create" cannot happen.
+            uow.accounts.create(
+                AccountRepository.build_row(
+                    tenant_id=tenant_id,
+                    account_id=account_id,
+                    name=name,
+                    status="active",
+                    brand_domain=brand_domain,
+                    brand_id=brand_id,
+                    operator=operator or None,
+                    principal_id=None,
+                    created_fields={
+                        "billing": billing,
+                        "payment_terms": payment_terms,
+                        "sandbox": sandbox or None,
+                    },
+                )
             )
-            uow.accounts.create(new_account)
     except ValueError as exc:
         # The repository refuses a create whose natural key is already occupied
         # (salesagent-0njj). Surfaced as a form error rather than a 500: this is

@@ -191,8 +191,12 @@ def test_webhook_notification_sent_on_success():
     # The client the sender builds is spied THROUGH the wire capture: the capture
     # rebinds httpx.Client/AsyncClient to inject its transport, so the spy has to be
     # installed first for the capture to wrap it.
+    # The loader now opens a UNIT OF WORK and returns a PROJECTION, so it is patched at
+    # its own seam rather than through a session it no longer opens (#1878). The
+    # get_db_session patch still stands for the signing path's own reads.
     with (
         patch("src.services.order_approval_service.get_db_session") as mock_db,
+        patch("src.services.order_approval_service._load_approval_webhook_config") as mock_load,
         constructed_http_clients() as built,
         capture_outbound_webhooks() as captured,
     ):
@@ -215,6 +219,19 @@ def test_webhook_notification_sent_on_success():
         # direct `select(PushNotificationConfig)` in the signing path reads `.first()`.
         mock_db_instance.scalars.return_value.all.return_value = [mock_config]
         mock_db_instance.scalars.return_value.first.return_value = mock_config
+
+        from src.services.order_approval_service import ApprovalWebhookAuth
+
+        mock_load.return_value = ApprovalWebhookAuth(
+            url="https://example.com/webhook",
+            authentication_type="bearer",
+            authentication_token="test_token",
+            validation_token=None,
+        )
+
+        # The loader now opens a UNIT OF WORK and returns a PROJECTION, so it is patched
+        # at its own seam rather than through a session it no longer opens (#1878). The
+        # get_db_session patch above still stands for the signing path's own reads.
 
         # Send webhook
         _send_approval_webhook(
@@ -294,6 +311,9 @@ def test_webhook_retries_on_failure(mock_sleep):
     # The receiver fails twice, then accepts.
     with (
         patch.object(service_module, "get_db_session") as mock_db,
+        # No registration for this URL — patched at the loader's own seam, which now
+        # opens a unit of work rather than the session this test mocks (#1878).
+        patch.object(service_module, "_load_approval_webhook_config", return_value=None),
         capture_outbound_webhooks(status_codes=(500, 500, 200)) as captured,
     ):
         # Mock DB — no auth config, on both the repository (`.all()`) and the direct

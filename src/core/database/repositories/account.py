@@ -279,7 +279,12 @@ class AccountRepository:
             account_id=account_id,
             name=name,
             status=status,
-            brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+            # No domain means NO brand reference, not a reference with an empty domain:
+            # ``Account.brand`` is nullable and a ``{"domain": ""}`` row is a different
+            # value from ``None``. A no-op whenever a domain is present, which is every
+            # sync/provisioning call; it is the admin form that can legitimately omit one
+            # (#1878).
+            brand=({"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})} if brand_domain else None),
             operator=operator,
             principal_id=principal_id,
             # Every settable field comes from the one walk in the caller -- naming

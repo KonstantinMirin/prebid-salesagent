@@ -8,6 +8,7 @@ when approval completes or fails.
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,7 +16,7 @@ import httpx
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PushNotificationConfig, SyncJob
+from src.core.database.models import SyncJob
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import reject_unsafe_outbound_webhook_url, webhook_url_for_log
 
@@ -346,25 +347,62 @@ def _mark_approval_failed(
         logger.error(f"Failed to mark approval failed: {e}")
 
 
-def _load_approval_webhook_config(tenant_id: str, principal_id: str, webhook_url: str) -> PushNotificationConfig | None:
-    """The buyer's registration for this URL, read through the repository.
+@dataclass(frozen=True, slots=True)
+class ApprovalWebhookAuth:
+    """The buyer's registration, PROJECTED to primitives — the row never escapes.
 
-    That row is the ONE selector for how this notification is authenticated
-    (#1291 C1, salesagent-98t2): it feeds both :func:`_approval_webhook_headers`
-    and the delivery boundary's auth-strategy choice, so it is read once here
-    rather than at each of those two points.
+    Structurally satisfies :class:`~src.core.signing.webhook_sender_factory.WebhookAuthConfig`
+    (``url`` / ``authentication_type`` / ``authentication_token``), so it is passed as
+    ``config=`` to the delivery boundary unchanged, plus ``validation_token`` for the one
+    extra header this service adds.
 
-    Detaching it at the end of the session is safe — ``get_db_session`` closes
-    without committing, so the loaded columns survive; the expiry hazard
-    ``_mark_approval_failed`` above guards against needs a ``commit()``.
+    WHY A PROJECTION AND NOT THE ORM ROW (#1878). The loader used to return the live row
+    and carried a paragraph explaining why that was safe: "Detaching it at the end of the
+    session is safe — ``get_db_session`` closes without committing, so the loaded columns
+    survive; the expiry hazard ... needs a ``commit()``." That is correctness resting on a
+    subtle SQLAlchemy behaviour explained in a comment — and it is why the loader could not
+    simply move to a unit of work, since ``BaseUoW.__exit__`` DOES commit
+    (``uow.py`` :107-108) and no session sets ``expire_on_commit=False`` (``uow.py`` :379),
+    which would expire the row before these fields are read.
+
+    Copying the values inside the session removes the hazard rather than documenting it:
+    the unit of work may commit and expire whatever it likes, because nothing downstream
+    holds anything that can expire.
     """
-    from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 
-    with get_db_session() as db:
-        return PushNotificationConfigRepository(db, tenant_id).get_active_by_url(principal_id, webhook_url)
+    url: str
+    authentication_type: str | None
+    authentication_token: str | None
+    validation_token: str | None
 
 
-def _approval_webhook_headers(config: PushNotificationConfig | None) -> dict[str, str]:
+def _load_approval_webhook_config(tenant_id: str, principal_id: str, webhook_url: str) -> ApprovalWebhookAuth | None:
+    """The buyer's registration for this URL, read through the repository's unit of work.
+
+    That registration is the ONE selector for how this notification is authenticated
+    (#1291 C1, salesagent-98t2): it feeds both :func:`_approval_webhook_headers` and the
+    delivery boundary's auth-strategy choice, so it is read once here rather than at each
+    of those two points.
+
+    Projected to :class:`ApprovalWebhookAuth` INSIDE the unit of work — see that class for
+    why the ORM row must not leave it.
+    """
+    from src.core.database.repositories.uow import PushNotificationConfigUoW
+
+    with PushNotificationConfigUoW(tenant_id) as uow:
+        assert uow.push_notification_configs is not None
+        row = uow.push_notification_configs.get_active_by_url(principal_id, webhook_url)
+        if row is None:
+            return None
+        return ApprovalWebhookAuth(
+            url=row.url,
+            authentication_type=row.authentication_type,
+            authentication_token=row.authentication_token,
+            validation_token=row.validation_token,
+        )
+
+
+def _approval_webhook_headers(config: ApprovalWebhookAuth | None) -> dict[str, str]:
     """The genuinely EXTRA headers for an order-approval webhook POST.
 
     Neither ``Content-Type`` nor the authentication header belongs here. The
@@ -395,7 +433,7 @@ def _post_approval_webhook_with_retries(
     webhook_url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
-    config: PushNotificationConfig | None,
+    config: ApprovalWebhookAuth | None,
     tenant_id: str,
 ) -> None:
     """Deliver the approval payload with retries, authenticated per *config*.
