@@ -92,6 +92,7 @@ def _in_layer(rel: str) -> bool:
     """Is *rel* (a repo-relative posix path) a file of the signing layer?"""
     return any(rel.startswith(prefix) for prefix in LAYER_PREFIXES)
 
+
 #: The facade module path. ``from src.core.signing import <exported name>`` is the one
 #: sanctioned import shape for callers.
 FACADE = "src.core.signing"
