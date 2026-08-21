@@ -48,6 +48,16 @@ plain ``required_for``-shaped POSTs with no JSON-RPC envelope at all. The senten
 governs which FIELD names the operation when the body IS a JSON-RPC envelope: never
 the envelope ``method``. ``params.name`` and ``data.skill`` are such fields.
 
+Where the CREDENTIALS come from is a different axis, and it is per LOCATION
+--------------------------------------------------------------------------
+The table above answers "what is this request called". The webhook-credential
+escalation (security.mdx :1375, :1462-1465) answers "does this request hand the seller
+credentials", and it must NOT be enumerated the same way: a method list has a default
+arm, and a default arm on this question is a default-ACCEPT over every method the list
+does not mention. It is enumerated by LOCATION instead — see ``_CONFIG_LOCATIONS`` and
+``_application_payloads`` below, and the block of prose above them for what that
+distinction cost.
+
 Fail closed on the unnameable, not on the merely unnamed
 --------------------------------------------------------
 ``resolvable=False`` is reserved for a request on an AdCP surface that carries a body
@@ -118,9 +128,12 @@ ADCP_SURFACE_PREFIXES: tuple[str, ...] = ("/mcp", "/a2a", "/api/v1")
 
 #: The three surfaces, named for the resolver's dispatch. UNPACKED from the allowlist
 #: rather than re-typed, so the resolver dispatches on exactly the strings the verifier
-#: scopes on. A fourth prefix added above without teaching the resolver about it fails
-#: LOUDLY here, at import, instead of reaching the resolver's fall-through as an AdCP
-#: surface nothing can name.
+#: scopes on. A fourth prefix added above and named nowhere fails LOUDLY here, at
+#: import. The case this unpack CANNOT catch — a fourth prefix named here and given no
+#: arm in :meth:`RegistryOperationResolver.resolve` — is caught at the other end, by a
+#: fall-through that asks :func:`is_adcp_surface` and answers ``resolvable=False``.
+#: Between them, a surface the verifier scopes over can never be a surface the resolver
+#: waves through.
 _MCP_PREFIX, _A2A_PREFIX, _REST_PREFIX = ADCP_SURFACE_PREFIXES
 
 
@@ -335,16 +348,119 @@ def _explicit_skill(params: Mapping[str, Any]) -> str:
     return ""
 
 
-def _jsonrpc_payload_forces_signature(method: str, params: Mapping[str, Any]) -> bool:
-    """Run the escalation test over wherever this transport puts the request payload."""
-    if method == _TOOL_CALL:
-        return _forces_signature(params.get("arguments"))
-    if method in _MESSAGE_METHODS:
-        return any(
-            _forces_signature(data.get("input")) or _forces_signature(data.get("parameters"))
-            for data in _data_parts(params)
-        )
-    return False
+# ---------------------------------------------------------------------------
+# The CREDENTIAL LOCATIONS: every place a transport can hand over webhook
+# credentials — which is what the escalation is a claim about
+# ---------------------------------------------------------------------------
+#
+# The enumeration below is of PLACES, and it is run against EVERY JSON-RPC body
+# whatever its method. The axis is the whole point, and having it wrong is SF-4:
+# the escalation used to enumerate each transport's TOOL-ARGUMENT envelope —
+# ``params.arguments`` for ``tools/call``, ``data.input`` / ``data.parameters`` for
+# ``message/send`` — and answer False for every other method. That final answer was
+# not "this method carries no credentials"; it was a DEFAULT-ACCEPT over the entire
+# rest of the JSON-RPC surface. ``tasks/pushNotificationConfig/set`` registers a
+# webhook AND its credentials with no skill invocation anywhere in sight — answered by
+# ``AdCPRequestHandler.on_create_task_push_notification_config``, which persists them —
+# and inherited that bypass, as would every method the next SDK release adds.
+#
+# ``src/services/protocol_webhook_service.py`` :7-13 already writes the enumeration
+# down, and it is by CONFIGURATION CHANNEL rather than by method:
+#
+#     protocol-level   A2A: MessageSendConfiguration.pushNotificationConfig
+#                      MCP: (future) protocol wrapper extension
+#     application      AdCP: the request's own payload
+#
+# so there are exactly two kinds of location here, and they differ in what the value
+# AT the location is:
+#
+# * APPLICATION payload — an AdCP request body, with the config INSIDE it at
+#   ``push_notification_config`` or ``accounts[].notification_configs``;
+#   :func:`_forces_signature` is the reader.
+# * PROTOCOL configuration — the notification config ITSELF;
+#   :func:`_authenticated_configs` is the reader.
+#
+# MCP contributes no protocol-configuration location because it has none yet — the
+# service's own "(future) protocol wrapper extension". When it grows one, it is one
+# more entry in the table below and not a new method arm. That is the axis.
+
+
+def _both_spellings(field: str) -> tuple[str, str]:
+    """*field* under both spellings the ``/a2a`` wire accepts.
+
+    ``src/app.py`` builds the one ``/a2a`` route with ``enable_v0_3_compat=True``, so
+    the route serves both A2A generations. The v1.0 methods carry protobuf JSON, and
+    ``ParseDict`` accepts a field under its ``json_name`` AND its declared proto name;
+    the v0.3 compat models are pydantic with ``validate_by_name`` AND
+    ``validate_by_alias`` under a camelCase alias generator. So ``pushNotificationConfig``
+    and ``push_notification_config`` are the SAME location on the wire, and reading only
+    one of them would leave the other an unwatched channel. Derived rather than typed
+    out twice, because a typo in a hand-written camelCase spelling fails silently — as
+    an accepted credential registration.
+    """
+    head, *rest = field.split("_")
+    return field, head + "".join(part.title() for part in rest)
+
+
+#: ``(container path, field)`` for every place a JSON-RPC envelope carries a
+#: notification config of its OWN. Each expands to both wire spellings below.
+_CONFIG_FIELDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # A2A v0.3 ``tasks/pushNotificationConfig/set`` — ``TaskPushNotificationConfig``,
+    # a registration on its own JSON-RPC method with no skill invocation at all.
+    ((), "push_notification_config"),
+    # A2A v0.3 ``message/send`` / ``message/stream`` — ``MessageSendConfiguration``,
+    # where ``adcp_a2a_server.on_message_send`` READS the config it persists.
+    (("configuration",), "push_notification_config"),
+    # The same field on the v1.0 ``SendMessage`` envelope, where the proto names it
+    # ``configuration.task_push_notification_config``.
+    (("configuration",), "task_push_notification_config"),
+)
+
+#: The protocol-configuration locations, as dotted paths into ``params``.
+#:
+#: The empty path leads, and is not a degenerate case: on A2A v1.0's
+#: ``CreateTaskPushNotificationConfig`` the params ARE the config — the proto is flat,
+#: so ``url`` / ``token`` / ``authentication`` sit directly on them, which is the shape
+#: ``on_create_task_push_notification_config`` reads (``params.authentication.credentials``).
+_CONFIG_LOCATIONS: tuple[tuple[str, ...], ...] = ((),) + tuple(
+    container + (spelling,) for container, field in _CONFIG_FIELDS for spelling in _both_spellings(field)
+)
+
+
+def _at_path(params: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    """The value *path* names inside *params*, or ``None`` when it names nothing."""
+    node: Any = params
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _application_payloads(params: Mapping[str, Any]) -> list[Any]:
+    """Every place this envelope can carry an AdCP request PAYLOAD.
+
+    ``params.arguments`` is the MCP ``tools/call`` slot; ``data.input`` and
+    ``data.parameters`` are the A2A message-part slots. Read without asking what the
+    ``method`` is — the location is the claim, so a method that reuses one of these
+    envelopes is covered the day it exists rather than the day someone remembers it.
+    """
+    payloads: list[Any] = [params.get("arguments")]
+    for data in _data_parts(params):
+        payloads.append(data.get("input"))
+        payloads.append(data.get("parameters"))
+    return payloads
+
+
+def _jsonrpc_payload_forces_signature(params: Mapping[str, Any]) -> bool:
+    """Does this JSON-RPC envelope hand the seller webhook credentials ANYWHERE?
+
+    Every credential location the surface carries, per the two tables above — never a
+    list of methods, and so never a default answer for the methods such a list forgot.
+    """
+    if any(_forces_signature(payload) for payload in _application_payloads(params)):
+        return True
+    return any(_authenticated_configs(_at_path(params, path)) for path in _CONFIG_LOCATIONS)
 
 
 def _resolve_jsonrpc(body: bytes) -> ResolvedOperation:
@@ -366,7 +482,7 @@ def _resolve_jsonrpc(body: bytes) -> ResolvedOperation:
 
     raw_params = envelope.get("params")
     params: Mapping[str, Any] = raw_params if isinstance(raw_params, dict) else {}
-    forced = _jsonrpc_payload_forces_signature(method, params)
+    forced = _jsonrpc_payload_forces_signature(params)
 
     if method == _TOOL_CALL:
         name = params.get("name")
@@ -413,8 +529,27 @@ class RegistryOperationResolver:
                 return ResolvedOperation(operation="", protocol_method=None, signature_forced=forced, resolvable=False)
             return ResolvedOperation(operation=operation, protocol_method=None, signature_forced=forced)
 
-        # Not an AdCP surface. The middleware never asks about these (its allowlist
-        # runs first), so this is the answer for a direct caller, not a bypass.
+        if is_adcp_surface(path):
+            # An AdCP surface with no dispatch arm above. UNREACHABLE TODAY — every
+            # prefix in ADCP_SURFACE_PREFIXES has an arm — and this is a DRIFT guard,
+            # not a live hole: a fourth prefix added to the vocabulary and taught to
+            # the arms nowhere would otherwise land in the fall-through below and be
+            # answered "nameable, and named nothing", which is the one answer that
+            # exempts a brand-new AdCP surface from every ``required_for`` the tenant
+            # declares. Deciding it off the CONSTANT rather than off the arms is what
+            # makes the two impossible to drift apart. The answer is the one the
+            # ``/api/v1`` arm already gives a route it cannot name.
+            logger.warning(
+                "%s is an AdCP surface (ADCP_SURFACE_PREFIXES) that this resolver has no "
+                "arm for; the request cannot be named and will be graded against the "
+                "strictest bucket this tenant declares",
+                path,
+            )
+            return ResolvedOperation(operation="", protocol_method=None, resolvable=False)
+
+        # Not an AdCP surface at all. The middleware never asks about these (its
+        # allowlist runs first), so this is the answer for a direct caller, not a
+        # bypass.
         return UNNAMED_OPERATION
 
 

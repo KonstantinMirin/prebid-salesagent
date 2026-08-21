@@ -424,9 +424,8 @@ class RequestSignatureMiddleware:
         # the composition rule above: the rule exists precisely because the registering
         # request is normally bearer-authed and an on-path mutator can inject or strip
         # the ``authentication`` block, so exempting authenticated callers would defeat
-        # it entirely. Bounded by ``supported`` (:1465 binds sellers that support
-        # request signing), which is what the ``none`` bucket carries here.
-        if resolved.signature_forced and context.bucket != "none":
+        # it entirely.
+        if _credentials_force_a_signature(context.posture, resolved):
             await self._reject_unsigned(
                 "the request registers webhook credentials (push_notification_config or "
                 "accounts[].notification_configs authentication), which this agent requires "
@@ -613,6 +612,26 @@ def _fail_closed_bucket(posture: RequestSigningPosture, bucket: PostureBucket) -
     return bucket
 
 
+def _credentials_force_a_signature(posture: RequestSigningPosture, resolved: ResolvedOperation) -> bool:
+    """Does this request hand over webhook credentials to a seller that CAN verify?
+
+    security.mdx @ v3.1.1 :1462-1465, restated at :1375 as a trigger that fires
+    "regardless of ``required_for`` membership". Bounded by ``supported`` and by nothing
+    else, because that is exactly where :1465 draws the line: "Sellers that do not
+    support request signing at all have no way to enforce this rule and fall back to the
+    log-and-alarm posture — 3.0 migration note, not an exemption."
+
+    A per-OPERATION bucket is NOT that line, and reading it as one is how the A2A
+    protocol-configuration channel stayed open after the resolver learned to see it:
+    :meth:`~src.core.signing.posture.RequestSigningPosture.bucket_for` grades a request
+    named in the PROTOCOL namespace against the ``protocol_methods_*`` trio, which
+    defaults to empty lists, so every JSON-RPC method on a signing-capable seller lands
+    in ``none``. ``tasks/pushNotificationConfig/set`` is such a method, and it persists
+    the credentials it is handed.
+    """
+    return resolved.signature_forced and posture.supported
+
+
 def _detect_tenant_for_posture(headers: dict[str, str]) -> tuple[str | None, dict[str, Any] | None]:
     """The seller's tenant, or ``(None, None)`` if it cannot be read at all.
 
@@ -679,6 +698,16 @@ def _resolve_request_context(
     bucket = posture.bucket_for(resolved.operation, resolved.protocol_method)
     if not resolved.resolvable:
         bucket = _fail_closed_bucket(posture, bucket)
+    if _credentials_force_a_signature(posture, resolved):
+        # ":1375 regardless of ``required_for`` membership" promotes the REQUEST, not
+        # one branch of one handler. Doing it here is what keeps the escalation from
+        # being bypassable by simply ATTACHING signature headers: a request whose bucket
+        # stayed ``none`` is waved through unverified below (the "ignored" arm), so an
+        # escalation enforced only on the unsigned branch would refuse the honest
+        # unsigned registration and admit the same registration carrying a junk
+        # ``Signature``. Promoted, the credential-carrying request is verified on the
+        # signed path and refused on the unsigned one, which is the whole MUST.
+        bucket = "required"
 
     needs_principal = (signed and bucket != "none") or (not signed and bucket == "required")
     if not needs_principal or not token:

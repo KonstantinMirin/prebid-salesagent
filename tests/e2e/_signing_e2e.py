@@ -40,7 +40,7 @@ import pytest
 from sqlalchemy import delete
 
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
-from tests.e2e.utils import live_db_env
+from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
 from tests.helpers.signing import json_seeded_client_factory, wire_origin
 
 #: The super-admin the e2e stack seeds, and the endpoint that logs it in.
@@ -118,6 +118,108 @@ def ca_bundle() -> str:
 def ca_verified_ssl_context() -> ssl.SSLContext:
     """An SSL context trusting the test stack's CA and nothing else extra."""
     return ssl.create_default_context(cafile=ca_bundle())
+
+
+class _ExistingIdentityEnv(_LiveDBEnv):
+    """The live-DB env shim, plus the three attributes the harness builder reads.
+
+    :func:`tests.harness.signing_capability.build_e2e_signing_capability` is written
+    against a harness env whose ``setup_default_data()`` CREATES the tenant and
+    principal it signs as. Here the identity already exists — it is the stack's own
+    seeded buyer, the one the test authenticates with — so this shim answers with
+    those rows and the builder's publish / read-back / attach sequence is reused
+    verbatim rather than re-derived beside it.
+    """
+
+    def __init__(self, session: Any, e2e_config: Any, tenant: Any, principal: Any) -> None:
+        super().__init__(session)
+        self.e2e_config = e2e_config
+        self._tenant_id = tenant.tenant_id
+        self._rows = (tenant, principal)
+
+    def setup_default_data(self) -> tuple[Any, Any]:
+        return self._rows
+
+
+@contextlib.contextmanager
+def resolvable_signing_counterparty(live_server: dict, *, access_token: str) -> Iterator[Any]:
+    """Give the principal holding *access_token* a signing identity the SERVER can WALK.
+
+    Yields a :class:`~tests.harness.signing_capability.SigningCapability`; pass its
+    ``private_key`` / ``token`` / ``key_id`` to :func:`~tests.helpers.signing.signed_headers`
+    and the request is signed by a counterparty the live server resolves through the
+    real ``agent_url -> capabilities -> brand.json -> jwks_uri`` walk.
+
+    ONE builder, not a second copy. ``build_e2e_signing_capability`` mints the key,
+    publishes it at a SLOT of its own on the counterparty origin (so no two callers
+    share the server's hour-long ``AGENT_RESOLUTION_CACHE`` entry), reads the published
+    trust root back the way the server will read it — failing HERE, naming the origin,
+    rather than three assertions later as an unresolvable key — and records the
+    ``agent_url`` on the principal row the verifier resolves the bearer to. Every one of
+    those steps has already been got wrong once; a second implementation beside it is
+    how the two end up signing against a keyset the other published.
+
+    A UNIQUE dotted ``virtual_host`` is set FIRST, and that is the whole reason this
+    seam sets one at all. ``ensure_declarable_identity_host`` — which the builder calls
+    unconditionally — assigns the SHARED CONSTANT ``SIGNING_AGENT_HOST`` to any tenant
+    whose host carries no dot, and ``ix_tenants_virtual_host`` is UNIQUE across a
+    database that ``tests/e2e`` shares for a whole randomly-ordered session. A second
+    row already holding that constant turns this into a ``UniqueViolation`` on the
+    UPDATE. The predicate that guards the assignment is only "has a dot" (its own
+    docstring gives the reason: ``_get_protocol_for_domain`` derives ``https`` for a
+    dotted host, which is what ``identity.brand_json_url``'s ``^https://`` needs), so a
+    per-invocation dotted host satisfies the contract AND makes the harness's assignment
+    a no-op — no change to the shared constant, which the in-process legs pin, and no
+    second assignment path.
+
+    RESTORES what it touched, because ``tests/e2e`` shares that one database: the
+    buyer's ``agent_url`` and the tenant's ``virtual_host``. The second is not inert —
+    ``virtual_host`` is host-routing state AND the value
+    ``Product.publisher_properties`` falls back to for ``publisher_domain``
+    (``src/core/database/models.py``), so inside the window the tenant's products report
+    the signing host instead of ``<subdomain>.example.com``. Tenant resolution is
+    unaffected (every request in this suite carries an ``x-adcp-tenant`` hint, and no
+    test dials that host), the e2e suite runs serially, and both columns are put back on
+    exit — so the only lasting effect is a keyset published at a slot nothing else
+    names. A caller that ASSERTS on ``publisher_domain`` must not wrap that assertion in
+    this context manager.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Principal, Tenant
+    from tests.harness.signing_capability import build_e2e_signing_capability, unique_run_id
+    from tests.harness.transport import E2EConfig
+
+    config = E2EConfig(
+        base_url=live_server["a2a"],
+        postgres_url=live_server["postgres"],
+        ca_bundle=ca_bundle(),
+    )
+    with live_repo_session(live_server) as db:
+        session = db.get_session()
+        principal = session.scalars(select(Principal).filter_by(access_token=access_token)).first()
+        assert principal is not None, (
+            f"no Principal in the live e2e database holds the access token {access_token!r}; the "
+            "counterparty's identity is a DB row (security.mdx forbids taking it from a header or a "
+            "body field), so there is nothing to attach an agent_url to"
+        )
+        tenant = session.get(Tenant, principal.tenant_id)
+        assert tenant is not None, f"principal {principal.principal_id!r} references a tenant that does not exist"
+        restore = (principal.agent_url, tenant.virtual_host)
+        if "." not in (tenant.virtual_host or ""):
+            tenant.virtual_host = f"seller-signing-{unique_run_id()}.example.com"
+            session.commit()
+        try:
+            yield build_e2e_signing_capability(_ExistingIdentityEnv(session, config, tenant, principal))
+        finally:
+            # ``rollback()`` first, unconditionally: if the body (or the builder) left
+            # this session with a failed flush pending, the restore below would raise
+            # ``PendingRollbackError`` from the ``finally`` and MASK the real failure
+            # with a bookkeeping one. Discarding the pending work is exactly right — the
+            # two columns are re-assigned from ``restore`` on the next line anyway.
+            session.rollback()
+            principal.agent_url, tenant.virtual_host = restore
+            session.commit()
 
 
 def seeded_capabilities_factory(body: dict):

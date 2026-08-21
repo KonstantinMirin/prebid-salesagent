@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 import pytest
 
+from tests.e2e._signing_e2e import origin, resolvable_signing_counterparty
 from tests.e2e._tenant_state import set_mock_approval
 from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server, tls_capture
 from tests.e2e.adcp_request_builder import (
@@ -28,6 +29,63 @@ from tests.e2e.adcp_request_builder import (
 from tests.e2e.conftest import e2e_in_network
 from tests.e2e.utils import make_mcp_client
 from tests.e2e.webhook_capture_service import decode_body
+from tests.helpers.signing import signed_headers
+
+#: The A2A JSON-RPC endpoint, as the SIGNATURE covers it: ``@target-uri`` is
+#: ``origin + path``, so this string and the URL posted to must agree exactly.
+_A2A_PATH = "/a2a"
+
+#: The tenant hint every request in this module carries. The stack's own seeded
+#: buyer lives here (``scripts/setup/init_database_ci.py``).
+_TENANT_SUBDOMAIN = "ci-test"
+
+
+async def _post_signed_a2a(live_server: dict, *, token: str, message: dict[str, Any]) -> httpx.Response:
+    """POST *message* to ``/a2a`` under a REAL RFC 9421 signature, and return the answer.
+
+    WHY the two credential-carrying tests in this module sign and the three others do
+    not. ``push_notification_config.authentication.credentials`` is the secret the
+    SELLER will present when it calls the buyer BACK, and security.mdx @ v3.1.1
+    :1462-1465 makes a seller that supports request signing REQUIRE the inbound request
+    carrying one to be 9421-signed — ":1375, regardless of ``required_for`` membership".
+    The buyer's own ``Authorization: Bearer`` does not satisfy that and never did: the
+    rule exists precisely because the registering request is normally bearer-authed and
+    an on-path mutator can strip or inject the ``authentication`` block.
+
+    Those two legs used to be ACCEPTED unsigned only because the escalation could not
+    see the A2A PROTOCOL envelope — ``params.configuration.pushNotificationConfig``,
+    which is where ``adcp_a2a_server.on_message_send`` READS the config it persists.
+    Closing that is SF-4 (``salesagent-n78j0.2``), and a credentialed registration
+    SUCCEEDING when signed is the half of that claim a refusal test cannot make.
+
+    Two rules are load-bearing and are stated here once rather than at each call site:
+
+    1. SERIALIZE ONCE and send exactly those bytes. httpx's ``json=`` re-serializes
+       with its own separators, so a signature over a different rendering of the same
+       object covers bytes the wire does not carry and is refused as
+       ``request_signature_digest_mismatch`` — a fixture bug wearing a verifier bug's
+       clothes.
+    2. The signature covers ``@target-uri``, and ``_verify_url``
+       (``src/core/signing/request_verifier_middleware.py``) rebuilds the authority from
+       the ``Host`` header as received — PORT INCLUDED. :func:`origin` is the one
+       definition of that value.
+    """
+    with resolvable_signing_counterparty(live_server, access_token=token) as counterparty:
+        raw = json.dumps(message).encode()
+        headers = signed_headers(
+            counterparty.private_key,
+            counterparty.token,
+            method="POST",
+            path=_A2A_PATH,
+            body=raw,
+            # ``request_headers`` otherwise injects the in-process signing suite's own
+            # tenant hint, which names no tenant in this database.
+            extra={"x-adcp-tenant": _TENANT_SUBDOMAIN, "Content-Type": "application/json"},
+            key_id=counterparty.key_id,
+            origin=origin(live_server["a2a"]),
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await client.post(f"{live_server['a2a']}{_A2A_PATH}", content=raw, headers=headers)
 
 
 async def _discover_product_and_pricing(live_server: dict, test_auth_token: str) -> tuple[str, str]:
@@ -227,7 +285,6 @@ class TestA2AWebhookPayloadTypes:
         # Enable auto-approval so create_media_buy completes immediately
         set_mock_approval(live_server, manual=False)
 
-        a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
 
         product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
@@ -252,19 +309,14 @@ class TestA2AWebhookPayloadTypes:
             },
         )
 
-        headers = {
-            "Authorization": f"Bearer {test_auth_token}",
-            "Content-Type": "application/json",
-            "x-adcp-tenant": "ci-test",
-        }
+        # SIGNED, and that is not incidental to this test's subject — it is what makes
+        # the registration above legal at all. See ``_post_signed_a2a``.
+        response = await _post_signed_a2a(live_server, token=test_auth_token, message=message)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(a2a_url, json=message, headers=headers)
-
-            # Request should succeed
-            assert response.status_code == 200, f"A2A request failed: {response.text}"
-            result = response.json()
-            assert "error" not in result, f"A2A error: {result.get('error')}"
+        # Request should succeed
+        assert response.status_code == 200, f"A2A request failed: {response.text}"
+        result = response.json()
+        assert "error" not in result, f"A2A error: {result.get('error')}"
 
         # Wait for webhook to be delivered
         timeout_seconds = 15
@@ -331,7 +383,6 @@ class TestA2AWebhookPayloadTypes:
         # spec-3.1.1 submitted envelopes with no media_buy_id.
         set_mock_approval(live_server, manual=True)
         try:
-            a2a_url = f"{live_server['a2a']}/a2a"
             context_id = str(uuid.uuid4())
 
             # AdCP-spec packages[] format (the A2A skill rejects legacy
@@ -359,17 +410,13 @@ class TestA2AWebhookPayloadTypes:
                 },
             )
 
-            headers = {
-                "Authorization": f"Bearer {test_auth_token}",
-                "Content-Type": "application/json",
-                "x-adcp-tenant": "ci-test",
-            }
+            # Signed for the same reason as the sibling test above: the registration
+            # carries the callback secret, and security.mdx @ v3.1.1 :1462-1465 makes a
+            # signature mandatory on the request that hands one over.
+            response = await _post_signed_a2a(live_server, token=test_auth_token, message=message)
 
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(a2a_url, json=message, headers=headers)
-
-                # Request should succeed (returns submitted status for async operations)
-                assert response.status_code == 200, f"A2A request failed: {response.text}"
+            # Request should succeed (returns submitted status for async operations)
+            assert response.status_code == 200, f"A2A request failed: {response.text}"
 
             # Wait for webhook to be delivered
             timeout_seconds = 15
