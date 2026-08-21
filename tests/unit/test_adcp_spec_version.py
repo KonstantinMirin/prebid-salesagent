@@ -132,3 +132,79 @@ def test_the_brand_agent_variant_is_still_the_one_we_bind() -> None:
         "$schema must be carried as field_schema with an alias — build_brand_json dumps "
         "by_alias, and without the alias the wire would carry 'field_schema'"
     )
+
+
+def test_published_timestamps_render_one_spelling() -> None:
+    """Every timestamp in every trust-root document renders through ONE formatter.
+
+    ASSERTS RENDERED BYTES, deliberately. A "parses as a datetime" test sails straight past
+    the failure this pins: ``2026-08-21T19:59:59.115782Z`` and
+    ``...115782+00:00`` are the same instant, both valid RFC 3339, and the pinned schemas
+    constrain neither (``adagents.json`` :110-113 says only
+    ``{"type": "string", "format": "date-time"}``). Only a byte comparison can see the
+    difference — which is how the regression was caught, by an assertion that compared
+    bytes rather than parsing them.
+
+    THE FAULT THIS EXISTS FOR (#1757). ``src/core/signing/_rfc3339.py`` was created because
+    this codebase already shipped two formatters that "happen to agree today" — its own
+    docstring says so. Routing two of the four documents through pinned SDK models
+    re-created that from the other side: pydantic renders ``...Z``, ``rfc3339()`` renders
+    ``...+00:00``. Because ``build_adagents_json`` embeds the same ``_published_jwk``
+    output while adagents itself is not converted, ONE ORIGIN was serving both spellings.
+
+    So the invariant is "exactly one spelling", not "the old spelling" — and it is held by
+    construction: the serializers CALL ``rfc3339()`` rather than re-implementing
+    ``isoformat()``, because a second implementation that agrees today is the fault itself.
+
+    MUTATION: drop either ``field_serializer`` and this goes RED on a ``Z``.
+    """
+    from datetime import UTC, datetime
+
+    from src.core.signing._rfc3339 import rfc3339
+    from src.core.signing.trust_root import PublishedBrandDocument, PublishedSigningKey
+
+    moment = datetime(2026, 8, 21, 19, 59, 59, 115782, tzinfo=UTC)
+    expected = "2026-08-21T19:59:59.115782+00:00"
+    assert rfc3339(moment) == expected, f"the one formatter changed shape: {rfc3339(moment)}"
+
+    # JWKS revoked_at — also embedded in adagents.json's signing_keys[].
+    jwk = {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "alg": "EdDSA",
+        "use": "sig",
+        "kid": "adcp-ts-pin",
+        "x": "0" * 43,
+        "revoked_at": rfc3339(moment),
+    }
+    served_jwk = PublishedSigningKey.model_validate(jwk).model_dump(mode="json", exclude_none=True)
+    assert served_jwk["revoked_at"] == expected, (
+        f"JWKS revoked_at must render through rfc3339; got {served_jwk['revoked_at']!r}"
+    )
+
+    # brand.json last_updated.
+    brand = {
+        "$schema": f"https://adcontextprotocol.org/schemas/{EXPECTED_SPEC_VERSION}/brand.json",
+        "agents": [
+            {
+                "type": "sales",
+                "url": "https://x.example.com/a2a",
+                "id": "x_a2a",
+                "jwks_uri": "https://x.example.com/.well-known/jwks.json",
+                "description": "d",
+            }
+        ],
+        "last_updated": rfc3339(moment),
+    }
+    served_brand = PublishedBrandDocument.model_validate(brand).model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    assert served_brand["last_updated"] == expected, (
+        f"brand.json last_updated must render through rfc3339; got {served_brand['last_updated']!r}"
+    )
+    assert "$schema" in served_brand, "the $schema alias must survive by_alias serialization"
+
+    # The revocation list's two timestamps are unconverted and call rfc3339 directly
+    # (revocation_list.py :104-105) — pinned here so a future conversion of THAT document
+    # cannot fork the format either.
+    assert rfc3339(moment) == expected

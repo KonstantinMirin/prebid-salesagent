@@ -39,6 +39,7 @@ would be a second opinion about our own key.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from adcp import get_adcp_spec_version
@@ -52,8 +53,8 @@ from adcp import get_adcp_spec_version
 # ``test_the_brand_agent_variant_is_still_the_one_we_bind`` in
 # tests/unit/test_adcp_spec_version.py.
 from adcp.types.generated_poc.brand import BrandDiscovery3 as LibraryBrandAgentDocument
-from adcp.types.generated_poc.core.agent_signing_key import AgentSigningKey
-from pydantic import BaseModel
+from adcp.types.generated_poc.core.agent_signing_key import AgentSigningKey as LibraryAgentSigningKey
+from pydantic import BaseModel, field_serializer
 
 from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonical_agent_url, jwks_uri
 from src.core.signing._rfc3339 import rfc3339
@@ -75,6 +76,40 @@ _SCHEMA_BASE = f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}
 
 # ``brand_agent_entry.type`` — this agent sells inventory.
 _SALES_AGENT_TYPE = "sales"
+
+
+# ---------------------------------------------------------------------------
+# The pinned models, EXTENDED so their timestamps render through OUR one formatter
+# ---------------------------------------------------------------------------
+#
+# ONE SPELLING, BY CONSTRUCTION. ``src/core/signing/_rfc3339.py`` exists because this
+# codebase already shipped two formatters that "happen to agree today" — its docstring
+# says so — and the model conversion re-created that from the other side: pydantic renders
+# a datetime as ``...Z`` while ``rfc3339()`` renders ``...+00:00``, so a converted document
+# and an unconverted one served from the SAME ORIGIN carried two spellings of one format.
+#
+# The serializers below CALL ``rfc3339()`` rather than re-implementing ``isoformat()``. A
+# second implementation that agrees today is exactly the fault being fixed, so agreement is
+# structural: there is one formatter and every document routes through it.
+#
+# Subclassed rather than patched (CLAUDE.md Pattern #1, ``Library*`` alias) so an SDK bump
+# changes no caller. Pinned by ``test_published_timestamps_render_one_spelling``.
+
+
+class PublishedSigningKey(LibraryAgentSigningKey):
+    """A published JWK whose ``revoked_at`` renders through :func:`rfc3339`."""
+
+    @field_serializer("revoked_at")
+    def _revoked_at(self, value: datetime | None) -> str | None:
+        return rfc3339(value) if value is not None else None
+
+
+class PublishedBrandDocument(LibraryBrandAgentDocument):
+    """The brand-agent document whose ``last_updated`` renders through :func:`rfc3339`."""
+
+    @field_serializer("last_updated")
+    def _last_updated(self, value: datetime | None) -> str | None:
+        return rfc3339(value) if value is not None else None
 
 
 def _validated(model: type[BaseModel], document: dict[str, Any]) -> dict[str, Any]:
@@ -124,7 +159,7 @@ def build_jwks(keys: Sequence[SigningKey]) -> dict[str, Any]:
     """
     return {
         "keys": [
-            AgentSigningKey.model_validate(_published_jwk(key)).model_dump(mode="json", exclude_none=True)
+            PublishedSigningKey.model_validate(_published_jwk(key)).model_dump(mode="json", exclude_none=True)
             for key in keys
         ]
     }
@@ -165,7 +200,7 @@ def build_brand_json(tenant: Tenant, keys: Sequence[SigningKey]) -> dict[str, An
     }
     if last_updated := _last_updated(keys):
         document["last_updated"] = last_updated
-    return _validated(LibraryBrandAgentDocument, document)
+    return _validated(PublishedBrandDocument, document)
 
 
 def _property_entry(prop: AuthorizedProperty) -> dict[str, Any]:
