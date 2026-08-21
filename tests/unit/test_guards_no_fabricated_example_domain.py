@@ -31,9 +31,17 @@ ALLOWLIST: set[tuple[str, int]] = {
     # needs its own fix (the pinned publisher-property-selector.json schema
     # requires publisher_domain non-empty on every entry, unlike capabilities.py's
     # optional Portfolio, so the capabilities.py fix does not transfer as-is).
-    ("src/core/database/models.py", 425),
-    ("src/core/database/models.py", 435),
-    ("src/core/database/models.py", 445),
+    #
+    # RE-PINNED (#1757, -1 line each): models.py's signing import shrank by one line when
+    # it stopped importing four primitives from the facade and started importing
+    # REQUEST_SIGNING plus two CHECK-clause OPERATIONS from the leaf. The SAME THREE
+    # violations are listed, at their new coordinates — none added, none fixed.
+    # This allowlist is keyed by LINE NUMBER, so any edit above a violation re-reports it
+    # as new AND its old coordinate as stale; re-keying it on (file, symbol) is tracked as
+    # a follow-up on #1757.
+    ("src/core/database/models.py", 424),
+    ("src/core/database/models.py", 434),
+    ("src/core/database/models.py", 444),
 }
 
 

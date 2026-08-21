@@ -35,8 +35,8 @@ from adcp.signing import generate_signing_keypair
 from src.core.database.models import SigningKey
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.exceptions import AdCPConfigurationError
-from src.core.signing.algorithms import REQUEST_SIGNING, keygen_alg, mint_kid, narrow_alg, narrow_purpose
 from src.core.signing.provider import DB_SCHEME, assert_pem_publishes_jwk, assert_ref_scheme_allowed
+from src.core.signing_contract import REQUEST_SIGNING, keygen_alg, mint_kid, narrow_alg, narrow_purpose
 
 #: Schemes a key can be MINTED under. ``file:`` is absent on purpose: it names
 #: material someone else provisioned, so minting into it would mean writing a

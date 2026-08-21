@@ -130,7 +130,7 @@ exclude = [
 # Verbatim upstream copies — unit bodies must stay byte-diffable against upstream
 # (enforced by tests/unit/test_signing_vendored_provenance.py). Format-only exclusion:
 # a global exclude would also change isort's first-party resolution for the package.
-exclude = ["src/core/signing/_upstream/*.py"]
+exclude = ["src/core/signing_contract/_upstream/*.py"]
 
 [tool.ruff.lint]
 select = [

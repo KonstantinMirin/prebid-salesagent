@@ -1,6 +1,6 @@
 """Guard: the vendored upstream signing units stay byte-equal to their cited source.
 
-#1291 (``salesagent-z6nr.33``). ``src/core/signing/_upstream/`` carries VERBATIM copies
+#1291 (``salesagent-z6nr.33``). ``src/core/signing_contract/_upstream/`` carries VERBATIM copies
 of merged upstream ``adcp-client-python`` fixes; "verbatim" is the load-bearing word —
 a local edit to a vendored unit turns an auditable copy into a silent fork, and the
 divergence surfaces only after the SDK bump deletes the copy. ``_upstream/`` is
@@ -30,7 +30,10 @@ import ast
 import hashlib
 from pathlib import Path
 
-VENDORED_CANONICAL = Path(__file__).resolve().parents[2] / "src/core/signing/_upstream/canonical.py"
+# Path tracks the leaf move (salesagent-n78j0.3): ``_upstream/`` relocated with the rest
+# of the dependency-free leaf to ``src/core/signing_contract/``. Same vendored bytes, same
+# provenance rule — only the directory changed.
+VENDORED_CANONICAL = Path(__file__).resolve().parents[2] / "src/core/signing_contract/_upstream/canonical.py"
 
 #: sha256 of each vendored unit's exact source segment at the provenance commits
 #: (PR #985 merge ``be233e4b`` + PR #987 merge ``afa04545``).

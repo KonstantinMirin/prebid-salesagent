@@ -81,7 +81,7 @@ from adcp.signing.errors import (
     WEBHOOK_SIGNATURE_WINDOW_INVALID,
 )
 
-from src.core.signing._upstream.canonical import REQUEST_TARGET_URI_MALFORMED
+from src.core.signing_contract._upstream.canonical import REQUEST_TARGET_URI_MALFORMED
 
 # Structural code for a malformed authority on the webhook profile. Named
 # without the ``webhook_signature_`` prefix the rest of this family carries

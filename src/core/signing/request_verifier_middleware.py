@@ -177,7 +177,6 @@ from src.core.metrics import record_request_unsigned, record_signature_failed, r
 # it validates the credential and raises, which at this layer would turn an auth
 # failure into a signature rejection.
 from src.core.resolved_identity import _detect_tenant, _extract_auth_token
-from src.core.signing.canonical import malformed_authority_reason, reject_malformed_target
 from src.core.signing.operations import (
     UNNAMED_OPERATION,
     OperationResolver,
@@ -193,6 +192,7 @@ from src.core.signing.posture import (
 )
 from src.core.signing.replay_store import PostgresReplayStore
 from src.core.signing.revocation import checker_for
+from src.core.signing_contract.canonical import malformed_authority_reason, reject_malformed_target
 
 logger = logging.getLogger(__name__)
 
@@ -1329,7 +1329,7 @@ def _duplicate_digest_algorithm(value: str) -> str | None:
 #: near-identical blocks: each rule is the same shape (read a value, name a reason or
 #: pass), and four copies is four chances for one of them to stop rejecting.
 #:
-#: ``host`` shares :func:`~src.core.signing.canonical.malformed_authority_reason` with
+#: ``host`` shares :func:`~src.core.signing_contract.canonical.malformed_authority_reason` with
 #: the canonicalization seam so the authority rule has exactly ONE definition. Only the
 #: CODE differs by caller — checklist step 1 here, ``request_target_uri_malformed``
 #: there — and that difference is deliberate (``negative/026`` grades the former).
@@ -1368,7 +1368,7 @@ def _strict_header_precheck(scope: Mapping[str, Any]) -> None:
 
     * the non-ASCII authority and the malformed-authority family are well grounded —
       ``url-canonicalization.mdx`` steps 2-3, MUST-reject, shared with
-      :mod:`src.core.signing.canonical` so the rule has ONE definition (the CODE
+      :mod:`src.core.signing_contract.canonical` so the rule has ONE definition (the CODE
       differs: a wire-header rejection is checklist step 1, a canonicalization
       rejection is ``request_target_uri_malformed``);
     * ``negative/023`` rests on RFC 9530 §2's Dictionary semantics;

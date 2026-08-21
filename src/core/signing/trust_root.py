@@ -47,13 +47,6 @@ from src.core.signing._rfc3339 import rfc3339
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.database.models import AuthorizedProperty, SigningKey, Tenant
 
-# The cache TTL we publish on every trust-root response, and the ONE constant the
-# revocation grace window is derived from (``SigningConfig.grace_seconds``
-# defaults to 2x this). ``security.mdx``:1103 bounds the brand.json TTL by the
-# revocation polling interval (floor 1 min, ceiling 30 min) and
-# ``core/agent-signing-key.json`` recommends a 5-minute cache TTL; publishing it
-# explicitly stops a proxy inventing its own and masking a rotation.
-CACHE_MAX_AGE_SECONDS = 300
 
 _SCHEMA_BASE = "https://adcontextprotocol.org/schemas/3.1.1"
 

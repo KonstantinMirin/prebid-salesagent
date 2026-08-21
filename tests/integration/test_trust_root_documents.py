@@ -514,7 +514,12 @@ class TestRevocationGraceWindow:
         delay, so grace must EXCEED the TTL — 2x, derived from ONE constant so the
         two cannot drift apart.
         """
-        from src.core.signing.trust_root import CACHE_MAX_AGE_SECONDS
+        # From the FACADE, not from trust_root: the constant moved to the layer's
+        # dependency-free leaf (#1757) because src.core.config derives grace_seconds from
+        # it and three modules inside the signing package import config back — a cycle
+        # while it sat behind the package's __init__. The facade still exports it, which
+        # is the sanctioned caller shape and is stable across that move.
+        from src.core.signing import CACHE_MAX_AGE_SECONDS
 
         with BareIntegrationEnv(tenant_id="trust_root_env_l") as env:
             env.setup_default_data()

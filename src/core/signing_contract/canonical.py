@@ -2,7 +2,7 @@
 
 #1291 B3 (``salesagent-z6nr.14``), re-scoped by ``salesagent-z6nr.33``. This module is
 the layer's canonicalization surface. It delegates every canonical form to the VENDORED
-upstream canonicalizer (:mod:`src.core.signing._upstream.canonical` — the merged fixes
+upstream canonicalizer (:mod:`src.core.signing_contract._upstream.canonical` — the merged fixes
 for upstream #977/#978/#979 that the pinned ``adcp==6.6.0`` lacks, byte-equal per unit)
 and adds exactly one thing on top: the COMPARER-side rejection of raw non-ASCII hosts.
 
@@ -70,11 +70,13 @@ from urllib.parse import urlsplit
 
 from adcp.signing.errors import SignatureVerificationError
 
-from src.core.signing._upstream.canonical import REQUEST_TARGET_URI_MALFORMED, host_has_raw_non_ascii
-from src.core.signing._upstream.canonical import TargetUriMalformedError as _UpstreamTargetUriMalformedError
-from src.core.signing._upstream.canonical import _malformed_authority_reason as _upstream_malformed_authority_reason
-from src.core.signing._upstream.canonical import canonicalize_authority as _vendored_canonicalize_authority
-from src.core.signing._upstream.canonical import canonicalize_target_uri as _vendored_canonicalize_target_uri
+from src.core.signing_contract._upstream.canonical import REQUEST_TARGET_URI_MALFORMED, host_has_raw_non_ascii
+from src.core.signing_contract._upstream.canonical import TargetUriMalformedError as _UpstreamTargetUriMalformedError
+from src.core.signing_contract._upstream.canonical import (
+    _malformed_authority_reason as _upstream_malformed_authority_reason,
+)
+from src.core.signing_contract._upstream.canonical import canonicalize_authority as _vendored_canonicalize_authority
+from src.core.signing_contract._upstream.canonical import canonicalize_target_uri as _vendored_canonicalize_target_uri
 
 __all__ = [
     "REQUEST_TARGET_URI_MALFORMED",

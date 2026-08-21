@@ -92,7 +92,12 @@ SCOPE: tuple[str, ...] = (
     "src/core/signing/keys.py",
     "src/core/signing/provider.py",
     "src/core/signing/posture.py",
-    "src/core/signing/algorithms.py",
+    # The primitives moved to the layer's dependency-free leaf (salesagent-n78j0.3).
+    # REPOINTED, not dropped: ``src/core/signing/algorithms.py`` still exists but is now a
+    # frozen forwarding shim for one committed migration, holding four re-exports and no
+    # logic. Scanning the shim instead of the leaf would have kept this guard GREEN while
+    # it graded nothing — the same shape as a guard grading its own copy of a rule.
+    "src/core/signing_contract/algorithms.py",
     "src/core/signing/trust_root.py",
     "src/core/database/repositories/signing_key.py",
     "src/core/database/repositories/uow.py",

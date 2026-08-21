@@ -39,11 +39,10 @@ from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.json_type import JSONType
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
-from src.core.signing import (
-    MINTABLE_PURPOSES,
+from src.core.signing_contract import (
     REQUEST_SIGNING,
-    SIGNING_ALG_VALUES,
-    sql_value_list,
+    signing_alg_check_clause,
+    signing_purpose_check_clause,
 )
 
 logger = logging.getLogger(__name__)
@@ -2436,15 +2435,18 @@ class SigningKey(Base):
         # security.mdx: "Unique within the JWKS. MUST NOT collide with any other
         # entry's kid regardless of adcp_use." One JWKS is published per tenant.
         UniqueConstraint("tenant_id", "kid", name="uq_signing_keys_tenant_kid"),
-        # Both CHECKs are DERIVED from src.core.signing.algorithms — the value-set
-        # has one source of truth and this is a copy of it, never an independent
-        # literal (#1521). Pinned by tests/unit/test_signing_alg_parity.py.
+        # Both CHECK bodies are TAKEN WHOLE from src.core.signing_contract, never
+        # composed here (#1521, salesagent-n78j0.3). Asking for the clause rather than
+        # for the value-set is what removes the choice of column name, operator and
+        # rendering from this call site — the freedom that let this constraint and the
+        # one in migration e7a2c40b91d5 be assembled independently. Pinned by
+        # tests/unit/test_signing_alg_parity.py.
         CheckConstraint(
-            f"alg IN ({sql_value_list(SIGNING_ALG_VALUES)})",
+            signing_alg_check_clause(),
             name="ck_signing_keys_alg",
         ),
         CheckConstraint(
-            f"purpose IN ({sql_value_list(MINTABLE_PURPOSES)})",
+            signing_purpose_check_clause(),
             name="ck_signing_keys_purpose",
         ),
         Index("idx_signing_keys_tenant_purpose_active", "tenant_id", "purpose", "not_after"),

@@ -25,7 +25,7 @@ from adcp.signing.provider import SigningAlgorithm, SigningProvider
 from src.core.database.models import SigningKey
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.exceptions import AdCPConfigurationError
-from src.core.signing.algorithms import REQUEST_SIGNING, narrow_alg, narrow_purpose
+from src.core.signing_contract import REQUEST_SIGNING, narrow_alg, narrow_purpose
 
 
 class SigningMaterial(NamedTuple):

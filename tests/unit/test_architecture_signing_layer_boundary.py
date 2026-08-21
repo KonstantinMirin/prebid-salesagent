@@ -68,9 +68,29 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: The layer. Files under this prefix are the ONLY place SDK delegation may live, and
+#: The layer. Files under these prefixes are the ONLY place SDK delegation may live, and
 #: the only place that may import sibling submodules directly.
-LAYER_PREFIX = "src/core/signing/"
+#:
+#: TWO directories, ONE layer (salesagent-n78j0.3). The dependency-free leaf —
+#: value-sets, canonicalization, error codes, the operation vocabulary — moved to
+#: ``src/core/signing_contract/`` because Python runs a package's ``__init__`` before any
+#: of its submodules, so while the leaf sat under ``src/core/signing/`` merely importing
+#: a value-set executed the facade and pulled in ``keys`` -> ORM, middleware -> metrics,
+#: and ``replay_store``/``revocation`` -> config. Three import cycles, all removed by the
+#: move.
+#:
+#: THIS ENTRY GRANTS NO NEW PERMISSION. It tracks a path: the leaf was always part of the
+#: layer and always allowed to delegate to the SDK. Both allowlists below remain EMPTY.
+#: The first prefix stays first so the facade keeps being the layer's public surface.
+LAYER_PREFIXES = ("src/core/signing/", "src/core/signing_contract/")
+
+#: The facade's own directory — the one a probe writes a synthetic layer file into.
+LAYER_PREFIX = LAYER_PREFIXES[0]
+
+
+def _in_layer(rel: str) -> bool:
+    """Is *rel* (a repo-relative posix path) a file of the signing layer?"""
+    return any(rel.startswith(prefix) for prefix in LAYER_PREFIXES)
 
 #: The facade module path. ``from src.core.signing import <exported name>`` is the one
 #: sanctioned import shape for callers.
@@ -92,9 +112,13 @@ def _layer_submodules(root: Path = ROOT) -> frozenset[str]:
     Derived rather than hand-listed so that adding a module to the layer (e.g. the
     ``_upstream/`` vendor package) extends rule B automatically.
     """
-    layer_dir = root / LAYER_PREFIX
-    names = {p.stem for p in layer_dir.glob("*.py") if p.stem != "__init__"}
-    names |= {p.name for p in layer_dir.iterdir() if p.is_dir() and not p.name.startswith("__")}
+    names: set[str] = set()
+    for prefix in LAYER_PREFIXES:
+        layer_dir = root / prefix
+        if not layer_dir.exists():
+            continue
+        names |= {p.stem for p in layer_dir.glob("*.py") if p.stem != "__init__"}
+        names |= {p.name for p in layer_dir.iterdir() if p.is_dir() and not p.name.startswith("__")}
     return frozenset(names)
 
 
@@ -106,7 +130,7 @@ def _scan_files(roots: list[Path], *, relative_to: Path) -> list[tuple[str, ast.
             continue
         for path in sorted(tree_root.rglob("*.py")):
             rel = path.relative_to(relative_to).as_posix()
-            if rel.startswith(LAYER_PREFIX):
+            if _in_layer(rel):
                 continue
             out.append((rel, ast.parse(path.read_text(encoding="utf-8"), rel)))
     return out

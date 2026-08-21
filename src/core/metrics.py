@@ -55,7 +55,8 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
-from src.core.signing import REQUEST_TO_WEBHOOK_CODE, resolved_operation_names
+from src.core.signing_contract import REQUEST_TO_WEBHOOK_CODE
+from src.core.signing_contract.vocabulary import resolved_operation_names
 
 # ---------------------------------------------------------------------------
 # Bounded label vocabularies
