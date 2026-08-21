@@ -290,3 +290,70 @@ class TestInitTripwire:
 
             assert provider.key_id() == "adcp-encrypted"
             assert _verifies(row, asyncio.run(provider.sign(SIGNATURE_BASE)))
+
+
+class TestRevocationBeatsTheProviderCache:
+    """A revoked key stops resolving IMMEDIATELY — inside the 60s cache window.
+
+    The mechanism is ordering, not invalidation: ``_resolve_cached`` selects the row
+    BEFORE it consults the cache, and ``_select_row`` refuses a revoked row on both
+    paths (``active_at`` excludes it in SQL; the explicit-``kid`` path raises). So the
+    cache is never reached for a revoked key.
+
+    THIS TEST EXISTS BECAUSE PRODUCTION SAID OTHERWISE. The admin revoke route claimed
+    the cache bust "is not optional… a revoke that skips it keeps signing with the
+    retired key for up to a minute". That was false, and nothing graded either claim —
+    two comments in the same tree disagreed about whether a 60-second window existed.
+
+    IT DELIBERATELY DOES NOT CALL ``clear_signing_provider_cache()``. Clearing first
+    would make this pass for the wrong reason: it would prove the cache can be emptied,
+    not that revocation beats it. The key is resolved FIRST so the entry is genuinely
+    cached and unexpired, then revoked, then resolved again — all well inside
+    ``_CACHE_TTL_SECONDS`` and with no clock manipulation, so a pass cannot be explained
+    by expiry.
+
+    MUTATION: drop ``SigningKey.revoked_at.is_(None)`` from
+    :meth:`SigningKeyRepository.active_at` and this goes RED — the revoked row is selected
+    again and resolves from the warm entry, which is the 60-second window the route's
+    comment imagined.
+
+    NOT the mutation you would reach for first, and the reason is worth keeping: reversing
+    the ORDER in ``_resolve_cached`` (cache before row) does NOT falsify this test, because
+    the cache key is ``(tenant_id, row.kid)`` — you must read the row to know the key. On
+    the ``active_at`` path the ordering is therefore FORCED, not chosen, so the property
+    rests on the row filter rather than on statement order. A mutation aimed at the order
+    passes and proves nothing; that was measured, not assumed.
+    """
+
+    def test_a_revoked_key_stops_resolving_while_its_entry_is_still_warm(self, integration_db):
+        from src.core.exceptions import AdCPConfigurationError
+        from src.core.signing import revoke_signing_key
+        from src.core.signing.provider import _CACHE_TTL_SECONDS, _provider_cache
+        from tests.factories import TenantFactory
+
+        tenant_id = "sk_revoke_cache_t1"
+        with BareIntegrationEnv() as env:
+            TenantFactory(tenant_id=tenant_id)
+            repo = signing_key_repo(env, tenant_id)
+            provision_key(repo, tenant_id, "adcp-revoke-cache-key")
+            now = just_after_provisioning()
+
+            # Warm the cache and PROVE it is warm — otherwise the second resolve could
+            # miss for a reason unrelated to revocation.
+            provider = resolve_provider(repo, tenant_id, now=now)
+            assert provider.key_id() == "adcp-revoke-cache-key"
+            assert (tenant_id, "adcp-revoke-cache-key") in _provider_cache, (
+                "precondition: the resolution must be cached, or this test cannot "
+                "distinguish revocation from a cold lookup"
+            )
+            assert _CACHE_TTL_SECONDS >= 60.0, (
+                "precondition: the window must be wide enough that a pass cannot be "
+                f"explained by expiry; TTL is {_CACHE_TTL_SECONDS}s"
+            )
+
+            revoked = revoke_signing_key(repo, kid="adcp-revoke-cache-key")
+            assert revoked is not None and revoked.revoked_at is not None
+
+            # Same instant, same process, entry still inside its TTL.
+            with pytest.raises(AdCPConfigurationError):
+                resolve_provider(repo, tenant_id, now=now)

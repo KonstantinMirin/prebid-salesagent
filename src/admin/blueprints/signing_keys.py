@@ -34,8 +34,8 @@ from src.core.exceptions import AdCPConfigurationError
 from src.core.signing import (
     MINTABLE_REF_SCHEMES,
     SIGNING_ALG_VALUES,
-    clear_signing_provider_cache,
     provision_signing_key,
+    revoke_signing_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,22 +118,28 @@ def create_signing_key(tenant_id):
 @signing_keys_bp.route("/<kid>/revoke", methods=["POST"])
 @require_tenant_access()
 @log_admin_action("revoke_signing_key")
-def revoke_signing_key(tenant_id, kid):
-    """Revoke a signing key, then drop the cached provider built from it.
+def revoke_signing_key_route(tenant_id, kid):
+    """Revoke a signing key through the layer's one revocation operation.
 
-    ``revoke()`` is the transition — no caller hand-sets ``revoked_at``. The
-    cache bust is not optional: the resolved provider is cached for 60 seconds,
-    so a revoke that skips it keeps signing with the retired key for up to a
-    minute after the operator was told it was retired.
+    ``revoke_signing_key`` owns BOTH effects — the row transition and the cached-provider
+    drop — so this route cannot perform half of one (#1757). It replaced two statements
+    here, which stayed correct only while every future call site remembered both.
+
+    CORRECTED CLAIM: this docstring used to say the cache bust "is not optional" because
+    "a revoke that skips it keeps signing with the retired key for up to a minute". That
+    was wrong. ``_resolve_cached`` selects the row BEFORE consulting the cache and
+    ``_select_row`` refuses a revoked row on both paths, so a revoked key stops signing
+    immediately. The drop is housekeeping — it evicts decrypted material that is already
+    unreachable — not the safety mechanism. Pinned by
+    ``tests/integration/test_signing_provider.py``.
     """
     with SigningKeyUoW(tenant_id) as uow:
         assert uow.signing_keys is not None
-        revoked = uow.signing_keys.revoke(kid, at=datetime.now(UTC))
+        revoked = revoke_signing_key(uow.signing_keys, kid=kid)
 
     if revoked is None:
         flash(f"No signing key {kid} for this tenant.", "error")
     else:
-        clear_signing_provider_cache()
         flash(
             f"Signing key {kid} revoked. It stays published with its revocation marker during the grace period.",
             "success",

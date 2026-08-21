@@ -47,7 +47,7 @@ from src.core.signing._mcp_client_signing_shim import (
 # and to mypy, leaving the layer's most security-relevant exports untyped at every call
 # site. If a cycle reappears, something below this package imports something above it —
 # move the leaf, do not defer the import.
-from src.core.signing.keys import MINTABLE_REF_SCHEMES, provision_signing_key
+from src.core.signing.keys import MINTABLE_REF_SCHEMES, provision_signing_key, revoke_signing_key
 from src.core.signing.operations import (
     ADCP_SURFACE_PREFIXES,
     is_adcp_surface,
@@ -157,6 +157,7 @@ __all__ = [
     "requires_trust_root",
     "resolved_operation_names",
     "resolve_signing_material",
+    "revoke_signing_key",
     "sdk_operation_names",
     "send_signed_challenge",
     "sign_revocation_list",

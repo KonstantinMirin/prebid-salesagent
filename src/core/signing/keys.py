@@ -173,6 +173,45 @@ def provision_signing_key(
     return ProvisionedKey(row=row, private_key_pem=None if ref_scheme == DB_SCHEME else pem)
 
 
+def revoke_signing_key(
+    repo: SigningKeyRepository,
+    *,
+    kid: str,
+    at: datetime | None = None,
+) -> SigningKey | None:
+    """Retire *kid*: stamp the row AND drop the cached provider, as ONE act.
+
+    Returns the revoked row, or ``None`` when this tenant has no key by that kid.
+
+    The sibling of :func:`provision_signing_key`, and it exists for the same reason
+    :meth:`SigningKeyRepository.canonical_origin` does: a caller should not be able to
+    perform HALF of an operation. Revocation is two effects — the row transition and the
+    cache drop — and they were previously two statements at one call site, which is a
+    shape that only stays correct while every future call site remembers both.
+
+    WHAT THE CACHE DROP IS, AND IS NOT. It is HOUSEKEEPING, not the safety mechanism, and
+    the distinction matters because the admin route used to claim the opposite ("a revoke
+    that skips it keeps signing with the retired key for up to a minute"). That was
+    FALSE. :func:`~src.core.signing.provider._resolve_cached` selects the row BEFORE it
+    consults the cache, and :func:`~src.core.signing.provider._select_row` refuses a
+    revoked row on BOTH paths — ``active_at`` excludes it in SQL, and the explicit-``kid``
+    path raises. So a revoked key stops signing IMMEDIATELY, cache or no cache; what the
+    drop removes is a now-unreachable entry holding decrypted key material in memory for
+    up to the TTL.
+
+    Keeping the drop is still right — retired material should not linger — but the
+    guarantee callers depend on comes from the row check, and a comment claiming
+    otherwise sends the next reader looking for a 60-second window that does not exist.
+    """
+    from src.core.signing.provider import clear_signing_provider_cache
+
+    revoked = repo.revoke(kid, at=at or datetime.now(UTC))
+    if revoked is None:
+        return None
+    clear_signing_provider_cache()
+    return revoked
+
+
 def _private_key_ref(ref_scheme: str, *, kid: str, env_var_name: str | None) -> str:
     """The scheme-prefixed locator the row will carry.
 
