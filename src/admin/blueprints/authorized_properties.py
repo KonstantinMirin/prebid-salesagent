@@ -233,15 +233,12 @@ def _construct_agent_url(tenant_id: str, request: Any) -> str:
     *request* is retained for call-site compatibility and is unused: the agent
     URL is stored tenant state, never request state.
     """
-    from src.core.agent_identity import canonical_agent_url
-    from src.core.database.repositories.uow import TrustRootUoW
+    from src.core.agent_identity import agent_identity_for_tenant_id
 
-    with TrustRootUoW(tenant_id) as uow:
-        assert uow.tenant_config is not None
-        tenant = uow.tenant_config.get_tenant()
-        if not tenant:
-            raise ValueError(f"Tenant {tenant_id} not found")
-        return canonical_agent_url(tenant)
+    identity = agent_identity_for_tenant_id(tenant_id)
+    if identity is None:
+        raise ValueError(f"Tenant {tenant_id} not found")
+    return identity.origin
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")

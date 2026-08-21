@@ -64,11 +64,14 @@ class SigningKeyRepository:
         session because it never receives the first one. Returns ``None`` when the tenant
         row is absent, which is what every one of those call sites did by hand.
         """
-        from src.core.agent_identity import canonical_agent_url
+        from src.core.agent_identity import agent_identity_for_tenant
         from src.core.database.repositories.tenant_config import TenantConfigRepository
 
         tenant = TenantConfigRepository(self._session, self._tenant_id).get_tenant()
-        return canonical_agent_url(tenant) if tenant is not None else None
+        # The PURE half, on THIS session. agent_identity_for_tenant_id() would open a
+        # TrustRootUoW of its own and read committed state — breaking the same-transaction
+        # property the flush-visibility test grades.
+        return agent_identity_for_tenant(tenant).origin if tenant is not None else None
 
     def _scope_prefix(self) -> tuple[ColumnElement[bool], ...]:
         """The tenant isolation term EVERY query composes.

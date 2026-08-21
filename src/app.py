@@ -32,9 +32,8 @@ from src.a2a_server.adcp_a2a_server import (
 )
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
-from src.core.agent_identity import agent_endpoint_urls
+from src.core.agent_identity import agent_identity_for_tenant_id
 from src.core.auth_middleware import UnifiedAuthMiddleware
-from src.core.database.repositories.uow import TrustRootUoW
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.exceptions import (
@@ -439,10 +438,8 @@ def _canonical_a2a_url(headers) -> str | None:
     routing = route_landing_page(dict(headers))
     if not routing.tenant:
         return None
-    with TrustRootUoW(routing.tenant["tenant_id"]) as uow:
-        assert uow.tenant_config is not None
-        tenant = uow.tenant_config.get_tenant()
-        return agent_endpoint_urls(tenant)["a2a"] if tenant else None
+    identity = agent_identity_for_tenant_id(routing.tenant["tenant_id"])
+    return identity.endpoints["a2a"] if identity else None
 
 
 def _create_dynamic_agent_card(request: Request):
