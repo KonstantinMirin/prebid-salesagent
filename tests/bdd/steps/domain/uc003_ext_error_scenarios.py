@@ -801,18 +801,22 @@ def given_negative_keyword_cross_dimension_ok(ctx: dict) -> None:
 
 @then(parsers.parse('the error should include "recovery" field with value "{value}"'))
 def then_error_recovery_field(ctx: dict, value: str) -> None:
-    """Assert the error includes a recovery field with the expected value."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    from src.core.exceptions import AdCPError
+    """Assert the WIRE envelope carries the expected recovery hint.
 
-    if isinstance(error, AdCPError):
-        assert error.recovery == value, f"Expected recovery '{value}', got '{error.recovery}'"
-    elif hasattr(error, "recovery"):
-        actual = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
-        assert actual == value, f"Expected recovery '{value}', got '{actual}'"
-    else:
-        raise AssertionError(f"Cannot check recovery on {type(error).__name__}: no recovery attribute")
+    Reads the envelope the buyer received rather than a reconstructed exception:
+    recovery is a graded wire field, and the reconstruction could only ever
+    re-derive it from the code (salesagent-3dawm.18).
+    """
+    result = ctx["result"]
+    code = result.wire_error_code()
+    assert code is not None, (
+        f"expected a wire rejection carrying recovery {value!r}, but no wire error envelope was "
+        "captured — the operation either succeeded or errored before reaching a transport"
+    )
+    # The CODE is taken from the wire because this step does not name one; the
+    # graded claim is the recovery VALUE the scenario states, which
+    # assert_wire_error pins on both envelope layers.
+    result.assert_wire_error(code, recovery=value)
 
 
 @then("no database records should be modified")
