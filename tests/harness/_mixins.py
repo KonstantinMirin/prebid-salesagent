@@ -994,15 +994,12 @@ class CircuitBreakerMixin:
         server — so the e2e branch reads the served capabilities document instead
         (:func:`_fetch_advertised_webhook_signing`).
         """
-        from src.core.agent_identity import canonical_agent_url
-        from src.core.database.repositories.tenant_config import TenantConfigRepository
         from src.core.signing.posture import webhook_signing_posture
         from tests.helpers.signing import signing_key_repo
 
         repo = signing_key_repo(self, self._tenant_id)  # type: ignore[attr-defined]
-        tenant = TenantConfigRepository(repo.session, self._tenant_id).get_tenant()  # type: ignore[attr-defined]
-        assert tenant is not None, f"no tenant row for {self._tenant_id!r}"  # type: ignore[attr-defined]
-        origin = canonical_agent_url(tenant)
+        origin = repo.canonical_origin()
+        assert origin is not None, f"no tenant row for {self._tenant_id!r}"
         return webhook_signing_posture(repo, now=datetime.now(UTC), origin=origin)
 
     def get_service(self) -> WebhookDeliveryService:

@@ -365,14 +365,11 @@ def _agent_origin(repo: SigningKeyRepository, tenant_id: str) -> str | None:
     at against the one we published.
 
     ``None`` when there is no tenant row: unknown origin is not a publishable one, so
-    the RFC 9421 arm closes. Reads through ``TenantConfigRepository`` on the caller's
-    session rather than opening a second one — the delivery path already owns it.
+    the RFC 9421 arm closes. The read happens inside the repository's OWN transaction —
+    the same one that produced the key row — which ``canonical_origin`` enforces by
+    construction rather than by asking (#1757).
     """
-    from src.core.agent_identity import canonical_agent_url
-    from src.core.database.repositories.tenant_config import TenantConfigRepository
-
-    tenant = TenantConfigRepository(repo.session, tenant_id).get_tenant()
-    return canonical_agent_url(tenant) if tenant is not None else None
+    return repo.canonical_origin()
 
 
 def _rfc9421_sender(

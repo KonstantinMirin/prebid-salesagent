@@ -42,20 +42,33 @@ class SigningKeyRepository:
     def tenant_id(self) -> str:
         return self._tenant_id
 
-    @property
-    def session(self) -> Session:
-        """The session this repository reads on, for a SIBLING repository only.
+    def canonical_origin(self) -> str | None:
+        """This tenant's canonical agent origin, read in THIS repository's transaction.
 
-        Exposed for the outbound webhook boundary (#1291 C1/D1), which must resolve
-        this tenant's canonical origin — a ``tenants`` read — inside the transaction
-        that already produced the key row it is about to sign with. Opening a second
-        session there could observe a rotation from one side and the host from the
-        other.
+        The outbound webhook boundary (#1291 C1/D1) must resolve the origin — a
+        ``tenants`` read — inside the transaction that already produced the key row it is
+        about to sign with. Opening a second session there could observe a rotation from
+        one side and the host from the other.
 
-        It is a seam for constructing another repository, never for raw queries: the
-        no-raw-select guards still apply to whoever borrows it.
+        THIS METHOD REPLACED A ``session`` PROPERTY (#1757). That property handed out the
+        raw session and asked callers, in fourteen lines of docstring, to use it only for
+        a sibling repository and to remember that the no-raw-select guards still applied
+        to whoever borrowed it. It was a PRIMITIVE PLUS PROSE, and the prose was the only
+        thing holding the invariant up: nothing stopped a caller opening a second session,
+        which is the exact race the docstring warned about. Three call sites — the RFC
+        9421 sender, the adapter client builder, and the test harness — each re-derived
+        the same origin from it, identically, differing only in how they handled ``None``.
+        One operation, written out three times, guarded by a request.
+
+        Now the invariant is enforced BY CONSTRUCTION: a caller cannot open a second
+        session because it never receives the first one. Returns ``None`` when the tenant
+        row is absent, which is what every one of those call sites did by hand.
         """
-        return self._session
+        from src.core.agent_identity import canonical_agent_url
+        from src.core.database.repositories.tenant_config import TenantConfigRepository
+
+        tenant = TenantConfigRepository(self._session, self._tenant_id).get_tenant()
+        return canonical_agent_url(tenant) if tenant is not None else None
 
     def _scope_prefix(self) -> tuple[ColumnElement[bool], ...]:
         """The tenant isolation term EVERY query composes.

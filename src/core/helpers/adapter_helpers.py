@@ -98,8 +98,6 @@ def build_adcp_multi_agent_client(
 
     from datetime import UTC, datetime
 
-    from src.core.agent_identity import canonical_agent_url
-    from src.core.database.repositories.tenant_config import TenantConfigRepository
     from src.core.exceptions import AdCPConfigurationError
     from src.core.signing import (
         REQUEST_SIGNING,
@@ -115,8 +113,7 @@ def build_adcp_multi_agent_client(
         material = None
 
     if material is not None:
-        tenant = TenantConfigRepository(repo.session, tenant_id).get_tenant()
-        origin = canonical_agent_url(tenant) if tenant is not None else None
+        origin = repo.canonical_origin()
         if origin_is_publishable(origin):
             signing = signing_config_from_material(material)
 

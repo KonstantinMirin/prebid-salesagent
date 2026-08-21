@@ -215,3 +215,53 @@ class TestActiveAt:
             assert _repo(env, "sk_scope_t1").active_at(now=_MID, purpose=_PURPOSE).kid == "adcp-t1-only"
             assert _repo(env, "sk_scope_t2").active_at(now=_MID, purpose=_PURPOSE) is None
             assert _repo(env, "sk_scope_t2").get_by_kid("adcp-t1-only") is None
+
+
+class TestCanonicalOriginReadsTheRepositorysOwnTransaction:
+    """``canonical_origin()`` resolves the origin in the SAME transaction as the key row.
+
+    The invariant is older than this test: ``SigningKeyRepository`` used to expose a raw
+    ``session`` property whose docstring warned that resolving the origin in a SECOND
+    session "could observe a rotation from one side and the host from the other". Nothing
+    graded that claim — it was an unenforced request to callers, and three call sites each
+    re-derived the origin from the borrowed session by hand. #1757 replaced the property
+    with :meth:`SigningKeyRepository.canonical_origin`, which makes the invariant true by
+    construction because a caller never receives the session at all.
+
+    GRADED BY VISIBILITY, NOT BY STRUCTURE. The test does not inspect the session, count
+    ``get_db_session`` calls, or scan source: an uncommitted write is visible ONLY inside
+    the transaction that made it, so reading the new value IS the proof the read happened
+    there. That is ordinary READ COMMITTED behaviour and it cannot be defeated by
+    extracting a helper — the assertion does not care how many frames deep the read is.
+
+    MUTATION: make ``canonical_origin`` open its own session instead of using
+    ``self._session`` and this goes RED, because the second transaction reads committed
+    state and returns the pre-flush host.
+    """
+
+    def test_it_sees_a_flushed_but_uncommitted_host_change(self, integration_db):
+        from tests.factories import SigningKeyFactory, TenantFactory
+
+        with BareIntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id="sk_txn_t1", virtual_host="origin-before.example.com")
+            SigningKeyFactory(tenant=tenant, kid="adcp-txn-key")
+            session = env.get_session()
+            session.commit()
+
+            repo = _repo(env, "sk_txn_t1")
+            assert repo.canonical_origin() == "https://origin-before.example.com", (
+                "precondition: the committed host is what a fresh transaction would read"
+            )
+
+            # In THIS transaction only — flushed so the UPDATE is issued, never committed,
+            # so no other session can observe it.
+            tenant.virtual_host = "origin-after.example.com"
+            session.flush()
+
+            assert repo.canonical_origin() == "https://origin-after.example.com", (
+                "canonical_origin() must read the tenant row in the repository's OWN "
+                "transaction — the one that produced the key row. Seeing the pre-flush "
+                "host means it opened a second session and read committed state, which is "
+                "exactly the split-view the .session property's docstring warned about "
+                "and which nothing graded before #1757."
+            )
