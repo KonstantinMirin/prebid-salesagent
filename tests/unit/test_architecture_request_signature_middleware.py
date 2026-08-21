@@ -30,6 +30,17 @@ at least have been a noisy 401 on a trust-root fetch. This guard derives the
 surface set from ``app.routes`` so adding a surface without classifying it
 fails the build.
 
+**The guard grades PRODUCTION's predicate, never a copy of it** (S2 fault B,
+``salesagent-n78j0.2``). It used to import ``ADCP_SURFACE_PREFIXES`` and then
+re-implement the segment-boundary rule against it — twice, byte-identically to
+the verifier's own body. Sharing the DATA while copying the LOGIC is what made
+this guard unable to fail: rewriting ``_is_adcp_surface`` to a bare
+``str.startswith``, dropping the boundary its own comment calls load-bearing,
+left all four tests below GREEN, because the guard was grading its own intact
+copy. The rule now exists ONCE, in :mod:`src.core.signing.operations`
+(``is_adcp_surface`` / ``matches_surface_prefix``, published through the
+facade), and this file asks the verifier's own entry point.
+
 Covers: salesagent-z6nr.12 (Refinement R-M4, R-M5(a)).
 """
 
@@ -40,10 +51,8 @@ from starlette.middleware.cors import CORSMiddleware
 
 from src.app import app
 from src.core.auth_middleware import UnifiedAuthMiddleware
-from src.core.signing.request_verifier_middleware import (
-    ADCP_SURFACE_PREFIXES,
-    RequestSignatureMiddleware,
-)
+from src.core.signing import ADCP_SURFACE_PREFIXES, RequestSignatureMiddleware, matches_surface_prefix
+from src.core.signing.request_verifier_middleware import _is_adcp_surface
 from src.routes.rest_compat_middleware import RestCompatMiddleware
 
 #: Execution order, outermost first. ``app.add_middleware`` inserts at index 0,
@@ -100,8 +109,20 @@ def _top_segment(path: str) -> str:
 
 
 def _covered_by_allowlist(path: str) -> bool:
-    """Prefix match with a segment boundary — ``/mcp`` must not match ``/mcpx``."""
-    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in ADCP_SURFACE_PREFIXES)
+    """Would the verifier scope itself IN for *path*? Asked of PRODUCTION.
+
+    This guard holds no copy of the boundary rule, and it does not ask a helper
+    one level below the verifier either: it asks the exact predicate
+    ``RequestSignatureMiddleware.__call__`` consults, so a rewrite at EITHER level
+    — the published :func:`src.core.signing.is_adcp_surface` or this wrapper — is
+    graded here. Re-implementing the rule (what this function used to do, verbatim
+    to production's) is why a bare-``startswith`` rewrite of the segment boundary
+    left every test in :class:`TestAllowlistTiedToRouteTable` green.
+
+    The scope adapter is the only thing local: ``path`` is what
+    ``path_from_asgi_scope`` reads.
+    """
+    return _is_adcp_surface({"type": "http", "path": path})
 
 
 #: Top-level prefixes that are deliberately NOT AdCP protocol surfaces. Each is
@@ -212,7 +233,7 @@ class TestAllowlistTiedToRouteTable:
         dead = sorted(
             prefix
             for prefix in ADCP_SURFACE_PREFIXES
-            if not any(path == prefix or path.startswith(f"{prefix}/") for path in paths)
+            if not any(matches_surface_prefix(path, prefix) for path in paths)
         )
 
         assert dead == [], (
@@ -226,6 +247,30 @@ class TestAllowlistTiedToRouteTable:
             assert _covered_by_allowlist(path), (
                 f"{path} is an AdCP protocol surface and must be covered by "
                 f"ADCP_SURFACE_PREFIXES {tuple(ADCP_SURFACE_PREFIXES)}"
+            )
+
+    @pytest.mark.parametrize("suffix", ["x", "-internal", ".json"], ids=["segment", "hyphen", "dot"])
+    def test_the_allowlist_stops_at_the_segment_boundary(self, suffix):
+        """``/mcpx`` is NOT ``/mcp`` — the whole reason the rule is not ``startswith``.
+
+        Derived from the allowlist rather than hand-listed, so a fourth surface gets
+        its near-misses graded the moment it is added. This is the case that made the
+        boundary load-bearing and the case a bare ``startswith`` gets wrong: it would
+        pull ``/mcpx`` and ``/api/v1x`` — arbitrary non-AdCP paths that merely share a
+        prefix — under the verifier, 401-ing traffic the layer never scoped, while
+        every route-table-derived assertion in this class stayed green because a MORE
+        permissive predicate can never leave a route unclassified.
+        """
+        for prefix in ADCP_SURFACE_PREFIXES:
+            near_miss = f"{prefix}{suffix}"
+            assert not _covered_by_allowlist(near_miss), (
+                f"{near_miss} is not the AdCP surface {prefix} — it only shares its prefix. "
+                "The allowlist must match on a SEGMENT boundary (equal, or followed by '/'); "
+                "a bare str.startswith puts arbitrary non-AdCP paths behind the verifier."
+            )
+            assert _covered_by_allowlist(f"{prefix}/"), (
+                f"{prefix}/ IS the AdCP surface {prefix} and must stay covered — the "
+                "boundary rule must not be tightened into an exact match either"
             )
 
     def test_the_trust_root_documents_are_not_allowlisted(self):

@@ -174,7 +174,14 @@ from tests.helpers.signing import (
 #
 #   src.core.signing.request_verifier_middleware
 #     .RequestSignatureMiddleware      pure-ASGI class (plan step 4)
-#     .ADCP_SURFACE_PREFIXES           the path allowlist (plan step 4b, R-M4)
+#     ._is_adcp_surface                the path allowlist (plan step 4b, R-M4).
+#                                      Adapts the ASGI scope and delegates: the
+#                                      allowlist and its segment-boundary rule
+#                                      moved to src.core.signing.operations
+#                                      (ADCP_SURFACE_PREFIXES, is_adcp_surface),
+#                                      published through the facade, because the
+#                                      resolver and the guard read them too
+#                                      (S2 fault B, salesagent-n78j0.2)
 #     .posture_for_tenant              imported from src.core.signing.posture
 #                                      into the middleware namespace, so the
 #                                      declaration is substitutable (see below)

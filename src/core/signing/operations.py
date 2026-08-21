@@ -95,6 +95,56 @@ from src.core.http_utils import path_from_asgi_scope
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# The SURFACE vocabulary: which paths are AdCP protocol surfaces at all
+# ---------------------------------------------------------------------------
+#
+# PUBLISHED HERE, not in the verifier, because the verifier is not its only reader:
+# the resolver below dispatches on the same three strings, and the structural guard
+# grades the same boundary. It lived in ``request_verifier_middleware`` with the rule
+# re-typed at every reader, and the cost was measured: the segment boundary existed in
+# FOUR places, so rewriting the verifier's copy to a bare ``startswith`` left the guard
+# grading its own intact copy and all of ``TestAllowlistTiedToRouteTable`` green. One
+# definition, imported by every reader — the verifier, the resolver and the guard.
+
+#: The AdCP protocol surfaces, and ONLY those. Everything else — admin, health, debug,
+#: the landing page, the A2A agent card and every A3 trust-root document — passes
+#: through untouched by construction rather than by remembering to exempt it.
+#: Prefix + segment boundary, so ``/api/v1x`` cannot sneak in.
+#:
+#: Note ``/a2a/`` (trailing slash) only 307-redirects to ``/a2a``; it matches the
+#: allowlist and is verified before being bounced, which is harmless.
+ADCP_SURFACE_PREFIXES: tuple[str, ...] = ("/mcp", "/a2a", "/api/v1")
+
+#: The three surfaces, named for the resolver's dispatch. UNPACKED from the allowlist
+#: rather than re-typed, so the resolver dispatches on exactly the strings the verifier
+#: scopes on. A fourth prefix added above without teaching the resolver about it fails
+#: LOUDLY here, at import, instead of reaching the resolver's fall-through as an AdCP
+#: surface nothing can name.
+_MCP_PREFIX, _A2A_PREFIX, _REST_PREFIX = ADCP_SURFACE_PREFIXES
+
+
+def matches_surface_prefix(path: str, prefix: str) -> bool:
+    """Prefix match on a SEGMENT BOUNDARY, so ``/api/v1x`` cannot sneak in.
+
+    The one boundary rule the whole layer shares. ``/mcp`` matches ``/mcp`` and
+    ``/mcp/anything``; it does not match ``/mcpx``. A bare ``str.startswith`` would,
+    and would silently pull a non-AdCP surface under the verifier.
+    """
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def is_adcp_surface(path: str) -> bool:
+    """Whether *path* targets one of the AdCP protocol surfaces.
+
+    THE boundary predicate: the verifier scopes itself with this (through
+    :func:`src.core.signing.request_verifier_middleware._is_adcp_surface`, which only
+    adapts the ASGI scope to a path), and the structural guard classifies
+    ``app.routes`` with it. Neither holds a copy.
+    """
+    return any(matches_surface_prefix(path, prefix) for prefix in ADCP_SURFACE_PREFIXES)
+
+
 @dataclass(frozen=True)
 class ResolvedOperation:
     """What one inbound request is NAMED, plus the two decisions naming it produces.
@@ -347,10 +397,10 @@ class RegistryOperationResolver:
     def resolve(self, scope: Mapping[str, Any], headers: Mapping[str, str], body: bytes) -> ResolvedOperation:
         path = path_from_asgi_scope(scope)
 
-        if _on_surface(path, "/mcp") or _on_surface(path, "/a2a"):
+        if matches_surface_prefix(path, _MCP_PREFIX) or matches_surface_prefix(path, _A2A_PREFIX):
             return _resolve_jsonrpc(body)
 
-        if _on_surface(path, "/api/v1"):
+        if matches_surface_prefix(path, _REST_PREFIX):
             operation = operation_for_rest_route(str(scope.get("method", "GET")).upper(), path)
             forced = _forces_signature(_json_object(body))
             if not operation:
@@ -366,11 +416,6 @@ class RegistryOperationResolver:
         # Not an AdCP surface. The middleware never asks about these (its allowlist
         # runs first), so this is the answer for a direct caller, not a bypass.
         return UNNAMED_OPERATION
-
-
-def _on_surface(path: str, prefix: str) -> bool:
-    """Prefix match on a segment boundary, so ``/api/v1x`` cannot sneak in."""
-    return path == prefix or path.startswith(f"{prefix}/")
 
 
 # ---------------------------------------------------------------------------

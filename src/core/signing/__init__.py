@@ -47,6 +47,9 @@ from src.core.signing.canonical import (
     reject_malformed_target,
 )
 from src.core.signing.operations import (
+    ADCP_SURFACE_PREFIXES,
+    is_adcp_surface,
+    matches_surface_prefix,
     operation_for_rest_route,
     resolved_operation_names,
     sdk_operation_names,
@@ -113,6 +116,7 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "ADCP_SURFACE_PREFIXES",
     "CACHE_MAX_AGE_SECONDS",
     "IdentityDeclaration",
     "KeyBacking",
@@ -143,7 +147,9 @@ __all__ = [
     "deliver_adcp_webhook_sync",
     "delivery_auth_mode",
     "emitted_identity",
+    "is_adcp_surface",
     "malformed_authority_reason",
+    "matches_surface_prefix",
     "operation_for_rest_route",
     "origin_is_publishable",
     "posture_for_tenant",

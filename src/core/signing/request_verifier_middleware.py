@@ -183,6 +183,7 @@ from src.core.signing.operations import (
     OperationResolver,
     RegistryOperationResolver,
     ResolvedOperation,
+    is_adcp_surface,
 )
 from src.core.signing.posture import (
     PostureBucket,
@@ -197,15 +198,6 @@ logger = logging.getLogger(__name__)
 
 Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
 Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
-
-#: The AdCP protocol surfaces, and ONLY those. Everything else — admin, health, debug,
-#: the landing page, the A2A agent card and every A3 trust-root document — passes
-#: through untouched by construction rather than by remembering to exempt it.
-#: Prefix + segment boundary, so ``/api/v1x`` cannot sneak in.
-#:
-#: Note ``/a2a/`` (trailing slash) only 307-redirects to ``/a2a``; it matches the
-#: allowlist and is verified before being bounced, which is harmless.
-ADCP_SURFACE_PREFIXES: tuple[str, ...] = ("/mcp", "/a2a", "/api/v1")
 
 #: Process-level ``{agent_url: AgentResolution}``. The WHOLE resolution is kept, not
 #: just the JWKS: ``expected_key_origins`` comes from it and is mandatory on every
@@ -572,9 +564,15 @@ class RequestSignatureMiddleware:
 
 
 def _is_adcp_surface(scope: Mapping[str, Any]) -> bool:
-    """Whether this request targets one of the three AdCP protocol surfaces."""
-    path = path_from_asgi_scope(scope)
-    return any(path == prefix or path.startswith(f"{prefix}/") for prefix in ADCP_SURFACE_PREFIXES)
+    """Whether this request targets one of the AdCP protocol surfaces.
+
+    ADAPTS the ASGI scope to a path and asks the ONE published predicate
+    (:func:`src.core.signing.is_adcp_surface`, defined beside
+    ``ADCP_SURFACE_PREFIXES`` in :mod:`src.core.signing.operations`). It holds no
+    boundary rule of its own on purpose: a second copy here is what let the segment
+    boundary be rewritten while the structural guard graded its own intact copy.
+    """
+    return is_adcp_surface(path_from_asgi_scope(scope))
 
 
 # ---------------------------------------------------------------------------
