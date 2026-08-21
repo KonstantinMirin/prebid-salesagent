@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import Transport, TransportResult
@@ -181,6 +182,40 @@ class ImplDispatcher:
         return TransportResult(payload=payload, envelope={"transport": "impl"})
 
 
+def a2a_transport_result(
+    call: Callable[[], Any],
+    *,
+    wire_response_of: Callable[[], dict[str, Any] | None] | None = None,
+) -> TransportResult:
+    """One ``TransportResult`` out of any dispatch onto the ``/a2a`` wire.
+
+    Stated once because A2A has MORE THAN ONE thing a buyer can send it — a
+    skill invocation and a bare credential registration
+    (``tasks/pushNotificationConfig/set``) — and both have to produce results a
+    scenario can grade side by side. A second copy of this wrapping would be
+    free to drop the refusal's raw response, which
+    ``assert_signature_challenge`` reports as "no wire to read" rather than as
+    the acceptance it actually is.
+
+    *wire_response_of* is read only on success, and only by callers that stash a
+    success-path wire capture; a caller that does not stash passes nothing rather
+    than handing over some other dispatch's capture.
+    """
+    try:
+        payload = call()
+    except Exception as exc:
+        return TransportResult(
+            error=exc,
+            wire_error_envelope=_wire_envelope_from_exception(exc),
+            raw_response=_refusal_response(exc),
+        )
+    return TransportResult(
+        payload=payload,
+        envelope={"transport": "a2a"},
+        wire_response=wire_response_of() if wire_response_of is not None else None,
+    )
+
+
 class A2ADispatcher:
     """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
 
@@ -202,21 +237,13 @@ class A2ADispatcher:
     """
 
     def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
-        try:
-            payload = env.call_a2a(**kwargs)
-        except Exception as exc:
-            return TransportResult(
-                error=exc,
-                wire_error_envelope=_wire_envelope_from_exception(exc),
-                raw_response=_refusal_response(exc),
-            )
-        # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
-        # (declared on BaseTestEnv, reset per call_via — read directly so a
-        # missed capture surfaces as None against a known attribute, not getattr).
-        return TransportResult(
-            payload=payload,
-            envelope={"transport": "a2a"},
-            wire_response=env._last_wire_response,
+        # Real A2A wire on success: the artifact DataPart dict stashed by
+        # _run_a2a_handler (declared on BaseTestEnv, reset per call_via — read
+        # directly so a missed capture surfaces as None against a known
+        # attribute, not getattr).
+        return a2a_transport_result(
+            lambda: env.call_a2a(**kwargs),
+            wire_response_of=lambda: env._last_wire_response,
         )
 
 

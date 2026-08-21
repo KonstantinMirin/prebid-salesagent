@@ -26,6 +26,13 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then
 
+from tests.bdd.steps.generic._dispatch import CREDENTIAL_REGISTRATIONS, GRADE_EVERY_CREDENTIAL_LOCATION
+
+#: How a scenario that registered nothing names its single dispatch. The three
+#: scenarios do not all register credentials, and the two that do not have exactly one
+#: request to grade — a location they never chose is not one a failure may name.
+_THE_REQUEST = "the request"
+
 #: A credential long enough for production's own boundary. ``Authentication.credentials``
 #: carries ``MinLen=32`` on the pinned model, so a shorter placeholder would be rejected
 #: as a validation error — a scenario that exists to prove the request is refused for the
@@ -104,6 +111,27 @@ def given_request_registers_authenticated_webhook(ctx: dict) -> None:
     where ``src/a2a_server/adcp_a2a_server.py:657-659`` READS it. The env owns that
     placement; the scenario states only the intent.
 
+    AND ON A2A THAT IS NOT THE ONLY PLACE (salesagent-jj90f). The same transport also
+    serves ``tasks/pushNotificationConfig/set``, where a buyer registers a webhook and
+    its credentials on a JSON-RPC method of its own with no skill invocation at all —
+    answered by our own ``AdCPRequestHandler.on_create_task_push_notification_config``,
+    which persists the credentials and returns a config id. So this Given asks for a
+    claim about CREDENTIALS, not about one request, and opts the scenario into being
+    graded at every location the transport offers
+    (``BaseTestEnv.credential_registrations``).
+
+    SAY IT PLAINLY: that makes this scenario's single When put TWO dispatches on the
+    wire where the transport has two locations, which departs from this suite's
+    "one request, one outcome" shape. It is worth the departure at two locations,
+    where naming the accepted one in the failure is enough to say what broke. It stops
+    being worth it at THREE: if a third location ever appears, switch to B1 —
+    parametrise the location at the ENV level so each location is its own leg with its
+    own outcome — rather than stacking a third dispatch inside one When.
+
+    What must NOT happen either way is MOVING the placement from one location to the
+    other. That yields the same number of failures while silently un-grading the
+    location it moved off, which looks like progress and is a coverage trade.
+
     Spec: security.mdx @ v3.1.1 :1462-1465, ``push_notification_config.authentication``
     named verbatim as a trigger; the pinned vector 027 registers exactly this shape.
     """
@@ -111,6 +139,7 @@ def given_request_registers_authenticated_webhook(ctx: dict) -> None:
         "url": _WEBHOOK_URL,
         "authentication": {"scheme": "HMAC-SHA256", "credentials": _WEBHOOK_CREDENTIAL},
     }
+    ctx[GRADE_EVERY_CREDENTIAL_LOCATION] = True
 
 
 @then(parsers.parse('the seller answers with the request-signature challenge "{code}"'))
@@ -122,8 +151,29 @@ def then_signature_challenge(ctx: dict, code: str) -> None:
     vocabulary, and FAILS (rather than passing for want of evidence) on a result that
     carries no raw HTTP response. ``status_code == 401`` is deliberately not the
     assertion — see ``TransportResult.assert_signature_challenge``.
+
+    ONE CHALLENGE PER CREDENTIAL LOCATION when the scenario is about credentials
+    (see the Given above for why one When then makes more than one dispatch, and for
+    when that shape must be abandoned). EVERY location is graded before anything is
+    raised — not the first failure — because the reason for exercising two is to be
+    able to say WHICH of them the seller accepted, and a first-failure abort would
+    hide the second behind the first for exactly as long as the first stays broken.
+    That is also the property S2 is graded on: a fix that closes one location and not
+    the other must still read as a failure naming the open one, never as a smaller
+    number.
     """
-    ctx["result"].assert_signature_challenge(code)
+    accepted: list[tuple[str, AssertionError]] = []
+    for location, result in ctx.get(CREDENTIAL_REGISTRATIONS) or ((_THE_REQUEST, ctx["result"]),):
+        try:
+            result.assert_signature_challenge(code)
+        except AssertionError as exc:
+            accepted.append((location, exc))
+    if not accepted:
+        return
+    raise AssertionError(
+        f"The seller did not answer {code!r} at {len(accepted)} of the credential "
+        f"location(s) this transport carries.\n\n" + "\n\n".join(f"AT {location}:\n{exc}" for location, exc in accepted)
+    )
 
 
 @then(parsers.parse("the seller verified exactly {count:d} request under the Buyer Agent's published key"))

@@ -338,6 +338,36 @@ _MCP_PATH = "/mcp/"
 #: refuses the POST outright ("Not Acceptable") when either is missing.
 _MCP_ACCEPT = "application/json, text/event-stream"
 
+#: WHERE the webhook credentials of an OPERATION request sit on each transport —
+#: the location ``call_via``'s own dispatch already puts them, named so a refusal
+#: (or an acceptance) can be attributed to a place rather than to "the request".
+#: Keyed by ``Transport.value`` because ``Transport`` is a TYPE_CHECKING-only
+#: import here. Each entry is where PRODUCTION reads the config on that transport,
+#: which is genuinely not the same place — see ``_a2a_message_send_body``.
+_OPERATION_CREDENTIAL_LOCATION: dict[str, str] = {
+    "a2a": "message/send params.configuration.task_push_notification_config",
+    "mcp": "the tools/call arguments' push_notification_config",
+    "rest": "the AdCP request body's push_notification_config",
+    "e2e_rest": "the AdCP request body's push_notification_config",
+}
+
+#: The label for a transport whose operation-payload location is not tabulated
+#: above. Deliberately vague: a location that has not been stated is not one a
+#: failure message may name precisely.
+_UNSTATED_CREDENTIAL_LOCATION = "the operation request's own payload"
+
+#: The A2A JSON-RPC method a buyer registers webhook credentials with WITHOUT
+#: invoking any skill — the SECOND credential location this transport carries.
+#: Served by the pinned a2a SDK's v0.3 compat adapter
+#: (``a2a/compat/v0_3/jsonrpc_adapter.py`` ``METHOD_TO_MODEL``) and answered by
+#: OUR OWN handler, ``AdCPRequestHandler.on_create_task_push_notification_config``
+#: (``src/a2a_server/adcp_a2a_server.py``), which persists the credentials it is
+#: given. Not a hypothetical surface: it is live, implemented and reachable.
+_A2A_PUSH_CONFIG_SET = "tasks/pushNotificationConfig/set"
+
+#: How a failure names the location above.
+_A2A_PUSH_CONFIG_SET_LOCATION = f"the {_A2A_PUSH_CONFIG_SET} params"
+
 
 def _a2a_message_send_body(
     skill_name: str, parameters: dict[str, Any], push_notification_config: Any = None
@@ -413,6 +443,55 @@ def _a2a_push_notification_config(config: Any) -> Any:
         token=raw.get("token"),
         authentication=info,
     )
+
+
+def _a2a_push_config_set_body(config: Any, *, task_id: str) -> dict[str, Any]:
+    """The ``tasks/pushNotificationConfig/set`` JSON-RPC envelope for *config*.
+
+    A2A's SECOND credential location, and the one nothing graded before
+    ``salesagent-jj90f``: a buyer registers a webhook and its credentials here
+    WITHOUT invoking any skill, so the registration never appears in a
+    ``message/send`` envelope or in any tool's arguments.
+
+    Built from the SDK's own ``SetTaskPushNotificationConfigRequest`` — the SAME
+    model the server's compat adapter validates the body against — for the reason
+    ``_a2a_message_send_body`` gives: a field the SDK renames must fail HERE, not
+    silently drop the credential and leave a credential-registration scenario
+    passing because it registered nothing.
+
+    *task_id* is required by the model but NOT by the seller: our handler upserts
+    a config for whatever id it is handed (``task_id or "*"``), which is precisely
+    why this is a registration channel of its own rather than a rider on an
+    existing task.
+    """
+    from a2a.compat.v0_3 import types as v03
+
+    request = v03.SetTaskPushNotificationConfigRequest(
+        id=str(uuid.uuid4()),
+        params=v03.TaskPushNotificationConfig(
+            task_id=task_id,
+            push_notification_config=_a2a_push_notification_config(config),
+        ),
+    )
+    return request.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _a2a_jsonrpc_result(response: Any) -> dict[str, Any]:
+    """The ``result`` of an ``/a2a`` answer, or its ``error`` raised as an AdCPError.
+
+    One reader for every method this harness POSTs to ``/a2a``: a refusal that
+    never produced an envelope surfaces as ``WireRefusal`` (carrying the response,
+    so a bodyless 401's ``WWW-Authenticate`` survives), a JSON-RPC error surfaces
+    as a typed ``AdCPError``, and anything else is the result object. Shared so a
+    second method cannot grow a second, differently-wrong way to read the same
+    wire.
+    """
+    envelope = _jsonrpc_body(response, surface=_A2A_PATH)
+    if "error" in envelope:
+        from src.core.exceptions import AdCPError
+
+        raise AdCPError(f"A2A JSON-RPC error: {envelope['error']}")
+    return envelope.get("result") or {}
 
 
 def _a2a_first_data_part(artifact: dict[str, Any]) -> dict[str, Any] | None:
@@ -873,6 +952,67 @@ class BaseTestEnv:
         """
         return IN_PROCESS_WEBHOOK_URL
 
+    # -- Inbound webhook credentials: WHERE a transport carries them ---------
+    #
+    # The counterpart of the block above, and the harder half: a buyer HANDS the
+    # seller webhook credentials in a transport-specific place, and on at least one
+    # transport there is MORE THAN ONE such place. A step that asked which transport
+    # it was on could not state that; this is the one layer that may
+    # (salesagent-jj90f).
+
+    def credential_registrations(
+        self,
+        transport: Transport,
+        config: Any,
+        operation_result: TransportResult,
+        *,
+        signed: bool = False,
+    ) -> tuple[tuple[str, TransportResult], ...]:
+        """Every place *transport* let this buyer hand the seller webhook credentials.
+
+        Returns ``((location, result), ...)``, ONE ENTRY PER LOCATION, so a caller
+        grades the seller's answer at each of them and names the location that
+        answered wrongly. The first entry is always *operation_result* — the
+        dispatch the caller already made — labelled with where THAT transport
+        carries the config. Any further entry is a channel this transport offers
+        that no operation dispatch touches; the env sends it here.
+
+        WHY THIS EXISTS AT ALL, and why one entry is not enough. A2A has TWO
+        credential locations and they are not variants of each other:
+
+        1. ``params.configuration.task_push_notification_config`` on
+           ``message/send`` — a webhook registered ALONGSIDE a skill invocation,
+           read by ``adcp_a2a_server.on_message_send``;
+        2. the ``tasks/pushNotificationConfig/set`` params — a webhook registered
+           on its OWN JSON-RPC method with no skill in sight, read by
+           ``adcp_a2a_server.on_create_task_push_notification_config``, which
+           persists the credentials and returns a config id.
+
+        Grading only (1) leaves (2) an unexercised bypass; MOVING the grading from
+        (1) to (2) trades one bypass for the other and un-grades the first. Both,
+        or the claim "this seller refuses unsigned credential registrations" is
+        false about a surface nothing looked at.
+
+        MCP and REST return a single entry because they genuinely have one such
+        place, not because the others were not looked for. If a transport grows a
+        second, it is added HERE — the scenario text does not change, because the
+        scenario's claim ("a registration carrying credentials is refused unless
+        signed") never mentioned a location in the first place.
+
+        *config* is the ``push_notification_config`` the operation dispatch
+        carried; ``None`` means the caller registered no credentials, so there is
+        nothing to send anywhere else and only the operation entry comes back.
+        *signed* must match the operation dispatch's own, or the extra locations
+        would be a different experiment from the one the scenario set up.
+        """
+        location = _OPERATION_CREDENTIAL_LOCATION.get(transport.value, _UNSTATED_CREDENTIAL_LOCATION)
+        registrations: list[tuple[str, TransportResult]] = [(location, operation_result)]
+        if config is not None and transport.value == "a2a":
+            registrations.append(
+                (_A2A_PUSH_CONFIG_SET_LOCATION, self._a2a_credential_registration(config, signed=signed))
+            )
+        return tuple(registrations)
+
     # -- Request signing ----------------------------------------------------
 
     def _realize_e2e_request_signing(self) -> Any:
@@ -1331,12 +1471,7 @@ class BaseTestEnv:
         )
         response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
-        envelope = _jsonrpc_body(response, surface=_A2A_PATH)
-        if "error" in envelope:
-            from src.core.exceptions import AdCPError
-
-            raise AdCPError(f"A2A JSON-RPC error: {envelope['error']}")
-        result = envelope.get("result") or {}
+        result = _a2a_jsonrpc_result(response)
         # v1.0 wraps the task; v0.3 returns it bare. Accept both so this parse does
         # not silently start returning {} if the compat arm is ever retired.
         task = result.get("task", result)
@@ -1349,6 +1484,50 @@ class BaseTestEnv:
             artifact_data=artifact_data,
             response_cls=response_cls,
         )
+
+    def _a2a_credential_registration(self, config: Any, *, signed: bool) -> TransportResult:
+        """A2A's SECOND credential location, dispatched and wrapped like any other.
+
+        Wrapped through ``a2a_transport_result`` — the same wrapper
+        ``A2ADispatcher`` uses — so this result carries a refusal's raw HTTP
+        response exactly as an operation dispatch would, and
+        ``assert_signature_challenge`` can read the challenge off it. A second,
+        local way of turning a POST into a ``TransportResult`` would be free to
+        drop that response, and a dropped response is graded as "no evidence",
+        which reads like a harness bug rather than the acceptance it would be.
+        """
+        from tests.harness.dispatchers import a2a_transport_result
+
+        return a2a_transport_result(lambda: self._run_a2a_push_config_set(config, signed=signed))
+
+    def _run_a2a_push_config_set(self, config: Any, *, signed: bool) -> Any:
+        """POST ``tasks/pushNotificationConfig/set`` to ``/a2a`` on ``src.app.app``.
+
+        Same route, same middleware chain and the same ``wire_request`` seam as
+        ``_run_a2a_over_http`` — deliberately, because the ONLY difference this
+        leg is allowed to have from the ``message/send`` one is the JSON-RPC
+        method and where the credentials sit inside it. Anything else (a
+        different bearer, a missing tenant hint, a re-serialized body) would make
+        the two locations incomparable, and the finding is precisely that the
+        seller treats them differently.
+
+        ``credentialed=True``: the buyer registering a webhook IS authenticated.
+        That is not a convenience — the escalation at security.mdx @ v3.1.1
+        :1462-1465 is deliberately NOT subject to the composition rule's
+        bearer exemption, so an unsigned registration carrying a valid bearer is
+        exactly the request that must be refused.
+
+        Does NOT stash ``_last_wire_response``: the operation dispatch's capture
+        belongs to the operation dispatch, and overwriting it here would rewrite
+        the wire a success-path Then step reads.
+        """
+        from a2a.compat.v0_3 import types as v03
+
+        self._commit_factory_data()
+        body = _a2a_push_config_set_body(config, task_id=f"task_{uuid.uuid4().hex[:12]}")
+        raw, headers = self.wire_request(path=_A2A_PATH, body=body, signed=signed, credentialed=True)
+        response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
+        return v03.TaskPushNotificationConfig.model_validate(_a2a_jsonrpc_result(response))
 
     def _run_mcp_client(
         self,
