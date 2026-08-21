@@ -13,7 +13,7 @@ disagree. Concretely —
   their own STORED ``public_jwk`` (and not against the other's). This is the one
   mechanism that serves both rotation overlap and the webhook blast-radius
   isolation security.mdx:955 describes ("isolation comes from the ``kid``").
-  Resolution goes through ``resolve_signing_provider(..., kid=...)`` — a test
+  Resolution goes through ``_resolve_signing_provider(..., kid=...)`` — a test
   that hand-constructs ``InMemorySigningProvider`` grades nothing, and skips the
   tripwire it is supposed to be exercising.
 * The private half never leaves the row: it is stored as the PKCS#8

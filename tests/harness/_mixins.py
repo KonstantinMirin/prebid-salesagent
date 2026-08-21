@@ -951,7 +951,7 @@ class CircuitBreakerMixin:
         repo = signing_key_repo(self, self._tenant_id)  # type: ignore[attr-defined]
         # A random suffix, not a deterministic one: this scenario runs once PER
         # TRANSPORT (a2a/mcp/rest) against the SAME tenant_id, and
-        # resolve_signing_provider (provider.py) caches resolved key material for
+        # _resolve_signing_provider (provider.py) caches resolved key material for
         # 60s keyed by (tenant_id, kid) — a deterministic kid would let one
         # transport's run resolve a STALE PEM cached under another transport's
         # identical kid, verifying against the wrong key entirely.

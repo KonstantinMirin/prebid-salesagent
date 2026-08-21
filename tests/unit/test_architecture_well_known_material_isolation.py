@@ -5,7 +5,7 @@
 private key; the other three secret-free bootstrap documents never do)
 rested on convention, not enforcement — the shared ``DocumentBuilder`` type
 hands every handler the whole ``TrustRootUoW``, so any handler COULD call
-``resolve_signing_material``/``resolve_signing_provider`` without a type
+``resolve_signing_material``/``_resolve_signing_provider`` without a type
 error. This guard makes the invariant executable: an AST scan of
 ``src/routes/well_known.py`` for calls to either name, asserting they occur
 in exactly one named function.
@@ -29,7 +29,7 @@ from tests.unit._architecture_helpers import iter_call_expressions
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WELL_KNOWN_MODULE = REPO_ROOT / "src" / "routes" / "well_known.py"
 
-_MATERIAL_RESOLVERS = ("resolve_signing_material", "resolve_signing_provider")
+_MATERIAL_RESOLVERS = ("resolve_signing_material", "_resolve_signing_provider")
 
 
 def _functions_calling_material_resolvers(tree: ast.Module) -> set[str]:
@@ -61,7 +61,7 @@ def test_no_handler_resolves_signing_material():
     resolvers = _functions_calling_material_resolvers(tree)
     assert resolvers == set(), (
         "no well_known.py handler may resolve signing material directly "
-        "(resolve_signing_material/resolve_signing_provider) -- the three secret-free "
+        "(resolve_signing_material/_resolve_signing_provider) -- the three secret-free "
         "bootstrap documents must never touch private key material, and the revocation "
         f"list reaches it through publishable_revocation_list. Found: {sorted(resolvers)}"
     )
@@ -99,7 +99,7 @@ def handler_a(uow, tenant, now):
     return material
 
 def handler_b(uow, tenant, now):
-    return resolve_signing_provider(uow.signing_keys, tenant_id=tenant.tenant_id, now=now)
+    return _resolve_signing_provider(uow.signing_keys, tenant_id=tenant.tenant_id, now=now)
 """
 
 _ONE_HANDLER_SOURCE = """

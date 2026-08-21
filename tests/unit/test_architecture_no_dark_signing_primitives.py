@@ -106,20 +106,26 @@ SCOPE: tuple[str, ...] = (
 # (repo-relative module, public symbol) pairs known to be reached only from tests.
 #
 # SHRINK-ONLY. Each entry needs a `# FIXME(#<gh-issue>)` at the source location.
-ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(#1291): C1, the outbound webhook signer, HAS landed — and it consumes
-    # resolve_signing_material, not this. adcp.webhooks.WebhookSender's RFC 9421
-    # constructor takes a raw PrivateKey rather than a SigningProvider, so nothing in
-    # production needs the provider FORM. This is not dark code awaiting a caller: it
-    # is the second PROJECTION of a shared resolution path (row -> ref -> PEM ->
-    # revocation refusal -> published-JWK tripwire) whose sibling projection IS in
-    # production, and ~10 integration tests grade that shared path THROUGH this
-    # projection. Retiring it means deleting graded behaviour, and privatising it
-    # would satisfy this scan while changing nothing real. The source FIXME at
-    # src/core/signing/provider.py:316 carries the same reasoning; remove both
-    # together if the projection is ever genuinely retired.
-    ("src/core/signing/provider.py", "resolve_signing_provider"),
-}
+ALLOWLIST: set[tuple[str, str]] = set()
+# EMPTY, and it ships that way (#1757 B2). It briefly carried
+# ("src/core/signing/provider.py", "resolve_signing_provider") with a FIXME — but BOTH
+# the guard and the symbol are introduced by this PR, so that was an allowlist larger
+# than it started, and this guard's own fix hint forbids exactly that resolution: "Do NOT
+# add an allowlist entry to make this pass."
+#
+# The entry's argument was half right. resolve_signing_provider is NOT dead code: it and
+# resolve_signing_material are one-line projections of the same _resolve_cached call, and
+# ~10 integration tests grade that shared path THROUGH the provider form — including
+# provider.sign() and provider.key_id(), i.e. production's binding of resolved material
+# into an InMemorySigningProvider. Deleting it would make those tests construct that
+# themselves and grade a test-side copy.
+#
+# But the conclusion was wrong, and so was "delete it". The symbol is NOT on the layer's
+# facade — src/core/signing/__init__.py neither imports nor exports it — and that module's
+# docstring says everything below the package is private to the layer. So it was already
+# private BY THE LAYER'S OWN RULE and merely unmarked. It is now _resolve_signing_provider,
+# which this guard does not scan (see test_private_symbols_are_not_scanned), the
+# declaration matches the facade's contract, and no graded behaviour was removed.
 
 _FIX_HINT = (
     "A public symbol on the signing-credential surface is referenced from tests/ but from no live\n"

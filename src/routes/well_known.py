@@ -20,7 +20,7 @@ the revocation-list handler ever resolves signing MATERIAL (a private-key
 decrypt under the deployment KEK) — a structural guard
 (``tests/unit/test_architecture_well_known_material_isolation.py``) pins
 that exactly one named function in this module calls
-``resolve_signing_material``/``resolve_signing_provider``. The other three
+``resolve_signing_material``/``_resolve_signing_provider``. The other three
 handlers read only what they already read: ``publishable_at()`` and (for
 adagents.json) the authorized-property records. Each handler is its own
 closure over the shared ``(uow, tenant, now)`` — none receives a parameter

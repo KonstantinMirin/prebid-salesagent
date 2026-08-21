@@ -32,7 +32,7 @@ class SigningMaterial(NamedTuple):
     """The loaded private half of one signing key, plus how to name it on the wire.
 
     Two consumers need the SAME three values and must not resolve them twice:
-    :func:`resolve_signing_provider` binds them into an
+    :func:`_resolve_signing_provider` binds them into an
     ``InMemorySigningProvider`` for the RFC 9421 REQUEST signer, and C1's
     outbound webhook boundary (``src/core/signing/webhook_sender_factory``)
     hands them to ``adcp.webhooks.WebhookSender``, whose RFC 9421 constructor
@@ -313,13 +313,7 @@ def _resolve_cached(
     return entry
 
 
-# FIXME(#1291): still reached only from tests. C1 (the outbound webhook boundary)
-# landed and consumes :func:`resolve_signing_material` instead, because
-# ``adcp.webhooks.WebhookSender``'s RFC 9421 constructor takes a raw ``PrivateKey``
-# rather than a ``SigningProvider``. Nothing in production needs the provider FORM
-# yet; retiring it (or lighting it up) is tracked on #1291. Allowlisted in
-# tests/unit/test_architecture_no_dark_signing_primitives.py; remove both together.
-def resolve_signing_provider(
+def _resolve_signing_provider(
     repo: SigningKeyRepository,
     *,
     tenant_id: str,
@@ -352,7 +346,7 @@ def resolve_signing_material(
     """Return the loaded key *tenant_id* signs *purpose* with at *now*.
 
     Same resolution, same cache and the same published-JWK tripwire as
-    :func:`resolve_signing_provider` — only the projection differs. This is the
+    :func:`_resolve_signing_provider` — only the projection differs. This is the
     form ``adcp.webhooks.WebhookSender`` needs (``private_key`` / ``key_id`` /
     ``alg``), so C1's outbound webhook boundary calls it rather than unwrapping a
     provider's private attribute.

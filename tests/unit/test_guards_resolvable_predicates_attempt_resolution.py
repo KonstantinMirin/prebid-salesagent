@@ -5,7 +5,7 @@ whenever SOME passphrase was configured, never attempting the real decrypt --
 presence was mistaken for correctness. This guard bans that shape going
 forward: any function in src/core/signing/*.py whose name promises
 resolvability (matches "*resolvable*") must call one of the real resolution
-functions (resolve_signing_material / resolve_signing_provider) somewhere in
+functions (resolve_signing_material / _resolve_signing_provider) somewhere in
 its body, or be explicitly allowlisted with a stated reason (e.g. a predicate
 that is honestly scoped to configuration-presence only, which should be named
 "*_configured", not "*_resolvable" -- see the sibling *_configured predicates
@@ -20,7 +20,7 @@ import ast
 from tests.unit._architecture_helpers import REPO_ROOT
 
 _SIGNING_DIR = REPO_ROOT / "src" / "core" / "signing"
-_REAL_RESOLVERS = {"resolve_signing_material", "resolve_signing_provider"}
+_REAL_RESOLVERS = {"resolve_signing_material", "_resolve_signing_provider"}
 
 # Format: relative_path_from_repo_root::function_name
 # Pre-existing violations that predate this guard. The list can only shrink.
@@ -59,14 +59,14 @@ def _scan() -> set[str]:
 
 class TestResolvablePredicatesAttemptResolution:
     """Every '*resolvable*'-named function in src/core/signing/ must actually
-    attempt resolution (resolve_signing_material / resolve_signing_provider),
+    attempt resolution (resolve_signing_material / _resolve_signing_provider),
     not merely check configuration presence."""
 
     def test_no_presence_only_resolvable_predicates(self):
         violations = _scan()
         assert not violations, (
             "functions named '*resolvable*' in src/core/signing/ that never call "
-            "resolve_signing_material/resolve_signing_provider -- a name promising "
+            "resolve_signing_material/_resolve_signing_provider -- a name promising "
             "resolvability must attempt resolution, not just check configuration "
             "presence (rename to '*_configured' if presence-only is the honest "
             "contract):\n" + "\n".join(f"  - {v}" for v in sorted(violations))

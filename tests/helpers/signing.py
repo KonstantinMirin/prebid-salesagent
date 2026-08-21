@@ -299,9 +299,9 @@ def resolve_provider(
     purpose: str = REQUEST_SIGNING,
 ) -> Any:
     """Resolve a SigningProvider through production (row -> ref -> PEM -> tripwire)."""
-    from src.core.signing.provider import resolve_signing_provider
+    from src.core.signing.provider import _resolve_signing_provider
 
-    return resolve_signing_provider(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid)
+    return _resolve_signing_provider(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid)
 
 
 # ---------------------------------------------------------------------------
