@@ -394,8 +394,10 @@ class WebhookDeliveryService:
                     logger.debug(f"⚠️ No webhooks configured for {tenant_id}/{principal_id}")
                     return False
 
-                # Send to all configured webhooks
-                sent_count = 0
+                # PHASE 1 — everything that needs the session: read the receiver rows,
+                # apply the gates, project to primitives, enqueue. Nothing here waits on
+                # a network.
+                pending: list[tuple[str, CircuitBreaker, WebhookQueue]] = []
                 for config in configs:
                     safe_url = webhook_url_for_log(config.url)
                     # Skip auth-blocked endpoints (UC-004-EXT-G-07)
@@ -459,16 +461,24 @@ class WebhookDeliveryService:
                         logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
                         continue
 
-                    # Deliver from queue with enhanced features
-                    if self._deliver_with_backoff(endpoint_key, circuit_breaker, queue):
-                        sent_count += 1
+                    pending.append((endpoint_key, circuit_breaker, queue))
 
-                if sent_count > 0:
-                    logger.debug(f"✅ Delivery webhook sent to {sent_count} endpoint(s)")
-                    return True
-                else:
-                    logger.warning("⚠️ Failed to deliver webhook to any endpoint")
-                    return False
+            # PHASE 2 — the session is CLOSED. ``_deliver_with_backoff`` sleeps between
+            # retries and POSTs to a buyer-supplied URL, so a connection held here would
+            # be parked on a third party's latency: a hanging receiver would consume a
+            # pooled connection for the whole backoff. Nothing below needs a session —
+            # the queue carries primitives (``QueuedWebhook``) and ``_signing_repo``
+            # opens its own short one for the key read (#1757, salesagent-n78j0.4).
+            sent_count = 0
+            for endpoint_key, circuit_breaker, queue in pending:
+                if self._deliver_with_backoff(endpoint_key, circuit_breaker, queue):
+                    sent_count += 1
+
+            if sent_count > 0:
+                logger.debug(f"✅ Delivery webhook sent to {sent_count} endpoint(s)")
+                return True
+            logger.warning("⚠️ Failed to deliver webhook to any endpoint")
+            return False
 
         except Exception as e:
             logger.error(f"❌ Error in webhook delivery: {e}", exc_info=True)
