@@ -66,7 +66,13 @@ class _DeferredEffect:
     already succeeded into an error.
     """
 
-    fn: Callable[[], Any]
+    #: Named ``run``, not ``fn``: a repo invariant (``check_repo_invariants``)
+    #: forbids attribute-``fn`` calls anywhere in ``src/``, because that spelling
+    #: is how a FastMCP tool's undecorated function gets invoked past the
+    #: transport boundary. The rule is a substring match over the raw line with
+    #: no allowlist -- so this callable field carries the other name rather than
+    #: an exemption, and this comment cannot spell the banned form either.
+    run: Callable[[], Any]
     label: str
     fatal: bool = False
 
@@ -155,7 +161,7 @@ def register_after_commit(
             "and nothing would ever run it. Register it inside the `with ...UoW(...)` block whose "
             "commit should release it."
         )
-    scope.queue.append(_DeferredEffect(fn=fn, label=label, fatal=fatal))
+    scope.queue.append(_DeferredEffect(run=fn, label=label, fatal=fatal))
 
 
 def is_preview(session: Session) -> bool:
@@ -192,7 +198,7 @@ def drain_after_commit(session: Session) -> None:
             return
         for effect in queued:
             try:
-                effect.fn()
+                effect.run()
             except Exception:
                 if effect.fatal:
                     raise
