@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
+from tests.bdd.steps.generic._dispatch import record_transport_result
 from tests.harness.transport import Transport
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -66,13 +67,7 @@ def _call_via(
 
     try:
         result = env.call_via(t, **kwargs)
-        if result.is_error:
-            ctx["error"] = result.error
-        else:
-            ctx["response"] = result.payload
-            # Real serialized wire (REST/A2A/MCP); None on IMPL — surfaced for
-            # success-path wire-shape steps (e.g. format_id federation contract).
-            ctx["wire_response"] = result.wire_response
+        record_transport_result(ctx, result)
     except Exception as exc:
         ctx["error"] = exc
 
