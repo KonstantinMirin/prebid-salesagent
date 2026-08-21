@@ -37,7 +37,7 @@ from tests.helpers.ledger import load_ledger_nodeids
 # --- mcp half ---
 # RE-SEEDED from the in-network run test-results/innet_130826_0940, taken WITH the
 # version-envelope fix (GH #1512) live. Current measured total, through
-# scripts.audit.ledger.load: 75 entries (43 mcp + 32 a2a).
+# scripts.audit.ledger.load: 101 entries (69 mcp + 32 a2a).
 #
 # The docstring's note above about #1512 is now history: the capability probe is no
 # longer rejected, so the runner reads our capabilities and gates on them. That
