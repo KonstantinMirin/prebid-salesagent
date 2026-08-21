@@ -2047,11 +2047,6 @@ async def _create_media_buy_impl(
             validate_setup_complete(tenant["tenant_id"])
         except SetupIncompleteError as e:
             # Return helpful error with missing tasks
-            task_list = "\n".join(f"  - {task['name']}: {task['description']}" for task in e.missing_tasks)
-            error_msg = (
-                f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
-                f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
-            )
             raise AdCPConfigurationError(
                 details={
                     "missing_tasks": [t["name"] for t in e.missing_tasks],
@@ -2182,8 +2177,7 @@ async def _create_media_buy_impl(
 
         # Validate start_time
         if req.start_time is None:
-            error_msg = "start_time is required"
-            raise AdCPValidationError()
+            raise AdCPValidationError(field="start_time")
 
         # Handle 'asap' start_time (AdCP v1.7.0)
         # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
@@ -2218,8 +2212,7 @@ async def _create_media_buy_impl(
 
         # Validate end_time
         if req.end_time is None:
-            error_msg = "end_time is required"
-            raise AdCPValidationError()
+            raise AdCPValidationError(field="end_time")
 
         # Ensure end_time is timezone-aware for comparison
         computed_end_time: datetime = req.end_time
@@ -2253,15 +2246,13 @@ async def _create_media_buy_impl(
             f"DEBUG: Request packages: {[{'product_id': p.product_id, 'bid_price': p.bid_price, 'pricing_option_id': p.pricing_option_id} for p in (req.packages or [])]}"
         )
         if not product_ids:
-            error_msg = "At least one product is required."
-            raise AdCPValidationError()
+            raise AdCPValidationError(field="packages")
 
         if req.packages:
             for package in req.packages:
                 # Check product_id field per AdCP spec
                 if not package.product_id:
-                    error_msg = "Package must specify product_id."
-                    raise AdCPValidationError()
+                    raise AdCPValidationError(field=package_field_path("product_id"))
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}
@@ -2298,8 +2289,8 @@ async def _create_media_buy_impl(
             # Validate all requested product_ids exist
             missing_product_ids = set(product_ids) - set(product_map.keys())
             if missing_product_ids:
-                error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
                 raise AdCPProductNotFoundError(
+                    details={"missing_product_ids": sorted(missing_product_ids)},
                     field=package_field_path("product_id"),
                 )
 
@@ -2613,7 +2604,15 @@ async def _create_media_buy_impl(
 
                     violations = unknown_violations + access_violations + geo_overlap_violations
                     if violations:
-                        error_msg = f"Targeting validation failed: {'; '.join(violations)}"
+                        # NOT routed to details, deliberately. All three validators return
+                        # RENDERED SENTENCES ("weather_targeting is not a recognized targeting
+                        # field", "key_value_pairs is managed-only and cannot be set via
+                        # overlay"), and a sentence in details is the message smuggled back in
+                        # -- the one thing salesagent-3dawm.9 forbids. Routing this needs
+                        # validate_unknown_targeting_fields / validate_overlay_targeting /
+                        # validate_geo_overlap (src/services/targeting_capabilities.py) to
+                        # return the offending KEYS instead, which is a wider change than that
+                        # step's boundary. The buyer keeps the code plus field= until then.
                         raise AdCPInvalidRequestError(
                             field="targeting_overlay",
                         )
@@ -3131,9 +3130,6 @@ async def _create_media_buy_impl(
                     )
 
             if config_errors:
-                error_detail = "GAM configuration validation failed:\n" + "\n".join(
-                    f"  • {err}" for err in config_errors
-                )
                 raise AdCPValidationError(
                     details={"config_errors": config_errors},
                     context=req.context,
@@ -3226,8 +3222,10 @@ async def _create_media_buy_impl(
             pkg_product_id = pkg.product_id
 
             if not pkg_product_id:
-                error_msg = f"Package {idx} has no product_id field set"
-                raise AdCPValidationError()
+                raise AdCPValidationError(
+                    details={"package_index": idx},
+                    field=package_field_path("product_id"),
+                )
 
             pkg_product: Product | None = None
             for p in products_in_buy:
@@ -3236,11 +3234,13 @@ async def _create_media_buy_impl(
                     break
 
             if not pkg_product:
-                error_msg = f"Package {idx} references unknown product_id: {pkg_product_id}"
                 # Defensive: the primary product-existence check above
                 # (AdCPProductNotFoundError) catches missing products first, so this
                 # per-package branch is suite-invisible — typed for guard parity.
-                raise AdCPProductNotFoundError()
+                raise AdCPProductNotFoundError(
+                    details={"package_index": idx, "product_id": pkg_product_id},
+                    field=package_field_path("product_id"),
+                )
 
             # Determine format_ids to use
             format_ids_to_use: list[FormatId] = []

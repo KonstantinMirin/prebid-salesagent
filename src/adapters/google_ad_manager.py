@@ -608,7 +608,6 @@ class GoogleAdManager(AdServerAdapter):
                     workflow_step_id=step_id,
                 )
             else:
-                error_msg = "Failed to create manual order workflow step"
                 raise AdCPWorkflowError()
 
         # Automatic mode - create order directly

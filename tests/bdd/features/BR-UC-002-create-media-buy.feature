@@ -165,9 +165,14 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "PRODUCT_NOT_FOUND"
     And the error recovery should be "correctable"
+    And the wire error details should include missing_product_ids "prod-nonexistent"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
-    # POST-F2: Buyer knows what failed
+    # POST-F2: Buyer knows what failed -- the id the request named reaches the buyer as a
+    # VALUE in errors[0].details, not in the message, which is a function of the CODE
+    # through CODE_TABLE and cannot carry request data. Before salesagent-3dawm.9 the guard
+    # computed this id into a local and the raise discarded it, so it reached neither the
+    # buyer's wire nor the server log.
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-c: DateTime Validation Failure ---
 
