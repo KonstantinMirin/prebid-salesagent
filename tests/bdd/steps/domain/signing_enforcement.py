@@ -1,0 +1,144 @@
+"""Steps for the inbound request-signature enforcement scenarios (salesagent-n78j0.1.3).
+
+Every step here is TRANSPORT-BLIND, and that is the whole reason the file exists.
+The property under test — a signed request accepted, an unsigned one refused,
+identically on every transport — is a CROSS-transport property, so a step that
+learned which transport it was on could not grade it: it would be four claims that
+happen to be spelled alike. Signing, the posture write, the credential location and
+the verification oracle are all realized by the ENV
+(``tests.harness.signing_capability``, ``BaseTestEnv.declare_request_signing`` /
+``signature_verifications``), which is the one place transport knowledge is allowed.
+
+Spec grounding, pinned AdCP 3.1.1 (``adcp==6.6.0``), all in
+``v3.1.1:dist/docs/3.1.1/building/by-layer/L1/security.mdx``:
+
+* :1268-1269 the composition rule — an unsigned request to a ``required_for``
+  operation is refused only when the caller presents no credential the agent accepts;
+* :1375 / :1462-1465 the payload escalation — a seller that SUPPORTS request signing
+  MUST require a signature when the request carries webhook ``authentication``,
+  "regardless of ``required_for`` membership";
+* graded by ``dist/compliance/3.1.1/test-vectors/request-signing/negative/
+  027-webhook-registration-authentication-unsigned.json``, whose
+  ``verifier_capability`` is ``{supported: true, required_for: []}``.
+"""
+
+from __future__ import annotations
+
+from pytest_bdd import given, parsers, then
+
+#: A credential long enough for production's own boundary. ``Authentication.credentials``
+#: carries ``MinLen=32`` on the pinned model, so a shorter placeholder would be rejected
+#: as a validation error — a scenario that exists to prove the request is refused for the
+#: MISSING SIGNATURE would then pass for the wrong reason on any transport that validated
+#: before the verifier ran.
+_WEBHOOK_CREDENTIAL = "harness-webhook-shared-secret-0123456789"
+
+#: The buyer's webhook endpoint. Under an RFC 2606/6761 reserved TLD so no seller-side
+#: reachability check can turn into a real network dial (``.example``); the request never
+#: gets that far in these scenarios, and it must not be able to.
+_WEBHOOK_URL = "https://buyer.example/webhooks/adcp/creative"
+
+
+@given("the Buyer Agent has published a signing key the seller can resolve")
+def given_buyer_publishes_signing_key(ctx: dict) -> None:
+    """Mint this buyer's key and publish it through its own trust root.
+
+    "The seller can resolve it" is the substance: in process the counterparty's whole
+    ``AgentResolution`` is seeded into the middleware's cache; over e2e the key is
+    PUBLISHED on a counterparty origin and the server reaches it by its own
+    ``agent_url -> capabilities -> brand.json -> jwks_uri`` walk. The step says neither.
+
+    Required by ALL THREE scenarios, including the two that dispatch UNSIGNED: once an
+    env can sign, both its signed and its unsigned dispatches travel the same real HTTP
+    path carrying the same bearer and tenant hint, so the two differ by exactly one
+    variable — the signature. Without it an unsigned dispatch is a different experiment.
+    """
+    ctx["env"].enable_request_signing()
+
+
+@given(parsers.parse('the seller requires a request signature for "{operation}"'))
+def given_seller_requires_signature_for(ctx: dict, operation: str) -> None:
+    """Declare ``required_for: [operation]`` as the seller's REAL posture.
+
+    Stored on the tenant and read back by production (``CapabilityDeclarations.from_tenant``
+    -> ``posture_for_tenant`` -> ``bucket_for``), never patched in. Naming the operation
+    explicitly is what leaves every OTHER operation in the ``none`` bucket, so the
+    refusal below is attributable to this declaration.
+    """
+    ctx["env"].declare_request_signing(required_for=[operation])
+
+
+@given("the seller supports request signatures but requires them for no operation")
+def given_seller_supports_signatures_only(ctx: dict) -> None:
+    """Declare the pinned vector's own ``{supported: true, required_for: []}``.
+
+    Load-bearing that ``required_for`` stays EMPTY: with the operation in it, the
+    refusal that follows could come from the composition rule, and the scenario would
+    stop grading the payload escalation it exists for
+    (vector 027, ``verifier_capability``).
+    """
+    ctx["env"].declare_request_signing()
+
+
+@given("the Buyer Agent signs the request")
+def given_buyer_signs_the_request(ctx: dict) -> None:
+    """Ask for a REAL RFC 9421 signature on the request this scenario is about to send.
+
+    What "signed" means per transport — which bytes, which headers, which path — is the
+    dispatcher's business (``BaseTestEnv.wire_request``). A transport that cannot sign
+    REFUSES rather than sending an unsigned request, so this can never silently degrade
+    into the control it is being compared against.
+    """
+    ctx["signed"] = True
+
+
+@given("the request registers a webhook whose authentication carries credentials")
+def given_request_registers_authenticated_webhook(ctx: dict) -> None:
+    """Attach a ``push_notification_config`` carrying an ``authentication`` block.
+
+    This is the escalation's trigger, in the buyer's own words: "register this webhook,
+    here are the credentials for it". WHERE those credentials sit on the wire is the
+    transport's business and is genuinely NOT the same place on each one — the AdCP
+    request body on REST, the ``tools/call`` arguments on MCP, and the A2A protocol
+    envelope (``params.configuration.task_push_notification_config``) on A2A, which is
+    where ``src/a2a_server/adcp_a2a_server.py:657-659`` READS it. The env owns that
+    placement; the scenario states only the intent.
+
+    Spec: security.mdx @ v3.1.1 :1462-1465, ``push_notification_config.authentication``
+    named verbatim as a trigger; the pinned vector 027 registers exactly this shape.
+    """
+    ctx["push_notification_config"] = {
+        "url": _WEBHOOK_URL,
+        "authentication": {"scheme": "HMAC-SHA256", "credentials": _WEBHOOK_CREDENTIAL},
+    }
+
+
+@then(parsers.parse('the seller answers with the request-signature challenge "{code}"'))
+def then_signature_challenge(ctx: dict, code: str) -> None:
+    """Grade the ``WWW-Authenticate: Signature error="<code>"`` challenge, byte-exactly.
+
+    Through the harness helper, which is the single way a request-signature refusal may
+    be graded: it refuses a code outside the SDK's own ``REQUEST_SIGNATURE_*``
+    vocabulary, and FAILS (rather than passing for want of evidence) on a result that
+    carries no raw HTTP response. ``status_code == 401`` is deliberately not the
+    assertion — see ``TransportResult.assert_signature_challenge``.
+    """
+    ctx["result"].assert_signature_challenge(code)
+
+
+@then(parsers.parse("the seller verified exactly {count:d} request under the Buyer Agent's published key"))
+def then_seller_verified_requests(ctx: dict, count: int) -> None:
+    """Pin how many requests the seller's verifier ACCEPTED under THIS buyer's key.
+
+    ``== count`` rather than "at least one": zero means the request never reached the
+    verifier (the posture collapsed to ``none``, or the leg never put bytes on a wire),
+    and more than one means frames that are not graded operations — an MCP session's
+    ``initialize`` / ``notifications/initialized`` — were verified as if they were.
+    """
+    verified = ctx["env"].signature_verifications()
+    assert verified == count, (
+        f"the seller's verifier accepted {verified} request(s) under this buyer's key, expected {count}. "
+        "0 means the signature was never verified — the request was waved through unverified (bucket "
+        "'none'), or the leg dispatched without putting bytes on a wire; more than expected means "
+        "transport session frames were graded as operations."
+    )

@@ -278,10 +278,15 @@ def when_sync_creative(ctx: dict) -> None:
     Honors ``ctx["has_auth"] is False`` by passing ``identity=ctx["identity"]``
     (typically None or a principal-less identity) so the auth boundary check
     in _sync_creatives_impl fires.
+
+    ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch
+    (salesagent-n78j0.1.3). It is forwarded rather than branched on: what a signature
+    IS on each transport belongs to the dispatcher, and defaulting to False keeps
+    every existing scenario byte-identical.
     """
     account_ref = ctx.get("account_ref")
     creatives = ctx.get("creatives", [])
-    kwargs: dict = {"account": account_ref, "creatives": creatives}
+    kwargs: dict = {"account": account_ref, "creatives": creatives, "signed": ctx.get("signed", False)}
     if "assignments" in ctx:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:

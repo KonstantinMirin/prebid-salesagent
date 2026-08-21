@@ -70,6 +70,20 @@ def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
     return _envelope_from_adcp_error(exc)
 
 
+def _refusal_response(exc: Exception) -> Any | None:
+    """The raw HTTP response a JSON-RPC leg was refused with, if it was.
+
+    The ``/a2a`` and ``/mcp`` legs read an ENVELOPE, so a refusal that never
+    produced one (the verifier's bodyless 401) can only be graded from the
+    response itself. ``_base.WireRefusal`` carries it; every other exception
+    yields ``None``, which ``assert_signature_challenge`` reports as "no raw HTTP
+    response" rather than passing for want of evidence.
+    """
+    from tests.harness._base import WireRefusal
+
+    return exc.response if isinstance(exc, WireRefusal) else None
+
+
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
     """Extract the wire envelope from an MCP ToolError's JSON string."""
     from fastmcp.exceptions import ToolError
@@ -194,6 +208,7 @@ class A2ADispatcher:
             return TransportResult(
                 error=exc,
                 wire_error_envelope=_wire_envelope_from_exception(exc),
+                raw_response=_refusal_response(exc),
             )
         # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
         # (declared on BaseTestEnv, reset per call_via — read directly so a
@@ -298,6 +313,7 @@ class McpDispatcher:
                 # What production WOULD emit for the same exception — see the
                 # ImplDispatcher caveat; never a substitute for the wire field.
                 synthesized_error_envelope=_envelope_from_adcp_error(exc),
+                raw_response=_refusal_response(exc),
             )
         # Real MCP wire: the structured_content dict stashed by _run_mcp_client
         # (declared on BaseTestEnv, reset per call_via — read directly).
@@ -327,17 +343,17 @@ class RestE2EDispatcher:
     the same seam the three in-process legs use, which owns all three rules a
     signed request obeys (serialize once and send exactly those bytes; carry the
     same credential and tenant hint whether or not you sign; one identity, on
-    ``Authorization``). Two things are this leg's OWN, and both are stated at the
-    call site rather than inside that seam because only this leg has them:
+    ``Authorization``, and the env's own tenant hint). ONE thing is this leg's OWN
+    and is stated at the call site rather than inside that seam, because only this
+    leg has it: the ORIGIN is the live stack's, port included — nginx forwards
+    ``Host`` verbatim and ``_verify_url`` rebuilds the authority from it.
 
-    * the ORIGIN is the live stack's, port included — nginx forwards ``Host``
-      verbatim and ``_verify_url`` rebuilds the authority from it;
-    * the tenant hint names the env's tenant, because ``request_headers``
-      otherwise injects the in-process ``sig_tenant``, which does not exist in
-      the live database. A header asserting a tenant other than the one being
-      addressed is a lie inside the signed byte range, and one ladder reordering
-      away from collapsing the posture bucket to ``none`` — an unverified
-      pass-through wearing a 200.
+    The tenant hint used to be this leg's too, for a reason that has since become
+    every leg's: ``request_headers`` injected the module-level ``sig_tenant``, which
+    does not exist in the live database, and a header asserting a tenant other than
+    the one being addressed is a lie inside the signed byte range — one ladder
+    reordering away from collapsing the posture bucket to ``none``, an unverified
+    pass-through wearing a 200. ``wire_request`` now sets it for all four legs.
     """
 
     def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
@@ -378,7 +394,7 @@ class RestE2EDispatcher:
         if env.can_sign:
             from tests.helpers.signing import wire_origin
 
-            extra = {"x-adcp-tenant": env._tenant_id}
+            extra = {}
             if "x-dry-run" in headers:
                 extra["x-dry-run"] = headers["x-dry-run"]
             raw, headers = env.wire_request(

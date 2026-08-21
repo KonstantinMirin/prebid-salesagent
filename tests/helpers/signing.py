@@ -115,7 +115,10 @@ def wire_origin(url: str) -> str:
 
 
 #: The seller tenant and the buyer's principal within it. Shared so the three
-#: in-process suites address the same rows and one ``seed_principal`` serves all.
+#: in-process suites address the same rows. An env that SIGNS no longer takes its
+#: identity from here — it signs as its OWN tenant/principal
+#: (``tests.harness.signing_capability.attach_agent_url``, owner decision D3), and a
+#: suite that wants these ids constructs its env with them.
 SIGNING_TENANT_ID = "sig_tenant"
 SIGNING_PRINCIPAL_ID = "sig_principal"
 
@@ -328,9 +331,9 @@ def declared_posture(*, tenant_id: str = SIGNING_TENANT_ID, **declaration: Any) 
     ``src.core.agent_identity``, never a literal: any non-empty bucket fires the
     pinned ``required_when`` trigger, and the capabilities read path additionally
     cross-checks a declared pointer against the served one. That is why
-    :func:`seed_principal` gives the tenant a DOTTED ``virtual_host`` — on
-    ``localhost`` the derived pointer is ``http://`` and the pin's ``^https://``
-    would (correctly) refuse the whole declaration.
+    :func:`tests.harness.signing_capability.attach_agent_url` gives the tenant a
+    DOTTED ``virtual_host`` — on ``localhost`` the derived pointer is ``http://``
+    and the pin's ``^https://`` would (correctly) refuse the whole declaration.
 
     Restores the previous stored value on exit, so a suite that declares different
     postures across tests does not inherit the last one.
@@ -376,7 +379,7 @@ def _declare(tenant_id: str, declaration: dict[str, Any]) -> dict[str, Any] | No
         tenant = uow.tenant_config.get_tenant()
         assert tenant is not None, (
             f"declared_posture needs tenant {tenant_id!r} to exist before a declaration can be stored "
-            "on it — seed it (seed_principal / TenantFactory) first"
+            "on it — seed it (env.setup_default_data() / TenantFactory) first"
         )
         previous = tenant.capability_declarations
         tenant.capability_declarations = posture_declaration_document(tenant, declaration)
@@ -785,6 +788,47 @@ def scraped_counter_samples(text: str, sample_name: str, **labels: str) -> dict[
     return out
 
 
+#: Flask's admin app is mounted at ``/`` as well as ``/admin`` (``src/app.py``), in the
+#: same process as the ASGI middleware, and the route carries no ``@require_auth``.
+METRICS_PATH = "/metrics"
+
+
+def scraped_verified_count(base_url: str, key_id: str, *, when: str = "now") -> float:
+    """This key's ``adcp_request_signature_verified_total`` total, scraped off a LIVE stack.
+
+    The out-of-process oracle for "the verifier ran and ACCEPTED this signature", and
+    the only one available across a container boundary: ``verifier_spy`` patches the
+    verifier in the RUNNER's process while the live server's verifier runs in another.
+    ``record_signature_verified`` has ONE call site in ``src/``
+    (``request_verifier_middleware``), on the branch reached only after the verifier
+    returns AND Tier 3 passes, so a non-zero total for a per-capability ``keyid``
+    (``signing_capability.unique_run_id``) is a claim about THIS env's requests rather
+    than about the server's cumulative session.
+
+    Both guards are load-bearing rather than defensive: a 404 scrape and an empty
+    exposition each yield "no samples", which reads exactly like "the mechanism did not
+    run" — the one thing this grading exists to tell apart. They FAIL, naming *when* the
+    scrape was taken, instead of returning a vacuous 0.
+
+    One definition, two callers (the e2e leg of ``env.signature_verifications()`` and
+    ``tests/integration/test_harness_signed_dispatch.py``'s live-stack pair), so the two
+    cannot drift into two ways of reading the same counter.
+    """
+    import httpx
+
+    response = httpx.get(f"{base_url}{METRICS_PATH}", timeout=30)
+    assert response.status_code == 200, (
+        f"the {when} metrics scrape must reach the Prometheus endpoint; GET {METRICS_PATH} returned HTTP "
+        f"{response.status_code}. STOP and fix the scrape rather than falling back to the other "
+        f"assertions — they do not grade the same thing. Body: {response.text[:300]!r}"
+    )
+    assert "# HELP" in response.text, (
+        f"the {when} metrics scrape returned HTTP 200 but no Prometheus exposition text, so a zero count "
+        f"would mean nothing. Body: {response.text[:300]!r}"
+    )
+    return sum(scraped_counter_samples(response.text, VERIFIED_METRIC, keyid=key_id).values())
+
+
 def _unescape_label_value(value: str) -> str:
     """Undo the Prometheus text format's label-value escaping."""
     for escaped, literal in _SCRAPED_UNESCAPES:
@@ -873,29 +917,6 @@ def keypair_for(kid: str) -> tuple[Any, dict[str, Any]]:
 
     pem, public_jwk = generate_signing_keypair(alg="ed25519", kid=kid, purpose=REQUEST_SIGNING)
     return load_private_key_pem(pem), {"keys": [public_jwk]}
-
-
-def seed_principal(env: Any, *, agent_url: str | None = COUNTERPARTY_AGENT_URL) -> str:
-    """Create the shared tenant + a Principal carrying *agent_url*; return its token.
-
-    ``Principal.agent_url`` (nullable ``String(500)``) is the onboarding record,
-    and the only legitimate source for the counterparty's agent URL. Pass
-    ``agent_url=None`` to grade what the verifier does when onboarding never
-    recorded one.
-
-    *env* is the live :class:`~tests.harness._base.BareIntegrationEnv`: it is not
-    read here, but the factories below write through the session that entering the
-    env bound to them, so taking it as an argument is what pins the ordering.
-    """
-    from tests.factories import PrincipalFactory, TenantFactory
-
-    tenant = TenantFactory(tenant_id=SIGNING_TENANT_ID, virtual_host=SIGNING_AGENT_HOST)
-    principal = PrincipalFactory(
-        tenant=tenant,
-        principal_id=SIGNING_PRINCIPAL_ID,
-        agent_url=agent_url,
-    )
-    return principal.access_token
 
 
 #: Both signature headers present, neither parseable — the malformed-signature

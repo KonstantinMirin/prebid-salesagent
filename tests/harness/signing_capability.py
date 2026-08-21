@@ -44,14 +44,15 @@ it and resolves the counterparty itself: ``_bearer_token``
 (``request_verifier_middleware.py:585``) reads the caller's token and
 ``token -> Principal -> agent_url`` is the key-resolution input. A dependency
 override is invisible to it, so a signed request must carry a REAL bearer whose
-Principal row records ``agent_url``. That is why this capability seeds a
-principal instead of reusing the env's mock identity.
+Principal row records ``agent_url``. That is why this capability writes to the
+env's OWN Principal row (:func:`attach_agent_url`) instead of relying on the env's
+mock identity — one acting identity, recorded where production reads it.
 """
 
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -63,6 +64,13 @@ class SigningCapability:
     ``private_key``/``key_id`` sign; ``jwks`` is what the verifier resolves to
     when it walks the counterparty's trust root; ``token`` is the bearer that
     ties the request back to the Principal carrying ``agent_url``.
+
+    ``verifications`` is the in-process observation of what the REAL verifier was
+    handed and what it returned (:func:`tests.helpers.signing.verifier_spy`), open
+    from the moment the capability exists so a caller does not have to wrap the
+    dispatch it wants to observe. Empty on the e2e realization, which cannot see
+    another container's verifier and reads the scraped counter instead — the fork
+    lives on :meth:`BaseTestEnv.signature_verifications`, not here.
     """
 
     private_key: Any
@@ -70,6 +78,7 @@ class SigningCapability:
     token: str
     key_id: str
     agent_url: str
+    verifications: list[dict[str, Any]] = field(default_factory=list)
 
 
 class _ExitStackPatcher:
@@ -121,21 +130,38 @@ def build_signing_capability(env: Any) -> SigningCapability:
 
     Registers teardown on *env* so the seeded resolution is torn down with the
     env, not left in the process-global ``AGENT_RESOLUTION_CACHE``.
+
+    The counterparty is THE ENV'S OWN principal (:func:`attach_agent_url`), the same
+    rule the e2e realization already obeyed, and not a second hardcoded
+    ``sig_tenant``/``sig_principal`` pair. Two reasons, and the second is why this
+    changed: owner decision D3 — once an env can sign there is exactly ONE acting
+    identity, so a signed and an unsigned dispatch differ by the signature and
+    nothing else; and a capability minted in a tenant OTHER than the env's makes
+    every signed dispatch carry a bearer and an ``x-adcp-tenant`` naming a tenant
+    the scenario never set up, which is unusable from a BDD env (whose tenant comes
+    from its Givens) and was silently fine only because the one caller constructed
+    its env with those very ids.
     """
     from tests.helpers.signing import (
         COUNTERPARTY_AGENT_URL,
         COUNTERPARTY_KID,
         counterparty_key,
         keypair_for,
-        seed_principal,
+        verifier_spy,
     )
 
     key_id = f"{COUNTERPARTY_KID}-{unique_run_id()}"
     private_key, jwks = keypair_for(key_id)
-    token = seed_principal(env, agent_url=COUNTERPARTY_AGENT_URL)
+    token = attach_agent_url(env, COUNTERPARTY_AGENT_URL)
 
     stack = ExitStack()
     stack.enter_context(counterparty_key(jwks))
+    # Opened HERE rather than around a dispatch: the positive oracle
+    # (``VerifiedSigner.key_id``) has to be readable from a Then step that never
+    # saw the When, and a spy is pure observation — the real verifier still runs
+    # and still decides, so leaving it open for the env's life costs nothing and
+    # removes the "wrap the right call" failure mode from every caller.
+    verifications = stack.enter_context(verifier_spy())
     env._patchers.append(_ExitStackPatcher(stack))
 
     return SigningCapability(
@@ -144,6 +170,7 @@ def build_signing_capability(env: Any) -> SigningCapability:
         token=token,
         key_id=key_id,
         agent_url=COUNTERPARTY_AGENT_URL,
+        verifications=verifications,
     )
 
 
@@ -185,7 +212,7 @@ def build_e2e_signing_capability(env: Any) -> SigningCapability:
     agent_url = slot_agent_url(run_id)
 
     _publish_jwks(config, slot_control_path(run_id), jwks)
-    token = _attach_agent_url(env, agent_url)
+    token = attach_agent_url(env, agent_url)
 
     # The published trust root, read back as the SERVER will read it. A slot that
     # answers 404 or serves an empty keyset must fail HERE, naming the origin,
@@ -258,27 +285,52 @@ def _publish_jwks(config: Any, control_path: str, jwks: dict[str, Any]) -> None:
     _counterparty_request(config, "PUT", f"{PUBLIC_ORIGIN}{control_path}", json=jwks)
 
 
-def _attach_agent_url(env: Any, agent_url: str) -> str:
+def attach_agent_url(env: Any, agent_url: str) -> str:
     """Record *agent_url* on the env's own Principal row; return its bearer token.
 
     Written through ``env._session``, which in e2e mode is bound to the LIVE
-    SERVER's database — the one the verifier reads. A ``PrincipalFactory`` call
-    here would try to INSERT a row ``_seed_e2e_identity`` already created.
+    SERVER's database — the one the verifier reads. ``setup_default_data`` is
+    get-or-create and idempotent, so the row ``_seed_e2e_identity`` (or a Given)
+    already created is REUSED rather than re-inserted, and an env that seeds
+    nothing of its own still gets a counterparty to sign as.
+
+    ``Principal.agent_url`` is the ONLY legitimate source of a counterparty's
+    identity — security.mdx forbids taking it from a header or a body field — and
+    it is the sole input to the verifier's key resolution, which is why this is a
+    DB write and not a header.
+
+    The tenant's ``virtual_host`` is made DOTTED here too — see
+    :func:`ensure_declarable_identity_host`.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Principal
-
     session = env._session
     assert session is not None, "enable_request_signing() must be called inside the env's `with` block"
-    principal = session.scalars(
-        select(Principal).filter_by(tenant_id=env._tenant_id, principal_id=env._principal_id)
-    ).first()
-    assert principal is not None, (
-        f"no Principal row for {env._principal_id!r} in tenant {env._tenant_id!r} in the live server "
-        "database. The counterparty's agent_url is recorded on the principal, so the row must exist "
-        "before the env can sign."
-    )
+    _tenant, principal = env.setup_default_data()
     principal.agent_url = agent_url
+    ensure_declarable_identity_host(env)
     session.commit()
     return principal.access_token
+
+
+def ensure_declarable_identity_host(env: Any) -> None:
+    """Give the env's tenant a DOTTED ``virtual_host`` if it has not got one.
+
+    ``identity.brand_json_url`` is DERIVED from the virtual host, and any non-empty
+    ``request_signing`` bucket fires that pointer's pinned ``required_when``, which
+    fixes it to ``^https://``. ``_get_protocol_for_domain`` deliberately derives
+    ``http`` for localhost and single-label hosts — and ``test_tenant``'s factory
+    default is single-label — so on the default integration host the whole
+    declaration is REFUSED. The consequence is not a loud failure: every operation
+    stays in the ``none`` bucket, the signed request is waved through unverified, and
+    the suite reads as "the seam did not sign".
+
+    Called from both the capability builder and
+    :meth:`~tests.harness._base.BaseTestEnv.declare_request_signing`, because either
+    may run first and neither may assume the other did.
+    """
+    from src.core.database.models import Tenant
+    from tests.helpers.signing import SIGNING_AGENT_HOST
+
+    session = env._session
+    tenant = session.get(Tenant, env._tenant_id) if session is not None else None
+    if tenant is not None and "." not in (tenant.virtual_host or ""):
+        tenant.virtual_host = SIGNING_AGENT_HOST

@@ -12,6 +12,7 @@ ctx["error"] is any exception raised.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -3361,7 +3362,14 @@ def _notif_config(
 
 
 def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
-    """Dispatch a sync_accounts request carrying a notification_configs array for one account."""
+    """Dispatch a sync_accounts request carrying a notification_configs array for one account.
+
+    ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch and is
+    forwarded rather than branched on (salesagent-n78j0.1.3): a registration carrying
+    ``notification_configs[].authentication`` is one the seller MUST refuse unless it is
+    signed (security.mdx @ v3.1.1 :1462-1465), so the credential-carrying scenario has
+    to be able to sign. Defaults to False, leaving every other scenario byte-identical.
+    """
     from src.core.schemas.account import SyncAccountsRequest
 
     entry = {
@@ -3372,7 +3380,7 @@ def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: li
     }
     try:
         req = SyncAccountsRequest(accounts=[entry])
-        dispatch_request(ctx, req=req)
+        dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
     except Exception as exc:
         ctx["error"] = exc
 
@@ -3537,6 +3545,49 @@ def then_echoed_subscriber_event_types(ctx: dict, ets: str) -> None:
     assert actual == expected, f"Expected event_types {expected}, got {actual}"
 
 
+@then(parsers.parse('the echoed subscriber\'s authentication object omits "{field}"'))
+def then_echoed_subscriber_auth_omits(ctx: dict, field: str) -> None:
+    """Assert the echoed authentication object does not carry the write-only field.
+
+    Spec: core/notification-config.json top-level — "Credentials and shared secrets
+    in authentication.credentials are write-only — sellers MUST NOT echo them back";
+    sync-accounts-response notification_configs — "authentication.credentials is
+    omitted on every entry (write-only)."
+
+    RESTORED with the branch that made it vacuous REMOVED (salesagent-n78j0.1.3). The
+    original returned early when no ``authentication`` object was echoed at all, which
+    is a pass for a response that echoed the credential under any OTHER key — and for a
+    response that echoed nothing, which is not what the Then claims. Both halves are now
+    graded: the named field is absent from the authentication object (empty when the
+    object is omitted, which legitimately satisfies "omits"), AND the registered
+    credential VALUE appears nowhere in the serialized subscriber. The value check is
+    what gives the step teeth on the omitted-object path, and it is the whole point of a
+    write-only rule.
+    """
+    subs = _echoed_subscribers(ctx)
+    assert subs, f"No echoed subscribers to check authentication on: {subs!r}"
+    subscriber = subs[0]
+    auth = _sub_attr(subscriber, "authentication")
+    if auth is None:
+        auth_dict: dict[str, Any] = {}
+    else:
+        auth_dict = auth if isinstance(auth, dict) else auth.model_dump(exclude_none=True)
+    assert field not in auth_dict, f"authentication echoed write-only {field!r}: {auth_dict!r}"
+
+    credential = ctx.get("notif_credential")
+    assert credential, (
+        "the When that registers a subscriber must record the credential it sent "
+        "(ctx['notif_credential']); without it this Then cannot tell an omitted "
+        "authentication object apart from a credential echoed under another key"
+    )
+    serialized = json.dumps(subscriber, default=str) if isinstance(subscriber, dict) else subscriber.model_dump_json()
+    assert credential not in serialized, (
+        f"the registered credential was echoed back in the subscriber document: {serialized!r}. "
+        "core/notification-config.json makes authentication.credentials write-only, which is a "
+        "statement about the WHOLE echoed document, not only about the field it was sent in."
+    )
+
+
 @then(
     parsers.re(
         r'the listed account for brand domain "(?P<domain>[^"]+)" echoes subscriber "(?P<sub>[^"]+)" '
@@ -3608,13 +3659,9 @@ def given_account_with_paused_notif_subscriber(ctx: dict, domain: str, sub: str,
 def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
     """Provision an account with one paused subscriber whose event_types are under test.
 
-    Serves both the event-scope scenarios and the register-and-read-back one. It used to
-    have an auth-carrying sibling; #1291 D1 retired that, because a seller supporting
-    request signing must reject an UNSIGNED request carrying
-    ``accounts[].notification_configs[].authentication`` — so no BDD scenario may register
-    a credential over the unsigned dispatch every transport here uses. Credential handling
-    is graded at integration level instead (see the comment on the register-and-read-back
-    scenario in the feature).
+    The credential-free sibling of the ``…, and legacy Bearer authentication`` When
+    below: this variant carries only the event_types, so the scenarios that use it grade
+    event-scope rejection rather than credential handling.
 
     Spec: core/notification-config.json#/properties/event_types — media-buy-anchored
     types (scheduled, final, delayed, adjusted, impairment) "are invalid on this
@@ -3624,6 +3671,37 @@ def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, su
     """
     ctx["notif_domain"] = domain
     cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)", '
+        r'event_types "(?P<ets>[^"]+)", and legacy Bearer authentication'
+    )
+)
+def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision an account with one paused (active:false) subscriber carrying legacy Bearer auth.
+
+    The authentication block (Bearer scheme + a 32-char write-only credential per
+    core/notification-config.json#/properties/authentication/properties/credentials)
+    gives the credentials-omitted echo assertion teeth: the input declares a
+    credential, so an echo that returns it is a real write-only leak.
+
+    RESTORED SIGNED (salesagent-n78j0.1.3). Registering a credential is exactly the
+    payload that forces a signature (security.mdx @ v3.1.1 :1462-1465), so the scenario
+    that uses this When declares ``the Buyer Agent signs the request`` — without it the
+    seller would (correctly) answer ``request_signature_required`` and the echo
+    assertions would never be reached. The step itself stays transport-blind: it does
+    not know what signing means on any leg, only that ``ctx["signed"]`` travels with the
+    dispatch.
+    """
+    ctx["notif_domain"] = domain
+    credential = "x" * 32
+    ctx["notif_credential"] = credential
+    auth = {"schemes": ["Bearer"], "credentials": credential}
+    cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
     _dispatch_sync_notification(ctx, domain, [cfg])
 
 

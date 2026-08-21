@@ -23,6 +23,7 @@ Multi-transport support (subclasses may also override):
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -331,7 +332,9 @@ _MCP_PATH = "/mcp/"
 _MCP_ACCEPT = "application/json, text/event-stream"
 
 
-def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
+def _a2a_message_send_body(
+    skill_name: str, parameters: dict[str, Any], push_notification_config: Any = None
+) -> dict[str, Any]:
     """The ``message/send`` JSON-RPC envelope naming *skill_name* explicitly.
 
     Built from the a2a-sdk's own v0.3 request model — the SAME model the server's
@@ -341,10 +344,25 @@ def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[
     diverge here. Explicit-skill invocation is the ``data`` part shape
     ``{"skill": ..., "parameters": ...}`` (``src/a2a_server/adcp_a2a_server.py``),
     which is also what ``src/core/signing/operations.py`` names the operation from.
+
+    A ``push_notification_config`` travels in the A2A PROTOCOL ENVELOPE, not in the
+    skill parameters, because that is where PRODUCTION reads it on this transport:
+    ``on_message_send`` takes it from
+    ``params.configuration.task_push_notification_config``
+    (``src/a2a_server/adcp_a2a_server.py:657-659``) and threads it into the skill
+    handler. Putting it in the parameters instead would be the harness choosing a
+    different registration channel than the one an A2A buyer uses — and would make
+    a webhook-registration scenario grade a payload shape nobody sends.
     """
     import uuid
 
     from a2a.compat.v0_3 import types as v03
+
+    configuration = None
+    if push_notification_config is not None:
+        configuration = v03.MessageSendConfiguration(
+            push_notification_config=_a2a_push_notification_config(push_notification_config)
+        )
 
     request = v03.SendMessageRequest(
         id=str(uuid.uuid4()),
@@ -353,10 +371,41 @@ def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[
                 message_id=str(uuid.uuid4()),
                 role=v03.Role.user,
                 parts=[v03.Part(root=v03.DataPart(data={"skill": skill_name, "parameters": parameters}))],
-            )
+            ),
+            configuration=configuration,
         ),
     )
     return request.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _a2a_push_notification_config(config: Any) -> Any:
+    """An AdCP ``push_notification_config`` as the A2A protocol layer carries it.
+
+    The two vocabularies name the same thing differently and the translation is
+    the transport's, not the scenario's: AdCP's ``authentication`` is
+    ``{scheme, credentials}`` (``core/push-notification-config.json``) while A2A's
+    ``PushNotificationAuthenticationInfo`` is ``{schemes: [...], credentials}``.
+    Built from the SDK's own v0.3 models so a renamed field fails here rather than
+    silently dropping the credential — which, for the scenario that exists to prove
+    a credential-carrying registration is refused, would be a false green.
+    """
+    from a2a.compat.v0_3 import types as v03
+
+    raw = config.model_dump(mode="json", exclude_none=True) if hasattr(config, "model_dump") else dict(config)
+    authentication = raw.get("authentication")
+    info = None
+    if authentication is not None:
+        scheme = authentication.get("scheme")
+        info = v03.PushNotificationAuthenticationInfo(
+            schemes=[scheme] if scheme else list(authentication.get("schemes") or []),
+            credentials=authentication.get("credentials"),
+        )
+    return v03.PushNotificationConfig(
+        url=raw.get("url"),
+        id=raw.get("id"),
+        token=raw.get("token"),
+        authentication=info,
+    )
 
 
 def _a2a_first_data_part(artifact: dict[str, Any]) -> dict[str, Any] | None:
@@ -397,6 +446,24 @@ def _mcp_error_to_exception(payload: dict[str, Any]) -> Exception:
     return ToolError(str(payload.get("message") or payload))
 
 
+class WireRefusal(AssertionError):
+    """An HTTP refusal that arrived BEFORE any JSON-RPC envelope existed.
+
+    Carries the response, because on the ``/a2a`` and ``/mcp`` legs the only
+    evidence of WHICH refusal happened can live outside the body: the ASGI
+    signature verifier answers a BODYLESS 401 whose sole signal is
+    ``WWW-Authenticate: Signature error="<code>"``. Raising a bare
+    ``AssertionError`` here discarded that header, so an unsigned refusal on those
+    two legs could be observed only as "some 4xx" — the exact status-shaped
+    vacuity ``assert_signature_challenge`` exists to remove (salesagent-n78j0.1.2),
+    and the reason the REST leg already had ``_non_json_error_result``.
+    """
+
+    def __init__(self, message: str, response: Any) -> None:
+        super().__init__(message)
+        self.response = response
+
+
 def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
     """One JSON-RPC envelope out of an HTTP response, SSE-framed or not.
 
@@ -409,7 +476,7 @@ def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
     import json as _json
 
     if response.status_code >= 400 or not response.content:
-        raise AssertionError(f"{surface} returned HTTP {response.status_code}: {response.text[:800]!r}")
+        raise WireRefusal(f"{surface} returned HTTP {response.status_code}: {response.text[:800]!r}", response)
 
     if "text/event-stream" not in response.headers.get("content-type", ""):
         return response.json()
@@ -763,6 +830,100 @@ class BaseTestEnv:
             self.__dict__["_signing"] = build_signing_capability(self)
         return self.__dict__["_signing"]
 
+    def declare_request_signing(self, *, required_for: Sequence[str] = ()) -> None:
+        """Store this seller's REAL ``request_signing`` declaration on its tenant.
+
+        The Given side of every enforcement scenario: production then does the rest
+        for real — ``CapabilityDeclarations.from_tenant`` parses and relation-checks
+        the document, ``posture_for_tenant`` reads it, ``bucket_for`` applies the
+        ``required_for > warn_for > supported_for`` precedence.
+
+        TWO DECLARATIONS, and the difference between them is the whole point:
+
+        * ``required_for=("op",)`` narrows ``supported_for`` to the same names
+          (:func:`~tests.helpers.signing.bucketed_declaration`), so every OTHER
+          operation lands in ``none`` and the composition rule
+          (security.mdx :1268-1269) is what refuses an unsigned, uncredentialed call;
+        * ``required_for=()`` writes ``{"supported": true, "required_for": []}`` —
+          the pinned conformance vector's own ``verifier_capability``
+          (``request-signing/negative/027-webhook-registration-authentication-unsigned.json``).
+          ``supported_for`` is left UNSET rather than empty, which is not the same
+          thing: null means "verifies wherever a signature appears" and puts every
+          operation in the ``supported`` bucket, whereas ``[]`` would put them all in
+          ``none`` and disable the escalation this shape exists to reach. That vector
+          deliberately keeps the operation OUT of ``required_for`` so the refusal can
+          only come from the payload escalation (:1462-1465), never from the
+          composition rule.
+
+        Written through the env's OWN session, which in e2e mode is bound to the LIVE
+        server's database — the one the verifier reads. ``declared_posture``'s
+        ``TenantConfigUoW`` writer cannot serve both: from the runner it opens its own
+        engine against ``DATABASE_URL`` (the suite database, not the server's) and is
+        empirically invisible to the live server's read. Same document either way
+        (:func:`~tests.helpers.signing.posture_declaration_document`), one writer.
+
+        No restore is registered: the in-process legs get a per-test database and the
+        e2e leg's live database is truncated per scenario by the BDD conftest
+        (``_reset_e2e_db``), and ``__exit__`` closes the session BEFORE it unwinds
+        ``_patchers``, so a teardown-time DB write would have nothing to write through.
+        """
+        from src.core.database.models import Tenant
+        from tests.harness.signing_capability import ensure_declarable_identity_host
+        from tests.helpers.signing import bucketed_declaration, posture_declaration_document
+
+        declaration = (
+            bucketed_declaration("required", *required_for) if required_for else {"supported": True, "required_for": []}
+        )
+        session = self._session
+        assert session is not None, "declare_request_signing() must be called inside the env's `with` block"
+        ensure_declarable_identity_host(self)
+        tenant = session.get(Tenant, self._tenant_id)
+        assert tenant is not None, (
+            f"declare_request_signing() needs tenant {self._tenant_id!r} to exist before a posture can be "
+            "stored on it — seed it (env.setup_default_data(), or the Given that authenticates the buyer) first"
+        )
+        tenant.capability_declarations = posture_declaration_document(tenant, declaration)
+        session.commit()
+
+    def _realize_e2e_signature_verifications(self) -> int:
+        """The same claim, read across a process boundary: the scraped counter.
+
+        ``verifier_spy`` patches the verifier in THIS process; the live server's
+        verifier runs in another container, so the in-process branch would report 0
+        for a request that WAS verified — the silent false negative this fork exists
+        to prevent. See :func:`tests.helpers.signing.scraped_verified_count` for why
+        the counter is a sound positive oracle and why an empty scrape fails loudly.
+        """
+        from tests.helpers.signing import scraped_verified_count
+
+        assert self.e2e_config is not None, "signature_verifications()'s e2e branch needs env.e2e_config"
+        return int(scraped_verified_count(self.e2e_config.base_url, self.signing.key_id))
+
+    @realize_e2e(_realize_e2e_signature_verifications)
+    def signature_verifications(self) -> int:
+        """How many requests the seller's verifier ACCEPTED under this env's key.
+
+        The positive oracle, and deliberately not a status code: a 200 is equally
+        true of a middleware that never looked, and under ``required_for`` an
+        unsigned request carrying a valid bearer is a spec-correct 200
+        (security.mdx :1269). ``VerifiedSigner.key_id`` is what says the signature
+        this env produced was actually verified — matching the CAPABILITY'S OWN kid,
+        so the count is a claim about this env's requests and not about any key
+        merely named like it.
+
+        Counted rather than asserted here because the assertion belongs to the
+        scenario: a Then that pins ``== 1`` also rules out a leg that verified twice
+        (session frames graded as operations) or zero times.
+        """
+        capability = self.signing
+        from tests.helpers.signing import VERIFIER_RESULT
+
+        return sum(
+            1
+            for call in capability.verifications
+            if getattr(call.get(VERIFIER_RESULT), "key_id", None) == capability.key_id
+        )
+
     @property
     def signing(self) -> Any:
         """The env's signing capability, or a hard failure naming the fix.
@@ -1074,12 +1235,24 @@ class BaseTestEnv:
         if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
             self._ensure_tenant_for_audit(a2a_identity.tenant_id)
 
+        # Lifted OUT of the skill parameters and into the protocol envelope, where
+        # production reads it on this transport — see ``_a2a_message_send_body``.
+        push_notification_config = kwargs.pop("push_notification_config", None)
         parameters = self._a2a_skill_parameters(kwargs)
-        body = _a2a_message_send_body(skill_name, parameters)
+        body = _a2a_message_send_body(skill_name, parameters, push_notification_config)
         # /a2a with NO trailing slash: src/app.py 307-redirects /a2a/, and httpx
         # would replay the pre-redirect signature against the new target-uri —
         # a genuine signature failing as request_signature_invalid.
-        raw, headers = self.wire_request(path=_A2A_PATH, body=body, signed=self._signed_dispatch)
+        #
+        # ``identity=None`` means "send without a credential" everywhere else in the
+        # harness, so it decides ``credentialed`` here too rather than the leg
+        # quietly attaching the capability's bearer to a call the caller asked to
+        # make anonymous. It is the only way this leg reaches the composition rule's
+        # refusal branch at all: security.mdx :1269 makes an unsigned request
+        # carrying a valid bearer a spec-correct 200.
+        raw, headers = self.wire_request(
+            path=_A2A_PATH, body=body, signed=self._signed_dispatch, credentialed=a2a_identity is not None
+        )
         response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
         envelope = _jsonrpc_body(response, surface=_A2A_PATH)
@@ -1294,12 +1467,18 @@ class BaseTestEnv:
 
         arguments = self._mcp_tool_arguments(kwargs)
 
+        # ``identity=None`` is "send without a credential" (see ``_run_a2a_over_http``);
+        # it applies to the handshake frames too, because a session opened under a
+        # bearer and used without one would differ from the anonymous request under
+        # test by more than the credential.
+        credentialed = mcp_identity is not None
         with preserved_global_app_state(), TestClient(app) as client:
-            session_id = self._mcp_open_session(client)
+            session_id = self._mcp_open_session(client, credentialed=credentialed)
             envelope = self._mcp_post(
                 client,
                 _mcp_jsonrpc_request(2, "tools/call", {"name": tool_name, "arguments": arguments}),
                 session_id=session_id,
+                credentialed=credentialed,
             )
 
         if "error" in envelope:
@@ -1313,7 +1492,7 @@ class BaseTestEnv:
         self._last_wire_response = structured
         return response_cls(**structured)
 
-    def _mcp_open_session(self, client: Any) -> str:
+    def _mcp_open_session(self, client: Any, *, credentialed: bool = True) -> str:
         """Run the two handshake frames and return the server's session id.
 
         ``initialize`` mints the session; the server REFUSES any request before
@@ -1337,10 +1516,15 @@ class BaseTestEnv:
                     ),
                 },
             ),
+            credentialed=credentialed,
         )
         session_id = response.headers.get("mcp-session-id")
         if not session_id:
-            raise AssertionError(f"MCP initialize returned no mcp-session-id: {response.text[:800]!r}")
+            # WireRefusal, not a bare AssertionError: a handshake frame REFUSED by a
+            # middleware above the mount (the verifier's bodyless 401 is the one that
+            # matters here) carries its reason only in the response, and dropping it
+            # would report "no session id" for a refusal the caller is entitled to grade.
+            raise WireRefusal(f"MCP initialize returned no mcp-session-id: {response.text[:800]!r}", response)
         # Read the envelope even though the session id is what we need: an
         # ``initialize`` that answered an ERROR still carries a session header,
         # and a handshake that failed must surface here rather than as an
@@ -1354,25 +1538,35 @@ class BaseTestEnv:
             client,
             initialized.model_dump(by_alias=True, mode="json", exclude_none=True),
             session_id=session_id,
+            credentialed=credentialed,
         )
         if acknowledged.status_code >= 400:
-            raise AssertionError(
+            raise WireRefusal(
                 f"MCP notifications/initialized was refused with HTTP "
-                f"{acknowledged.status_code}: {acknowledged.text[:800]!r}"
+                f"{acknowledged.status_code}: {acknowledged.text[:800]!r}",
+                acknowledged,
             )
         return session_id
 
-    def _mcp_send(self, client: Any, body: dict[str, Any], *, session_id: str | None = None) -> Any:
+    def _mcp_send(
+        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
+    ) -> Any:
         """POST one MCP frame, signed-or-not by the SAME rules every other leg obeys."""
         extra = {"Accept": _MCP_ACCEPT}
         if session_id:
             extra["mcp-session-id"] = session_id
-        raw, headers = self.wire_request(path=_MCP_PATH, body=body, signed=self._signed_dispatch, extra=extra)
+        raw, headers = self.wire_request(
+            path=_MCP_PATH, body=body, signed=self._signed_dispatch, extra=extra, credentialed=credentialed
+        )
         return client.post(_MCP_PATH, content=raw, headers=headers)
 
-    def _mcp_post(self, client: Any, body: dict[str, Any], *, session_id: str | None = None) -> dict[str, Any]:
+    def _mcp_post(
+        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
+    ) -> dict[str, Any]:
         """POST one MCP frame and return its JSON-RPC envelope."""
-        return _jsonrpc_body(self._mcp_send(client, body, session_id=session_id), surface=_MCP_PATH)
+        return _jsonrpc_body(
+            self._mcp_send(client, body, session_id=session_id, credentialed=credentialed), surface=_MCP_PATH
+        )
 
     def _run_mcp_wrapper(
         self,
@@ -1543,7 +1737,8 @@ class BaseTestEnv:
            answers 200 — which reads as "unsigned was accepted" when in truth the
            verifier was never engaged. Measured on the first spike run, where it
            produced exactly that false green.
-        3. **One identity, on the spec-canonical header** (owner decision D3/D4).
+        3. **One identity, on the spec-canonical header** (owner decision D3/D4), and
+           ONE tenant hint — the env's own, set here so no leg can send a different one.
            ``signed_headers``/``request_headers`` put the capability's token in
            ``Authorization: Bearer`` and set no ``x-adcp-auth``: the alias appears
            nowhere in the pinned 3.1 schemas, and the pinned SDK calls Bearer "the
@@ -1592,7 +1787,14 @@ class BaseTestEnv:
         # empty JSON document: it must sign — and send — zero bytes, or the
         # content-digest covers a ``{}`` the wire does not carry.
         raw = b"" if body is None else _json.dumps(body).encode()
-        merged = {"Content-Type": "application/json", **(extra or {})}
+        # The tenant hint names THIS env's tenant on every leg. ``request_headers``
+        # otherwise injects the module-level ``sig_tenant``, which is a lie for any
+        # env whose tenant comes from its own Givens — and a lie inside the signed
+        # byte range, one ladder reordering away from collapsing the posture bucket
+        # to ``none`` and answering an unverified pass-through with a 200. Stated
+        # once here rather than per-leg, so no leg can forget it (``RestE2EDispatcher``
+        # used to carry its own copy).
+        merged = {"Content-Type": "application/json", "x-adcp-tenant": self._tenant_id, **(extra or {})}
         if not signed:
             return raw, request_headers(token, merged)
         return raw, signed_headers(

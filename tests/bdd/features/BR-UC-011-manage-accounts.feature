@@ -624,29 +624,36 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-notif-register-paused @sync @notification-configs @partition @boundary
   Scenario: Register a paused account-level notification subscriber and read it back
     Given the Buyer Agent has an authenticated connection
-    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative" and event_types "creative.status_changed, creative.purged"
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer Agent signs the request
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative", event_types "creative.status_changed, creative.purged", and legacy Bearer authentication
     Then the response is a success variant with accounts array
     And the account notification_configs echo exactly 1 subscriber
     And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/creative" and active false
     And the echoed subscriber has event_types "creative.status_changed, creative.purged"
-    # The `authentication` block was REMOVED from this When, and with it the
-    # "authentication object omits credentials" Then, under #1291 D1. Not a trim to get
-    # green: security.mdx @ v3.1.1 ("Downgrade and injection resistance") makes a seller
-    # that SUPPORTS request signing reject an unsigned request carrying
-    # accounts[].notification_configs[].authentication with `request_signature_required`,
-    # and D1 made this deployment such a seller. So "register credentials over an unsigned
-    # request and read them back" is an outcome the pin FORBIDS — the scenario was
-    # asserting a prohibited state. Signing it instead was considered and rejected: the
-    # obligations below are already graded elsewhere, so signing would buy nothing in
-    # exchange for the e2e_rest blast radius.
-    # Both obligations the removed halves carried are graded elsewhere, not dropped:
-    #   - credentials are write-only and MUST NOT be echoed ->
-    #     tests/integration/test_sync_accounts_credentials_are_write_only.py, which drives
-    #     the impl directly and so may legally register a credential;
-    #   - an unsigned request carrying credentials is rejected ->
-    #     tests/integration/test_request_signature_operations.py
-    #     ::TestWebhookAuthenticationForcesASignature (both triggers, plus the
-    #     declared-nothing case D1 made reachable).
+    And the echoed subscriber's authentication object omits "credentials"
+    # The `authentication` block and its "omits credentials" Then were REMOVED under
+    # #1291 D1 and are RESTORED here, SIGNED (salesagent-n78j0.1.3).
+    # The removal itself was correct at the time: security.mdx @ v3.1.1 :1462-1465
+    # ("Downgrade and injection resistance") makes a seller that SUPPORTS request signing
+    # reject an UNSIGNED request carrying accounts[].notification_configs[].authentication
+    # with `request_signature_required`, D1 made this deployment such a seller, and a BDD
+    # scenario could only dispatch unsigned — so the scenario was asserting an outcome the
+    # pin FORBIDS. What has changed is the second half of that reasoning, not the first:
+    # the recorded rationale for not simply signing it ("signing would buy nothing in
+    # exchange for the e2e_rest blast radius") stopped being true the moment
+    # salesagent-n78j0.1.1 gave the cross-transport env a real signature on all four legs.
+    # Signing now buys the thing that was actually missing: the write-only credential rule
+    # is graded ON THE WIRE, on every transport, against a request that really registers a
+    # credential — which the impl-level test below cannot do (it never crosses a boundary
+    # where an echo could leak differently).
+    # The two integration tests stay and are not duplicated by this: they grade the
+    # ADJACENT obligations — that the impl scrubs credentials
+    # (tests/integration/test_sync_accounts_credentials_are_write_only.py, including the
+    # whole-document grep this scenario does not do), and that the UNSIGNED registration is
+    # refused (tests/integration/test_request_signature_operations.py
+    # ::TestWebhookAuthenticationForcesASignature). This scenario grades the third: the
+    # SIGNED registration is accepted and echoes no credential.
     When the Buyer Agent sends a list_accounts request
     Then the listed account for brand domain "acme-corp.com" echoes subscriber "buyer-primary" with active false
     # Graduated (T2 increment F4a): accounts.notification_configs now persists as a

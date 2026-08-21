@@ -212,7 +212,18 @@ class CreativeSyncEnv(IntegrationEnv):
         A2A handler's _handle_sync_creatives_skill constructs CreativeAsset
         from raw dicts, which fails validation (assets field required).
         That handler bug needs a separate fix.
+
+        A SIGNING ENV HAS NO IN-PROCESS OPTION (salesagent-n78j0.1.3). ``_raw`` is a
+        direct function call: it puts nothing on a wire, so ``RequestSignatureMiddleware``
+        — which is ASGI, above the whole app — never sees the request, and a
+        ``signed=True`` dispatch would run UNSIGNED while reporting success. That silent
+        downgrade is the precise false green S1 exists to remove, so once the env can
+        sign this leg goes over real HTTP like every other one, and the handler above is
+        exercised for real.
         """
+        if self.can_sign:
+            return self._run_a2a_over_http("sync_creatives", SyncCreativesResponse, **kwargs)
+
         from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 
         self._commit_factory_data()

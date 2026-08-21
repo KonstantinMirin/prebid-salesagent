@@ -4876,6 +4876,28 @@ mappings:
       upstream_refs: ["BR-UC-006-main"]
       business_rules: []
       status: new
+    # Locally added (salesagent-n78j0.1.3): inbound RFC 9421 enforcement, graded on the
+    # sync_creatives dispatch. No upstream storyboard scenario exists — the request-signing
+    # obligations are graded upstream only by static conformance vectors, which replay bytes
+    # against a verifier and never drive a real buyer request through a real deployment.
+    - adcp_scenario_id: "T-UC-006-local-signing-required-unsigned"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-verified"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-webhook-credentials"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
   UC-007:
     - adcp_scenario_id: "T-UC-007-main-rest"
       adcp_feature: "BR-UC-007-list-authorized-properties.feature"

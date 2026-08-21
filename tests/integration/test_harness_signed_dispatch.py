@@ -74,7 +74,7 @@ from tests.helpers.signing import (
     declared_posture,
     posture_declaration_document,
     rejection_code,
-    scraped_counter_samples,
+    scraped_verified_count,
     verifier_spy,
 )
 
@@ -317,36 +317,6 @@ def _live_stack() -> E2EConfig | None:
 
 LIVE_STACK = _live_stack()
 
-#: Flask's admin app is mounted at ``/`` as well as ``/admin`` (``src/app.py``), in the
-#: same process as the ASGI middleware, and the route carries no ``@require_auth``.
-_METRICS_PATH = "/metrics"
-
-
-def _scrape(config: E2EConfig, when: str) -> str:
-    """GET ``/metrics`` off the live stack, failing LOUDLY on anything but a scrape.
-
-    The non-404 assertion is the point: two empty scrapes produce a vacuous
-    0-vs-0 delta that reads exactly like "the mechanism did not run", which is
-    the one thing this whole grading exists to tell apart.
-    """
-    response = httpx.get(f"{config.base_url}{_METRICS_PATH}", timeout=30)
-    assert response.status_code == 200, (
-        f"the {when} metrics scrape must reach the Prometheus endpoint; GET {_METRICS_PATH} returned HTTP "
-        f"{response.status_code}. STOP and fix the scrape rather than falling back to the other "
-        f"assertions — they do not grade the same thing. Body: {response.text[:300]!r}"
-    )
-    assert "# HELP" in response.text, (
-        f"the {when} metrics scrape returned HTTP 200 but no Prometheus exposition text, so a zero delta "
-        f"would mean nothing. Body: {response.text[:300]!r}"
-    )
-    return response.text
-
-
-def _verified_count(metrics_text: str, key_id: str) -> float:
-    """This capability's own ``{operation, keyid}`` series total in one scrape."""
-    samples = scraped_counter_samples(metrics_text, VERIFIED_METRIC, operation=SIGNED_OPERATION, keyid=key_id)
-    return sum(samples.values())
-
 
 @contextmanager
 def _posture_declared_on_the_live_tenant(env: Any):
@@ -424,9 +394,9 @@ if LIVE_STACK is not None:
             capability = env.enable_request_signing()
 
             with _posture_declared_on_the_live_tenant(env):
-                before = _scrape(LIVE_STACK, "before")
+                before = scraped_verified_count(LIVE_STACK.base_url, capability.key_id, when="before")
                 accepted = env.call_via(Transport.E2E_REST, signed=True)
-                after = _scrape(LIVE_STACK, "after")
+                after = scraped_verified_count(LIVE_STACK.base_url, capability.key_id, when="after")
                 refused = env.call_via(Transport.E2E_REST, signed=False, identity=None)
 
             assert accepted.is_success, (
@@ -434,9 +404,9 @@ if LIVE_STACK is not None:
                 f"error={accepted.error!r} wire={accepted.wire_error_envelope!r}. "
                 f"WWW-Authenticate={rejection_code(accepted.raw_response)!r}"
             )
-            delta = _verified_count(after, capability.key_id) - _verified_count(before, capability.key_id)
+            delta = after - before
             assert delta == 1.0, (
-                f"{VERIFIED_METRIC}{{operation={SIGNED_OPERATION!r}, keyid={capability.key_id!r}}} must "
+                f"{VERIFIED_METRIC}{{keyid={capability.key_id!r}}} must "
                 f"increment by EXACTLY 1 across the signed dispatch; it moved by {delta}. The 2xx above is "
                 "equally consistent with a request that was never verified, so this delta — not the status "
                 "code — is what says the verifier ran and accepted THIS signature."

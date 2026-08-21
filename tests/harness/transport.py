@@ -321,10 +321,26 @@ class TransportResult:
         )
 
         response = self.raw_response
+
+        # Lead with the ACCEPTED case. A result that succeeded is not a missing wire —
+        # it is the finding: the seller waved through a request this scenario says it
+        # must refuse. Diagnosing that as "the env has no signing capability" sends the
+        # reader hunting a harness bug and past the defect, which is the failure mode
+        # this whole surface exists to end (SF-4 survived green CI for exactly that
+        # reason). Order matters: is_error is checkable on every transport, raw_response
+        # is not.
+        assert self.is_error, (
+            f"Expected the {code!r} signature challenge, but the request was ACCEPTED "
+            f"(is_error=False, payload={self.payload!r}). The seller did not refuse a request this "
+            "scenario requires it to refuse. If sibling transports DO refuse the same request, that "
+            "asymmetry is the finding — the operation never reached a graded posture bucket on this "
+            "one, so nothing forced a signature. Read it as a production defect until proven otherwise."
+        )
+
         assert response is not None and hasattr(response, "status_code") and hasattr(response, "headers"), (
-            f"Expected the {code!r} signature challenge, but this result carries no raw HTTP response "
-            f"to read WWW-Authenticate from (raw_response={response!r}, is_error={self.is_error}, "
-            f"error={self.error!r}). Either the env has no signing capability — call "
+            f"Expected the {code!r} signature challenge, and this result IS an error "
+            f"(error={self.error!r}) — but it carries no raw HTTP response to read WWW-Authenticate "
+            f"from (raw_response={response!r}). Either the env has no signing capability — call "
             "env.enable_request_signing() so the leg dispatches over real HTTP instead of in-process — "
             "or the dispatcher dropped the response. Refusing to grade the refusal on anything else."
         )
