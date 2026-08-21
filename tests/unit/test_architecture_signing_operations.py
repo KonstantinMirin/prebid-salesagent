@@ -79,7 +79,7 @@ from typing import Any
 
 import pytest
 
-from tests.unit._architecture_helpers import REPO_ROOT, parse_module
+from tests.unit._architecture_helpers import REPO_ROOT, parse_module, src_python_files
 
 # --------------------------------------------------------------------------
 # Classification allowlists — SHRINK-ONLY, and each entry states its reason
@@ -129,9 +129,17 @@ _PROTOCOL_METHOD_PATTERN = re.compile(r"^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$")
 
 
 def _sdk_operation_names() -> set[str]:
-    from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+    """The SDK leg — read from PRODUCTION's derivation, not re-derived here.
 
-    return {definition["name"] for definition in ADCP_TOOL_DEFINITIONS}
+    ``src.core.signing.sdk_operation_names`` is one leg of the closed vocabulary
+    that bounds the ``operation`` metric label, so a copy of it in this file would
+    grade a set production does not use. That is the exact shape of the defect this
+    epic already found once (a guard grading its own copy of the predicate under
+    test), and it is not rebuilt here.
+    """
+    from src.core.signing import sdk_operation_names
+
+    return set(sdk_operation_names())
 
 
 def _registered_mcp_tools() -> list[str]:
@@ -599,4 +607,140 @@ class TestBufferedReceiveReachesEveryArm:
         assert "buffered" in args, (
             f"{branch} must take the already-buffered body (the reorder buffers once, before the "
             f"signed/unsigned split); its parameters are {args}"
+        )
+
+
+# --------------------------------------------------------------------------
+# The operation label's closed set is DERIVED, and bounded inside the recorders
+# --------------------------------------------------------------------------
+
+#: The three ``src/core/metrics.py`` helpers that put ``operation`` on a Prometheus
+#: counter. Each must bound the label ITSELF: ``record_request_unsigned`` alone has
+#: two pre-auth call sites in the middleware, so a sanitizer applied at a call site
+#: is a sanitizer that one of them forgets.
+_OPERATION_RECORDERS = ("record_signature_verified", "record_signature_failed", "record_request_unsigned")
+
+#: Names no registry serves. Each is a legal ``params.name`` an anonymous
+#: ``POST /mcp {"method":"tools/call","params":{"name":...}}`` can carry, and each
+#: is one new Prometheus series for as long as the process lives if recorded raw.
+_ATTACKER_OPERATION_NAMES = (
+    "create_media_buy\n",
+    "../../etc/passwd",
+    "sync_creatives; DROP TABLE",
+    "a" * 512,
+)
+
+
+def _enclosing_function(tree: ast.Module, target: ast.AST) -> str | None:
+    """The name of the function whose body (transitively) contains *target*."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and any(
+            child is target for child in ast.walk(node)
+        ):
+            return node.name
+    return None
+
+
+class TestTheOperationLabelIsBoundedByADerivedSet:
+    """``operation`` is the one Prometheus label an ANONYMOUS caller chooses.
+
+    It reaches the counters verbatim from ``params.name`` / ``data.skill``
+    (``src/core/signing/operations.py``) on a surface the verifier grades ABOVE
+    authentication, so an unbounded label is one new time series per request in a
+    long-running multi-tenant process.
+
+    Two properties are graded, and they are the two ways the fix could be built
+    wrong. FIRST: the closed set is DERIVED from the transport registries, so this
+    guard reads production's derivation and drives it with the registries it reads
+    independently (AST for the MCP tools, the route table for REST, the dispatch
+    table for A2A) — a hand-listed vocabulary that misses a tool goes red here
+    rather than silently demoting that tool's real traffic into ``"other"``.
+    SECOND: the bounding happens INSIDE the recording helpers, so no call site can
+    bypass it.
+    """
+
+    def test_every_name_a_registry_can_emit_survives_the_sanitizer_verbatim(self):
+        """The derivation half.
+
+        The names come from the same three registries the guards above drive the
+        resolver with; the vocabulary comes from production. A name a transport
+        really serves must be recorded AS ITSELF — collapsing it to ``"other"``
+        would be an observability regression indistinguishable from an attack.
+        """
+        from src.core.metrics import sanitize_operation
+
+        emitted = sorted(set(_registered_mcp_tools()) | {op for _m, _p, op in _rest_routes()} | set(_a2a_skill_ids()))
+        collapsed = {name: sanitize_operation(name) for name in emitted if sanitize_operation(name) != name}
+
+        assert collapsed == {}, (
+            f"registered operation names the metric label does not recognize: {collapsed}. "
+            "src.core.signing.resolved_operation_names must DERIVE the closed set from the "
+            "SDK definitions, the _register_tool list, the /api/v1 route table and the A2A "
+            "dispatch table. A hand-written copy drifts silently: the tool keeps working and "
+            "its traffic is filed under 'other', in the bucket that exists to make an "
+            "attacker-supplied name visible."
+        )
+
+    def test_the_unnamed_sentinel_is_a_member_and_not_a_collapse(self):
+        """``("", None)`` is what the resolver returns for a request named in the
+        PROTOCOL namespace (``initialize``, ``tools/list``, ``tasks/get``) or for a
+        bodiless session frame. Folding it into ``"other"`` would bury every MCP
+        handshake in the attacker bucket — and would break the discriminator
+        ``tests/integration/test_request_signature_operations.py`` uses to assert
+        that a session frame named NO operation.
+        """
+        from src.core.metrics import sanitize_operation
+        from src.core.signing.operations import UNNAMED_OPERATION
+
+        assert sanitize_operation(UNNAMED_OPERATION.operation) == UNNAMED_OPERATION.operation, (
+            "the resolver's unnamed sentinel must survive as itself: it is one series, it is "
+            "not attacker-chosen, and the integration suite reads the empty label as proof "
+            "that a session frame was not named as an operation"
+        )
+
+    @pytest.mark.parametrize("name", _ATTACKER_OPERATION_NAMES)
+    def test_a_name_no_registry_serves_collapses(self, name):
+        """The other side of the same coin — without this the test above passes
+        for an identity function.
+        """
+        from src.core.metrics import sanitize_operation
+
+        assert sanitize_operation(name) == "other", (
+            f"{name!r} is not served by any transport registry, so it must collapse to the "
+            "single bounded bucket; recorded verbatim it is one new Prometheus series per "
+            "distinct value an anonymous POST body carries"
+        )
+
+    def test_every_sanitize_operation_call_in_src_is_inside_a_recording_helper(self):
+        """The placement half, made unrepresentable rather than remembered.
+
+        ``record_request_unsigned`` has TWO pre-auth call sites
+        (``request_verifier_middleware.py`` — the ignored-posture arm and the
+        absent-signature arm), which is the standing proof that a sanitizer called
+        at the call site is a sanitizer one call site forgets. So the only legal
+        place to call it is inside the helpers themselves.
+        """
+        callers: set[str] = set()
+        for path in sorted(src_python_files(REPO_ROOT)):
+            tree = parse_module(path)
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "sanitize_operation"
+                ):
+                    enclosing = _enclosing_function(tree, node) or "<module scope>"
+                    callers.add(f"{path.relative_to(REPO_ROOT)}::{enclosing}")
+
+        stray = sorted(key for key in callers if key.rsplit("::", 1)[1] not in _OPERATION_RECORDERS)
+        missing = sorted(set(_OPERATION_RECORDERS) - {key.rsplit("::", 1)[1] for key in callers})
+
+        assert missing == [], (
+            f"recording helpers that do not bound their own operation label: {missing}. "
+            "Each of src/core/metrics.py's three operation-labelled counters must call "
+            "sanitize_operation itself — the label is attacker-chosen on every one of them."
+        )
+        assert stray == [], (
+            f"sanitize_operation called outside the recording helpers: {stray}. Bounding at a "
+            "call site is how the second call site gets missed; the helpers are the boundary."
         )

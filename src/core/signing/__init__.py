@@ -46,7 +46,11 @@ from src.core.signing.canonical import (
     malformed_authority_reason,
     reject_malformed_target,
 )
-from src.core.signing.operations import operation_for_rest_route
+from src.core.signing.operations import (
+    operation_for_rest_route,
+    resolved_operation_names,
+    sdk_operation_names,
+)
 from src.core.signing.posture import (
     IdentityDeclaration,
     KeyBacking,
@@ -148,7 +152,9 @@ __all__ = [
     "reject_malformed_target",
     "request_signing_buckets_declared",
     "requires_trust_root",
+    "resolved_operation_names",
     "resolve_signing_material",
+    "sdk_operation_names",
     "send_signed_challenge",
     "sign_revocation_list",
     "sign_scoped_mcp_call",

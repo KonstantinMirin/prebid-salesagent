@@ -347,10 +347,20 @@ from src.core.tools.task_management import complete_task, get_task, list_tasks
 
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
+#: The MCP wire tool names, accumulated BY the registration below rather than
+#: re-listed beside it. ``src/core/signing/operations.py`` reads this as one leg of
+#: the closed vocabulary that bounds the ``operation`` Prometheus label: a tool name
+#: arrives verbatim from an unauthenticated ``params.name``, so a name the label
+#: cannot recognize collapses to ``"other"``. Deriving the leg from the registration
+#: is what keeps a newly registered tool out of that bucket without anyone
+#: remembering to add it twice.
+MCP_TOOL_NAMES: set[str] = set()
+
 
 def _register_tool(fn: Any) -> None:
     """Register an MCP tool with SDK description and annotations when available."""
     tool_name = fn.__name__
+    MCP_TOOL_NAMES.add(tool_name)
     sdk_def = _sdk_tool_defs.get(tool_name)
     kwargs: dict[str, Any] = {}
     if sdk_def:

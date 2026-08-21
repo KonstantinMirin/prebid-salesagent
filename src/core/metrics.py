@@ -15,11 +15,21 @@ long-running multi-tenant process:
 - **``code``** (request-signature outcomes) is validated against the SDK's own
   request-family taxonomy via :func:`sanitize_signature_code`; anything else —
   including anything an attacker could induce — collapses to ``"other"``.
+- **``operation``** is the sharpest of these, because the verifier runs ABOVE
+  authentication and the value arrives VERBATIM out of the request body on two of
+  the three transports (an MCP ``tools/call``'s ``params.name``, an A2A
+  ``message/send``'s ``data.skill``). Recorded raw, one anonymous POST per distinct
+  value mints one series per request. :func:`sanitize_operation` bounds it against
+  :func:`~src.core.signing.resolved_operation_names` — the closed set DERIVED from
+  the transport registries, never hand-listed here.
+- **``reason``** (unsigned verdicts) is the closed set :data:`UNSIGNED_REASONS` via
+  :func:`sanitize_unsigned_reason`.
 - **``keyid``** is the signer's real key id ONLY after the verifier resolved it
   (checklist step 7), i.e. only for a key we already recognize. Before that it is
   attacker-supplied, so it is recorded as ``"unresolved"``.
 - **``reason``** (revocation availability) is the closed set
-  :data:`REVOCATION_UNAVAILABLE_REASONS`. Deliberately NOT the issuer origin,
+  :data:`REVOCATION_UNAVAILABLE_REASONS` via
+  :func:`sanitize_revocation_unavailable_reason`. Deliberately NOT the issuer origin,
   which is derived from a counterparty-supplied ``brand_json_url`` and would let
   a pre-auth caller mint series; the origin goes in the WARNING log instead.
 
@@ -27,7 +37,16 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 :func:`record_ai_review_error`, and request-signature outcomes through
 :func:`record_signature_verified` / :func:`record_signature_failed` /
 :func:`record_request_unsigned`, so the bounding logic lives in exactly one place.
+
+That "exactly one place" is INSIDE the recording helpers, never at their call sites.
+The two ``record_request_unsigned`` call sites in
+``src/core/signing/request_verifier_middleware.py`` (:352 on the ignored-posture arm,
+:449 on the absent-signature arm) are the standing proof: sanitizing at one of them
+leaves the other minting series, and a sanitizer you have to REMEMBER to call is the
+same shape of defect as the unbounded label it was added to fix.
 """
+
+from collections.abc import Container
 
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
@@ -36,11 +55,26 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
-from src.core.signing import REQUEST_TO_WEBHOOK_CODE
+from src.core.signing import REQUEST_TO_WEBHOOK_CODE, resolved_operation_names
 
 # ---------------------------------------------------------------------------
 # Bounded label vocabularies
 # ---------------------------------------------------------------------------
+
+#: The one value every bounded label collapses to. A single shared bucket is what
+#: makes "series count is a function of the vocabulary, not of the caller" true.
+OTHER_LABEL = "other"
+
+
+def _bounded(value: str | None, vocabulary: Container[str]) -> str:
+    """Return *value* when the closed *vocabulary* admits it, else :data:`OTHER_LABEL`.
+
+    Every ``sanitize_*`` below is this one rule with a different vocabulary, so the
+    rule is written once. The NAMED wrappers are the contract — each states which
+    vocabulary bounds which label — and this is only their shared body.
+    """
+    return value if value is not None and value in vocabulary else OTHER_LABEL
+
 
 #: Fixed enum for the ``error_type`` label. Keep <= 5 values.
 ERROR_TYPE_VALUES = ("validation", "timeout", "model_error", "other")
@@ -81,9 +115,7 @@ def categorize_error(error: BaseException) -> str:
 
 def sanitize_policy_triggered(value: str | None) -> str:
     """Return ``value`` if it is in the allowlist, else ``"other"``."""
-    if value in POLICY_TRIGGERED_ALLOWLIST:
-        return value
-    return "other"
+    return _bounded(value, POLICY_TRIGGERED_ALLOWLIST)
 
 
 #: The 27 request-family signature rejection codes, taken from the SDK's own
@@ -103,7 +135,33 @@ UNSIGNED_REASONS = frozenset({"absent", "ignored"})
 
 def sanitize_signature_code(code: str | None) -> str:
     """Return ``code`` if it is a spec request-signature code, else ``"other"``."""
-    return code if code in SIGNATURE_ERROR_CODES else "other"
+    return _bounded(code, SIGNATURE_ERROR_CODES)
+
+
+def sanitize_operation(operation: str | None) -> str:
+    """Return ``operation`` if a transport registry names it, else ``"other"``.
+
+    THE attacker-facing label in this module. The verifier that records it sits ABOVE
+    authentication, and on two of the three transports the value is lifted verbatim
+    out of the request body (``params.name``, ``data.skill``), so an anonymous caller
+    chooses it. The closed set comes from
+    :func:`~src.core.signing.resolved_operation_names`, which DERIVES it from the
+    SDK definitions, the registered MCP tools, the ``/api/v1`` route table and the A2A
+    skill table — the same registries the resolver names requests from. Re-listing
+    those names here would create a second source of truth that silently demotes a
+    newly added tool's real traffic into the ``"other"`` bucket.
+
+    ``""`` is a member of that set, not a collapse: it is what the resolver returns
+    for a request named in the JSON-RPC PROTOCOL namespace or carrying no body at all,
+    and keeping it distinct is what stops every MCP handshake from landing in the
+    bucket that exists to make an attacker-supplied name visible.
+    """
+    return _bounded(operation, resolved_operation_names())
+
+
+def sanitize_unsigned_reason(reason: str | None) -> str:
+    """Return ``reason`` if it is an :data:`UNSIGNED_REASONS` member, else ``"other"``."""
+    return _bounded(reason, UNSIGNED_REASONS)
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +280,15 @@ request_revocation_unavailable_total = Counter(
 REVOCATION_UNAVAILABLE_REASONS = frozenset({"fetch", "parse", "signature", "ssrf"})
 
 
+def sanitize_revocation_unavailable_reason(reason: str | None) -> str:
+    """Return ``reason`` if it is a :data:`REVOCATION_UNAVAILABLE_REASONS` member.
+
+    Anything else collapses to ``"other"``, which keeps the series count fixed even
+    if a future exception member is added to the translation site without its label.
+    """
+    return _bounded(reason, REVOCATION_UNAVAILABLE_REASONS)
+
+
 # ---------------------------------------------------------------------------
 # Recording helpers — single source of truth for label bounding
 # ---------------------------------------------------------------------------
@@ -244,31 +311,36 @@ def record_signature_verified(operation: str, keyid: str) -> None:
 
     ``keyid`` is safe to record verbatim here and ONLY here: the verifier resolved it
     against the counterparty's JWKS at checklist step 7, so the value is drawn from a
-    key set we already know.
+    key set we already know. ``operation`` never is — it comes off the wire on every
+    transport — so it is bounded here like it is on the other two counters.
     """
-    request_signature_verified_total.labels(operation=operation, keyid=keyid).inc()
+    request_signature_verified_total.labels(operation=sanitize_operation(operation), keyid=keyid).inc()
 
 
 def record_signature_failed(operation: str, code: str | None) -> None:
-    """Increment :data:`request_signature_failed_total` with a bounded ``code``."""
+    """Increment :data:`request_signature_failed_total` with bounded labels."""
     request_signature_failed_total.labels(
-        operation=operation,
+        operation=sanitize_operation(operation),
         keyid=UNRESOLVED_KEYID,
         code=sanitize_signature_code(code),
     ).inc()
 
 
 def record_request_unsigned(operation: str, reason: str) -> None:
-    """Increment :data:`request_unsigned_total`.
+    """Increment :data:`request_unsigned_total` with bounded labels.
 
     ``reason="absent"`` — the request carried no signature headers.
     ``reason="ignored"`` — headers were present but the tenant's posture puts this
     operation in the ``none`` bucket, so nothing was verified (and, per R-H3, nothing
     was buffered or hashed either).
+
+    Both of this helper's call sites are pre-auth arms of the verifier, and both are
+    reached with an ``operation`` the anonymous caller chose — which is why the
+    bounding is here and not at either of them.
     """
     request_unsigned_total.labels(
-        operation=operation,
-        reason=reason if reason in UNSIGNED_REASONS else "other",
+        operation=sanitize_operation(operation),
+        reason=sanitize_unsigned_reason(reason),
     ).inc()
 
 
@@ -276,12 +348,10 @@ def record_signature_revocation_unavailable(reason: str) -> None:
     """Increment :data:`request_revocation_unavailable_total` with a bounded ``reason``.
 
     Called on the fail-open path only: the counterparty's revocation list could not
-    be read at all, so step 9 was answered from the local set alone. Anything outside
-    :data:`REVOCATION_UNAVAILABLE_REASONS` collapses to ``"other"``, which keeps the
-    series count fixed even if a future exception member is added without its label.
+    be read at all, so step 9 was answered from the local set alone.
     """
     request_revocation_unavailable_total.labels(
-        reason=reason if reason in REVOCATION_UNAVAILABLE_REASONS else "other",
+        reason=sanitize_revocation_unavailable_reason(reason),
     ).inc()
 
 

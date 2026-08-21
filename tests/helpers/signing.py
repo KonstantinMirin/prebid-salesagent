@@ -919,6 +919,37 @@ def keypair_for(kid: str) -> tuple[Any, dict[str, Any]]:
     return load_private_key_pem(pem), {"keys": [public_jwk]}
 
 
+def seed_principal(env: Any, *, agent_url: str | None = COUNTERPARTY_AGENT_URL) -> str:
+    """Create the shared tenant + a Principal carrying *agent_url*; return its token.
+
+    ``Principal.agent_url`` (nullable ``String(500)``) is the onboarding record,
+    and the only legitimate source for the counterparty's agent URL. Pass
+    ``agent_url=None`` to grade what the verifier does when onboarding never
+    recorded one.
+
+    *env* is the live :class:`~tests.harness._base.BareIntegrationEnv`: it is not
+    read here, but the factories below write through the session that entering the
+    env bound to them, so taking it as an argument is what pins the ordering.
+
+    Distinct from :func:`tests.harness.signing_capability.attach_agent_url`, and
+    both are needed. That one is for an env that SIGNS: it reuses the env's OWN
+    tenant/principal (owner decision D3) so the signer's identity is the env's.
+    This one seeds the shared unsigned-suite rows named by
+    :data:`SIGNING_TENANT_ID` / :data:`SIGNING_PRINCIPAL_ID`, which the four
+    ``tests/integration/test_request_signature_*`` / ``test_signing_conformance_*``
+    modules address directly and which no env creates for them.
+    """
+    from tests.factories import PrincipalFactory, TenantFactory
+
+    tenant = TenantFactory(tenant_id=SIGNING_TENANT_ID, virtual_host=SIGNING_AGENT_HOST)
+    principal = PrincipalFactory(
+        tenant=tenant,
+        principal_id=SIGNING_PRINCIPAL_ID,
+        agent_url=agent_url,
+    )
+    return principal.access_token
+
+
 #: Both signature headers present, neither parseable — the malformed-signature
 #: shape. security.mdx :1226/:1271 make this the case that blocks the bearer
 #: fallback regardless of bucket, and it is checklist STEP 1, which is what makes

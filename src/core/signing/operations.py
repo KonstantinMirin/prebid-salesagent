@@ -371,3 +371,72 @@ class RegistryOperationResolver:
 def _on_surface(path: str, prefix: str) -> bool:
     """Prefix match on a segment boundary, so ``/api/v1x`` cannot sneak in."""
     return path == prefix or path.startswith(f"{prefix}/")
+
+
+# ---------------------------------------------------------------------------
+# The VOCABULARY: every value ``ResolvedOperation.operation`` can carry
+# ---------------------------------------------------------------------------
+#
+# ``operation`` is a Prometheus LABEL on all three request-signature counters
+# (``src/core/metrics.py``), and on two of the three transports its value comes
+# VERBATIM out of the request body — ``params.name`` for an MCP ``tools/call``,
+# ``data.skill`` for an A2A ``message/send``. The verifier runs ABOVE
+# authentication, so recording it raw would let an anonymous
+# ``POST /mcp {"method":"tools/call","params":{"name":"<anything>"}}`` mint one new
+# time series per request, forever, in a long-running multi-tenant process. The
+# label is therefore bounded against the closed set below exactly the way ``code``
+# is bounded against the SDK's error taxonomy: anything outside it collapses to
+# ``"other"``, so cardinality is a function of the vocabulary and not of the caller.
+#
+# DERIVED, never hand-listed. A hand-written copy would be a second source of truth
+# for the same surface, and it fails the way second copies always fail: silently, on
+# the day a tool is added, by demoting that tool's real traffic into the bucket that
+# exists to alarm on attacker-supplied names.
+# ``tests/unit/test_architecture_signing_operations.py`` drives every registered MCP
+# tool, every ``/api/v1`` route and every A2A skill through the sanitizer and fails
+# the build if one of them does not survive verbatim.
+
+
+@lru_cache(maxsize=1)
+def sdk_operation_names() -> frozenset[str]:
+    """The AdCP operation names the pinned SDK defines.
+
+    A CROSS-CHECK leg, never the authority (module docstring): the SDK list can
+    diverge from the spec and is missing two operations we genuinely implement. It
+    is in the union so that an operation the SDK knows about is a bounded label the
+    moment we start serving it, ahead of any of our own registries naming it.
+    """
+    from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+
+    return frozenset(definition["name"] for definition in ADCP_TOOL_DEFINITIONS)
+
+
+@lru_cache(maxsize=1)
+def resolved_operation_names() -> frozenset[str]:
+    """Every value :attr:`ResolvedOperation.operation` can carry, derived.
+
+    The union of the four registries this resolver names requests from — the SDK's
+    definitions, the ``_register_tool`` list in ``src/core/main.py``, the
+    ``/api/v1`` route table and the A2A skill dispatch table — plus
+    :data:`UNNAMED_OPERATION`'s ``""``, which the table in the module docstring
+    gives a request named in the PROTOCOL namespace or carrying no body at all.
+    ``""`` is ONE series and is deliberately kept distinct: folding it into
+    ``"other"`` would bury every MCP handshake in the bucket whose whole job is to
+    make an attacker-supplied name visible.
+
+    The imports are inside the function for the reason ``_rest_registry`` gives:
+    this module is imported by the ASGI middleware, which ``src/app.py`` registers
+    while the transports are still being assembled. Cached — all four registries are
+    fixed once the process has finished importing, and the first call is at request
+    time.
+    """
+    from src.a2a_server.adcp_a2a_server import SKILL_HANDLERS
+    from src.core.main import MCP_TOOL_NAMES
+
+    return (
+        frozenset({UNNAMED_OPERATION.operation})
+        | sdk_operation_names()
+        | frozenset(MCP_TOOL_NAMES)
+        | frozenset(SKILL_HANDLERS)
+        | frozenset(operation for _methods, _regex, operation in _rest_registry())
+    )

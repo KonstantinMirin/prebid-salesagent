@@ -96,6 +96,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
 from typing import Any
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from adcp.signing import REQUEST_SIGNATURE_REQUIRED
@@ -114,6 +115,7 @@ from tests.helpers.signing import (
     counter_samples,
     counter_total,
     request_headers,
+    samples_with,
     seed_principal,
 )
 from tests.helpers.signing import (
@@ -217,9 +219,9 @@ def _jsonrpc(method: str, params: dict[str, Any]) -> bytes:
     return json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
 
 
-def _mcp_tool_call(tool_name: str) -> bytes:
+def _mcp_tool_call(tool_name: str, arguments: dict[str, Any] | None = None) -> bytes:
     """An MCP ``tools/call`` envelope — the operation is ``params.name``."""
-    return _jsonrpc("tools/call", {"name": tool_name, "arguments": {}})
+    return _jsonrpc("tools/call", {"name": tool_name, "arguments": arguments or {}})
 
 
 def _a2a_explicit_skill(skill: str) -> bytes:
@@ -963,4 +965,224 @@ class TestUnsignedBodyReachesTheHandlerIntact:
             assert parsed[0] == body, (
                 "the downstream body reader must receive the request EXACTLY as sent; it got "
                 f"{ {key: (value[:40] + '…' if isinstance(value, str) and len(value) > 40 else value) for key, value in parsed[0].items()} }"
+            )
+
+
+# --------------------------------------------------------------------------
+# The operation label is bounded — an anonymous body cannot mint series
+# --------------------------------------------------------------------------
+
+#: Signature headers whose CONTENT is irrelevant: their presence alone is what
+#: ``__call__`` reads to pick the signed arm (``signed = "signature" in headers or
+#: "signature-input" in headers``), and the ``none``-bucket arm returns before any
+#: verification, so nothing here is ever parsed.
+_PRESENT_SIGNATURE_HEADERS = {
+    "Signature-Input": 'sig1=("@method");created=1',
+    "Signature": "sig1=:AAAA:",
+}
+
+
+def _attacker_operation() -> str:
+    """A ``params.name`` no registry serves, unique per call.
+
+    Unique because the Prometheus registry is process-global and outlives every
+    test in this file: a name a previous test minted would make the absence
+    assertion below pass or fail for a reason that has nothing to do with the
+    request under test.
+    """
+    return f"attacker-minted-series-{uuid4().hex}"
+
+
+@contextmanager
+def _assert_operation_collapsed(metric: str, attacker_operation: str, **bounded_labels: str) -> Iterator[None]:
+    """*metric* counted this request under the bounded bucket, never verbatim.
+
+    Both halves are load-bearing and neither works alone. The ABSENCE half is what
+    an unbounded label fails — the attacker's string appearing as a label value IS
+    the new time series. The PRESENCE half is what stops the absence half from
+    passing vacuously: "no such series" is equally true of a middleware that never
+    counted this request at all, which is the same trap
+    :func:`_assert_verifier_looked` exists for one layer up.
+
+    The delta is asserted as MOVEMENT rather than as exactly one, for the reason
+    :func:`_assert_no_operation_was_named` already records: ``POST /mcp`` 307s to
+    ``/mcp/`` and the verifier grades both passes, so a single client call counts
+    twice. What must be exact is the LABEL, and that is the first assertion.
+    """
+    before = sum(samples_with(metric, **bounded_labels).values())
+    yield
+    minted = samples_with(metric, operation=attacker_operation)
+    after = sum(samples_with(metric, **bounded_labels).values())
+
+    assert minted == {}, (
+        f"{metric} carries the caller's own string as its `operation` label: {sorted(minted)}. "
+        "The verifier runs above authentication, so that value came out of an anonymous request "
+        "body — one new Prometheus time series per distinct value, for the life of the process. "
+        "sanitize_operation must bound the label INSIDE the recording helper."
+    )
+    assert after > before, (
+        f"{metric}{bounded_labels} did not move ({before} -> {after}), so this request was not "
+        "counted at all and the absence assertion above proves nothing about bounding. Either "
+        "the middleware returned early or the arm under test is no longer reached."
+    )
+
+
+@pytest.mark.requires_db
+class TestTheOperationLabelCannotBeMintedByACaller:
+    """``operation`` labels all three request-signature counters
+    (``src/core/metrics.py``), and on MCP its value is ``params.name`` — lifted
+    verbatim out of the request body by
+    ``src/core/signing/operations.py:_resolve_jsonrpc``.
+
+    The verifier sits ABOVE authentication (``UnifiedAuthMiddleware`` rejects
+    nothing before it), so every request below carries NO credential of any kind.
+    Unbounded, each one mints a Prometheus series that lives as long as the
+    process — a cardinality bomb any anonymous client can drive at request rate,
+    in a long-running multi-tenant process.
+
+    One test per arm that can be reached pre-auth with a caller-chosen name, which
+    is what makes "bound it inside the recording helper" the only correct fix:
+
+    * ``record_request_unsigned(..., "absent")`` — no signature headers at all
+      (``request_verifier_middleware.py`` unsigned arm);
+    * ``record_request_unsigned(..., "ignored")`` — headers present, posture puts
+      the name in the ``none`` bucket, nothing verified;
+    * ``record_signature_failed(...)`` — the webhook-credential escalation
+      rejects, and the rejection carries the same caller-chosen name.
+
+    Sanitizing at ONE call site leaves the others minting; that is the whole
+    argument for the placement, and it is graded structurally by
+    ``tests/unit/test_architecture_signing_operations.py::TestTheOperationLabelIsBoundedByADerivedSet``.
+    """
+
+    def test_an_anonymous_tools_call_with_an_arbitrary_name_records_other(self, integration_db):
+        """The ``absent`` arm — the cheapest one to drive: a bare POST, no headers.
+
+        The posture narrows to ``create_media_buy``, so the arbitrary name falls in
+        the ``none`` bucket, is not rejected, and is counted on the way through.
+        """
+        operation = _attacker_operation()
+
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
+            client = _client(env)
+
+            with (
+                _declared_posture(**bucketed_declaration("required", "create_media_buy")),
+                _assert_operation_collapsed(
+                    "adcp_request_unsigned_total", operation, operation="other", reason="absent"
+                ),
+            ):
+                response = client.post(_MCP_PATH, content=_mcp_tool_call(operation), headers=_json_headers(None))
+
+            _assert_not_rejected(
+                response,
+                "an unknown tool name is not in required_for, so the verifier must let it "
+                "past — which is precisely why its name reaches the counter",
+            )
+
+    def test_an_ignored_posture_does_not_record_the_name_either(self, integration_db):
+        """The SECOND ``record_request_unsigned`` call site, and the reason the
+        sanitizer cannot live at a call site.
+
+        This arm is reached only when signature headers ARE present and the
+        posture buckets the operation as ``none``: the middleware records
+        ``reason="ignored"`` and passes through without verifying anything. It is a
+        different line from the ``absent`` arm above, with the same
+        attacker-supplied value, and a fix applied to one of them leaves the other
+        minting series.
+        """
+        operation = _attacker_operation()
+
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
+            client = _client(env)
+
+            with (
+                _declared_posture(**bucketed_declaration("required", "create_media_buy")),
+                _assert_operation_collapsed(
+                    "adcp_request_unsigned_total", operation, operation="other", reason="ignored"
+                ),
+            ):
+                response = client.post(
+                    _MCP_PATH,
+                    content=_mcp_tool_call(operation),
+                    headers=request_headers(None, {"Content-Type": "application/json", **_PRESENT_SIGNATURE_HEADERS}),
+                )
+
+            _assert_not_rejected(
+                response,
+                "a 'none' bucket ignores the signature rather than rejecting it; the request "
+                "passes through and is counted with reason='ignored'",
+            )
+
+    def test_a_rejected_registration_does_not_record_the_name_either(self, integration_db):
+        """The third counter, reached pre-auth by the escalation.
+
+        A ``tools/call`` carrying ``push_notification_config.authentication`` is
+        rejected unsigned whatever its bucket (security.mdx :1462-1465), and the
+        rejection records ``record_signature_failed(operation, ...)`` with the same
+        name the anonymous body chose. ``_supported_only()`` is what puts the
+        unknown name above the ``none`` bucket so the escalation fires at all.
+        """
+        operation = _attacker_operation()
+        arguments = {
+            "push_notification_config": {
+                "url": "https://buyer.example.com/adcp-webhook",
+                "authentication": dict(_WEBHOOK_AUTHENTICATION),
+            }
+        }
+
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
+            client = _client(env)
+
+            with (
+                _declared_posture(**_supported_only()),
+                _assert_operation_collapsed(
+                    "adcp_request_signature_failed_total",
+                    operation,
+                    operation="other",
+                    code=REQUEST_SIGNATURE_REQUIRED,
+                ),
+            ):
+                response = client.post(
+                    _MCP_PATH,
+                    content=_mcp_tool_call(operation, arguments),
+                    headers=_json_headers(None),
+                )
+
+            _assert_rejected(
+                response,
+                "the payload registers webhook credentials, so security.mdx :1465 requires a "
+                "signature regardless of the bucket — and the rejection is what puts the "
+                "caller-chosen operation name on adcp_request_signature_failed_total",
+            )
+
+    def test_a_registered_tool_is_still_recorded_under_its_own_name(self, integration_db):
+        """The control that keeps the three tests above from passing under a
+        sanitizer that collapses EVERYTHING.
+
+        A real registered MCP tool must still be counted as itself: the bound is a
+        closed set derived from the transport registries, not a blanket. A fix that
+        recorded ``"other"`` for every request would satisfy every assertion above
+        and destroy the only per-operation signal these counters exist to give.
+        """
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            seed_principal(env)
+            client = _client(env)
+
+            before = sum(samples_with("adcp_request_unsigned_total", operation="get_products").values())
+            with _declared_posture(**bucketed_declaration("required", "create_media_buy")):
+                response = client.post(_MCP_PATH, content=_mcp_tool_call("get_products"), headers=_json_headers(None))
+            after = sum(samples_with("adcp_request_unsigned_total", operation="get_products").values())
+
+            _assert_not_rejected(response, "get_products is not in required_for")
+            assert after > before, (
+                "a REGISTERED MCP tool must be recorded under its own name "
+                f"(adcp_request_unsigned_total{{operation='get_products'}}: {before} -> {after}). "
+                "The operation vocabulary is DERIVED from the _register_tool list, the /api/v1 "
+                "route table, the A2A dispatch table and the SDK definitions — a hand-listed "
+                "copy that misses a tool files its real traffic under 'other', which is the "
+                "bucket that exists to make an attacker-supplied name visible."
             )
