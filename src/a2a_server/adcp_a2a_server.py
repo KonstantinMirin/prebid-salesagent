@@ -64,6 +64,7 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
+    AdCPUrlNotAllowedError,
     AdCPValidationError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
@@ -138,11 +139,11 @@ def _require_params(params: dict, required: list[str], *, field: str | None = No
 
 
 def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
-    """Wrap an SSRF rejection as A2A InvalidParamsError with AdCP ``data`` envelope."""
-    if isinstance(exc, AdCPValidationError):
-        adcp_err = exc
+    """Wrap a refused-URL rejection as A2A InvalidParamsError with the AdCP ``data`` envelope."""
+    if isinstance(exc, AdCPUrlNotAllowedError):
+        adcp_err: AdCPError = exc
     else:
-        adcp_err = AdCPValidationError(
+        adcp_err = AdCPUrlNotAllowedError(
             field="push_notification_config.url",
         )
     return InvalidParamsError(
@@ -156,15 +157,18 @@ def _reject_unsafe_a2a_webhook_url(url: str) -> None:
 
     A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
     translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
-    two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
+    two-layer AdCP envelope in ``data`` (``URL_NOT_ALLOWED`` / ``recovery=correctable``
     + suggestion) — same pattern as the auth rejection on ``on_message_send``.
     Delegates to ``reject_unsafe_webhook_registration_url`` so recovery/suggestion/field
-    cannot drift from the tool-path gate. AdCP tool wrappers raise ``AdCPValidationError``
-    directly for the same helper.
+    cannot drift from the tool-path gate.
+
+    Catches the dedicated ``AdCPUrlNotAllowedError`` rather than the generic validation
+    error it used to: only a refused URL translates to ``InvalidParamsError`` here, and a
+    class per code makes that catch say so.
     """
     try:
         reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
-    except AdCPValidationError as e:
+    except AdCPUrlNotAllowedError as e:
         raise _invalid_params_from_ssrf_error(e) from e
 
 

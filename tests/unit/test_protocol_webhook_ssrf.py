@@ -31,7 +31,7 @@ from adcp.types import ReportingWebhook
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _reject_unsafe_a2a_webhook_url
 from src.core.database.models import PushNotificationConfig
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPUrlNotAllowedError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
@@ -191,7 +191,7 @@ async def test_send_notification_does_not_follow_redirect_to_metadata() -> None:
 
 
 def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> None:
-    with pytest.raises(AdCPValidationError) as exc_info:
+    with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
         reject_unsafe_webhook_registration_url(
             "http://metadata.google.internal/computeMetadata/v1/",
             field="reporting_webhook.url",
@@ -254,7 +254,7 @@ def test_push_notification_config_repo_upsert_rejects_ssrf_url() -> None:
 async def test_create_media_buy_rejects_reporting_webhook_anyurl() -> None:
     """Registration gate must run for real ReportingWebhook.url (AnyUrl, not str)."""
     req = _minimal_create_request(reporting_webhook=_reporting_webhook(_METADATA_URL))
-    with pytest.raises(AdCPValidationError) as exc_info:
+    with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
         await _create_media_buy_impl(req, identity=_identity())
     assert exc_info.value.field == "reporting_webhook.url"
 
@@ -266,7 +266,7 @@ async def test_create_media_buy_rejects_push_config_before_workflow() -> None:
     mock_ctx = MagicMock()
     with (
         patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx),
-        pytest.raises(AdCPValidationError) as exc_info,
+        pytest.raises(AdCPUrlNotAllowedError) as exc_info,
     ):
         await _create_media_buy_impl(
             req,
@@ -280,7 +280,7 @@ async def test_create_media_buy_rejects_push_config_before_workflow() -> None:
 
 def test_sync_creatives_rejects_unsafe_push_config_url() -> None:
     """sync_creatives must reject metadata URL at registration before DB work."""
-    with pytest.raises(AdCPValidationError) as exc_info:
+    with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
         _sync_creatives_impl(
             creatives=[],
             push_notification_config={"url": _METADATA_URL},
@@ -293,7 +293,7 @@ def test_reject_unsafe_a2a_webhook_url_rejects_metadata() -> None:
     """A2A registration helper maps SSRF to InvalidParamsError + AdCP envelope in data."""
     with pytest.raises(InvalidParamsError) as exc_info:
         _reject_unsafe_a2a_webhook_url(_METADATA_URL)
-    assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
+    assert_envelope_shape(exc_info.value.data, "URL_NOT_ALLOWED", recovery="correctable")
     assert exc_info.value.data["errors"][0].get("suggestion")
 
 
@@ -313,7 +313,7 @@ async def test_a2a_message_send_rejects_unsafe_push_config_url() -> None:
     with pytest.raises(InvalidParamsError) as exc_info:
         await handler.on_message_send(params, context=MagicMock())
 
-    assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
+    assert_envelope_shape(exc_info.value.data, "URL_NOT_ALLOWED", recovery="correctable")
     assert handler._task_push_configs == {}
 
 
@@ -336,5 +336,5 @@ async def test_a2a_set_push_handler_rejects_metadata_url() -> None:
     ):
         await handler.on_create_task_push_notification_config(params, context=MagicMock())
 
-    assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
+    assert_envelope_shape(exc_info.value.data, "URL_NOT_ALLOWED", recovery="correctable")
     mock_uow.assert_not_called()

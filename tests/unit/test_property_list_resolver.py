@@ -9,7 +9,7 @@ import httpx
 import pytest
 from adcp.types import PropertyListReference
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPUrlNotAllowedError
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +85,7 @@ def _make_mock_response(response_json: dict, status_code: int = 200) -> MagicMoc
 # oracle over the seller's internal network view.
 # The buyer-facing sentence is SERVICE_UNAVAILABLE's table entry now — no raise site
 # authors it, so a wording drift can only come from the pinned table itself.
-def _assert_ssrf_rejection(exc: AdCPAdapterError, *, detail_pattern: str, absent: str | None = None) -> None:
+def _assert_ssrf_rejection(exc: AdCPUrlNotAllowedError, *, detail_pattern: str, absent: str | None = None) -> None:
     """Grade one SSRF rejection: safe on the wire, still discriminating server-side.
 
     These assertions used to run against the buyer-facing message
@@ -95,9 +95,13 @@ def _assert_ssrf_rejection(exc: AdCPAdapterError, *, detail_pattern: str, absent
     ``internal_detail`` slot, so each test keeps its specific expectation
     without the message carrying it.
     """
-    # No assertion on the suggestion: it is the code's, resolved from CODE_TABLE, so
-    # asserting it would grade the table against itself. See the note on
-    # salesagent-3dawm.12 about this code being mis-classified — left for the SSRF rework.
+    # The buyer's actionable signal is the CODE and the FIELD. URL_NOT_ALLOWED /
+    # correctable says a different URL will work; the previous AdCPAdapterError said
+    # SERVICE_UNAVAILABLE / transient — "retry with exponential backoff" — for a condition
+    # retrying can never resolve. The suggestion is the code's and is asserted nowhere,
+    # since comparing it to CODE_TABLE would grade the table against itself.
+    assert exc.error_code == "URL_NOT_ALLOWED", f"expected URL_NOT_ALLOWED, got {exc.error_code}"
+    assert exc.recovery == "correctable", f"a rejected URL is correctable, got {exc.recovery}"
     assert re.search(detail_pattern, str(exc.internal_detail)), (
         f"the rejection reason must survive server-side on internal_detail; "
         f"expected /{detail_pattern}/ in {exc.internal_detail!r}"
@@ -468,7 +472,7 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url=malicious_url)
 
-        with pytest.raises(AdCPAdapterError) as exc_info:
+        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
             await resolve_property_list(ref)
         _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
 
@@ -493,7 +497,7 @@ class TestSSRFProtection:
             "src.core.security.url_validator.socket.gethostbyname",
             return_value=resolved_ip,
         ):
-            with pytest.raises(AdCPAdapterError) as exc_info:
+            with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
                 await resolve_property_list(ref)
 
         # The sharpest form of the obligation: ``resolved_ip`` is the
@@ -526,7 +530,7 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url=f"https://{hostname}")
 
-        with pytest.raises(AdCPAdapterError) as exc_info:
+        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
             await resolve_property_list(ref)
         # The hostname came from the buyer, but the fact that THIS seller
         # blocklists it is seller-internal network topology, so the reason stays
@@ -541,7 +545,7 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url="http://external-agent.example.com")
 
-        with pytest.raises(AdCPAdapterError) as exc_info:
+        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
             await resolve_property_list(ref)
         _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
 
@@ -552,7 +556,7 @@ class TestSSRFProtection:
 
         ref = _make_ref(agent_url="file:///etc/passwd")
 
-        with pytest.raises(AdCPAdapterError) as exc_info:
+        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
             await resolve_property_list(ref)
         _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
 
@@ -583,7 +587,7 @@ class TestSSRFProtection:
         ref = _make_ref(agent_url="http://evil.internal:9200")
 
         with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            with pytest.raises(AdCPAdapterError) as exc_info:
+            with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
                 await resolve_property_list(ref)
 
             # AsyncClient should never have been instantiated

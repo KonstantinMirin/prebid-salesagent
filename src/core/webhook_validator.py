@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 from adcp.types import ContextObject, TaskType
 
 from src.core.config import is_production
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPUrlNotAllowedError
 from src.core.security.url_validator import check_url_ssrf
 
 # Fallback used when an action label is not a member of the SDK's closed
@@ -66,7 +66,6 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
     return task_type
 
 
-
 def sanitize_webhook_url_for_log(url: str | None) -> str | None:
     """Return ``scheme://host/path`` for logs — never credentials or query."""
     if not url:
@@ -97,10 +96,14 @@ def reject_unsafe_webhook_registration_url(
         return
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
     if not is_valid:
-        raise AdCPValidationError(
-            details={"field": field, "error_msg": error_msg},
+        # error_msg names the rejected host, which the spec's Security Considerations
+        # forbid disclosing ("MUST NOT include: internal service names, hostnames, or IP
+        # addresses"). It rides internal_detail (server log only) rather than details,
+        # which is on the buyer's wire.
+        raise AdCPUrlNotAllowedError(
             field=field,
             context=context,
+            internal_detail=error_msg,
         )
 
 

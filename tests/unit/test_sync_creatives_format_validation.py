@@ -170,7 +170,6 @@ class TestSyncCreativesFormatValidation:
             with pytest.raises(AdCPServiceUnavailableError) as exc_info:
                 _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
 
-
     def test_format_validation_with_string_format_id(self, identity, mock_tenant, mock_format_spec):
         """Test that string format_ids are rejected (FormatId object required)."""
         # Creative with string format_id (legacy format - no longer supported)

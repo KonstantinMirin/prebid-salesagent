@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from adcp.types import GetPropertyListResponse, PropertyListReference
 
-from src.core.exceptions import AdCPAdapterError
+from src.core.exceptions import AdCPAdapterError, AdCPUrlNotAllowedError
 from src.core.security.url_validator import check_url_ssrf
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,8 @@ def _validate_agent_url(agent_url: str) -> None:
         # f"Invalid URL: {e}", i.e. third-party text. The static suggestion
         # covers the closed set of causes (scheme / hostname / blocked host /
         # private range / unresolvable); the reason goes to the log only.
-        raise AdCPAdapterError(
+        raise AdCPUrlNotAllowedError(
+            field="property_list.agent_url",
             internal_detail=error,
         )
 

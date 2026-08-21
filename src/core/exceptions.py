@@ -720,6 +720,29 @@ class AdCPInternalError(AdCPError):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
 
 
+class AdCPUrlNotAllowedError(AdCPError):
+    """A buyer-supplied URL names a host this seller will not contact (400).
+
+    Not SERVICE_UNAVAILABLE: nothing of ours is down, and retrying the same URL can
+    never succeed. Not the generic VALIDATION_ERROR either — the pin reserves that for
+    "invalid field values or business rules beyond schema validation", which is true but
+    tells a buyer nothing they can act on differently. This is its own condition: the URL
+    is well formed and schema-valid, and refused for where it points.
+
+    A platform code, legal because AdCP 3.1.1's core/error.json makes the vocabulary open
+    — published codes are documentary and senders MAY emit codes outside the set, provided
+    recovery stays inside its three values. Correctable: a different URL works.
+
+    The rejection REASON never reaches the buyer. The spec's Security Considerations
+    forbid disclosing internal service names, hostnames or IP addresses, so the specific
+    cause rides ``internal_detail`` (server log only) while the table's suggestion names
+    the closed set of host classes a buyer must avoid.
+    """
+
+    _default_status_code: ClassVar[int] = 400
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.URL_NOT_ALLOWED
+
+
 # ---------------------------------------------------------------------------
 # Typed subclasses for spec-compliant error codes.
 # ---------------------------------------------------------------------------
