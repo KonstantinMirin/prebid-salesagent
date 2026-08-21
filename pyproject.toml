@@ -113,6 +113,11 @@ dev = [
     # both sides; branch fix(test-infra) 45c310f3e). pytest-xdist is declared
     # once above next to pytest-bdd.
     "pytest-randomly>=3.15.0",
+    # The hook runner itself. CONTRIBUTING.md and docs/development/ci-pipeline.md
+    # both tell contributors to run `pre-commit install`, but it was never a
+    # declared dependency -- it resolved only via `uvx`, i.e. from the network.
+    # Floor is the pre-push stage requirement (docs/development/ci-pipeline.md).
+    "pre-commit>=3.2.0",
 ]
 
 [tool.ruff]
