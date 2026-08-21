@@ -737,13 +737,37 @@ def then_accounts_from_first_page(ctx: dict) -> None:
 
 @then("the response contains a validation error")
 def then_validation_error(ctx: dict) -> None:
-    """Assert the response is a validation error."""
-    error = ctx.get("error")
-    assert error is not None, "Expected a validation error but got no error"
+    """Assert the request was rejected as invalid.
+
+    Two genuinely different rejections reach this step, and only one has a wire:
+
+    * the SERVER rejected it -> assert VALIDATION_ERROR on the envelope the buyer
+      received, not on a reconstructed exception (salesagent-3dawm.18).
+    * the request could not be CONSTRUCTED -> e.g.
+      ``ListAccountsRequest(status="unknown_status")`` raises in the When step at
+      :468 before ``dispatch_request`` is ever called, so there is no wire at
+      all and ``ctx["error"]`` holds the real pydantic exception.
+
+    The old ``isinstance(error, (AdCPValidationError, ValueError))`` collapsed
+    both into one weak type check that also admitted a bare ``ValueError`` from
+    anywhere.
+    """
+    from pydantic import ValidationError as PydanticValidationError
+
     from src.core.exceptions import AdCPValidationError
 
-    assert isinstance(error, (AdCPValidationError, ValueError)), (
-        f"Expected validation error, got {type(error).__name__}: {error}"
+    result = ctx.get("result")
+    if result is not None:
+        result.assert_wire_error("VALIDATION_ERROR")
+        return
+
+    error = ctx.get("error")
+    assert error is not None, (
+        "Expected a validation error, but the request neither reached the wire nor failed to build"
+    )
+    assert isinstance(error, (PydanticValidationError, AdCPValidationError)), (
+        "no wire envelope was captured, so the request must have been rejected while being built — "
+        f"got {type(error).__name__}: {error}"
     )
 
 
@@ -3124,27 +3148,16 @@ def then_error_with_code(ctx: dict, code: str) -> None:
 
 @then("the error indicates accounts array must not be empty")
 def then_empty_accounts_error(ctx: dict) -> None:
-    """Assert the error is a validation error about empty accounts array.
+    """Assert the buyer received VALIDATION_ERROR naming the accounts field.
 
-    Production raises AdCPValidationError with a message containing
-    'accounts array must not be empty'.
+    One call on the single sanctioned surface. The isinstance gate this replaces
+    was redundant on top of the wire read below it — and weaker, since it also
+    admitted a bare ``ValueError``. WHICH input was rejected is graded on the
+    protocol ``field`` pointer, not on the sentence: the sentence is a function
+    of the code through CODE_TABLE and cannot name a request field, so a
+    substring pair could only ever have passed by accident of wording.
     """
-    from src.core.exceptions import AdCPValidationError
-
-    error = _get_error(ctx)
-    assert isinstance(error, (AdCPValidationError, ValueError)), (
-        f"Expected AdCPValidationError, got {type(error).__name__}: {error}"
-    )
-    # WHICH input was rejected is graded on the protocol `field` pointer, not on the
-    # sentence: the sentence is a function of the code through CODE_TABLE and cannot name
-    # a request field, so the old "empty"/"account" substring pair could only ever have
-    # passed by accident of wording.
-    result = ctx.get("result")
-    error_object = result.wire_error_object() if result is not None else None
-    assert error_object is not None, "no wire error object captured"
-    assert error_object.get("field") == "accounts", (
-        f"expected the rejection to name the accounts field, got field={error_object.get('field')!r}: {error_object!r}"
-    )
+    ctx["result"].assert_wire_error("VALIDATION_ERROR", field="accounts")
 
 
 @then("the per-account error indicates brand domain is required")
