@@ -92,9 +92,7 @@ def _as_format_dict(fmt: Any) -> dict[str, Any]:
     model_dump = getattr(fmt, "model_dump", None)
     if callable(model_dump):
         return model_dump(mode="json")
-    raise AdCPAdapterError(
-        recovery="terminal",
-    )
+    raise AdCPAdapterError()
 
 
 def _unknown_asset_types(fmt_data: dict[str, Any]) -> set[str]:
@@ -429,9 +427,7 @@ class CreativeAgentRegistry:
             if result.status == "completed":
                 formats_data = result.data
                 if formats_data is None:
-                    raise AdCPAdapterError(
-                        recovery="terminal",
-                    )
+                    raise AdCPAdapterError()
 
                 logger.info(
                     f"_fetch_formats_from_agent: Got response with {len(formats_data.formats) if hasattr(formats_data, 'formats') else 'N/A'} formats"
@@ -452,7 +448,6 @@ class CreativeAgentRegistry:
             elif result.status == "submitted":
                 raise AdCPAdapterError(
                     details={"agent_name": agent.name},
-                    recovery="terminal",
                 )
 
             elif result.status == "failed":
@@ -500,7 +495,6 @@ class CreativeAgentRegistry:
             else:
                 raise AdCPAdapterError(
                     details={"agent_name": agent.name, "status": result.status},
-                    recovery="terminal",
                 )
 
         except ADCPError as e:
@@ -584,7 +578,6 @@ class CreativeAgentRegistry:
                 raise AdCPAdapterError(
                     details={"status_code": exc.response.status_code},
                     internal_detail=exc,
-                    recovery="terminal",
                 ) from exc
             except httpx.TimeoutException as exc:
                 last_exc = exc
@@ -624,7 +617,6 @@ class CreativeAgentRegistry:
 
         raise AdCPAdapterError(
             details={"agent_url": agent.agent_url},
-            recovery="terminal",
         )
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
@@ -639,9 +631,7 @@ class CreativeAgentRegistry:
                 formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        raise AdCPAdapterError(
-            recovery="terminal",
-        )
+        raise AdCPAdapterError()
 
     async def get_formats_for_agent(
         self,

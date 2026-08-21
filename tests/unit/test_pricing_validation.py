@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 from src.core.schemas import PricingModel
 from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
@@ -30,7 +30,7 @@ class TestPricingValidation:
         package.bid_price = None
 
         # Should raise data integrity error
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPConfigurationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
     def test_legacy_product_with_pricing_model_in_package_should_error(self):
@@ -48,7 +48,7 @@ class TestPricingValidation:
         package.pricing_option_id = None
         package.bid_price = None
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPConfigurationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
     def test_new_product_with_matching_pricing_model(self):
@@ -195,7 +195,7 @@ class TestPricingValidation:
         package.pricing_model = PricingModel.cpm
         package.bid_price = None
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPConfigurationError) as exc_info:
             _validate_pricing_model_selection(package, product, "USD")
 
     def test_budget_below_minimum_spend(self):

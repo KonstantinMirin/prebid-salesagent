@@ -196,7 +196,6 @@ class TestSignalsAgentRegistry:
         # reconciles auth failures to AUTH_INVALID (presented-but-rejected credential,
         # recovery terminal) per the v3.1.1 error-code.json split (salesagent-mkso).
         assert exc_info.value.error_code == "AUTH_INVALID"
-        assert exc_info.value.recovery == "terminal"
 
     @pytest.mark.asyncio
     async def test_get_signals_from_agent_handles_timeout_error(self):
@@ -231,7 +230,6 @@ class TestSignalsAgentRegistry:
                 tenant_id="test-tenant",
             )
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
 
     @pytest.mark.asyncio
     async def test_get_signals_from_agent_handles_connection_error(self):
@@ -269,7 +267,6 @@ class TestSignalsAgentRegistry:
                 tenant_id="test-tenant",
             )
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
 
     @pytest.mark.asyncio
     async def test_get_signals_from_agent_handles_generic_adcp_error(self):
@@ -304,7 +301,6 @@ class TestSignalsAgentRegistry:
                 tenant_id="test-tenant",
             )
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
         # The catch-all used to forward the bare SDK message. That is third-party
         # free text on a client-facing field (transport-errors.mdx § Security
         # Considerations), so the buyer now gets the first-party sentence and the

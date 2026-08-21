@@ -150,13 +150,11 @@ def _adcp_error_from_code(
         return AdCPError(
             error_code=error_code,
             details=details,
-            recovery=recovery or "terminal",
             suggestion=suggestion,
             field=field,
         )
     return exc_cls(
         details=details,
-        recovery=recovery or "terminal",
         suggestion=suggestion,
         field=field,
     )

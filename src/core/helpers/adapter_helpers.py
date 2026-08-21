@@ -292,10 +292,7 @@ def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdap
     if test_behavior.unavailable:
         from src.core.exceptions import AdCPAdapterError
 
-        raise AdCPAdapterError(
-            recovery=test_behavior.recovery,
-            suggestion="Retry the operation or contact ad server support",
-        )
+        raise AdCPAdapterError()
 
     return get_adapter_class(adapter_type)
 

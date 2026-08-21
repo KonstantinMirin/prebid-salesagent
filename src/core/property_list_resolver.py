@@ -47,7 +47,6 @@ def _validate_agent_url(agent_url: str) -> None:
         # covers the closed set of causes (scheme / hostname / blocked host /
         # private range / unresolvable); the reason goes to the log only.
         raise AdCPAdapterError(
-            suggestion="Provide an https:// agent_url that resolves to a publicly routable host",
             internal_detail=error,
         )
 

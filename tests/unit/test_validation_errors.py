@@ -34,8 +34,14 @@ def test_first_validation_error_field_is_owned_by_exception_leaf_module():
     assert first_validation_error_field.__module__ == "src.core.exceptions"
 
 
-def test_create_media_buy_boundary_validation_preserves_field_suggestion():
-    """Boundary request construction keeps the current field-specific hint."""
+def test_create_media_buy_boundary_validation_names_the_offending_field():
+    """Boundary request construction tells the buyer WHICH field, via the field slot.
+
+    The specificity lives on ``field``, not in prose: the suggestion is a function of the
+    code and is asserted nowhere, since comparing it to CODE_TABLE would grade the table
+    against itself. This test previously pinned an authored sentence that named the same
+    field ``field=`` already carries.
+    """
     from src.core.tools.media_buy_create import _build_create_media_buy_request
 
     with pytest.raises(AdCPValidationError) as exc_info:
@@ -55,7 +61,6 @@ def test_create_media_buy_boundary_validation_preserves_field_suggestion():
 
     error = exc_info.value
     assert error.field == "idempotency_key"
-    assert error.suggestion == ("Provide the required 'idempotency_key' field and resend the request.")
 
 
 def test_brand_target_audience_must_be_string():

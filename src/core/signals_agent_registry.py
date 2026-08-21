@@ -175,9 +175,7 @@ class SignalsAgentRegistry:
             if result.status == "completed":
                 # Synchronous completion
                 if result.data is None:
-                    raise AdCPAdapterError(
-                        recovery="terminal",
-                    )
+                    raise AdCPAdapterError()
                 signals = result.data.signals
                 total_duration = time.time() - start_time
                 logger.info(f"[TIMING] Got {len(signals or [])} signals synchronously in {total_duration:.2f}s total")
@@ -198,9 +196,7 @@ class SignalsAgentRegistry:
                 # Asynchronous completion - webhook registered
                 total_duration = time.time() - start_time
                 if result.submitted is None:
-                    raise AdCPAdapterError(
-                        recovery="terminal",
-                    )
+                    raise AdCPAdapterError()
                 logger.info(
                     f"[TIMING] Async operation submitted in {total_duration:.2f}s, "
                     f"webhook: {result.submitted.webhook_url}"
@@ -211,7 +207,6 @@ class SignalsAgentRegistry:
             else:
                 raise AdCPAdapterError(
                     details={"agent_name": agent.name, "status": result.status},
-                    recovery="terminal",
                 )
 
         except ADCPError as e:

@@ -346,10 +346,7 @@ class MockAdServer(AdServerAdapter):
         from src.core.exceptions import AdCPAdapterError
 
         details = test_behavior.get("error_details")
-        suggestion = (details or {}).pop("suggestion", None) if isinstance(details, dict) else None
         raise AdCPAdapterError(
-            recovery=test_behavior.get("recovery", "transient"),
-            suggestion=suggestion or "Retry the operation or contact ad server support",
             details=details or None,
             # A fault-injection knob must still DO something (CLAUDE.md: no quiet
             # failures). The injected text is a server-side diagnostic, so it rides

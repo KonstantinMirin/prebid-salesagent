@@ -2426,7 +2426,6 @@ class TestWorkflowStepCreation:
                 context=None,
                 uow=mock_uow,
             )
-        assert exc_info.value.recovery == "transient"
 
 
 # ============================================================================

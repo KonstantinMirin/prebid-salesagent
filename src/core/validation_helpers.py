@@ -53,7 +53,6 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
         errors = e.errors()
         raise AdCPValidationError(
             field=field if field is not None else first_validation_error_field(e),
-            suggestion=suggest_validation_fix(e),
             details=build_validation_error_details(errors),
         ) from e
 

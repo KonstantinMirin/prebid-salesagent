@@ -81,18 +81,15 @@ def _check_account_status(account_id: str, status: str | None) -> None:
         # details payload carrying the setup instructions (POST-F2).
         setup_instructions = "Complete billing configuration before use."
         raise AdCPAccountSetupRequiredError(
-            suggestion=setup_instructions,
             details={"setup_instructions": setup_instructions, "account_id": account_id},
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(
             details={"account_id": account_id},
-            suggestion="Contact your account manager.",
         )
     if status == "payment_required":
         raise AdCPAccountPaymentRequiredError(
             details={"account_id": account_id},
-            suggestion="Resolve payment before use.",
         )
 
 
@@ -109,7 +106,6 @@ def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: A
     if not repo.has_access(principal_id, account_id):
         raise AdCPAuthorizationError(
             details={"principal_id": principal_id, "account_id": account_id},
-            suggestion="Use list_accounts to find accounts accessible to this agent.",
         )
 
 
@@ -123,7 +119,6 @@ def _resolve_by_id(
     if account is None:
         raise AdCPAccountNotFoundError(
             details={"account_id": account_id},
-            suggestion="Use list_accounts to find valid account IDs.",
         )
 
     _require_account_access(identity, account_id, repo)
@@ -167,14 +162,12 @@ def _resolve_by_natural_key(
         )
         raise AdCPAccountAmbiguousError(
             details={"match_count": total, "brand_domain": brand_domain, "operator": ref.operator},
-            suggestion="Use explicit account_id instead of brand+operator to avoid ambiguity.",
         )
 
     account = matches[0] if matches else None
     if account is None:
         raise AdCPAccountNotFoundError(
             details={"brand_domain": brand_domain, "operator": ref.operator},
-            suggestion="Use list_accounts to find valid accounts.",
         )
 
     _require_account_access(identity, account.account_id, repo)

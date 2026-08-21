@@ -23,15 +23,6 @@ from src.core.security.url_validator import check_url_ssrf
 # enum and would otherwise reject the payload as schema-invalid.
 WEBHOOK_TASK_TYPE_FALLBACK = "update_media_buy"
 
-WEBHOOK_SSRF_SUGGESTION = (
-    "Provide a public https webhook URL that does not target private, loopback, "
-    "link-local, CGNAT, multicast, or cloud-metadata hosts."
-)
-WEBHOOK_SSRF_SUGGESTION_DEV = (
-    "Provide a public http(s) webhook URL that does not target private, loopback, "
-    "link-local, CGNAT, multicast, or cloud-metadata hosts."
-)
-
 # Log fallback when sanitize_webhook_url_for_log cannot parse scheme/host —
 # never fall back to the raw buyer URL (credentials / query).
 UNPARSEABLE_WEBHOOK_URL_FOR_LOG = "<unparseable-url>"
@@ -75,12 +66,6 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
     return task_type
 
 
-def webhook_ssrf_suggestion() -> str:
-    """Buyer-facing suggestion for registration/outbound SSRF rejections."""
-    if _strict_mode():
-        return WEBHOOK_SSRF_SUGGESTION
-    return WEBHOOK_SSRF_SUGGESTION_DEV
-
 
 def sanitize_webhook_url_for_log(url: str | None) -> str | None:
     """Return ``scheme://host/path`` for logs — never credentials or query."""
@@ -115,7 +100,6 @@ def reject_unsafe_webhook_registration_url(
         raise AdCPValidationError(
             details={"field": field, "error_msg": error_msg},
             field=field,
-            suggestion=webhook_ssrf_suggestion(),
             context=context,
         )
 

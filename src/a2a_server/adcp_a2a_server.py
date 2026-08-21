@@ -119,7 +119,6 @@ from src.core.validation_helpers import (
 from src.core.version import get_version
 from src.core.webhook_validator import (
     reject_unsafe_webhook_registration_url,
-    webhook_ssrf_suggestion,
     webhook_url_for_log,
 )
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -145,7 +144,6 @@ def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
     else:
         adcp_err = AdCPValidationError(
             field="push_notification_config.url",
-            suggestion=webhook_ssrf_suggestion(),
         )
     return InvalidParamsError(
         message=adcp_err.message,
@@ -1817,9 +1815,7 @@ class AdCPRequestHandler(RequestHandler):
         # Map A2A parameters - creatives is required.
         # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
         if "creatives" not in parameters:
-            raise AdCPValidationError(
-                suggestion="Required: ['creatives']",
-            )
+            raise AdCPValidationError()
 
         # Construct typed models at the A2A boundary (Pydantic validation at entry).
         # Pre-process format_id: upgrade legacy strings to FormatId models.
@@ -2091,9 +2087,7 @@ class AdCPRequestHandler(RequestHandler):
         # media_buy_id is required. Raise typed AdCPValidationError so the dispatcher
         # routes it through the two-layer envelope, matching the create_media_buy skill.
         if "media_buy_id" not in params:
-            raise AdCPValidationError(
-                suggestion="Provide the media_buy_id of the media buy to update",
-            )
+            raise AdCPValidationError()
 
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')

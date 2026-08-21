@@ -104,9 +104,7 @@ def _get_media_buys_impl(
     identity = require_identity(identity, context=req.context)
 
     if req.account is not None or req.account_id is not None:
-        raise AdCPCapabilityNotSupportedError(
-            suggestion="Omit account/account_id from the request; the seller infers the account from the auth token.",
-        )
+        raise AdCPCapabilityNotSupportedError()
 
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
@@ -468,7 +466,6 @@ def _resolve_status_filter(
         raise AdCPValidationError(
             internal_detail=e,
             field="status_filter",
-            suggestion="status_filter values must be valid media-buy statuses",
         ) from e
 
 

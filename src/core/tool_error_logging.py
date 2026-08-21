@@ -453,9 +453,11 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     # error_message is deliberately dropped: a plain ToolError's text has no
     # provenance guarantee, and the resolved code's table sentence is what the buyer
     # should see. The raw text is still logged server-side above.
+    # recovery is NOT passed: it is a function of the code, resolved from CODE_TABLE by the
+    # named-code branch of the constructor. A caller-supplied recovery could contradict the
+    # code it travels with, which is what deleting the parameter prevents.
     synthetic = AdCPError(
         error_code=resolved_code,
         status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
-        recovery=recovery,
     )
     return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))

@@ -1,7 +1,7 @@
 """A server-side property-list failure must not reach the buyer as their mistake.
 
 ``_get_products_impl`` wrapped every non-``AdCPError`` out of
-``resolve_property_list`` in ``AdCPValidationError(..., recovery="transient")``.
+``resolve_property_list`` in ``AdCPValidationError``, whose recovery the code table supplies.
 Two things are wrong with that on the wire, and only the wire can show them:
 
 1. The buyer is told ``VALIDATION_ERROR`` — "your request is malformed" — for a

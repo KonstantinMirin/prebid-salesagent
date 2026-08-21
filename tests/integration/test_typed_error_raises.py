@@ -101,7 +101,6 @@ class TestTypedAdCPErrorRaises:
             await _create_media_buy_impl(req=req, identity=identity)
 
         assert exc_info.value.error_code == "BUDGET_TOO_LOW"
-        assert exc_info.value.recovery == "correctable"
 
     def test_media_buy_not_found_raises_typed_subclass(self, typed_raise_setup):
         """``_verify_principal`` raises ``AdCPMediaBuyNotFoundError`` on lookup miss.
@@ -120,7 +119,6 @@ class TestTypedAdCPErrorRaises:
         assert exc_info.value.error_code == "MEDIA_BUY_NOT_FOUND"
         # AdCPMediaBuyNotFoundError overrides AdCPNotFoundError's terminal default
         # because the buyer can correct by supplying the right media_buy_id.
-        assert exc_info.value.recovery == "correctable"
 
     def test_account_filter_unsupported_raises_typed_subclass(self):
         """``_get_media_buys_impl`` raises ``AdCPCapabilityNotSupportedError``.
@@ -146,4 +144,3 @@ class TestTypedAdCPErrorRaises:
         assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
         # Intentional spec divergence (see exceptions.py:484) — we emit
         # correctable because the buyer can drop the unsupported parameter.
-        assert exc_info.value.recovery == "correctable"

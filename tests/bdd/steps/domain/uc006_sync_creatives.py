@@ -2206,8 +2206,8 @@ def given_assignments_to_package_only_accepts(ctx: dict, accepted_format: str) -
 def given_assignments_referencing_nonexistent_package(ctx: dict) -> None:
     """Build an assignments payload whose package_id does not exist in the tenant.
 
-    Production's _assignments.py:62-69 raises AdCPNotFoundError(recovery=
-    "correctable") when ``find_package_with_media_buy`` returns nothing
+    Production's _assignments.py:62-69 raises AdCPNotFoundError, whose recovery the
+    code table supplies as "correctable", when ``find_package_with_media_buy`` returns nothing
     AND validation_mode == "strict".
 
     Distinct from the existing "an assignment to a package that does not

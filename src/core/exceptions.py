@@ -300,9 +300,7 @@ class AdCPError(Exception):
         error_code: ErrorCodeT | None = None,
         status_code: int | None = None,
         details: dict[str, Any] | None = None,
-        recovery: RecoveryHint | None = None,
         field: str | None = None,
-        suggestion: str | None = None,
         retry_after: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
         internal_detail: BaseException | str | None = None,
@@ -340,7 +338,7 @@ class AdCPError(Exception):
             default_suggestion = entry.suggestion if declared_suggestion is None else declared_suggestion
         self.details = details
         self.field = field
-        self.suggestion = suggestion if suggestion is not None else default_suggestion
+        self.suggestion = default_suggestion
         self.retry_after = retry_after
         self.context = context
         # NON-WIRE. Deliberately absent from to_dict()/to_adcp_error()/
@@ -348,7 +346,7 @@ class AdCPError(Exception):
         # by normalize_to_adcp_error(). Never add it to a serializer.
         self.internal_detail = internal_detail
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
-        self.recovery = recovery if recovery is not None else default_recovery
+        self.recovery = default_recovery
         # args stays EMPTY: BaseException.__reduce__ replays ``cls(*args)``, and this
         # constructor takes none. ``__reduce__`` below replays the keyword form instead,
         # and ``__str__`` reads the property, so str(e) and .message cannot diverge.
@@ -702,6 +700,24 @@ class AdCPServiceUnavailableError(AdCPError):
 
     _default_status_code: ClassVar[int] = 503
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
+
+
+class AdCPInternalError(AdCPError):
+    """The seller's own state is inconsistent, so the request cannot be completed (500).
+
+    Distinct from AdCPServiceUnavailableError, which names a downstream outage, and from
+    AdCPValidationError, which says the buyer's request is at fault. This says neither: the
+    request was well formed and no dependency is down, but an invariant this seller relies
+    on did not hold. The buyer cannot fix it by changing anything, and recovery is transient
+    because the inconsistency may be a race that a retry resolves.
+
+    INTERNAL_ERROR is a platform code (AppErrorCode), legal on the wire because AdCP 3.1.1's
+    code vocabulary is open, and classified in CODE_TABLE like every other code this seller
+    emits.
+    """
+
+    _default_status_code: ClassVar[int] = 500
+    _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
 
 
 # ---------------------------------------------------------------------------

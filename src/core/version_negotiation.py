@@ -53,5 +53,4 @@ def negotiate_adcp_version(adcp_version: str | None, adcp_major_version: int | N
             "adcp_version": adcp_version,
             "adcp_major_version": adcp_major_version,
         },
-        suggestion=f"Re-pin adcp_version to one of {SUPPORTED_ADCP_VERSIONS} and retry",
     )

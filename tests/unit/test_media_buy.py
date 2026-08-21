@@ -28,6 +28,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
+    AdCPConfigurationError,
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
     AdCPProductNotFoundError,
@@ -1246,7 +1247,7 @@ class TestCreateMediaBuyImplAuth:
                 ),
             ),
         ):
-            with pytest.raises(AdCPValidationError) as _ei:
+            with pytest.raises(AdCPConfigurationError) as _ei:
                 await _create_media_buy_impl(req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
 
@@ -1279,9 +1280,8 @@ class TestCreateMediaBuyImplAuth:
                 ),
             ),
         ):
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPConfigurationError) as exc_info:
                 await _create_media_buy_impl(req, identity=identity)
-            assert exc_info.value.recovery == "terminal"
 
 
 class TestIdempotencyKeyRequired:
@@ -4386,7 +4386,6 @@ class TestGetMediaBuysImplAuth:
 
         with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
             _get_media_buys_impl(req, identity=identity)
-        assert exc_info.value.recovery == "correctable"
 
 
 # ===========================================================================

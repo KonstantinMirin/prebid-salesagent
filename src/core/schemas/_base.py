@@ -1996,14 +1996,12 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
             if not data.get("package_id"):
                 raise AdCPInvalidRequestError(
                     field=package_field_path("package_id"),
-                    suggestion="Include the package_id of the package you want to update.",
                 )
             present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
             if present:
                 raise AdCPInvalidRequestError(
                     details={"immutable_fields": present},
                     field=package_field_path(present[0]),
-                    suggestion="Remove the immutable field(s) from the package update, or create a new media buy to change product, formats, or pricing.",
                 )
         return data
 
@@ -2029,17 +2027,14 @@ def validate_idempotency_key_shape(key: str | None) -> None:
     if len(key) < _IDEMPOTENCY_KEY_MIN:
         raise AdCPValidationError(
             field="idempotency_key",
-            suggestion=f"Use an idempotency_key of at least {_IDEMPOTENCY_KEY_MIN} characters.",
         )
     if len(key) > _IDEMPOTENCY_KEY_MAX:
         raise AdCPValidationError(
             field="idempotency_key",
-            suggestion=f"Use an idempotency_key of at most {_IDEMPOTENCY_KEY_MAX} characters.",
         )
     if not _IDEMPOTENCY_KEY_CHARSET.match(key):
         raise AdCPValidationError(
             field="idempotency_key",
-            suggestion="Use only letters, digits, and the characters _ . : -",
         )
 
 

@@ -80,7 +80,6 @@ class MediaBuyRepository:
 
             raise AdCPMediaBuyNotFoundError(
                 details={"media_buy_id": media_buy_id},
-                suggestion="Verify the media_buy_id is correct and belongs to your account.",
                 context=context,
             )
         return media_buy
@@ -204,7 +203,6 @@ class MediaBuyRepository:
 
             raise AdCPPackageNotFoundError(
                 details={"package_id": package_id, "media_buy_id": media_buy_id},
-                suggestion="Verify the package_id exists in this media buy; list the media buy's packages to find valid ids.",
                 context=context,
             )
         return package

@@ -46,11 +46,13 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
     AdCPCreativeRejectedError,
     AdCPError,
     AdCPFormatNotFoundError,
     AdCPIdempotencyConflictError,
     AdCPIdempotencyExpiredError,
+    AdCPInternalError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
     AdCPServiceUnavailableError,
@@ -379,10 +381,6 @@ def _validate_creatives_before_adapter_call(
         # BR-UC-003 ext-i storyboard cell grades it) — deferred pending
         # upstream reconciliation.
         raise AdCPCreativeRejectedError(
-            suggestion=(
-                "Sync the creative(s) via sync_creatives (or pick an existing "
-                "creative from list_creatives) before referencing them in a media buy."
-            ),
             details={"creative_ids": sorted(missing_ids)},
         )
 
@@ -494,12 +492,6 @@ def _validate_creatives_before_adapter_call(
         )
         logger.error(f"[PRE-VALIDATION] {error_msg}")
         raise AdCPCreativeRejectedError(
-            suggestion=(
-                "Reference creatives must have dimensions (width/height) and a content URL "
-                "matching their format specification, and their format must match the product's "
-                "accepted formats. Re-sync the creative(s) via sync_creatives so they pass "
-                "validation before creating the media buy."
-            ),
             details={"creative_errors": validation_errors},
         )
 
@@ -1406,10 +1398,7 @@ def _validate_pricing_model_selection(
 
     # All products must have pricing_options
     if not product.pricing_options or len(product.pricing_options) == 0:
-        raise AdCPValidationError(
-            details={"product_id": product.product_id},
-            recovery="terminal",
-        )
+        raise AdCPConfigurationError(details={"product_id": product.product_id})
 
     # Determine which pricing option to use
     # Priority: pricing_option_id (AdCP spec) > pricing_model (legacy)
@@ -1471,7 +1460,6 @@ def _validate_pricing_model_selection(
                 **({"requested_pricing_model": str(pricing_model_fallback)} if pricing_model_fallback else {}),
                 **({"requested_currency": campaign_currency} if campaign_currency else {}),
             },
-            suggestion="Select a pricing_option_id offered by the product (see the product's pricing_options) and resend.",
         )
 
     # Validate auction pricing
@@ -1486,7 +1474,6 @@ def _validate_pricing_model_selection(
                         str(selected_option.price_guidance.get("floor")) if selected_option.price_guidance else None
                     ),
                 },
-                suggestion="Provide a bid_price at or above the floor price for this auction pricing option and resend.",
             )
 
         floor_price = (
@@ -1503,15 +1490,11 @@ def _validate_pricing_model_selection(
                     "floor_price": str(floor_price),
                     "pricing_model": str(selected_option.pricing_model),
                 },
-                suggestion=f"Increase bid_price to at least the floor price ({floor_price}) and resend.",
             )
 
     # Validate fixed pricing has rate
     if selected_option.is_fixed and not selected_option.rate:
-        raise AdCPValidationError(
-            details={"product_id": product.product_id},
-            recovery="terminal",
-        )
+        raise AdCPConfigurationError(details={"product_id": product.product_id})
 
     # Validate minimum spend per package
     if selected_option.min_spend_per_package:
@@ -1671,10 +1654,7 @@ def _raise_degraded_replay_outcome(
         assert uow.idempotency_attempts is not None
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
-            raise AdCPValidationError(
-                details={"idempotency_key": idempotency_key},
-                recovery="terminal",
-            )
+            raise AdCPInternalError(details={"idempotency_key": idempotency_key})
 
         # Rule 6 (security.mdx#idempotency): a key the seller has seen whose
         # replay window has expired rejects rather than silently re-deriving —
@@ -1691,14 +1671,7 @@ def _raise_degraded_replay_outcome(
             cached.expires_at <= now if cached is not None else now - existing.created_at > DEFAULT_REPLAY_TTL
         )
         if window_expired:
-            raise AdCPIdempotencyExpiredError(
-                suggestion=(
-                    "Perform a natural-key existence check (e.g. get_media_buys by "
-                    "context.internal_campaign_id) to determine whether the original "
-                    "request succeeded, then accept that result or mint a fresh "
-                    "idempotency_key for a new attempt."
-                ),
-            )
+            raise AdCPIdempotencyExpiredError()
 
         # Rule 5: same key + different canonical payload conflicts even on the
         # degraded path — never resolve a request to a buy it does not describe.
@@ -2079,7 +2052,12 @@ async def _create_media_buy_impl(
                 f"Setup incomplete. Please complete the following required tasks:\n\n{task_list}\n\n"
                 f"Visit the setup checklist at /tenant/{tenant['tenant_id']}/setup-checklist for details."
             )
-            raise AdCPValidationError(recovery="terminal")
+            raise AdCPConfigurationError(
+                details={
+                    "missing_tasks": [t["name"] for t in e.missing_tasks],
+                    "setup_checklist_url": f"/tenant/{tenant['tenant_id']}/setup-checklist",
+                }
+            )
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.
@@ -2195,7 +2173,6 @@ async def _create_media_buy_impl(
         budget_err = validate_budget_positive(total_budget, field=package_field_path("budget"))
         if budget_err:
             raise AdCPBudgetTooLowError(
-                suggestion="Set each package budget to a positive amount.",
                 field=package_field_path("budget"),
                 context=req.context,
             )
@@ -2236,7 +2213,6 @@ async def _create_media_buy_impl(
                 # marker check grades. The unwrapped value renders as "2020-01-01 00:00:00+00:00".
                 raise AdCPInvalidRequestError(
                     details={"start_time": str(computed_start_time)},
-                    suggestion="Use a future datetime or 'asap' for immediate start.",
                     field="start_time",
                 )
 
@@ -2258,7 +2234,6 @@ async def _create_media_buy_impl(
                     "start_time": str(computed_start_time),
                     "end_time": str(computed_end_time),
                 },
-                suggestion="Set end_time to a datetime after start_time.",
                 field="end_time",
             )
 
@@ -2298,7 +2273,6 @@ async def _create_media_buy_impl(
             if duplicate_products:
                 raise AdCPValidationError(
                     details={"duplicate_product_ids": sorted(duplicate_products)},
-                    suggestion="Each package must reference a distinct product_id; remove the duplicate package or change its product_id.",
                 )
 
         # 4. Currency-specific budget validation
@@ -2326,7 +2300,6 @@ async def _create_media_buy_impl(
             if missing_product_ids:
                 error_msg = f"Product(s) not found: {', '.join(sorted(missing_product_ids))}"
                 raise AdCPProductNotFoundError(
-                    suggestion="Check available products with get_products.",
                     field=package_field_path("product_id"),
                 )
 
@@ -2434,7 +2407,6 @@ async def _create_media_buy_impl(
                 # emit UNSUPPORTED_FEATURE (matches the update path and UC-002 ext-d).
                 raise AdCPCapabilityNotSupportedError(
                     details={"request_currency": request_currency},
-                    suggestion="Contact the publisher to add support for this currency, or use a supported currency.",
                     context=req.context,
                 )
 
@@ -2451,7 +2423,6 @@ async def _create_media_buy_impl(
                 if request_currency not in supported_currencies:
                     # Same seller-capability gap as above, scoped to the GAM network.
                     raise AdCPCapabilityNotSupportedError(
-                        suggestion="Contact the publisher to enable this currency in GAM, or use a supported currency.",
                         context=req.context,
                     )
 
@@ -2644,7 +2615,6 @@ async def _create_media_buy_impl(
                     if violations:
                         error_msg = f"Targeting validation failed: {'; '.join(violations)}"
                         raise AdCPInvalidRequestError(
-                            suggestion="Check targeting constraints.",
                             field="targeting_overlay",
                         )
 
@@ -3801,10 +3771,6 @@ async def _create_media_buy_impl(
                         # CREATIVE_NOT_FOUND uniformity MUST — deferred pending
                         # upstream reconciliation.
                         raise AdCPCreativeRejectedError(
-                            suggestion=(
-                                "Sync the creative(s) via sync_creatives (or pick an existing "
-                                "creative from list_creatives) before referencing them in a media buy."
-                            ),
                             details={"creative_ids": sorted(missing_ids)},
                         )
 
@@ -3862,11 +3828,6 @@ async def _create_media_buy_impl(
                                             # validation failure — matching the sibling pre-adapter
                                             # validation raise. Carry a remediation suggestion (POST-F3).
                                             raise AdCPCreativeRejectedError(
-                                                suggestion=(
-                                                    "Assign a creative whose format matches one of the product's "
-                                                    "accepted formats, or re-sync the creative with a compatible "
-                                                    "format before referencing it in this media buy."
-                                                ),
                                                 details={"creative_id": creative_id, "product_id": package.product_id},
                                             )
 
@@ -3968,13 +3929,7 @@ async def _create_media_buy_impl(
                                     logger.error(
                                         log_safe(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
                                     )
-                                    raise AdCPAdapterError(
-                                        suggestion=(
-                                            "The ad server rejected the creative upload. Retry the request, or "
-                                            "verify the creative meets the ad server's technical requirements "
-                                            "before re-submitting."
-                                        ),
-                                    ) from upload_error
+                                    raise AdCPAdapterError() from upload_error
 
                             # Create database assignment
                             assignment_id = f"assign_{uuid.uuid4().hex[:12]}"

@@ -135,12 +135,7 @@ def _process_assignments(
                         # Entity-specific spec code (pinned enum: CREATIVE_NOT_FOUND,
                         # correctable, MANDATED uniformly for unowned creative_ids) —
                         # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
-                        raise AdCPCreativeNotFoundError(
-                            suggestion=(
-                                "Sync the creative via sync_creatives (or include it in this "
-                                "request's creatives array) before assigning it to a package."
-                            ),
-                        )
+                        raise AdCPCreativeNotFoundError()
                     logger.warning(log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
                     continue
 
@@ -239,11 +234,6 @@ def _process_assignments(
                                     # creative-format-incompatible-with-product is CREATIVE_REJECTED,
                                     # the canonical code for a rejected creative (#1417).
                                     raise AdCPCreativeRejectedError(
-                                        suggestion=(
-                                            "Assign a creative whose format matches one of the product's "
-                                            f"supported formats ({supported_formats_display}), or call "
-                                            "list_creative_formats to discover supported formats."
-                                        ),
                                         details={"supported_formats": supported_formats_display},
                                     )
                                 else:
@@ -374,7 +364,6 @@ def _process_assignments(
             entry = _failed_sync_result(
                 creative_id,
                 cause(
-                    recovery="correctable",
                     details={"creative_id": creative_id, "assignment_errors": dict(errors)},
                 ),
             )

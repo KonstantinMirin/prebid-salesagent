@@ -23,8 +23,6 @@ from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from src.core.exceptions import RecoveryHint
-
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -226,7 +224,7 @@ class MockTestBehavior(BaseModel):
     a TypedDict describes a shape but checks nothing, so the reader had to
     ``cast()`` arbitrary tenant-supplied JSON into it and every consumer trusted
     a type nobody verified. ``recovery`` is the sharp edge -- it is handed
-    straight to ``AdCPAdapterError(recovery=...)``, so a typo in the column
+    straight to the wire, so a typo in the column
     would otherwise put an invalid recovery value on a buyer's wire.
 
     ``extra="ignore"``: this column is written by test tooling and by hand, and
@@ -247,7 +245,6 @@ class MockTestBehavior(BaseModel):
 
     unavailable: bool = False
     error_message: str | None = None
-    recovery: RecoveryHint = "transient"
     targeting_capabilities: dict[str, bool] | None = None
     default_channels: list[str] | None = None
 

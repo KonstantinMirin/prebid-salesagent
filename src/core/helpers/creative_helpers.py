@@ -584,10 +584,6 @@ def process_and_upload_package_creatives(
                 error_msg = "Creative validation failed:\n" + "\n".join(f"  • {m}" for m in detail_msgs)
                 logger.error(error_msg)
                 raise AdCPCreativeRejectedError(
-                    suggestion=(
-                        "Fix the rejected creative(s) so each reference format has the required "
-                        "content URL and dimensions, then re-submit the create_media_buy request."
-                    ),
                     details={"creative_errors": detail_msgs},
                 )
 

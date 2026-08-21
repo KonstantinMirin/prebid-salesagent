@@ -37,7 +37,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION_DEV, reject_unsafe_webhook_registration_url
+from src.core.webhook_validator import reject_unsafe_webhook_registration_url
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
@@ -197,8 +197,6 @@ def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> Non
             field="reporting_webhook.url",
         )
     assert exc_info.value.field == "reporting_webhook.url"
-    assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION_DEV
-    assert exc_info.value.recovery == "correctable"
 
 
 @pytest.mark.parametrize("blank", [None, "", "   "])

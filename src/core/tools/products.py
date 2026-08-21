@@ -866,7 +866,6 @@ async def get_products(
         # Helper raises ValueError for semantic (non-Pydantic) input problems.
         raise AdCPValidationError(
             internal_detail=e,
-            suggestion="Correct the get_products request per the AdCP specification and resend.",
         ) from e
 
     # Read identity pre-resolved by MCPAuthMiddleware

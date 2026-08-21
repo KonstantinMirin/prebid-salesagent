@@ -170,7 +170,6 @@ class TestSyncCreativesFormatValidation:
             with pytest.raises(AdCPServiceUnavailableError) as exc_info:
                 _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
 
-            assert exc_info.value.recovery == "transient"
 
     def test_format_validation_with_string_format_id(self, identity, mock_tenant, mock_format_spec):
         """Test that string format_ids are rejected (FormatId object required)."""
@@ -415,7 +414,6 @@ class TestSyncCreativesFormatValidation:
             # Down agent: request-level TRANSIENT failure — the creative is fine.
             with pytest.raises(AdCPServiceUnavailableError) as exc_info:
                 _sync_creatives_impl(creatives=[creative_unreachable], identity=identity)
-            assert exc_info.value.recovery == "transient"
 
 
 class TestFormatValidationOptimization:

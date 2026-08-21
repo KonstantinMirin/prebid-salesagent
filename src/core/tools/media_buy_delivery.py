@@ -49,7 +49,6 @@ def _validate_attribution_window(attribution_window: "AttributionWindow | None")
         if unit == "campaign" and window.interval != 1:
             raise AdCPValidationError(
                 field="attribution_window",
-                suggestion="interval must be 1 when unit is 'campaign'",
             )
 
 
@@ -197,7 +196,6 @@ def _get_media_buy_delivery_impl(
         if start_dt >= end_dt:
             raise AdCPValidationError(
                 field="start_date",
-                suggestion="Set start_date to a date before end_date and resend.",
                 context=req.context,
             )
     else:

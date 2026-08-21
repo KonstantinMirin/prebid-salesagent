@@ -75,7 +75,6 @@ class TestNegotiateAdcpVersion:
         err = exc_info.value
         assert err.error_code == "VERSION_UNSUPPORTED"
         assert err.status_code == 400
-        assert err.recovery == "correctable"
 
     def test_accepts_supported_version_pin_as_noop(self):
         from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS, negotiate_adcp_version

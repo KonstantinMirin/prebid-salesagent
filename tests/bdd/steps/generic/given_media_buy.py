@@ -142,7 +142,6 @@ def _sync_adapter_error_to_db(
     fail_on_upload: bool = False,
     error_message: str | None = None,
     error_details: dict | None = None,
-    recovery: str | None = None,
 ) -> None:
     """Write adapter error injection config to DB so Docker adapter raises errors."""
     tenant = ctx.get("tenant")
@@ -159,8 +158,6 @@ def _sync_adapter_error_to_db(
     }
     if error_details is not None:
         kwargs["error_details"] = error_details
-    if recovery is not None:
-        kwargs["recovery"] = recovery
     set_adapter_test_behavior(env, tenant.tenant_id, **kwargs)
 
 
@@ -2339,7 +2336,6 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
 
     message = "Ad server rejected the creative upload"
     suggestion = "Retry the upload or verify the creative meets the ad server's requirements"
-    recovery = "transient"
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
@@ -2348,7 +2344,7 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     # position. Burying it in details={"suggestion": ...} yields a non-conformant wire
     # error (empty top-level suggestion). The e2e sibling below keeps error_details;
     # mock_ad_server pops it back to first-class.
-    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(recovery=recovery, suggestion=suggestion)
+    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(suggestion=suggestion)
     # E2E path: write the failure to the adapter test-behavior config so the
     # Docker-hosted adapter raises the same error on creative upload
     # (MockAdServer.add_creative_assets reads the fail_on_upload flag).
@@ -2356,8 +2352,6 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
         ctx,
         fail_on_upload=True,
         error_message=message,
-        error_details={"suggestion": suggestion},
-        recovery=recovery,
     )
 
 
@@ -2836,8 +2830,11 @@ def given_adapter_error(ctx: dict) -> None:
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
+    # recovery is not stated: it is a function of the code. This step previously injected
+    # "retryable", which is not in RecoveryHint at all — the parameter's deletion made that
+    # unrepresentable, and AdCPAdapterError's table recovery ("transient") is what a buyer
+    # should see for an ad-server outage anyway.
     error = AdCPAdapterError(
-        recovery="retryable",
         details={"suggestion": "Retry the operation or contact ad server support"},
     )
     mock_adapter.create_media_buy.side_effect = error
@@ -2851,8 +2848,6 @@ def given_adapter_error(ctx: dict) -> None:
         fail_on_create=True,
         fail_on_update=True,
         error_message="Ad server unavailable",
-        error_details={"suggestion": "Retry the operation or contact ad server support"},
-        recovery="retryable",
     )
     # Ensure tenant is auto-approval so production code doesn't short-circuit
     _seed_auto_approval(ctx, sync_adapter=False)
