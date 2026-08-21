@@ -369,7 +369,7 @@ def _list_creatives_impl(
                 # succeeded AND that the seller owes a decision, i.e. "wait for us").
                 #
                 # The advisory code is PINNED to CONFIGURATION_ERROR: normalize_advisory_errors
-                # collapses any code outside WIRE_STANDARD_CODES to SERVICE_UNAVAILABLE /
+                # used to collapse any unclassified code to SERVICE_UNAVAILABLE /
                 # recovery=transient — which would tell the buyer to retry a permanently
                 # bad row forever. Honest caveat: CONFIGURATION_ERROR's pinned prose says
                 # "prevents handling the request" and here the request IS handled; it is

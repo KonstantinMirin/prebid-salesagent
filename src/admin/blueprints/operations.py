@@ -15,7 +15,7 @@ from sqlalchemy import select
 from src.admin.utils import echo_context, require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.exceptions import AdCPMediaBuyRejectedError
+from src.core.exceptions import AdCPMediaBuyRejectedError, build_error_object
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -595,17 +595,18 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # cannot carry it. It travels in `details` — without this the buyer is told
                     # only "The media buy was declined" and never learns why, which is what the
                     # comment above has always promised ("embed that with the reason").
-                    rejection = AdCPMediaBuyRejectedError()
-                    rejection_details = {"rejection_reason": reason} if reason else None
+                    # DERIVED, not hand-listed. build_error_object is the ONE place that turns
+                    # an exception into an advisory entry, and its own docstring warns that "a
+                    # second place that turns a code into buyer-facing text will disagree with
+                    # this one, and did". Listing the fields here did exactly that: once
+                    # salesagent-3dawm.8 made suggestion resolve from CODE_TABLE, a hand-built
+                    # copy that omitted it gave the buyer MEDIA_BUY_REJECTED *with* the pin's
+                    # suggestion on the tool path and *without* it on this webhook -- one code,
+                    # two behaviours, split by lane. The reason rides on the exception so the
+                    # single derivation carries it.
+                    rejection = AdCPMediaBuyRejectedError(details={"rejection_reason": reason} if reason else None)
                     create_media_buy_rejected_result = CreateMediaBuyError(
-                        errors=[
-                            Error(
-                                code=rejection.error_code,
-                                message=rejection.message,
-                                recovery=rejection.recovery,
-                                details=rejection_details,
-                            )
-                        ]
+                        errors=[Error(**build_error_object(rejection))]
                     )
                     metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 

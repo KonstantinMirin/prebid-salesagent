@@ -21,9 +21,12 @@ Feature: A declared error code reaches the buyer as declared
   # a scenario that graded only the code would still pass while telling the buyer to
   # retry a rejection.
   #
-  # No suggestion is asserted: AdCPMediaBuyRejectedError leaves _default_suggestion
-  # unset, so the envelope omits the field. That is the 42/42 suggestion half of the
-  # deferred class-attribute fold, out of scope here — an omission, not a contradiction.
+  # The suggestion half of the fold landed with salesagent-3dawm.8: because
+  # AdCPMediaBuyRejectedError leaves _default_suggestion unset and this raise site passes
+  # none, the envelope now carries the PIN's suggestion for MEDIA_BUY_REJECTED rather than
+  # omitting the field. This scenario still pins only code and recovery — the two fields a
+  # buyer DISPATCHES on. The suggestion's appearance on this same bare path is graded by
+  # BR-CODES-002, which asserts its presence and never its text.
 
   @T-CODES-001-platform-code-reaches-buyer
   Scenario: A seller rejection reaches the buyer as the code the seller declared

@@ -116,7 +116,6 @@ def reject_unsafe_webhook_registration_url(
             details={"field": field, "error_msg": error_msg},
             field=field,
             suggestion=webhook_ssrf_suggestion(),
-            recovery="correctable",
             context=context,
         )
 

@@ -131,6 +131,21 @@ the transaction survive it.
    `internal_detail=e` is the only thing that compiles. Add `_default_message` + populate `_default_suggestion`
    for all 42 subclasses from the wheel's `enumMetadata`. The 1116-line guard, its allowlist, and three
    tickets become unnecessary.
+
+   **AMENDED 2026-08-21 (owner decision, ADR-010).** This item as written authorised `message` and
+   `_default_suggestion` only, and said nothing about `recovery`. That silence made the recovery half of
+   every later step formally out-of-boundary, and the `salesagent-3dawm.8` design gate correctly returned
+   NARROW on exactly that ground. The scope is now explicit and covers ALL THREE graded wire fields:
+
+   > A graded wire field (`message`, `recovery`, `suggestion`) is a function of the error CODE. A raise
+   > site cannot author one. The `recovery=` and `suggestion=` PARAMETERS are deleted, not defaulted —
+   > the same move `message` already had. A different retry semantic is a different code, hence a
+   > different error class. An advisory `errors[]` entry is constructible only from a typed exception.
+   > Specifics travel as `details=` / `field=` / `internal_detail=`, never as authored prose.
+
+   Rationale, consequences and the cost (including that a TEST HOOK is what currently keeps `recovery=`
+   alive) are in `docs/decisions/adr-010-graded-wire-fields-are-functions-of-the-code.md`. Execution is
+   `salesagent-3dawm.11` (recovery), `.12` (suggestion), `.14` (advisory; subsumes `.13`).
 4. **MCP takes the request model as its parameter.** FastMCP derives `inputSchema` from the wrapper
    signature, which is why the request model is currently *downstream* of the wire contract. One parameter
    whose type is the SDK model inverts that. Then delete the `_raw` layer: one typed entry point per tool,

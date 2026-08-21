@@ -3269,6 +3269,9 @@ _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
 #: manual-approval scenario, so it gets its own set rather than overloading that name.
 _UC002_FULL_CREATE_WIRED: set[str] = {
     "T-CODES-001-platform-code-reaches-buyer",
+    # BR-CODES-002's bare-raise scenario deliberately reuses that same rejection path:
+    # it is the cheapest BARE, non-auth raise site already wired to all four transports.
+    "T-CODES-002-suggestion-appears-on-a-bare-raise",
 }
 
 
@@ -3655,7 +3658,7 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "COMPAT"
     if any(t.startswith("T-SECURITY-001") for t in marker_names):
         return "SECURITY"
-    if any(t.startswith("T-CODES-001") for t in marker_names):
+    if any(t.startswith("T-CODES-001") or t.startswith("T-CODES-002") for t in marker_names):
         # BR-CODES-001 is a cross-cutting WIRE obligation (a declared error code reaches the
         # buyer unrewritten), but it exercises it through a full create_media_buy, so it needs
         # the UC-002 harness. Mapped explicitly rather than by feature name, the same way

@@ -106,11 +106,10 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     AUTH_MISSING suggestion so the REST 401 envelope tells the buyer how to
     recover (parity with require_identity on the _impl path; AdCP POST-F3).
     """
-    from src.core.auth import AUTH_MISSING_SUGGESTION
     from src.core.exceptions import AdCPAuthRequiredError
 
     if not auth_ctx.auth_token:
-        raise AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)
+        raise AdCPAuthRequiredError()
 
     from src.core.resolved_identity import resolve_identity
 
@@ -126,7 +125,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
         # already raises AdCPAuthenticationError (AUTH_INVALID) before
         # returning if the token doesn't resolve. Kept as AUTH_MISSING-shaped
         # for parity with the guard above should this branch ever fire.
-        raise AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)
+        raise AdCPAuthRequiredError()
 
     # Set tenant ContextVar at the REST transport boundary
     if identity.tenant:

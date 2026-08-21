@@ -358,7 +358,7 @@ class ContextManager(DatabaseManager):
 
         Untyped exceptions are normalized to ``AdCPError`` via
         ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
-        subscribers only see codes in ``WIRE_STANDARD_CODES``.
+        subscribers only see codes the pinned table classifies.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the

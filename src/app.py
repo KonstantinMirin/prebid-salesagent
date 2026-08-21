@@ -38,8 +38,6 @@ from src.core.auth_middleware import UnifiedAuthMiddleware
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.exceptions import (
-    INVALID_REQUEST_SUGGESTION,
-    VALIDATION_ERROR_SUGGESTION,
     AdCPError,
     AdCPInvalidRequestError,
     AdCPValidationError,
@@ -262,12 +260,11 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # follow-up; for now the attribution_window family — reconciled to
     # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly. (salesagent-meho)
     if field and field.startswith("attribution_window"):
-        exc_cls, suggestion = AdCPValidationError, VALIDATION_ERROR_SUGGESTION
+        exc_cls = AdCPValidationError
     else:
-        exc_cls, suggestion = AdCPInvalidRequestError, INVALID_REQUEST_SUGGESTION
+        exc_cls = AdCPInvalidRequestError
     adcp_exc = exc_cls(
         field=field,
-        suggestion=suggestion,
         details=build_validation_error_details(errors),
     )
     return _envelope_response(request, adcp_exc)

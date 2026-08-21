@@ -583,7 +583,6 @@ def _update_existing_creative(
                 _failed_sync_result(
                     existing_creative.creative_id,
                     AdCPConfigurationError(
-                        recovery="terminal",
                         details={"creative_id": existing_creative.creative_id},
                         internal_detail=config_error,
                     ),
@@ -602,7 +601,6 @@ def _update_existing_creative(
                 _failed_sync_result(
                     existing_creative.creative_id,
                     AdCPServiceUnavailableError(
-                        recovery="transient",
                         details={"creative_id": existing_creative.creative_id},
                         internal_detail=validation_error,
                     ),
@@ -920,7 +918,6 @@ def _create_new_creative(
                 _failed_sync_result(
                     creative_id,
                     AdCPConfigurationError(
-                        recovery="terminal",
                         details={"creative_id": creative_id},
                         internal_detail=config_error,
                     ),
@@ -939,7 +936,6 @@ def _create_new_creative(
                 _failed_sync_result(
                     creative_id,
                     AdCPServiceUnavailableError(
-                        recovery="transient",
                         details={"creative_id": creative_id},
                         internal_detail=validation_error,
                     ),

@@ -60,7 +60,6 @@ from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.errors.codes import AppErrorCode
 from src.core.exceptions import (
-    AUTH_MISSING_SUGGESTION,
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
@@ -147,7 +146,6 @@ def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
         adcp_err = AdCPValidationError(
             field="push_notification_config.url",
             suggestion=webhook_ssrf_suggestion(),
-            recovery="correctable",
         )
     return InvalidParamsError(
         message=adcp_err.message,
@@ -344,8 +342,8 @@ class AdCPRequestHandler(RequestHandler):
         (``ValueError → AdCPValidationError``, ``PermissionError →
         AdCPAuthorizationError``, arbitrary ``Exception →
         AdCPError(INTERNAL_ERROR)``) so the wire output stays in
-        ``WIRE_STANDARD_CODES`` (SDK ``STANDARD_ERROR_CODES`` plus the
-        pinned-spec supplement) and the envelope shape never degrades to a
+        ``CODE_TABLE`` (the pinned ``enums/error-code.json`` plus this platform's
+        own ``AppErrorCode`` members) and the envelope shape never degrades to a
         flat ``{"error": "..."}`` dict the storyboard runner would synthesize
         as ``MCP_ERROR``.
         """
@@ -411,7 +409,7 @@ class AdCPRequestHandler(RequestHandler):
         if require_valid_token and not auth_token:
             raise InvalidRequestError(
                 message="Missing authentication token",
-                data=build_two_layer_error_envelope(AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)),
+                data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
             )
 
         # Extract testing context from A2A request headers (same as MCP does)
@@ -440,7 +438,7 @@ class AdCPRequestHandler(RequestHandler):
                 # error-code.json.
                 raise InvalidRequestError(
                     message="Authentication token is invalid or expired.",
-                    data=build_two_layer_error_envelope(AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)),
+                    data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
                 )
 
             if not identity.tenant:
@@ -707,11 +705,7 @@ class AdCPRequestHandler(RequestHandler):
             if requires_auth and not auth_token:
                 raise InvalidRequestError(
                     message="Missing authentication token - Bearer token required in Authorization header",
-                    data=build_two_layer_error_envelope(
-                        AdCPAuthRequiredError(
-                            suggestion=AUTH_MISSING_SUGGESTION,
-                        )
-                    ),
+                    data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
                 )
 
             # SSRF-reject unsafe push URLs after the auth-required gate so callers
@@ -1602,7 +1596,7 @@ class AdCPRequestHandler(RequestHandler):
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
                 message="Authentication required for skill invocation",
-                data=build_two_layer_error_envelope(AdCPAuthRequiredError(suggestion=AUTH_MISSING_SUGGESTION)),
+                data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
             )
 
         # Map skill names to handlers. Handler signatures are heterogeneous

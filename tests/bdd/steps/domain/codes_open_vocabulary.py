@@ -92,8 +92,39 @@ def then_error_carries_declared_code(ctx: dict, code: str) -> None:
     on the wire, since the rewriting it grades happened at the transport boundary.
     Recovery is left to the shared recovery step so each Then pins one thing.
 
-    No suggestion is required: AdCPMediaBuyRejectedError leaves ``_default_suggestion``
-    unset, so the envelope omits the field. That is the suggestion half of the deferred
-    class-attribute fold — an omission, not a contradiction.
+    No suggestion is asserted HERE, though the envelope now carries one: since
+    salesagent-3dawm.8 an unset ``_default_suggestion`` means the table owns it, so this
+    error resolves the pin's suggestion rather than omitting the field. This step pins the
+    two fields a buyer DISPATCHES on; the suggestion's presence on this same bare path is
+    graded by BR-CODES-002.
     """
     ctx["result"].assert_wire_error(code, recovery=None)
+
+
+# ---------------------------------------------------------------------------
+# BR-CODES-002 (salesagent-3dawm.8) — the suggestion resolves from the table
+# ---------------------------------------------------------------------------
+# Asserts PRESENCE, never text. extract_wire_suggestion reads the protocol
+# position only (a suggestion buried in ``details`` deliberately does not
+# satisfy it), and there is NO reconstructed fallback here: the generic
+# 'the suggestion should contain "..."' step falls back to ctx["error"] when the
+# wire suggestion is None, which would let a MISSING wire field pass a scenario
+# whose entire claim is that the field is present.
+
+
+@then("the wire error carries a non-empty suggestion")
+def then_wire_suggestion_present(ctx: dict) -> None:
+    from tests.harness.transport import extract_wire_suggestion
+
+    envelope = ctx["result"].wire_error_envelope
+    assert envelope is not None, (
+        "No wire error envelope captured — this scenario grades a WIRE field, so a "
+        "no-wire (IMPL) run cannot satisfy it. Wire the env rather than relaxing this."
+    )
+    suggestion = extract_wire_suggestion(envelope)
+    assert suggestion is not None, (
+        f"Wire envelope carries no suggestion at the protocol position: {envelope!r}. "
+        "Before salesagent-3dawm.8 this bare raise site emitted no suggestion at all; "
+        "the field resolving from CODE_TABLE is the obligation under test."
+    )
+    assert suggestion.strip() != "", f"Wire suggestion is present but empty: {suggestion!r}"

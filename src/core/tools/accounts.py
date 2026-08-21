@@ -628,7 +628,7 @@ def _gate_failures_to_errors(failures: list[GateFailure]) -> list["Error"]:
             suggestion=f.suggestion,
             field=f.field,
             # recovery is deliberately NOT set here. normalize_advisory_errors
-            # (called by _build_failed_result) fills it from WIRE_STANDARD_CODES,
+            # (called by _build_failed_result) fills it from CODE_TABLE,
             # the pin-corrected table, so the recovery a buyer sees on a gate
             # refusal comes from the SAME authority as every other advisory.
             # Hard-coding "correctable" here re-created the second classification
@@ -1069,9 +1069,7 @@ def _extract_natural_key(entry: SyncEntry) -> NaturalKey:
     brand = entry.brand
     operator = entry.operator
     if brand is None or operator is None:
-        raise AdCPValidationError(
-            recovery="correctable",
-        )
+        raise AdCPValidationError()
     brand_domain, brand_id = brand_key_parts(brand)
     return NaturalKey.from_parts(brand_domain, brand_id, operator, entry.sandbox)
 
@@ -1259,9 +1257,7 @@ def _process_settings_update_entry(
     change without applying").
     """
     if entry.account is None:
-        raise AdCPConfigurationError(
-            recovery="terminal",
-        )
+        raise AdCPConfigurationError()
     ref = entry.account.root
     existing = _resolve_settings_update_target(ref, repo)
 
@@ -1283,7 +1279,6 @@ def _process_settings_update_entry(
         # must still be a conformant error object.
         raise AdCPConfigurationError(
             details={"account_id": existing.account_id},
-            recovery="terminal",
         )
 
     # notification_configs (shared with the provisioning arm) -> rejected-field
@@ -1511,9 +1506,7 @@ def _build_update_result(
     two-arm drift this precondition guarded against no longer has a mechanism.
     """
     if entry.brand is None:
-        raise AdCPConfigurationError(
-            recovery="terminal",
-        )
+        raise AdCPConfigurationError()
     return _build_sync_result(
         brand=entry.brand,
         operator=operator,
@@ -1649,7 +1642,6 @@ async def _sync_accounts_impl(
                 raise AdCPValidationError(
                     details={"index": index},
                     field=f"accounts[{index}]",
-                    recovery="correctable",
                 )
 
             if entry.account is not None:
@@ -1803,7 +1795,6 @@ async def _sync_accounts_impl(
                         # arm: a NULLABLE column the buyer cannot fix.
                         raise AdCPConfigurationError(
                             details={"account_id": db_acct.account_id},
-                            recovery="terminal",
                         )
                     results.append(
                         _build_sync_result(

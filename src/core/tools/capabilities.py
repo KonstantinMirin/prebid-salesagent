@@ -437,9 +437,7 @@ def _get_adcp_capabilities_impl(
         resolved: list[PublisherDomain] = []
         with TenantConfigUoW(tenant_id) as uow:
             if uow.tenant_config is None:
-                raise AdCPConfigurationError(
-                    recovery="terminal",
-                )
+                raise AdCPConfigurationError()
             for partner in uow.tenant_config.list_publisher_partners():
                 if partner.publisher_domain:
                     resolved.append(PublisherDomain(root=partner.publisher_domain))

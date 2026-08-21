@@ -3,8 +3,10 @@
 Core Invariant: every AUTH_MISSING/AUTH_INVALID rejection carries a non-empty
 TOP-LEVEL ``suggestion`` in the two-layer wire envelope (AdCP 3.1.1, pinned
 ref dist/schemas/3.1.1/enums/error-code.json — "Suggested action to resolve
-the error"). ``require_identity`` already passes
-``suggestion=AUTH_MISSING_SUGGESTION``; its siblings in ``src/core/auth.py``
+the error"). ``require_identity`` used to pass an authored
+``suggestion=AUTH_MISSING_SUGGESTION``; salesagent-3dawm.8 deleted both that constant
+and every call site, so ALL of these paths now resolve the pin's suggestion from
+CODE_TABLE. Its siblings in ``src/core/auth.py``
 (invalid-token, ``resolve_principal_or_raise``, ``require_principal_id``)
 raised with the hint only in message text, leaving the graded top-level
 ``suggestion`` field EMPTY (PR #1417 review round 8, item 4). Split from the

@@ -19,10 +19,11 @@ deliberate rather than tidy: the SDK carries a message for 37 published codes an
 those 37 are what this seller sends today, so dropping it would rewrite 37 live
 buyer-facing strings. The cost is that an ``adcp`` bump can change those 37
 without the pinned schema changing. Everywhere else in this codebase the SDK is
-treated as a cross-check rather than the authority -- see
-``exceptions._SPEC_RECOVERY_OVERRIDES``, which exists because the SDK's recovery
-values were the drift -- so if the two ever disagree about a message, the file
-wins and the SDK entry is the bug.
+treated as a cross-check rather than the authority: the pinned enumMetadata says
+"SDKs MUST consume this block ... the recovery classification embedded in that prose
+is normative and MUST match the value here", and where the shipped SDK values
+disagreed with the pin it was the SDK that was drifting. So if the two ever disagree
+about a message, the file wins and the SDK entry is the bug.
 
 The platform codes in :class:`AppErrorCode` are this seller's own. The spec's
 vocabulary is open by design -- ``core/error.json`` (AdCP 3.1.1): ``error.code``

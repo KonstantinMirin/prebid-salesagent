@@ -34,7 +34,6 @@ from src.core.database.models import Principal as ModelPrincipal
 # Canonical hints owned by exceptions.py (class-level default suggestions on
 # AdCPAuthRequiredError / AdCPAuthenticationError); re-exported here for
 # existing importers.
-from src.core.exceptions import AUTH_MISSING_SUGGESTION
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.schemas import Principal
 
@@ -356,7 +355,6 @@ def require_principal_id(
         # "Principal ID not found in identity" substring existing tests match on.
         raise AdCPAuthRequiredError(
             context=context,
-            suggestion=AUTH_MISSING_SUGGESTION,
         )
     return principal_id
 
@@ -415,7 +413,6 @@ def require_identity(
     if identity is None:
         raise AdCPAuthRequiredError(
             context=context,
-            suggestion=AUTH_MISSING_SUGGESTION,
         )
     return identity
 

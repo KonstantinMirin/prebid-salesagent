@@ -407,8 +407,8 @@ class TestSyncCreativesFormatValidation:
             # A wrong format is buyer-correctable; an unreachable agent is transient.
             # The CODE carries that distinction, so it cannot be blurred by wording.
             # The advisory is built by the SAME derivation as the request-level envelope
-            # (build_error_object), so its suggestion is the class default — not the table's.
-            # Making the table authoritative for all 42 classes is salesagent-3dawm.8.
+            # (build_error_object), and since salesagent-3dawm.8 that derivation resolves
+            # the suggestion from CODE_TABLE — the class default is gone, not deferred.
             assert advisory1.code == "VALIDATION_ERROR"
             assert advisory1.code != "SERVICE_UNAVAILABLE"
 

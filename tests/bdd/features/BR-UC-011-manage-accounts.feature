@@ -430,6 +430,7 @@ Feature: BR-UC-011 Manage Accounts
     Then the settings-update entry has action "failed"
     And the per-account errors array contains an error with code "UNSUPPORTED_PROVISIONING"
     And the per-account error recovery is "correctable"
+    And the per-account error with code "UNSUPPORTED_PROVISIONING" carries a non-empty suggestion
     When the Buyer Agent sends a list_accounts request
     Then the response contains an empty accounts array
     # Graduated: unmatched settings-update references are rejected with UNSUPPORTED_PROVISIONING.

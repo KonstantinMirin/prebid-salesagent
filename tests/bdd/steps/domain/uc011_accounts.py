@@ -1381,6 +1381,45 @@ def then_per_account_error_recovery(ctx: dict, recovery: str) -> None:
     assert recovery in recoveries, f"Expected per-account error recovery '{recovery}', got {recoveries}"
 
 
+@then(parsers.parse('the per-account error with code "{code}" carries a non-empty suggestion'))
+def then_per_account_error_suggestion(ctx: dict, code: str) -> None:
+    """Assert the ADVISORY lane resolves a suggestion, on the entry carrying that code.
+
+    The advisory lane is a different lane from a raised error: normalize_advisory_errors
+    fills an Error embedded in a SUCCESS response's errors[] array, via model_copy, not
+    build_two_layer_error_envelope.
+
+    WHAT THIS DOES **NOT** WITNESS, measured rather than assumed: it does not grade
+    salesagent-3dawm.8's advisory FILL. Reverting that fill and re-running this scenario
+    still passes, because this path's suggestion is AUTHORED upstream — GateFailure declares
+    ``suggestion: str`` as a REQUIRED field (src/core/tools/accounts.py:610) and
+    _gate_failures_to_errors passes it straight through, so ``e.suggestion is not None`` and
+    the fill never fires here. That authoring lane is salesagent-3dawm.13.
+
+    What it DOES pin is still worth pinning: the advisory lane carries a suggestion at the
+    protocol position on the entry that carries the graded code. It would fail if that were
+    dropped.
+
+    Keyed on the entry that carries ``code`` rather than searching the whole array. The
+    sibling recovery step above asserts ``recovery in recoveries`` — membership — which can
+    pass on a different entry than the one being graded; this must not inherit that.
+
+    Presence only, never text: comparing the string to CODE_TABLE would grade the table
+    against itself.
+    """
+    errors = _sole_account_errors(ctx)
+    assert errors, "Expected a non-empty per-account errors array on the wire, got []"
+    present = {e.get("code") for e in errors}
+    assert code in present, f"No per-account error carries code {code!r}; got {sorted(present)}"
+    entry = next(e for e in errors if e.get("code") == code)
+    suggestion = entry.get("suggestion")
+    assert suggestion is not None, (
+        f"The per-account error for {code!r} carries no suggestion. The advisory lane must "
+        f"resolve it from the code table, as the raised lane does. Entry: {entry!r}"
+    )
+    assert str(suggestion).strip() != "", f"Advisory suggestion present but empty: {suggestion!r}"
+
+
 @then(parsers.parse('the per-account error details scope is "{scope}"'))
 def then_per_account_error_details_scope(ctx: dict, scope: str) -> None:
     """Assert the failed account's BILLING_NOT_SUPPORTED error details.scope value.
