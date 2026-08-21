@@ -1158,7 +1158,21 @@ def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
     """
     from tests.harness.transport import Transport
 
-    if ctx.get("transport") is not Transport.A2A:
+    # The A2A branch below is a LEGITIMATE transport-aware assertion (see the
+    # docstring): on A2A the wire-dict NOT-contain checks are vacuous, so the real
+    # Task is graded instead. What is NOT legitimate is reaching it with the
+    # transport unset — `None is not Transport.A2A` silently reads as "some other
+    # transport" and returns, grading nothing on the only transport this guard
+    # exists for. An unset transport is a wiring bug; report it (salesagent-n78j0.1.5).
+    transport = ctx.get("transport")
+    if transport is None:
+        raise AssertionError(
+            "A2A submitted-artifact guard reached with ctx['transport'] unset — the "
+            "check would silently downgrade to 'not A2A' and grade nothing. Dispatch "
+            "through dispatch_request (which raises on an unset transport) or set "
+            "ctx['transport'] explicitly."
+        )
+    if transport is not Transport.A2A:
         return
     if wire_dict(ctx).get("status") != "submitted":
         return

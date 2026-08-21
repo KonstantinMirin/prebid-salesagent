@@ -1,6 +1,6 @@
 """Guard: BDD wire-discipline — error handling goes through the wire, not test-side.
 
-Two complementary checks, locking in the universal-wire-dispatch invariant after the
+Four complementary checks, locking in the universal-wire-dispatch invariant after the
 holdouts were migrated:
 
 A. **No test-side error construction** (dispatch-side). A step must NOT
@@ -30,7 +30,16 @@ C. **No hand-rolled envelope/error parsing** (assertion-side, PR #1721 review ro
    envelope parsing") and neither is caught by Check B, which only looks for the two named
    ``_get_error_code``/``_get_error_dict`` helpers, not these inline forms.
 
-Both allowlists can only SHRINK. Each entry documents the production gap that keeps it.
+D. **No hand-rolled parsing of the ATTRIBUTE form** (assertion-side,
+   salesagent-n78j0.1.5). Check C's matcher is ``isinstance(node, ast.Call)``-gated, so
+   it can never see ``ctx['result'].wire_error_envelope``. A step that moved from
+   ``ctx.get("wire_error_envelope")`` to the attribute access and KEPT the hand-rolled
+   parsing moved the violation past the guard rather than fixing it. Check D matches the
+   attribute read with its own predicate, wired into the FINDER only — widening Check C's
+   ``_is_ctx_wire_envelope_get`` instead would also widen the exemption calculator that
+   consumes it, and the new shape would be matched and immediately excused.
+
+Every allowlist can only SHRINK. Each entry documents the production gap that keeps it.
 """
 
 from __future__ import annotations
@@ -69,6 +78,17 @@ _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
 
 # -- Check C: hand-rolled envelope/error parsing -------------------------------
 _HAND_ROLLED_PARSING_ALLOWLIST: set[str] = set()
+
+# -- Check D: hand-rolled parsing of the ATTRIBUTE form ------------------------
+# Check C matches ``ctx.get("wire_error_envelope")`` only. Moving the same
+# hand-rolled parsing onto ``ctx["result"].wire_error_envelope`` moved the
+# violation PAST the guard rather than fixing it, so the attribute form gets its
+# own detector. Ships EMPTY and can only SHRINK: the one live violation the
+# detector found (uc002_nfr.then_payload_size_limits, which walked
+# result.wire_error_envelope by hand because PAYLOAD_TOO_LARGE is not a pinned
+# code) was FIXED to read through _wire_error_object rather than allowlisted —
+# a non-pinned code rules out the assertion helper, not the reader.
+_ATTRIBUTE_ENVELOPE_PARSING_ALLOWLIST: set[str] = set()
 
 
 def _iter_step_modules() -> list[tuple[str, ast.Module]]:
@@ -323,6 +343,87 @@ def test_no_hand_rolled_envelope_parsing() -> None:
     )
 
 
+_WIRE_ENVELOPE_ATTRS = {"wire_error_envelope", "synthesized_error_envelope"}
+
+
+def _is_wire_envelope_attribute(node: ast.AST) -> bool:
+    """True if node is an ATTRIBUTE read of a wire envelope (``result.wire_error_envelope``).
+
+    Deliberately a SEPARATE predicate from :func:`_is_ctx_wire_envelope_get`, not a
+    widening of it. That one is consumed twice — by the Check-C finder AND by
+    :func:`_exempted_envelope_get_ids` — so teaching it the attribute form would
+    make the new shape matched and, via the one-hop ``var_sources`` exemption,
+    immediately excused: a re-introduced violation would sail through. This
+    predicate is wired into the Check-D finder only, with its own narrow,
+    direct-form exemptions below.
+
+    ``ast.Attribute`` is also structurally unreachable for the Check-C matcher,
+    whose first line is ``isinstance(node, ast.Call)``.
+    """
+    return isinstance(node, ast.Attribute) and node.attr in _WIRE_ENVELOPE_ATTRS
+
+
+def _exempted_envelope_attribute_ids(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[int]:
+    """id()s of wire-envelope ATTRIBUTE reads that are exempt from Check D.
+
+    Mirrors Check C's exemptions, but DIRECT-FORM ONLY (no one-variable hop):
+
+    (a) presence-only -- ``result.wire_error_envelope is not None``, the wire-first
+        guard in front of ``result.assert_wire_error(...)`` (then_error
+        then_validation_error, uc019 then_real_validation_error, uc026 then_outcome);
+    (b) piped straight into ``assert_envelope_shape(...)``, the sanctioned helper;
+    (c) inside an f-string -- a diagnostic interpolation cannot influence pass/fail.
+
+    The hop-through-a-variable form is deliberately NOT exempt here: reading the
+    envelope into a local and then walking it is exactly the disease, and every
+    sanctioned site in the tree uses the direct compare.
+    """
+    exempt: set[int] = set()
+    for node in _own_nodes(func):
+        if isinstance(node, ast.JoinedStr):
+            exempt.update(id(n) for n in ast.walk(node) if _is_wire_envelope_attribute(n))
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.Is, ast.IsNot)):
+            operands = [node.left, *node.comparators]
+            if any(isinstance(o, ast.Constant) and o.value is None for o in operands):
+                exempt.update(id(o) for o in operands if _is_wire_envelope_attribute(o))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "assert_envelope_shape":
+            exempt.update(id(a) for a in node.args if _is_wire_envelope_attribute(a))
+    return exempt
+
+
+def _hand_rolled_attribute_reads_in_func(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if func's own body reads a wire envelope via attribute access, unexempted."""
+    exempt = _exempted_envelope_attribute_ids(func)
+    return any(_is_wire_envelope_attribute(n) and id(n) not in exempt for n in _own_nodes(func))
+
+
+def _find_attribute_envelope_parsing() -> set[str]:
+    """Find @then steps that hand-roll parsing off ``<x>.wire_error_envelope``."""
+    found: set[str] = set()
+    for rel, tree in _iter_step_modules():
+        for func in _enclosing_functions(tree):
+            if _is_then(func) and _hand_rolled_attribute_reads_in_func(func):
+                found.add(f"{rel} {func.name}")
+    return found
+
+
+def test_no_attribute_form_envelope_parsing() -> None:
+    """Check D: moving a hand-roll from ctx.get('wire_error_envelope') onto
+    ctx['result'].wire_error_envelope moves the violation past Check C, not away.
+    """
+    assert_violations_match_allowlist(
+        _find_attribute_envelope_parsing(),
+        _ATTRIBUTE_ENVELOPE_PARSING_ALLOWLIST,
+        fix_hint=(
+            "An error Then-step reads <x>.wire_error_envelope / .synthesized_error_envelope "
+            "and parses it by hand. Use ctx['result'].assert_wire_error(code, recovery=..., "
+            "message_substr=...) (tests/harness/transport.py). A bare presence check "
+            "(`result.wire_error_envelope is not None`) in front of assert_wire_error is "
+            "exempt; walking the dict is not."
+        ),
+    )
+
+
 def test_no_reconstructed_only_error_assertion() -> None:
     """ztl6.8: error @then steps must read the wire envelope, not only the lossy ctx['error']."""
     assert_violations_match_allowlist(
@@ -412,6 +513,81 @@ def then_something(ctx):
     tree = ast.parse(src)
     func = _enclosing_functions(tree)[0]
     assert _hand_rolled_calls_in_func(func) is False
+
+
+# -- Check D meta-tests ---------------------------------------------------------
+
+
+def test_positive_attribute_form_envelope_parsing_is_detected() -> None:
+    """Meta-test: the shape Check C could never see -- hand-rolled parsing off
+    ``ctx["result"].wire_error_envelope`` -- is caught by Check D.
+    """
+    src = """
+@then("something")
+def then_something(ctx, token):
+    envelope = ctx["result"].wire_error_envelope
+    code = envelope.get("errors", [{}])[0].get("code", "")
+    assert code == token
+"""
+    func = _enclosing_functions(ast.parse(src))[0]
+    assert _hand_rolled_attribute_reads_in_func(func) is True
+
+
+def test_check_c_matcher_cannot_see_the_attribute_form() -> None:
+    """Meta-test: Check C's matcher is Call-only, so the attribute form is invisible
+    to it -- which is why Check D exists as a separate detector rather than a
+    widening of _is_ctx_wire_envelope_get (that would auto-exempt via var_sources).
+    """
+    src = """
+@then("something")
+def then_something(ctx):
+    envelope = ctx["result"].wire_error_envelope
+    assert envelope.get("errors")
+"""
+    func = _enclosing_functions(ast.parse(src))[0]
+    assert _hand_rolled_calls_in_func(func) is False
+    assert _hand_rolled_attribute_reads_in_func(func) is True
+
+
+def test_negative_attribute_presence_guard_then_assert_wire_error_is_not_flagged() -> None:
+    """Meta-test: the sanctioned wire-first form (presence compare, then
+    assert_wire_error) is exempt -- the real shape at then_error.then_validation_error,
+    uc019.then_real_validation_error and uc026.then_outcome.
+    """
+    src = """
+@then("something")
+def then_something(ctx):
+    result = ctx.get("result")
+    if result is not None and result.wire_error_envelope is not None:
+        result.assert_wire_error("VALIDATION_ERROR")
+        return
+    assert ctx.get("error") is not None
+"""
+    func = _enclosing_functions(ast.parse(src))[0]
+    assert _hand_rolled_attribute_reads_in_func(func) is False
+
+
+def test_negative_attribute_piped_into_assert_envelope_shape_is_not_flagged() -> None:
+    """Meta-test: piping the attribute straight into assert_envelope_shape is exempt."""
+    src = """
+@then("something")
+def then_something(ctx):
+    assert_envelope_shape(ctx["result"].wire_error_envelope, "FOO", recovery="correctable")
+"""
+    func = _enclosing_functions(ast.parse(src))[0]
+    assert _hand_rolled_attribute_reads_in_func(func) is False
+
+
+def test_regex_slip_unrelated_attribute_is_not_flagged() -> None:
+    """Meta-test: an attribute with a different name is not a Check D false positive."""
+    src = """
+@then("something")
+def then_something(ctx):
+    body = ctx["result"].wire_response
+    assert body.get("status") == "ok"
+"""
+    func = _enclosing_functions(ast.parse(src))[0]
+    assert _hand_rolled_attribute_reads_in_func(func) is False
 
 
 def test_regex_slip_non_then_step_is_not_scanned() -> None:

@@ -16,6 +16,7 @@ import uuid
 from pytest_bdd import given, then
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.then_error import _wire_error_object
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
@@ -242,8 +243,10 @@ def then_payload_size_limits(ctx: dict) -> None:
     FIXME(salesagent-9vgz.92): Implement payload size validation middleware.
 
     Note: PAYLOAD_TOO_LARGE is not a canonical AdCP error code in the pinned
-    enum, so assert_wire_error() cannot be used here — the assertion inspects
-    the raw wire envelope (and any dispatch error) for a payload-size rejection.
+    enum, so assert_wire_error() cannot be used here. The wire error object is
+    still read through the sanctioned ``_wire_error_object`` helper rather than
+    walking ``result.wire_error_envelope`` by hand (salesagent-n78j0.1.5): the
+    non-pinned code rules out the ASSERTION helper, not the READER.
     """
     import uuid
     from copy import deepcopy
@@ -265,11 +268,10 @@ def then_payload_size_limits(ctx: dict) -> None:
     # body is accepted and no payload-size rejection appears on the wire (nor in
     # any dispatch error). Inspect both the wire envelope and a transport error.
     payload_rejected = False
-    result = payload_ctx.get("result")
-    envelope = result.wire_error_envelope if result is not None else None
-    if envelope:
-        code = envelope.get("errors", [{}])[0].get("code", "")
-        msg = (envelope.get("errors", [{}])[0].get("message") or "").lower()
+    wire_error = _wire_error_object(payload_ctx)
+    if wire_error:
+        code = wire_error.get("code", "")
+        msg = (wire_error.get("message") or "").lower()
         if code == "PAYLOAD_TOO_LARGE" or "payload" in msg or "too large" in msg or "content-length" in msg:
             payload_rejected = True
     dispatch_error = payload_ctx.get("error")

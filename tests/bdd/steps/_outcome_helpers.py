@@ -210,7 +210,16 @@ def _get_response_field(resp: object, field: str) -> object:
 
 
 def is_e2e(ctx: dict) -> bool:
-    """Check if the current transport is E2E (Docker-based)."""
+    """Check if the current transport is E2E (Docker-based).
+
+    FIXME(#1757): silent default — an unset transport reads as "not e2e" here, so a
+    caller that branches on this skips its e2e assertions instead of reporting the
+    missing setup. Same class as the twin site ``then_payload._is_e2e``, which was
+    converted to the raising form in salesagent-n78j0.1.5; this one has ~25 callers
+    across UC-002/003/006 including Given steps, so it needs its own measured BDD
+    slice rather than a drive-by change. Tracked as its own task, not suppressed by
+    any allowlist.
+    """
     transport = ctx.get("transport")
     return transport is not None and hasattr(transport, "value") and str(transport.value).startswith("e2e_")
 
