@@ -65,43 +65,6 @@ __all__ = [
 ]
 
 
-class AppErrorCode(StrEnum):
-    """Codes this platform emits that AdCP's published set does not define.
-
-    Legal on the wire: the spec's code vocabulary is open (see the module
-    docstring). Each one names a failure this seller can distinguish and a buyer
-    can act on differently -- collapsing them onto a published code would throw
-    that distinction away, which is the opposite of what an open vocabulary is
-    for.
-
-    No member may name a vendor. A buyer integrates with this seller, not with
-    whatever ad server sits behind it, and a code is part of the contract: once
-    ``GAM_UPDATE_FAILED`` is on the wire, swapping ad servers is a breaking
-    change to every buyer parsing it. The two ad-server codes are therefore
-    named for the operation that failed, not the system that failed it.
-    """
-
-    ACTIVATION_WORKFLOW_FAILED = "ACTIVATION_WORKFLOW_FAILED"
-    AD_SERVER_CREATE_FAILED = "AD_SERVER_CREATE_FAILED"
-    AD_SERVER_UPDATE_FAILED = "AD_SERVER_UPDATE_FAILED"
-    AGENT_UNREACHABLE = "AGENT_UNREACHABLE"
-    FORMAT_NOT_FOUND = "FORMAT_NOT_FOUND"
-    INTERNAL_ERROR = "INTERNAL_ERROR"
-    INVENTORY_UNAVAILABLE = "INVENTORY_UNAVAILABLE"
-    MEDIA_BUY_REJECTED = "MEDIA_BUY_REJECTED"
-    NOT_FOUND = "NOT_FOUND"
-    PARTIAL_FAILURE = "PARTIAL_FAILURE"
-    TASK_NOT_FOUND = "TASK_NOT_FOUND"
-    WORKFLOW_CREATION_FAILED = "WORKFLOW_CREATION_FAILED"
-
-
-#: Any code this seller can emit: AdCP's published set plus this platform's own.
-#: A union rather than a subclass because a Python enum with members cannot be
-#: extended -- ``class AppErrorCode(ErrorCode)`` is a TypeError at class
-#: creation, not a design choice.
-ErrorCodeT = ErrorCode | AppErrorCode
-
-
 class Recovery(StrEnum):
     """What a buyer can do about an error.
 
@@ -121,6 +84,146 @@ class CodeEntry:
     recovery: Recovery
     suggestion: str
     message: str
+
+
+class AppErrorCode(StrEnum):
+    """Codes this platform emits that AdCP's published set does not define.
+
+    Legal on the wire: the spec's code vocabulary is open (see the module
+    docstring). Each one names a failure this seller can distinguish and a buyer
+    can act on differently -- collapsing them onto a published code would throw
+    that distinction away, which is the opposite of what an open vocabulary is
+    for.
+
+    No member may name a vendor. A buyer integrates with this seller, not with
+    whatever ad server sits behind it, and a code is part of the contract: once
+    ``GAM_UPDATE_FAILED`` is on the wire, swapping ad servers is a breaking
+    change to every buyer parsing it. The two ad-server codes are therefore
+    named for the operation that failed, not the system that failed it.
+
+    Each member carries its own :class:`CodeEntry`, so declaring a code and
+    declaring what it means are one act -- a member with no entry is a
+    ``TypeError`` at class creation, not a lookup that fails later on an
+    error path.
+
+    Recovery follows the same rule the spec applies to its own codes --
+    correctable when the buyer can change the request and retry, transient when
+    the same request may succeed later, terminal when neither is true. Messages
+    reach buyer agents, so they say what happened in the buyer's terms and never
+    name an internal component.
+    """
+
+    entry: CodeEntry
+
+    def __new__(cls, value: str, entry: CodeEntry) -> AppErrorCode:
+        obj = str.__new__(cls, value)
+        obj._value_ = value
+        obj.entry = entry
+        return obj
+
+    ACTIVATION_WORKFLOW_FAILED = (
+        "ACTIVATION_WORKFLOW_FAILED",
+        CodeEntry(
+            recovery=Recovery.TRANSIENT,
+            suggestion="Check the media buy's status before retrying; it may activate without further action",
+            message="The media buy was created but could not be activated",
+        ),
+    )
+    AD_SERVER_CREATE_FAILED = (
+        "AD_SERVER_CREATE_FAILED",
+        CodeEntry(
+            recovery=Recovery.TRANSIENT,
+            suggestion="Retry with backoff; if it persists, the seller's operator must intervene",
+            message="The media buy could not be created on the ad server",
+        ),
+    )
+    AD_SERVER_UPDATE_FAILED = (
+        "AD_SERVER_UPDATE_FAILED",
+        CodeEntry(
+            recovery=Recovery.TRANSIENT,
+            suggestion="Retry with backoff; the media buy is unchanged",
+            message="The media buy could not be updated on the ad server",
+        ),
+    )
+    AGENT_UNREACHABLE = (
+        "AGENT_UNREACHABLE",
+        CodeEntry(
+            recovery=Recovery.TRANSIENT,
+            suggestion="Retry to pick up the missing formats; the formats that were returned are complete and usable",
+            message="A configured creative agent is unreachable; its formats were not included",
+        ),
+    )
+    FORMAT_NOT_FOUND = (
+        "FORMAT_NOT_FOUND",
+        CodeEntry(
+            recovery=Recovery.CORRECTABLE,
+            suggestion="Call list_creative_formats and request a format this seller offers",
+            message="Requested creative format is not offered",
+        ),
+    )
+    INTERNAL_ERROR = (
+        "INTERNAL_ERROR",
+        CodeEntry(
+            recovery=Recovery.TRANSIENT,
+            suggestion="Retry with backoff; if it persists, report it to the seller's operator",
+            message="The request could not be completed",
+        ),
+    )
+    INVENTORY_UNAVAILABLE = (
+        "INVENTORY_UNAVAILABLE",
+        CodeEntry(
+            recovery=Recovery.CORRECTABLE,
+            suggestion="Call get_products for current availability and request what is offered",
+            message="Requested inventory is not available",
+        ),
+    )
+    MEDIA_BUY_REJECTED = (
+        "MEDIA_BUY_REJECTED",
+        CodeEntry(
+            recovery=Recovery.TERMINAL,
+            suggestion="Do not retry this buy; contact the seller about the decision",
+            message="The media buy was declined",
+        ),
+    )
+    NOT_FOUND = (
+        "NOT_FOUND",
+        CodeEntry(
+            recovery=Recovery.CORRECTABLE,
+            suggestion="Check the identifier and resend",
+            message="Requested resource does not exist",
+        ),
+    )
+    PARTIAL_FAILURE = (
+        "PARTIAL_FAILURE",
+        CodeEntry(
+            recovery=Recovery.CORRECTABLE,
+            suggestion="Read the per-item errors and resend only the items that failed",
+            message="Some items in the request succeeded and others failed",
+        ),
+    )
+    TASK_NOT_FOUND = (
+        "TASK_NOT_FOUND",
+        CodeEntry(
+            recovery=Recovery.CORRECTABLE,
+            suggestion="Check the task identifier and resend",
+            message="Referenced task does not exist",
+        ),
+    )
+    WORKFLOW_CREATION_FAILED = (
+        "WORKFLOW_CREATION_FAILED",
+        CodeEntry(
+            recovery=Recovery.TRANSIENT,
+            suggestion="Retry with backoff; the request itself was accepted",
+            message="The request was accepted but its approval workflow could not be started",
+        ),
+    )
+
+
+#: Any code this seller can emit: AdCP's published set plus this platform's own.
+#: A union rather than a subclass because a Python enum with members cannot be
+#: extended -- ``class AppErrorCode(ErrorCode)`` is a TypeError at class
+#: creation, not a design choice.
+ErrorCodeT = ErrorCode | AppErrorCode
 
 
 # ---------------------------------------------------------------------------
@@ -194,91 +297,28 @@ def _message_from_prose(description: str) -> str:
 # First-party entries
 # ---------------------------------------------------------------------------
 
-#: This platform's codes, complete: one code, one entry, all three fields in one
-#: place. Nothing about a platform code lives anywhere else.
-#:
-#: Recovery follows the same rule the spec applies to its own codes -- correctable
-#: when the buyer can change the request and retry, transient when the same
-#: request may succeed later, terminal when neither is true. Messages reach buyer
-#: agents, so they say what happened in the buyer's terms and never name an
-#: internal component.
-_APP_CODES: Final[Mapping[AppErrorCode, CodeEntry]] = MappingProxyType(
-    {
-        AppErrorCode.ACTIVATION_WORKFLOW_FAILED: CodeEntry(
-            recovery=Recovery.TRANSIENT,
-            suggestion="Check the media buy's status before retrying; it may activate without further action",
-            message="The media buy was created but could not be activated",
-        ),
-        AppErrorCode.AD_SERVER_CREATE_FAILED: CodeEntry(
-            recovery=Recovery.TRANSIENT,
-            suggestion="Retry with backoff; if it persists, the seller's operator must intervene",
-            message="The media buy could not be created on the ad server",
-        ),
-        AppErrorCode.AD_SERVER_UPDATE_FAILED: CodeEntry(
-            recovery=Recovery.TRANSIENT,
-            suggestion="Retry with backoff; the media buy is unchanged",
-            message="The media buy could not be updated on the ad server",
-        ),
-        AppErrorCode.AGENT_UNREACHABLE: CodeEntry(
-            recovery=Recovery.TRANSIENT,
-            suggestion="Retry to pick up the missing formats; the formats that were returned are complete and usable",
-            message="A configured creative agent is unreachable; its formats were not included",
-        ),
-        AppErrorCode.FORMAT_NOT_FOUND: CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Call list_creative_formats and request a format this seller offers",
-            message="Requested creative format is not offered",
-        ),
-        AppErrorCode.INTERNAL_ERROR: CodeEntry(
-            recovery=Recovery.TRANSIENT,
-            suggestion="Retry with backoff; if it persists, report it to the seller's operator",
-            message="The request could not be completed",
-        ),
-        AppErrorCode.INVENTORY_UNAVAILABLE: CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Call get_products for current availability and request what is offered",
-            message="Requested inventory is not available",
-        ),
-        AppErrorCode.MEDIA_BUY_REJECTED: CodeEntry(
-            recovery=Recovery.TERMINAL,
-            suggestion="Do not retry this buy; contact the seller about the decision",
-            message="The media buy was declined",
-        ),
-        AppErrorCode.NOT_FOUND: CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Check the identifier and resend",
-            message="Requested resource does not exist",
-        ),
-        AppErrorCode.PARTIAL_FAILURE: CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Read the per-item errors and resend only the items that failed",
-            message="Some items in the request succeeded and others failed",
-        ),
-        AppErrorCode.TASK_NOT_FOUND: CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Check the task identifier and resend",
-            message="Referenced task does not exist",
-        ),
-        AppErrorCode.WORKFLOW_CREATION_FAILED: CodeEntry(
-            recovery=Recovery.TRANSIENT,
-            suggestion="Retry with backoff; the request itself was accepted",
-            message="The request was accepted but its approval workflow could not be started",
-        ),
-    }
-)
 
 #: Message overrides for published codes. Only the message: recovery and
 #: suggestion for these come from the pinned schema, which is authoritative for
-#: them. These are the published codes the SDK's ``STANDARD_ERROR_CODES`` does not
-#: carry a message for, and the text is what this seller already sends -- carried
-#: verbatim so wiring the table up cannot change text a buyer is already parsing.
+#: them.
+#:
+#: These seven are the published codes that resolve to no buyer-shippable text on
+#: their own. The SDK's ``STANDARD_ERROR_CODES`` carries no message for any of
+#: them, and the pinned schema's prose for them is normative implementer text
+#: rather than a sentence for a buyer: the shortest of the seven is 195
+#: characters and the longest, ``PERMISSION_DENIED``'s, is over 2000, all of it
+#: MUST/SHOULD referencing other codes and error-details JSON paths. So they are authored here, and each one deletes itself the moment
+#: the pin ships a message for it.
+#:
+#: There were eight until ``CREATIVE_NOT_FOUND`` was removed: the pinned prose
+#: resolves it to one clean sentence unaided, which is strictly better than a
+#: hand-written override that can drift from the file it duplicates.
 _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
     {
         ErrorCode.AUTH_INVALID: "Credentials were presented but rejected",
         ErrorCode.AUTH_MISSING: "No credentials were presented",
         ErrorCode.BILLING_NOT_SUPPORTED: "Billing model is not supported by this seller",
         ErrorCode.CONFIGURATION_ERROR: "Configuration error",
-        ErrorCode.CREATIVE_NOT_FOUND: "Creative not found",
         ErrorCode.PERMISSION_DENIED: "Not authorized for this action",
         ErrorCode.UNSUPPORTED_PROVISIONING: "Settings-update entry matched no existing account",
         ErrorCode.VERSION_UNSUPPORTED: "Requested AdCP version is not supported",
@@ -308,10 +348,9 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
             ),
         )
 
-    # Iterate the ENUM, not the entries: a member without an entry then fails HERE,
-    # at import, rather than as a KeyError on the error path at a transport boundary.
-    for app_code in AppErrorCode:
-        table[app_code] = _APP_CODES[app_code]
+    # Each member carries its own entry, so there is nothing to reconcile: a code
+    # without one cannot be declared.
+    table.update({member: member.entry for member in AppErrorCode})
 
     return table
 
