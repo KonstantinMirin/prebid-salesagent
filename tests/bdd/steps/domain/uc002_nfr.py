@@ -65,24 +65,45 @@ def given_budget_below_minimum(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+# The wire codes that mean "rejected for authentication". AUTH_MISSING and
+# AUTH_INVALID are the v3.1.1 split of the deprecated AUTH_REQUIRED
+# (salesagent-mkso); AUTH_REQUIRED itself stays listed because it remains
+# emittable per CODE_TABLE and a scenario must not start passing merely because
+# production still emits the older alias.
+_AUTH_REJECTION_CODES = frozenset({"AUTH_MISSING", "AUTH_INVALID", "AUTH_REQUIRED"})
+
+
 @then("the operation should fail with authentication error")
 def then_fail_with_auth_error(ctx: dict) -> None:
-    """Assert the operation failed with an authentication error.
+    """Assert the operation was rejected for authentication, before business logic.
 
-    Accepts AdCPAuthenticationError (in-process auth rejection) or
-    TypeError (E2E: null auth token can't be serialized to HTTP header).
-    Both prove the request never reached business logic.
+    Two genuinely different outcomes satisfy this, and only one of them has a
+    wire envelope:
+
+    * the server rejected the request -> the WIRE carries an auth code. Read the
+      envelope, not a reconstructed exception (salesagent-3dawm.18).
+    * the client could not even send it -> a real in-process ``TypeError``,
+      because a null auth token cannot be serialized into an HTTP header (E2E).
+      There is no wire at all here, so ``ctx["error"]`` legitimately holds the
+      actual exception.
     """
-    from src.core.exceptions import AdCPAuthenticationError
+    result = ctx.get("result")
+    code = result.wire_error_code() if result is not None else None
+    if code is not None:
+        assert code in _AUTH_REJECTION_CODES, (
+            f"expected an authentication rejection on the wire, got {code!r}. "
+            f"Expected one of {sorted(_AUTH_REJECTION_CODES)}"
+        )
+        result.assert_wire_error(code)
+        return
 
     error = ctx.get("error")
     assert error is not None, (
         "Expected an authentication error but no error was recorded — the request succeeded despite invalid credentials"
     )
-    is_auth_error = isinstance(error, AdCPAuthenticationError)
-    is_null_token_error = isinstance(error, TypeError) and "Header value" in str(error)
-    assert is_auth_error or is_null_token_error, (
-        f"Expected AdCPAuthenticationError (or null-token TypeError in E2E), got {type(error).__name__}: {error}"
+    assert isinstance(error, TypeError) and "Header value" in str(error), (
+        "no wire error envelope was captured, so the only remaining acceptable outcome is the "
+        f"E2E null-token header failure — got {type(error).__name__}: {error}"
     )
 
 
@@ -139,20 +160,22 @@ def then_auth_before_business_logic(ctx: dict) -> None:
     AUTH_REQUIRED, now split again); the "Principal ID not found" message
     still holds.
     """
-    from src.core.exceptions import AdCPAuthenticationError
     from src.core.schemas import CreateMediaBuyRequest
     from tests.factories.principal import PrincipalFactory
 
     env = ctx["env"]
 
-    # First, verify the original request (with valid creds) succeeded
+    # First, verify the original request (with valid creds) was not rejected for
+    # auth. Graded on the wire code, not on the class of a reconstructed
+    # exception (salesagent-3dawm.18).
     resp = ctx.get("response")
-    error = ctx.get("error")
-    if error is not None:
-        assert not isinstance(error, AdCPAuthenticationError), (
-            f"Authentication failed despite valid credentials: {error}"
+    result = ctx.get("result")
+    first_code = result.wire_error_code() if result is not None else None
+    if first_code is not None:
+        assert first_code not in _AUTH_REJECTION_CODES, (
+            f"Authentication failed despite valid credentials: wire code {first_code!r}"
         )
-    else:
+    elif ctx.get("error") is None:
         assert resp is not None, "Expected either a response or an error"
 
     # Now make a SECOND call with invalid credentials to prove ordering.
