@@ -18,15 +18,13 @@ What this file grades, precisely:
   - MediaBuyFactory, which persists without the repository, seeds the same
     confirmed_at the repository would have written (the fixture seam).
 
-What it does NOT grade: that the bump is emitted as a SQL expression
-(``revision = revision + 1``) rather than a Python read-modify-write. That form
-is what makes two CONCURRENT bumps serialize in the database, and no test here
-discriminates the two implementations — measured, not assumed: swapping
-``_bump_revision`` to a read-modify-write leaves every test in this file green.
-Discriminating it needs two overlapping uncommitted transactions, i.e. real
-concurrency machinery, which this module deliberately does not carry. The
-rationale for the SQL-expression form lives in ``_bump_revision``'s docstring;
-treat it as ungraded here rather than as covered.
+  - the bump is emitted as a SQL expression (``revision = revision + 1``) and not
+    as a Python read-modify-write. That form is the whole reason two CONCURRENT
+    bumps serialize in the database, and it used to be ungraded: swapping
+    ``_bump_revision`` to a read-modify-write left every other test in this file
+    green, so the protection could be deleted silently. ``TestConcurrentBumps``
+    below discriminates the two implementations against two real connections
+    (round-1 R1-6).
 
 Semantics adopted verbatim from PR #1544 (GH #1928 requires reconciling with it
 rather than deciding independently):
@@ -593,4 +591,101 @@ class TestFactorySeedsWhatTheRepositoryWouldWrite:
         assert built.confirmed_at is None, (
             "an explicit confirmed_at=None no longer overrides the factory's derived stamp — "
             "every test that hands an unstamped committed row to the repository is now vacuous"
+        )
+
+
+# How long writer A holds the row lock so writer B's UPDATE is genuinely
+# queued behind it. B needs microseconds to reach the lock.
+_LOCK_HOLD_SECONDS = 1.0
+
+
+@pytest.mark.requires_db
+class TestConcurrentBumps:
+    """Two OVERLAPPING transactions bumping one row must not lose an update (R1-6).
+
+    The interleaving is the whole test, and it needs real threads: the second
+    UPDATE has to be issued while the first transaction still holds the row lock.
+    Sequential commits do not discriminate — the second session simply re-SELECTs
+    the already-incremented row, and a read-modify-write produces the right answer
+    by accident. That version was written first and passed under mutation.
+
+    Ordering enforced here:
+      1. writer A updates and flushes  -> holds the row lock, uncommitted
+      2. writer B updates             -> its SELECT sees the OLD committed value,
+                                          then its UPDATE blocks on A's lock
+      3. A commits                    -> B unblocks and commits
+
+    ``UPDATE ... SET revision = revision + 1`` re-evaluates server-side against the
+    row as committed by A, so B lands on top: start + 2. A Python read-modify-write
+    writes the absolute value B read in step 2, so A's bump is overwritten and the
+    token moves by one for two mutations.
+    """
+
+    def test_overlapping_transactions_do_not_lose_a_bump(self, integration_db, bound_factory_session):
+        import threading
+        import time
+
+        from sqlalchemy.orm import Session as SASession
+
+        from src.core.database.database_session import get_engine
+        from tests.factories import MediaBuyFactory
+
+        media_buy = MediaBuyFactory(status="pending_approval", created_at=_PAST, approved_at=_PAST)
+        bound_factory_session.commit()
+        media_buy_id, tenant_id = media_buy.media_buy_id, media_buy.tenant_id
+        start = media_buy.revision
+
+        engine = get_engine()
+        a_holds_lock = threading.Event()
+        errors: list[BaseException] = []
+
+        def writer_a() -> None:
+            try:
+                with SASession(engine) as session:
+                    MediaBuyRepository(session, tenant_id).update_fields(media_buy_id, budget=21000)
+                    session.flush()
+                    a_holds_lock.set()
+                    # A HOLD, not a handshake. B cannot signal "I have issued my
+                    # UPDATE" because it is blocked inside that UPDATE; an event set
+                    # before the call is set too early and releases A first, which
+                    # degrades this to the sequential case. (Measured: that version
+                    # passed under the read-modify-write mutation.) B needs only
+                    # microseconds to reach the lock, so holding it is what makes
+                    # the overlap real.
+                    time.sleep(_LOCK_HOLD_SECONDS)
+                    session.commit()
+            except BaseException as exc:  # noqa: BLE001 - surfaced below
+                errors.append(exc)
+                a_holds_lock.set()
+
+        def writer_b() -> None:
+            try:
+                with SASession(engine) as session:
+                    a_holds_lock.wait(timeout=10)
+                    # SELECT sees the old committed value (A is uncommitted); the
+                    # UPDATE then blocks on A's row lock until A commits.
+                    MediaBuyRepository(session, tenant_id).update_fields(media_buy_id, budget=22000)
+                    session.commit()
+            except BaseException as exc:  # noqa: BLE001 - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer_a), threading.Thread(target=writer_b)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert not errors, f"a writer raised: {errors!r}"
+        assert not any(thread.is_alive() for thread in threads), "a writer deadlocked"
+
+        with SASession(engine) as reader:
+            final = reader.get(MediaBuy, media_buy_id).revision
+
+        assert final == start + 2, (
+            f"two committed mutations moved revision {start} -> {final}. One bump was "
+            f"lost: the second writer wrote an absolute value it had read before the "
+            f"first committed. revision is the buyer's optimistic-concurrency token, "
+            f"so a buyer holding {final} cannot tell which of the two writes it names. "
+            f"Check that _bump_revision still assigns MediaBuy.revision + 1 (a SQL "
+            f"expression evaluated server-side) rather than reading the Python value."
         )
